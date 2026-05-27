@@ -141,12 +141,14 @@
               <option value="none">no English sub</option>
             </select>
             <label class="check"><input type="checkbox" id="lib-only-eng"> with EN only</label>
+            <label class="check"><input type="checkbox" id="lib-group" checked> group by show</label>
             <input type="text" id="lib-filter-text" placeholder="path substring">
             <button class="ghost" id="lib-refresh">Refresh</button>
           </div>
         </div>
         <p class="muted small">Probe-confirmed embedded subs feed back to Coverage — rows here with full EN or SDH are filtered out of Coverage (and excluded from auto-queue) by default.</p>
-        <table class="tbl coverage-table" id="lib-table">
+        <div id="lib-tree" class="coverage-tree" hidden></div>
+        <table class="tbl coverage-table" id="lib-table"
           <thead><tr>
             <th>english</th>
             <th>path</th>

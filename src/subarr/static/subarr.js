@@ -1306,6 +1306,145 @@
   });
 
   // ───── Library Probe tab ─────
+  function libBadge(track) {
+    if (track === 'EN') return '<span class="embedded-badge embedded-full">EN</span>';
+    if (track === 'EN(SDH)') return '<span class="embedded-badge embedded-full" title="SDH track — treated as English coverage">EN(SDH)</span>';
+    if (track === 'EN(forced)') return '<span class="embedded-badge embedded-partial">EN(forced)</span>';
+    if (track === 'EN(commentary)') return '<span class="embedded-badge embedded-partial">EN(commentary)</span>';
+    return '<span class="embedded-badge embedded-none">—</span>';
+  }
+  function libSubSummary(streams) {
+    return (streams || []).map((s) => {
+      const flags = [];
+      if (s.forced) flags.push('forced');
+      if (s.sdh) flags.push('SDH');
+      if (s.commentary) flags.push('comm');
+      return `${escape(s.language || '?')}${flags.length ? '(' + flags.join(',') + ')' : ''}`;
+    }).join(', ');
+  }
+
+  // Bucket library items by canonical_path structure.
+  // TV/<Show>/Season X/<file>  → root=TV, show, season, leaf
+  // Movies/<Movie>/<file>      → root=Movies, show=Movie, no season, leaf
+  // <root>/<file or sub-dirs>  → root, leaf
+  function groupLibraryByShow(items) {
+    const roots = new Map();  // root → Map(show → Map(season → [items]))
+    for (const it of items) {
+      const parts = (it.canonical_path || '').split('/').filter(Boolean);
+      if (parts.length < 2) continue;
+      const root = parts[0];
+      const show = parts.length >= 2 ? parts[1] : '(top)';
+      let season = '(no season)';
+      if (root === 'TV' && parts.length >= 3) season = parts[2];
+      else if (root !== 'TV') season = '(files)';
+      let byShow = roots.get(root);
+      if (!byShow) { byShow = new Map(); roots.set(root, byShow); }
+      let bySeason = byShow.get(show);
+      if (!bySeason) { bySeason = new Map(); byShow.set(show, bySeason); }
+      let bucket = bySeason.get(season);
+      if (!bucket) { bucket = []; bySeason.set(season, bucket); }
+      bucket.push(it);
+    }
+    return roots;
+  }
+
+  function countWithEng(items) {
+    return items.filter((i) => i.usable_english).length;
+  }
+
+  function renderLibraryTree(data) {
+    const root = $('#lib-tree');
+    root.innerHTML = '';
+    const roots = groupLibraryByShow(data.items || []);
+    if (roots.size === 0) {
+      root.innerHTML = '<p class="muted">no matches — run a probe walk from Settings to populate the cache</p>';
+      return;
+    }
+    // Sort root order: TV, Movies, others alpha
+    const rootOrder = [...roots.keys()].sort((a, b) => {
+      if (a === 'TV') return -1;
+      if (b === 'TV') return 1;
+      if (a === 'Movies') return -1;
+      if (b === 'Movies') return 1;
+      return a.localeCompare(b);
+    });
+    for (const rootName of rootOrder) {
+      const byShow = roots.get(rootName);
+      const allInRoot = [...byShow.values()].flatMap((seasons) => [...seasons.values()].flat());
+      const rootDet = document.createElement('details');
+      const rootSum = document.createElement('summary');
+      const engCount = countWithEng(allInRoot);
+      rootSum.innerHTML = `
+        <span class="lvl-name"><strong>${escape(rootName)}</strong></span>
+        <span class="lvl-meta">${allInRoot.length} file${allInRoot.length === 1 ? '' : 's'} · ${engCount} with EN</span>
+      `;
+      rootDet.appendChild(rootSum);
+
+      const showOrder = [...byShow.keys()].sort((a, b) => a.localeCompare(b));
+      for (const showName of showOrder) {
+        const bySeason = byShow.get(showName);
+        const showFlat = [...bySeason.values()].flat();
+        const showDet = document.createElement('details');
+        const showSum = document.createElement('summary');
+        const showEng = countWithEng(showFlat);
+        showSum.innerHTML = `
+          <span class="lvl-name">${escape(showName)}</span>
+          <span class="lvl-meta">${showFlat.length} · ${showEng} EN</span>
+        `;
+        showDet.appendChild(showSum);
+
+        const seasonOrder = [...bySeason.keys()].sort((a, b) => {
+          // Numeric where possible
+          const aMatch = (a.match(/(\d+)/) || [])[1];
+          const bMatch = (b.match(/(\d+)/) || [])[1];
+          if (aMatch && bMatch) return Number(aMatch) - Number(bMatch);
+          return a.localeCompare(b);
+        });
+
+        // If only one (synthetic) season for non-TV roots, skip the level
+        // and render files directly under the show.
+        const renderItemsInto = (parent, items) => {
+          for (const it of items) {
+            const r = document.createElement('div');
+            r.className = 'ep-row';
+            const dur = it.duration_s ? `${Math.round(it.duration_s/60)}m` : '—';
+            const basename = (it.canonical_path || '').split('/').pop() || it.canonical_path;
+            const subSummary = libSubSummary(it.subtitle_streams);
+            r.innerHTML = `
+              <span style="width:18px"></span>
+              ${libBadge(it.english_track)}
+              <span class="ep-title" title="${escape(it.canonical_path)}">${escape(basename)}</span>
+              <span class="audio-langs">audio: ${escape((it.audio_langs || []).join(',') || '—')}</span>
+              <span class="audio-langs">sub: ${escape(subSummary || '—')}</span>
+              <span class="audio-langs">${dur}</span>
+            `;
+            parent.appendChild(r);
+          }
+        };
+
+        if (seasonOrder.length === 1 && seasonOrder[0] === '(files)') {
+          renderItemsInto(showDet, bySeason.get('(files)'));
+        } else {
+          for (const seasonName of seasonOrder) {
+            const items = bySeason.get(seasonName);
+            const seasonDet = document.createElement('details');
+            const seasonSum = document.createElement('summary');
+            const seasonEng = countWithEng(items);
+            seasonSum.innerHTML = `
+              <span class="lvl-name">${escape(seasonName)}</span>
+              <span class="lvl-meta">${items.length} · ${seasonEng} EN</span>
+            `;
+            seasonDet.appendChild(seasonSum);
+            renderItemsInto(seasonDet, items);
+            showDet.appendChild(seasonDet);
+          }
+        }
+        rootDet.appendChild(showDet);
+      }
+      root.appendChild(rootDet);
+    }
+  }
+
   async function loadLibrary() {
     const meta = $('#library-meta');
     meta.textContent = 'loading…';
@@ -1314,38 +1453,34 @@
         filter_text: $('#lib-filter-text').value || '',
         sub_kind: $('#lib-filter-kind').value || '',
         only_with_eng: $('#lib-only-eng').checked ? 'true' : 'false',
-        limit: '500',
+        limit: '5000',
       });
       const data = await fetch(`/api/probe/library?${params}`).then((r) => r.json());
-      const tbody = $('#lib-table tbody');
-      tbody.innerHTML = '';
-      if (data.items.length === 0) {
-        tbody.innerHTML = `<tr class="empty-row"><td colspan="5">no matches — run a probe walk from Settings to populate the cache</td></tr>`;
+
+      if ($('#lib-group')?.checked) {
+        $('#lib-table').hidden = true;
+        $('#lib-tree').hidden = false;
+        renderLibraryTree(data);
       } else {
-        for (const it of data.items) {
-          const tr = document.createElement('tr');
-          let badge;
-          if (it.english_track === 'EN') badge = '<span class="embedded-badge embedded-full">EN</span>';
-          else if (it.english_track === 'EN(SDH)') badge = '<span class="embedded-badge embedded-full" title="SDH track — treated as English coverage">EN(SDH)</span>';
-          else if (it.english_track === 'EN(forced)') badge = '<span class="embedded-badge embedded-partial">EN(forced)</span>';
-          else if (it.english_track === 'EN(commentary)') badge = '<span class="embedded-badge embedded-partial">EN(commentary)</span>';
-          else badge = '<span class="embedded-badge embedded-none">—</span>';
-          const subSummary = (it.subtitle_streams || []).map((s) => {
-            const flags = [];
-            if (s.forced) flags.push('forced');
-            if (s.sdh) flags.push('SDH');
-            if (s.commentary) flags.push('comm');
-            return `${escape(s.language || '?')}${flags.length ? '(' + flags.join(',') + ')' : ''}`;
-          }).join(', ');
-          const dur = it.duration_s ? `${Math.round(it.duration_s/60)}m` : '—';
-          tr.innerHTML = `
-            <td>${badge}</td>
-            <td style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;">${escape(it.canonical_path)}</td>
-            <td class="audio-langs">${escape((it.audio_langs || []).join(',') || '—')}</td>
-            <td class="audio-langs">${escape(subSummary || '—')}</td>
-            <td class="audio-langs">${dur}</td>
-          `;
-          tbody.appendChild(tr);
+        $('#lib-table').hidden = false;
+        $('#lib-tree').hidden = true;
+        const tbody = $('#lib-table tbody');
+        tbody.innerHTML = '';
+        if (data.items.length === 0) {
+          tbody.innerHTML = `<tr class="empty-row"><td colspan="5">no matches — run a probe walk from Settings to populate the cache</td></tr>`;
+        } else {
+          for (const it of data.items) {
+            const tr = document.createElement('tr');
+            const dur = it.duration_s ? `${Math.round(it.duration_s/60)}m` : '—';
+            tr.innerHTML = `
+              <td>${libBadge(it.english_track)}</td>
+              <td style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;">${escape(it.canonical_path)}</td>
+              <td class="audio-langs">${escape((it.audio_langs || []).join(',') || '—')}</td>
+              <td class="audio-langs">${escape(libSubSummary(it.subtitle_streams) || '—')}</td>
+              <td class="audio-langs">${dur}</td>
+            `;
+            tbody.appendChild(tr);
+          }
         }
       }
       meta.textContent = `${data.shown} shown of ${data.total_cached} cached probes${data.shown < data.total_cached ? ' (filter applied)' : ''}`;
@@ -1357,6 +1492,7 @@
   $('#lib-filter-text').addEventListener('input', loadLibrary);
   $('#lib-filter-kind').addEventListener('change', loadLibrary);
   $('#lib-only-eng').addEventListener('change', loadLibrary);
+  $('#lib-group')?.addEventListener('change', loadLibrary);
 
   // Per-row probe button (run ffprobe on a single file)
   $('#cov-table').addEventListener('click', async (ev) => {
