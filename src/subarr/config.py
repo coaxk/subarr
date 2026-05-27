@@ -26,6 +26,11 @@ class Settings:
     # Subgen container name (for docker logs/restart).
     subgen_container: str
 
+    # Filesystem prefix subgen sees library files under. Subgen's compose
+    # mounts /mnt/nas/Media:/media so canonical paths map to /media/<canonical>.
+    # PS V69's working /batch calls use this same prefix.
+    subgen_media_prefix: str
+
     # SQLite path for scan queue persistence.
     db_path: Path
 
@@ -65,6 +70,7 @@ def load() -> Settings:
         ),
         subgen_url=os.environ.get("SUBGEN_URL", "http://subgen:9000"),
         subgen_container=os.environ.get("SUBGEN_CONTAINER", "subgen"),
+        subgen_media_prefix=os.environ.get("SUBGEN_MEDIA_PREFIX", "/media"),
         db_path=Path(os.environ.get("SUBARR_DB_PATH", "/data/subarr.db")),
         port=int(os.environ.get("SUBARR_PORT", "9922")),
         plex_url=os.environ.get("PLEX_URL", "http://192.168.1.105:32400"),

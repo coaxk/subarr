@@ -42,6 +42,21 @@ def fs_to_canonical(p: Path) -> str:
 
 def canonical_to_subgen_batch(canonical: str) -> str:
     """Form the `directory` query value subgen's /batch expects.
-    Subgen sees the library at /media/library/ regardless of host mount."""
+
+    Subgen's compose mounts `/mnt/nas/Media:/media`, so files are at
+    `/media/TV/...`, `/media/Movies/...`, etc. NOT `/media/library/...`
+    (that's subarr's own mount). The prefix is configurable via
+    SUBGEN_MEDIA_PREFIX in case a future deployment differs.
+
+    Verified against Subgenscan.ps1 V69 line 353 (the canonical PS driver):
+    `$encodedPath = "/media/$encodedFolder"` — same prefix.
+
+    Note: the original `/media/library/` prefix was wrong since Phase 1 but
+    never surfaced because every scan test mocked subgen with a transport
+    that ignored the directory= value. First live end-to-end scan caught it.
+    """
     rel = canonical.strip().strip("/")
-    return f"/media/library/{rel}" if rel else "/media/library/"
+    prefix = settings.subgen_media_prefix.rstrip("/")
+    if rel:
+        return f"{prefix}/{rel}"
+    return prefix + "/"
