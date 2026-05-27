@@ -13,7 +13,8 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') loadSettings();
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); }
+    if (tab === 'coverage') loadCoverage();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
 
@@ -395,6 +396,121 @@
       $('#action-result').textContent = `plex scan failed: ${e.message}`;
     }
   });
+
+  // ───── Integrations health (Settings tab) ─────
+  async function loadIntegrations() {
+    const grid = $('#integrations-grid');
+    grid.textContent = 'loading…';
+    try {
+      const data = await fetch('/api/integrations/health').then((r) => r.json());
+      grid.innerHTML = '';
+      for (const it of (data.integrations || [])) {
+        const cell = document.createElement('div');
+        cell.className = 'integration';
+        const dotCls = !it.configured ? 'unconf' : (it.online ? 'up' : 'down');
+        const statusLabel = !it.configured ? 'not configured' : (it.online ? 'online' : 'offline');
+        let metaHtml = `<div class="meta">${escape(statusLabel)}${it.version ? ' · ' + escape(it.version) : ''}</div>`;
+        if (it.badges) {
+          const b = it.badges;
+          metaHtml += `<div class="meta">eps wanted: ${b.episodes ?? '?'} · movies: ${b.movies ?? '?'} · providers: ${b.providers ?? '?'}</div>`;
+        }
+        if (it.error) {
+          metaHtml += `<div class="err">${escape(it.error)}</div>`;
+        }
+        cell.innerHTML = `<div class="name"><span class="dot ${dotCls}"></span>${escape(it.name)}</div>${metaHtml}`;
+        grid.appendChild(cell);
+      }
+    } catch (e) {
+      grid.innerHTML = `<span class="err">${escape(e.message)}</span>`;
+    }
+  }
+
+  // ───── Coverage tab ─────
+  let coverageRaw = null;
+  function renderCoverage() {
+    if (!coverageRaw) return;
+    const tbody = $('#cov-table tbody');
+    tbody.innerHTML = '';
+    const hideStale = $('#cov-hide-stale').checked;
+    const filter = ($('#cov-filter').value || '').toLowerCase().trim();
+    let shown = 0;
+    for (const item of coverageRaw.items) {
+      if (hideStale && item.has_sub_on_disk) continue;
+      if (filter) {
+        const hay = [item.title, item.episode_title, item.original_language, ...(item.tags || [])]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(filter)) continue;
+      }
+      shown++;
+      const tr = document.createElement('tr');
+      if (item.has_sub_on_disk) tr.classList.add('row-stale');
+      const scoreCls = item.score >= 1000 ? 'high' : item.score >= 200 ? 'mid' : item.score < 0 ? 'neg' : 'low';
+      tr.innerHTML = `
+        <td class="score ${scoreCls}" title="${escape((item.score_reasons || []).join(' · '))}">${item.score}</td>
+        <td>${escape(item.media_type)}</td>
+        <td>${escape(item.title)}</td>
+        <td>${escape(item.episode_number ? item.episode_number + ' ' : '')}${escape(item.episode_title || '')}</td>
+        <td class="lang">${escape(item.original_language || '—')}</td>
+        <td>${item.monitored === null ? '—' : (item.monitored ? '✓' : '✗')}</td>
+        <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}">${item.has_sub_on_disk ? '!' : '—'}</td>
+        <td>${escape((item.bazarr?.missing_subtitles || []).join(', '))}</td>
+        <td>${escape((item.tags || []).join(', '))}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+    if (shown === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="9">no rows match (or coverage list is empty)</td></tr>`;
+    }
+    const t = coverageRaw.totals || {};
+    const ts = coverageRaw.generated_at ? new Date(coverageRaw.generated_at * 1000).toLocaleTimeString() : '?';
+    $('#coverage-meta').textContent = `${shown} shown · ${t.items} total (${t.episodes} ep + ${t.movies} mv) · ${t.with_disk_sub} with .srt on disk · generated ${ts}${coverageRaw.cached ? ` (cached ${coverageRaw.cache_age_s}s)` : ''}`;
+  }
+
+  function renderCoverageSources() {
+    const wrap = $('#cov-sources');
+    wrap.innerHTML = '';
+    const s = coverageRaw?.sources || {};
+    for (const [name, info] of Object.entries(s)) {
+      const span = document.createElement('span');
+      const cls = !info.configured ? 'unconf' : (info.ok ? 'ok' : 'err');
+      span.className = `src ${cls}`;
+      let label = `${name}: `;
+      if (!info.configured) label += 'unconfigured';
+      else if (info.ok) {
+        const counts = [];
+        if ('count' in info) counts.push(`${info.count} rows`);
+        if ('episodes_wanted' in info) counts.push(`${info.episodes_wanted} eps wanted`);
+        if ('movies_wanted' in info) counts.push(`${info.movies_wanted} movies wanted`);
+        if ('history_rows' in info) counts.push(`${info.history_rows} history rows`);
+        label += counts.length ? counts.join(', ') : 'ok';
+      } else label += info.error || 'error';
+      span.textContent = label;
+      wrap.appendChild(span);
+    }
+  }
+
+  async function loadCoverage(fresh = false) {
+    const meta = $('#coverage-meta');
+    meta.textContent = fresh ? 'refreshing (this can take ~10s on first run)…' : 'loading…';
+    try {
+      const useTautulli = $('#cov-tautulli').checked;
+      const url = `/api/coverage?tautulli=${useTautulli}${fresh ? '&fresh=true' : ''}`;
+      const r = await fetch(url);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `coverage failed: ${r.status}`);
+      }
+      coverageRaw = await r.json();
+      renderCoverageSources();
+      renderCoverage();
+    } catch (e) {
+      meta.textContent = `error: ${e.message}`;
+    }
+  }
+  $('#cov-refresh').addEventListener('click', () => loadCoverage(true));
+  $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
+  $('#cov-hide-stale').addEventListener('change', renderCoverage);
+  $('#cov-filter').addEventListener('input', renderCoverage);
 
   // ───── helpers ─────
   function escape(s) {

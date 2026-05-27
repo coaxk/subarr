@@ -30,6 +30,7 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="scan" role="tab">Scan</button>
+    <button class="tab" data-tab="coverage" role="tab">Coverage</button>
     <button class="tab" data-tab="logs" role="tab">Logs</button>
     <button class="tab" data-tab="monitor" role="tab">Monitor</button>
     <button class="tab" data-tab="settings" role="tab">Settings</button>
@@ -67,6 +68,39 @@
             <ul class="results" id="active-scan-results"></ul>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ───── Coverage ───── -->
+    <section class="tabpanel" id="tab-coverage">
+      <div class="card">
+        <div class="coverage-head">
+          <div>
+            <h2>Gap list — prioritised</h2>
+            <p class="muted small" id="coverage-meta">loading…</p>
+          </div>
+          <div class="coverage-actions">
+            <label class="check"><input type="checkbox" id="cov-tautulli" checked> Tautulli scoring</label>
+            <label class="check"><input type="checkbox" id="cov-hide-stale"> hide stale (has .srt on disk)</label>
+            <input type="text" id="cov-filter" placeholder="filter title / lang">
+            <button class="ghost" id="cov-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="coverage-sources" id="cov-sources"></div>
+        <table class="tbl coverage-table" id="cov-table">
+          <thead><tr>
+            <th>score</th>
+            <th>media</th>
+            <th>title</th>
+            <th>episode</th>
+            <th>lang</th>
+            <th>monitored</th>
+            <th>disk srt</th>
+            <th>missing</th>
+            <th>tags</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
@@ -118,6 +152,11 @@
         </table>
         <h3 class="muted">Top-level (SUBGEN_KWARGS)</h3>
         <pre id="kwargs-top" class="codeblock">…</pre>
+      </div>
+      <div class="card">
+        <h2>Integrations</h2>
+        <p class="muted small">Status of upstream services. Configure URLs + API keys via env vars (BAZARR_URL/BAZARR_API_KEY, SONARR_URL/SONARR_API_KEY, etc).</p>
+        <div class="integrations-grid" id="integrations-grid">loading…</div>
       </div>
       <div class="card">
         <h2>Actions</h2>

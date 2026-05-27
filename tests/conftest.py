@@ -40,14 +40,33 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     monkeypatch.setenv("PLEX_URL", "http://plex.test:32400")
     monkeypatch.setenv("PLEX_TOKEN", "test-token")
     monkeypatch.setenv("PLEX_SECTION", "all")
+    # v1.1 integrations — configured by default so is_configured() is True.
+    monkeypatch.setenv("BAZARR_URL", "http://bazarr.test:6767")
+    monkeypatch.setenv("BAZARR_API_KEY", "bz-test-key")
+    monkeypatch.setenv("SONARR_URL", "http://sonarr.test:8989")
+    monkeypatch.setenv("SONARR_API_KEY", "sn-test-key")
+    monkeypatch.setenv("RADARR_URL", "http://radarr.test:7878")
+    monkeypatch.setenv("RADARR_API_KEY", "rd-test-key")
+    monkeypatch.setenv("TAUTULLI_URL", "http://tautulli.test:8181")
+    monkeypatch.setenv("TAUTULLI_API_KEY", "tt-test-key")
+    monkeypatch.setenv("ARR_PATH_PREFIX", "/data/Media/")
 
     from subarr import app as app_mod
-    from subarr import config, docker_client, paths, scan_runner, scan_store, subgen_client
-    from subarr.routers import admin, browse, gpu, logs, mode, queue, scan
+    from subarr import config, coverage_engine, docker_client, paths, scan_runner, scan_store, subgen_client
+    from subarr.integrations import bazarr as iz_bazarr
+    from subarr.integrations import base as iz_base
+    from subarr.integrations import radarr as iz_radarr
+    from subarr.integrations import sonarr as iz_sonarr
+    from subarr.integrations import tautulli as iz_tautulli
+    from subarr.routers import (
+        admin, browse, coverage, gpu, integrations as r_integrations,
+        logs, mode, queue, scan,
+    )
 
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
-        browse, mode, queue, scan, gpu, logs, admin, app_mod,
+        iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, coverage_engine,
+        browse, mode, queue, scan, gpu, logs, admin, r_integrations, coverage, app_mod,
     ]:
         importlib.reload(m)
 
@@ -100,8 +119,66 @@ def app_with_stub(subarr_env, request):
     docker_kwargs = docker_marker.kwargs if docker_marker else {}
     app_mod.DockerOps = _make_docker_stub(**docker_kwargs)  # type: ignore[attr-defined]
 
+    integ_marker = request.node.get_closest_marker("integrations_stub")
+    integ_kwargs = integ_marker.kwargs if integ_marker else {}
+    app_mod.IntegrationBundle = _make_integration_bundle(**integ_kwargs)  # type: ignore[attr-defined]
+
     with TestClient(app) as c:
         yield c
+
+
+def _make_integration_bundle(
+    bazarr_handler=None,
+    sonarr_handler=None,
+    radarr_handler=None,
+    tautulli_handler=None,
+):
+    """Build an IntegrationBundle whose four clients use httpx.MockTransport.
+
+    Each *_handler is a callable httpx.Request -> httpx.Response. Pass None
+    to mark that integration as unconfigured (it'll return is_configured() False)."""
+    from subarr.coverage_engine import IntegrationBundle
+    from subarr.integrations.bazarr import BazarrClient
+    from subarr.integrations.radarr import RadarrClient
+    from subarr.integrations.sonarr import SonarrClient
+    from subarr.integrations.tautulli import TautulliClient
+
+    def _wrap(cls, handler, base_url, headers=None):
+        c = cls.__new__(cls)
+        if handler is None:
+            # Mark unconfigured. base/url cleared so is_configured() == False.
+            c._base_url = ""
+            c._configured = False
+            c._client = httpx.AsyncClient(base_url="http://void.test")
+            if isinstance(c, TautulliClient):
+                c._apikey = ""
+            return c
+        c._base_url = base_url
+        c._configured = True
+        c._client = httpx.AsyncClient(
+            base_url=base_url,
+            transport=httpx.MockTransport(handler),
+            headers=headers or {},
+        )
+        if isinstance(c, TautulliClient):
+            c._apikey = "tt-test-key"
+        return c
+
+    class _StubBundle(IntegrationBundle):
+        def __init__(self):
+            self.bazarr = _wrap(BazarrClient, bazarr_handler,
+                                "http://bazarr.test:6767",
+                                {"X-API-KEY": "bz-test-key"} if bazarr_handler else None)
+            self.sonarr = _wrap(SonarrClient, sonarr_handler,
+                                "http://sonarr.test:8989",
+                                {"X-Api-Key": "sn-test-key"} if sonarr_handler else None)
+            self.radarr = _wrap(RadarrClient, radarr_handler,
+                                "http://radarr.test:7878",
+                                {"X-Api-Key": "rd-test-key"} if radarr_handler else None)
+            self.tautulli = _wrap(TautulliClient, tautulli_handler,
+                                  "http://tautulli.test:8181")
+
+    return _StubBundle
 
 
 def _make_docker_stub(
@@ -152,4 +229,8 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "docker_stub(container_running=..., container_unavailable=..., log_lines=...): override docker stub",
+    )
+    config.addinivalue_line(
+        "markers",
+        "integrations_stub(bazarr_handler=..., sonarr_handler=..., radarr_handler=..., tautulli_handler=...)",
     )

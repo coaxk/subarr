@@ -38,6 +38,24 @@ class Settings:
     plex_token: str
     plex_section: str  # "all" or numeric section ID
 
+    # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
+    bazarr_url: str
+    bazarr_api_key: str
+    sonarr_url: str
+    sonarr_api_key: str
+    radarr_url: str
+    radarr_api_key: str
+    tautulli_url: str
+    tautulli_api_key: str
+
+    # Filesystem prefix subgen prepends to canonical paths inside its container.
+    # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
+    # canonical-to-subarr form used everywhere else (relative to media_root).
+    # Subgen sees Sonarr/Radarr paths as /data/Media/<...>; Subarr sees the
+    # same files at /media/library/<...>. This prefix is what Sonarr/Radarr
+    # store as `path`; we strip it to canonicalise.
+    arr_path_prefix: str
+
 
 def load() -> Settings:
     return Settings(
@@ -52,6 +70,15 @@ def load() -> Settings:
         plex_url=os.environ.get("PLEX_URL", "http://192.168.1.105:32400"),
         plex_token=os.environ.get("PLEX_TOKEN", ""),
         plex_section=os.environ.get("PLEX_SECTION", "all"),
+        bazarr_url=os.environ.get("BAZARR_URL", "http://bazarr:6767"),
+        bazarr_api_key=os.environ.get("BAZARR_API_KEY", ""),
+        sonarr_url=os.environ.get("SONARR_URL", "http://sonarr:8989"),
+        sonarr_api_key=os.environ.get("SONARR_API_KEY", ""),
+        radarr_url=os.environ.get("RADARR_URL", "http://radarr:7878"),
+        radarr_api_key=os.environ.get("RADARR_API_KEY", ""),
+        tautulli_url=os.environ.get("TAUTULLI_URL", "http://tautulli:8181"),
+        tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", ""),
+        arr_path_prefix=os.environ.get("ARR_PATH_PREFIX", "/data/Media/"),
     )
 
 

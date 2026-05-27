@@ -1,0 +1,32 @@
+"""Sonarr v3 API client (read-only).
+
+Endpoints used:
+- GET /api/v3/system/status → version
+- GET /api/v3/series → master list (id, title, tvdbId, monitored, originalLanguage, path, tags)
+- GET /api/v3/tag → tag id→label map (we want labels in coverage output)
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from ..config import settings
+from .base import IntegrationClient
+
+
+class SonarrClient(IntegrationClient):
+    name = "sonarr"
+
+    def __init__(self):
+        super().__init__(
+            base_url=settings.sonarr_url if settings.sonarr_api_key else "",
+            headers={"X-Api-Key": settings.sonarr_api_key} if settings.sonarr_api_key else None,
+        )
+
+    async def status(self) -> dict[str, Any]:
+        return await self._get("/api/v3/system/status")
+
+    async def series(self) -> list[dict[str, Any]]:
+        return await self._get("/api/v3/series")
+
+    async def tags(self) -> list[dict[str, Any]]:
+        return await self._get("/api/v3/tag")
