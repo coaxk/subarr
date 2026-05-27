@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,15 +11,35 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
-from .routers import browse, mode
+from .routers import browse, mode, queue, scan
+from .scan_runner import ScanRunner
+from .scan_store import ScanStore
+from .subgen_client import SubgenClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="subarr", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    app_.state.subgen = SubgenClient()
+    app_.state.scans = ScanStore(settings.db_path)
+    app_.state.scans.init_schema()
+    app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
+    try:
+        yield
+    finally:
+        await app_.state.runner.aclose()
+        await app_.state.subgen.aclose()
+        app_.state.scans.close()
+
+
+app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 
 app.include_router(browse.router)
 app.include_router(mode.router)
+app.include_router(queue.router)
+app.include_router(scan.router)
 
 
 @app.get("/api/health")
