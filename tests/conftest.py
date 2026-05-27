@@ -185,6 +185,7 @@ def _make_docker_stub(
     container_running: bool = True,
     container_unavailable: bool = False,
     log_lines: list[str] | None = None,
+    progress_map: dict[str, dict] | None = None,
 ):
     from subarr.docker_client import DockerOps, DockerUnavailable
 
@@ -220,6 +221,11 @@ def _make_docker_stub(
                 raise DockerUnavailable("stub: docker unavailable")
             for line in (log_lines or ["INFO:root:line one", "INFO:root:line two"]):
                 yield line
+
+        async def recent_progress(self, tail: int = 80) -> dict[str, dict]:
+            # Tests opt-in via @pytest.mark.docker_stub(progress_map=...). Default
+            # is empty so the queue endpoint doesn't try to talk to docker.
+            return progress_map or {}
 
     return _StubDocker
 

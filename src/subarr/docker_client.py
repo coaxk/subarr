@@ -1,14 +1,16 @@
 """Thin wrapper around the docker SDK.
 
 Subarr's docker.sock surface is intentionally narrow: tail logs from the
-subgen container, restart the subgen container. Nothing else. This keeps the
-docker.sock security tradeoff (root-equivalent) honest — no user input ever
-flows into Docker SDK calls.
+subgen container, restart the subgen container, snapshot recent logs to
+extract progress lines. Nothing else. This keeps the docker.sock security
+tradeoff (root-equivalent) honest — no user input ever flows into Docker
+SDK calls.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import AsyncIterator
 
 import docker
@@ -17,6 +19,17 @@ from docker.errors import NotFound
 from .config import settings
 
 log = logging.getLogger(__name__)
+
+# subgen emits progress lines like:
+#   INFO:root:[ Cette nuit-là - S01E02 - TBA WEBDL-72.. ]  78% | 2040/2610 s [06:43<01:52,  5.06s/s] | Jobs: 1 processing, 0 queued
+# Filename in brackets is left-truncated to ~38 chars + ".." when long.
+# Capture: filename_prefix, pct, current_sec, total_sec, elapsed, eta, speed.
+_PROGRESS_RE = re.compile(
+    r"\[\s*(?P<name>.+?)\s*\.{0,2}\s*\]\s+"
+    r"(?P<pct>\d+)%\s+\|\s+"
+    r"(?P<cur>[\d.]+)/(?P<tot>[\d.]+)\s+s\s+"
+    r"\[(?P<elapsed>[\d:]+)<(?P<eta>[\d:?]+),\s+(?P<speed>[\d.]+)s/s\]"
+)
 
 
 class DockerUnavailable(RuntimeError):
@@ -77,6 +90,51 @@ class DockerOps:
             }
 
         return await asyncio.to_thread(_do)
+
+    async def recent_progress(self, tail: int = 80) -> dict[str, dict]:
+        """Snapshot recent subgen log lines and pull the latest progress
+        update per file. Returns {filename_prefix → {pct, cur_s, tot_s,
+        elapsed, eta, speed_s_per_s}}. Last write wins per filename — the
+        most recent line for each file is what the GUI shows.
+
+        Keyed by the truncated name subgen emits in the bracket; the
+        queue-merge step in routers/queue.py matches it against
+        os.path.basename of each processing-task path."""
+        def _do() -> dict[str, dict]:
+            client = self._get()
+            try:
+                container = client.containers.get(settings.subgen_container)
+            except NotFound:
+                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+            # docker logs(tail=N) returns the last N lines as bytes.
+            raw = container.logs(tail=tail, stream=False, timestamps=False)
+            if isinstance(raw, bytes):
+                text = raw.decode("utf-8", errors="replace")
+            else:
+                text = str(raw)
+            out: dict[str, dict] = {}
+            for line in text.splitlines():
+                m = _PROGRESS_RE.search(line)
+                if not m:
+                    continue
+                d = m.groupdict()
+                out[d["name"]] = {
+                    "pct": int(d["pct"]),
+                    "cur_s": float(d["cur"]),
+                    "tot_s": float(d["tot"]),
+                    "elapsed": d["elapsed"],
+                    "eta": d["eta"],
+                    "speed_s_per_s": float(d["speed"]),
+                }
+            return out
+
+        try:
+            return await asyncio.to_thread(_do)
+        except DockerUnavailable:
+            return {}
+        except Exception as e:
+            log.debug("recent_progress error (non-fatal): %s", e)
+            return {}
 
     async def stream_subgen_logs(self, tail: int = 200) -> AsyncIterator[str]:
         """Yields log lines from subgen, decoded UTF-8 (errors replaced).

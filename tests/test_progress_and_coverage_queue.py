@@ -1,0 +1,154 @@
+"""Tests for the v1.1 batch 2 additions:
+
+- docker_client._PROGRESS_RE parses subgen's progress log lines.
+- /api/queue merges per-processing-task progress when docker_ops reports any.
+- POST /api/coverage/queue resolves a sonarr_episode_id to a single .mkv
+  file path via sonarr.episode + sonarr.episode_file, NOT the series dir.
+"""
+from __future__ import annotations
+
+import httpx
+import pytest
+
+
+# ───── progress regex ───────────────────────────────────────────────────────
+
+
+def test_progress_regex_parses_subgen_lines():
+    from subarr.docker_client import _PROGRESS_RE
+    line = (
+        "INFO:root:[ Cette nuit-là - S01E02 - TBA WEBDL-72.. ]  78% "
+        "| 2040/2610 s [06:43<01:52,  5.06s/s] | Jobs: 1 processing, 0 queued"
+    )
+    m = _PROGRESS_RE.search(line)
+    assert m, "expected progress regex to match"
+    d = m.groupdict()
+    assert d["name"] == "Cette nuit-là - S01E02 - TBA WEBDL-72"
+    assert d["pct"] == "78"
+    assert d["cur"] == "2040"
+    assert d["tot"] == "2610"
+    assert d["elapsed"] == "06:43"
+    assert d["eta"] == "01:52"
+    assert d["speed"] == "5.06"
+
+
+def test_progress_regex_short_filename_no_truncation():
+    from subarr.docker_client import _PROGRESS_RE
+    line = "INFO:root:[ Foo - S01E01.mkv ]  5% | 100/2000 s [00:20<06:30,  4.94s/s] | Jobs:"
+    m = _PROGRESS_RE.search(line)
+    assert m
+    assert m.groupdict()["name"] == "Foo - S01E01.mkv"
+
+
+# ───── /api/queue with progress merge ────────────────────────────────────
+
+
+def _subgen_busy(req: httpx.Request) -> httpx.Response:
+    if req.url.path == "/queue":
+        return httpx.Response(200, json={
+            "queued": [],
+            "processing": [{
+                "path": "/media/TV/Cette nuit-là/Season 1/Cette nuit-là - S01E02 - TBA WEBDL-720p.mkv",
+                "type": "transcribe",
+            }],
+            "queued_count": 0,
+            "processing_count": 1,
+            "idle": False,
+            "version": "2026.05.3",
+        })
+    return httpx.Response(404)
+
+
+@pytest.mark.subgen(handler=_subgen_busy)
+@pytest.mark.docker_stub(progress_map={
+    "Cette nuit-là - S01E02 - TBA WEBDL-72": {
+        "pct": 78, "cur_s": 2040.0, "tot_s": 2610.0,
+        "elapsed": "06:43", "eta": "01:52", "speed_s_per_s": 5.06,
+    },
+})
+def test_queue_merges_progress_into_processing_rows(app_with_stub):
+    r = app_with_stub.get("/api/queue")
+    assert r.status_code == 200
+    body = r.json()
+    proc = body["processing"][0]
+    assert "progress" in proc, f"expected progress merged, got {proc}"
+    assert proc["progress"]["pct"] == 78
+    assert proc["progress"]["elapsed"] == "06:43"
+
+
+@pytest.mark.subgen(handler=_subgen_busy)
+def test_queue_no_progress_when_docker_silent(app_with_stub):
+    r = app_with_stub.get("/api/queue")
+    proc = r.json()["processing"][0]
+    assert "progress" not in proc
+
+
+# ───── POST /api/coverage/queue resolves to single file ─────────────────────
+
+
+def _sonarr_resolver_handler(req: httpx.Request) -> httpx.Response:
+    path = req.url.path
+    if path == "/api/v3/system/status":
+        return httpx.Response(200, json={"version": "4.0.17.2967"})
+    if path == "/api/v3/episode/9001":
+        return httpx.Response(200, json={
+            "id": 9001, "seriesId": 42, "seasonNumber": 1,
+            "episodeNumber": 3, "title": "Pilot", "hasFile": True,
+            "episodeFileId": 4242,
+        })
+    if path == "/api/v3/episodefile/4242":
+        return httpx.Response(200, json={
+            "id": 4242, "seriesId": 42,
+            "path": "/data/Media/TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv",
+        })
+    return httpx.Response(404)
+
+
+@pytest.fixture
+def coverage_queue_media_root():
+    """Plant the resolved file on disk so canonical_to_fs passes the
+    target.exists() check."""
+    from subarr.config import settings
+    folder = settings.media_root / "TV" / "Foreign Drama" / "Season 1"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "Foreign.Drama.S01E03.mkv").write_bytes(b"")
+    yield
+
+
+@pytest.mark.integrations_stub(sonarr_handler=_sonarr_resolver_handler)
+def test_coverage_queue_resolves_episode_to_file(app_with_stub, coverage_queue_media_root):
+    r = app_with_stub.post("/api/coverage/queue", json={"sonarr_episode_id": 9001})
+    assert r.status_code == 202, r.json()
+    body = r.json()
+    # The resolved canonical is the SINGLE file, not the series dir.
+    assert body["canonical_path"] == "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+    assert body["is_file"] is True
+    assert body["resolved_via"] == "sonarr_episode_id=9001"
+
+
+def _sonarr_no_file_handler(req: httpx.Request) -> httpx.Response:
+    if req.url.path == "/api/v3/episode/777":
+        return httpx.Response(200, json={"id": 777, "hasFile": False, "episodeFileId": 0})
+    return _sonarr_resolver_handler(req)
+
+
+@pytest.mark.integrations_stub(sonarr_handler=_sonarr_no_file_handler)
+def test_coverage_queue_404_when_episode_has_no_file(app_with_stub):
+    r = app_with_stub.post("/api/coverage/queue", json={"sonarr_episode_id": 777})
+    assert r.status_code == 404
+    assert "no episodeFileId" in r.json()["detail"]
+
+
+def test_coverage_queue_falls_back_to_canonical_path(app_with_stub, coverage_queue_media_root):
+    """Movies: Bazarr's wanted payload doesn't expose a per-file id, so the
+    button posts canonical_path directly and we skip Sonarr resolution."""
+    r = app_with_stub.post("/api/coverage/queue", json={
+        "canonical_path": "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv",
+    })
+    assert r.status_code == 202
+    assert r.json()["resolved_via"] == "canonical_path"
+
+
+def test_coverage_queue_400_when_nothing_supplied(app_with_stub):
+    r = app_with_stub.post("/api/coverage/queue", json={})
+    assert r.status_code == 400

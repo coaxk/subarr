@@ -420,9 +420,10 @@
     } else {
       cCard.innerHTML = `<span class="muted">docker unavailable</span>`;
     }
-    // Queue
+    // Queue (board layout, processing rows get progress bars)
     const qCard = $('#queue-card');
-    const qBody = $('#queue-table tbody');
+    const qProc = $('#q-processing');
+    const qQueued = $('#q-queued');
     if (q) {
       qCard.innerHTML = `
         <div class="row"><span class="k">idle</span><span class="v">${q.idle ? 'yes' : 'no'}</span></div>
@@ -430,24 +431,53 @@
         <div class="row"><span class="k">processing</span><span class="v">${q.processing_count}</span></div>
         <div class="row"><span class="k">version</span><span class="v">${escape(q.version || '')}</span></div>
       `;
-      qBody.innerHTML = '';
-      const rows = [
-        ...q.processing.map((r) => ({ state: 'processing', ...r })),
-        ...q.queued.map((r) => ({ state: 'queued', ...r })),
-      ];
-      if (rows.length === 0) {
-        qBody.innerHTML = `<tr class="empty-row"><td colspan="3">queue idle</td></tr>`;
+      qProc.innerHTML = '';
+      qQueued.innerHTML = '';
+      if ((q.processing || []).length === 0) {
+        qProc.innerHTML = '<li class="q-empty">idle</li>';
       } else {
-        for (const r of rows) {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${r.state}</td><td>${escape(r.type || '')}</td><td>${escape(r.path || '')}</td>`;
-          qBody.appendChild(tr);
-        }
+        for (const t of q.processing) qProc.appendChild(renderQueueRow(t, 'processing'));
+      }
+      if ((q.queued || []).length === 0) {
+        qQueued.innerHTML = '<li class="q-empty">empty</li>';
+      } else {
+        for (const t of q.queued) qQueued.appendChild(renderQueueRow(t, 'queued'));
       }
     } else {
       qCard.innerHTML = `<span class="muted">subgen unreachable</span>`;
-      qBody.innerHTML = '';
+      qProc.innerHTML = '';
+      qQueued.innerHTML = '';
     }
+  }
+
+  function renderQueueRow(task, state) {
+    const li = document.createElement('li');
+    const basename = (task.path || '').split('/').pop() || task.path || '(unknown)';
+    const head = document.createElement('div');
+    head.className = 'q-row-head';
+    head.innerHTML = `
+      <span class="q-row-name" title="${escape(task.path || '')}">${escape(basename)}</span>
+      <span class="q-row-type">${escape(task.type || '')}</span>
+      <button class="q-cancel" disabled title="subgen v4.2 doesn't expose task cancel — needs a v4.3 patch">cancel</button>
+    `;
+    li.appendChild(head);
+    if (state === 'processing' && task.progress) {
+      const p = task.progress;
+      const line = document.createElement('div');
+      line.className = 'q-progress-line';
+      line.innerHTML = `<span>${p.pct}%</span><span>${p.elapsed} elapsed · ${p.eta} eta · ${p.speed_s_per_s.toFixed(2)}s/s</span>`;
+      li.appendChild(line);
+      const bar = document.createElement('div');
+      bar.className = 'q-progress-bar';
+      bar.innerHTML = `<div class="fill" style="width: ${p.pct}%"></div>`;
+      li.appendChild(bar);
+    } else if (state === 'processing') {
+      const line = document.createElement('div');
+      line.className = 'q-progress-line';
+      line.innerHTML = `<span class="muted">no progress data yet</span>`;
+      li.appendChild(line);
+    }
+    return li;
   }
   function refreshMonitor() { pollHeader(); /* renderMonitor runs from pollHeader */ }
 
@@ -525,10 +555,38 @@
 
   // ───── Coverage tab ─────
   let coverageRaw = null;
+
+  // Track rows queued in this browser across page reloads. Keyed by:
+  //   ep:<sonarr_episode_id>  for episodes
+  //   mv:<canonical_path>     for movies
+  // Value: { scan_id, queued_at_ms }. We forget entries older than 24h
+  // to avoid stale-state confusion across days.
+  const COV_QUEUED_KEY = 'subarr.coverage.queued.v1';
+  function loadQueuedMap() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COV_QUEUED_KEY) || '{}');
+      const now = Date.now();
+      const fresh = {};
+      for (const [k, v] of Object.entries(raw)) {
+        if (v && v.queued_at_ms && (now - v.queued_at_ms) < 24 * 3600 * 1000) fresh[k] = v;
+      }
+      return fresh;
+    } catch { return {}; }
+  }
+  function saveQueuedMap(m) {
+    try { localStorage.setItem(COV_QUEUED_KEY, JSON.stringify(m)); } catch {}
+  }
+  function coverageRowKey(item) {
+    const eid = item?.bazarr?.episode_id;
+    if (eid) return `ep:${eid}`;
+    if (item?.canonical_path) return `mv:${item.canonical_path}`;
+    return null;
+  }
   function renderCoverage() {
     if (!coverageRaw) return;
     const tbody = $('#cov-table tbody');
     tbody.innerHTML = '';
+    var covQueuedMap = loadQueuedMap();
     const hideStale = $('#cov-hide-stale').checked;
     const filter = ($('#cov-filter').value || '').toLowerCase().trim();
     let shown = 0;
@@ -543,11 +601,26 @@
       const tr = document.createElement('tr');
       if (item.has_sub_on_disk) tr.classList.add('row-stale');
       const scoreCls = item.score >= 1000 ? 'high' : item.score >= 200 ? 'mid' : item.score < 0 ? 'neg' : 'low';
-      const canQueue = !!item.canonical_path;
-      const queueBtnLabel = item.has_sub_on_disk ? 'Re-scan' : '→ Queue';
-      const queueBtnTitle = canQueue
-        ? `Send ${item.canonical_path} to subgen via /api/scan`
-        : 'No path available (Sonarr/Radarr metadata missing for this row)';
+      const rowKey = coverageRowKey(item);
+      const isAlreadyQueued = rowKey && (covQueuedMap[rowKey] !== undefined);
+      if (isAlreadyQueued) tr.classList.add('row-queued');
+      const canQueue = !!(item.bazarr?.episode_id) || !!item.canonical_path;
+      let queueBtnLabel;
+      let queueBtnTitle;
+      if (isAlreadyQueued) {
+        queueBtnLabel = '✓ queued';
+        queueBtnTitle = `scan_id ${covQueuedMap[rowKey].scan_id} — queued earlier in this browser`;
+      } else if (item.has_sub_on_disk) {
+        queueBtnLabel = 'Re-scan';
+        queueBtnTitle = 'Re-queue this file (existing .srt will be overwritten by subgen)';
+      } else {
+        queueBtnLabel = '→ Queue';
+        queueBtnTitle = item.bazarr?.episode_id
+          ? `Resolve sonarr episode ${item.bazarr.episode_id} → single .mkv and send to subgen`
+          : 'Send this row to subgen (path-level)';
+      }
+      if (!canQueue) queueBtnTitle = 'No sonarr episode id or canonical path — nothing to queue';
+      tr.dataset.rowKey = rowKey || '';
       tr.innerHTML = `
         <td class="score ${scoreCls}" title="${escape((item.score_reasons || []).join(' · '))}">${item.score}</td>
         <td>${escape(item.media_type)}</td>
@@ -558,7 +631,11 @@
         <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}" title="${item.has_sub_on_disk ? 'Disk has .srt: Bazarr view is stale. Re-scan only if the existing sub is bad.' : ''}">${item.has_sub_on_disk ? '!' : '—'}</td>
         <td>${escape((item.bazarr?.missing_subtitles || []).join(', '))}</td>
         <td>${escape((item.tags || []).join(', '))}</td>
-        <td><button class="ghost small cov-queue-btn" data-path="${escape(item.canonical_path || '')}" title="${escape(queueBtnTitle)}" ${canQueue ? '' : 'disabled'}>${queueBtnLabel}</button></td>
+        <td><button class="ghost small cov-queue-btn ${isAlreadyQueued ? 'queued' : ''}"
+                   data-episode-id="${item.bazarr?.episode_id ?? ''}"
+                   data-canonical="${escape(item.canonical_path || '')}"
+                   data-row-key="${escape(rowKey || '')}"
+                   title="${escape(queueBtnTitle)}" ${(canQueue && !isAlreadyQueued) ? '' : 'disabled'}>${queueBtnLabel}</button></td>
       `;
       tbody.appendChild(tr);
     }
@@ -616,30 +693,44 @@
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
 
-  // Per-row Queue button (event-delegated so we don't rebind every render).
+  // Per-row Queue button (event-delegated). Posts to /api/coverage/queue
+  // which resolves the sonarr_episode_id to a single .mkv file before
+  // enqueueing — so we queue ONE episode, not the whole series directory.
   $('#cov-table').addEventListener('click', async (ev) => {
     const btn = ev.target.closest('.cov-queue-btn');
     if (!btn || btn.disabled) return;
-    const path = btn.dataset.path;
-    if (!path) return;
-    const orig = btn.textContent;
+    const epId = btn.dataset.episodeId ? Number(btn.dataset.episodeId) : null;
+    const canonical = btn.dataset.canonical || null;
+    const rowKey = btn.dataset.rowKey || null;
     btn.disabled = true;
     btn.textContent = '…';
     try {
-      const r = await fetch('/api/scan', {
+      const body = {};
+      if (epId) body.sonarr_episode_id = epId;
+      else if (canonical) body.canonical_path = canonical;
+      else throw new Error('nothing to queue');
+      const r = await fetch('/api/coverage/queue', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ paths: [path], reverse: false }),
+        body: JSON.stringify(body),
       });
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      // Persist + flip row to queued state.
+      if (rowKey) {
+        const map = loadQueuedMap();
+        map[rowKey] = { scan_id: data.id, canonical: data.canonical_path, queued_at_ms: Date.now() };
+        saveQueuedMap(map);
+      }
       btn.textContent = '✓ queued';
-      btn.title = `scan_id ${body.id}`;
-      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 4000);
+      btn.classList.add('queued');
+      btn.title = `scan_id ${data.id} · resolved ${data.canonical_path}`;
+      const tr = btn.closest('tr');
+      if (tr) tr.classList.add('row-queued');
     } catch (e) {
       btn.textContent = '✗ ' + (e.message.length > 40 ? e.message.slice(0, 40) + '…' : e.message);
       btn.title = e.message;
-      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 6000);
+      setTimeout(() => { btn.textContent = '→ Queue'; btn.disabled = false; }, 6000);
     }
   });
 

@@ -13,7 +13,9 @@ from . import __version__
 from .config import settings
 from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
-from .routers import admin, browse, coverage, gpu, integrations, logs, mode, queue, scan
+from .routers import (
+    admin, browse, coverage, coverage_actions, gpu, integrations, logs, mode, queue, scan,
+)
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .subgen_client import SubgenClient
@@ -51,6 +53,7 @@ app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(integrations.router)
 app.include_router(coverage.router)
+app.include_router(coverage_actions.router)
 
 
 @app.get("/api/health")

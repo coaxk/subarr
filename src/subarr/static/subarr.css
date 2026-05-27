@@ -352,5 +352,84 @@ button.ghost:hover { background: var(--bg-elev2); }
 .coverage-table .disk-srt-no { color: var(--muted); }
 .coverage-table tr:hover { background: var(--bg-elev2); cursor: pointer; }
 .coverage-table .row-stale { opacity: 0.55; }
+.coverage-table .row-queued { opacity: 0.7; background: rgba(79, 208, 127, 0.05); }
 .coverage-table .cov-queue-btn { padding: 3px 8px; font-size: 11px; }
 .coverage-table .cov-queue-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.coverage-table .cov-queue-btn.queued { background: var(--ok); color: #06101e; border-color: var(--ok); }
+
+/* ───── Queue board (Monitor tab) ───── */
+.queue-board {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+}
+@media (max-width: 700px) { .queue-board { grid-template-columns: 1fr; } }
+.queue-col h3 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.queue-list { list-style: none; padding: 0; margin: 0; }
+.queue-list li {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.queue-list .q-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.queue-list .q-row-name {
+  font-family: var(--font-mono);
+  word-break: break-all;
+  flex: 1;
+  color: var(--text);
+}
+.queue-list .q-row-type {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.queue-list .q-progress-line {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.queue-list .q-progress-bar {
+  background: var(--bg-elev2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.queue-list .q-progress-bar .fill {
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  height: 100%;
+  transition: width 0.4s ease;
+}
+.queue-list .q-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.queue-list .q-empty { color: var(--muted); padding: 8px 10px; }

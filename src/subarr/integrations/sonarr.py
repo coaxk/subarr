@@ -30,3 +30,10 @@ class SonarrClient(IntegrationClient):
 
     async def tags(self) -> list[dict[str, Any]]:
         return await self._get("/api/v3/tag")
+
+    async def episode(self, episode_id: int) -> dict[str, Any]:
+        return await self._get(f"/api/v3/episode/{episode_id}")
+
+    async def episode_file(self, episode_file_id: int) -> dict[str, Any]:
+        """Per-file info: includes `path` — the absolute path Sonarr stores."""
+        return await self._get(f"/api/v3/episodefile/{episode_file_id}")

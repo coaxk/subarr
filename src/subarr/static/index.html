@@ -137,10 +137,17 @@
       <div class="card">
         <h2>Queue (subgen v4.2)</h2>
         <div id="queue-card" class="kv">loading…</div>
-        <table class="tbl" id="queue-table">
-          <thead><tr><th>state</th><th>type</th><th>path</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <p class="muted small">Pause / cancel / reorder requires a v4.3 patch to subgen (DeduplicatedQueue doesn't currently expose item removal). The cancel buttons below are disabled until that lands.</p>
+        <div class="queue-board">
+          <div class="queue-col">
+            <h3>Processing</h3>
+            <ul class="queue-list" id="q-processing"></ul>
+          </div>
+          <div class="queue-col">
+            <h3>Queued</h3>
+            <ul class="queue-list" id="q-queued"></ul>
+          </div>
+        </div>
       </div>
     </section>
 
