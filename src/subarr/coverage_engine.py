@@ -51,6 +51,13 @@ class CoverageItem:
     bazarr_radarr_id: int | None = None
     bazarr_episode_id: int | None = None
     missing_subtitles: list[str] = field(default_factory=list)
+    # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
+    embedded_en: str | None = None   # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
+    audio_langs: list[str] = field(default_factory=list)
+    suggest_bazarr_rescan: bool = False
+    # Resolved file path (file-level, not series-dir; populated when
+    # Sonarr's episode_file is fetched during enrichment)
+    file_canonical_path: str | None = None
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
@@ -73,6 +80,10 @@ class CoverageItem:
                 "episode_id": self.bazarr_episode_id,
                 "missing_subtitles": self.missing_subtitles,
             },
+            "embedded_en": self.embedded_en,
+            "audio_langs": self.audio_langs,
+            "suggest_bazarr_rescan": self.suggest_bazarr_rescan,
+            "file_canonical_path": self.file_canonical_path,
             "score": self.score,
             "score_reasons": self.score_reasons,
         }
@@ -94,6 +105,8 @@ class CoverageReport:
                 "episodes": sum(1 for i in self.items if i.media_type == "episode"),
                 "movies": sum(1 for i in self.items if i.media_type == "movie"),
                 "with_disk_sub": sum(1 for i in self.items if i.has_sub_on_disk),
+                "embedded_full_en": sum(1 for i in self.items if i.embedded_en == "EN"),
+                "suggest_bazarr_rescan": sum(1 for i in self.items if i.suggest_bazarr_rescan),
             },
         }
 
@@ -239,6 +252,55 @@ def _tautulli_signals(history: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _episode_filename_pattern(episode_number: str | None) -> str | None:
+    """Convert Bazarr's "1x3" → "S01E03" regex pattern for filename matching.
+    Returns None if unparseable."""
+    if not episode_number or "x" not in episode_number:
+        return None
+    try:
+        season, episode = episode_number.split("x")
+        return f"S{int(season):02d}E{int(episode):02d}".lower()
+    except (ValueError, TypeError):
+        return None
+
+
+def _attach_probe_episode(item: CoverageItem, idx: dict[str, list]) -> None:
+    """Look up a probed file under the series prefix whose basename
+    contains S01E03 (or equivalent). On match, copy embedded_en +
+    audio_langs + file_canonical_path onto the item."""
+    from .media_probe import audio_lang_summary, english_track_summary
+    if not item.canonical_path:
+        return
+    candidates = idx.get(item.canonical_path) or []
+    if not candidates:
+        return
+    pattern = _episode_filename_pattern(item.episode_number)
+    if not pattern:
+        return
+    for file_canonical, probe in candidates:
+        basename = file_canonical.rsplit("/", 1)[-1].lower()
+        if pattern in basename:
+            item.file_canonical_path = file_canonical
+            item.embedded_en = english_track_summary(probe)
+            item.audio_langs = audio_lang_summary(probe)
+            return
+
+
+def _attach_probe_movie(item: CoverageItem, idx: dict[str, list]) -> None:
+    """Movies: a single video file lives directly under the movie dir.
+    First probe under the movie's canonical wins."""
+    from .media_probe import audio_lang_summary, english_track_summary
+    if not item.canonical_path:
+        return
+    candidates = idx.get(item.canonical_path) or []
+    if not candidates:
+        return
+    file_canonical, probe = candidates[0]
+    item.file_canonical_path = file_canonical
+    item.embedded_en = english_track_summary(probe)
+    item.audio_langs = audio_lang_summary(probe)
+
+
 def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
     s = 0
     reasons: list[str] = []
@@ -264,6 +326,14 @@ def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
         # Strong negative — disk has a sub, Bazarr's view is stale.
         s -= 5000
         reasons.append("stale: disk already has .srt (Bazarr needs scan-disk)")
+    # v1.1 hotfix: embedded English in the container itself.
+    if item.embedded_en == "EN":
+        s -= 3000
+        reasons.append("embedded: full English sub in file (Bazarr missed it)")
+        item.suggest_bazarr_rescan = True
+    elif item.embedded_en in {"EN(forced)", "EN(SDH)", "EN(commentary)"}:
+        s -= 500
+        reasons.append(f"embedded: {item.embedded_en} — partial coverage")
     item.score = s
     item.score_reasons = reasons
 
@@ -271,7 +341,12 @@ def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
 # ───────────────────────────── main entrypoint ──────────────────────────────
 
 
-async def build_coverage(bundle: IntegrationBundle, *, use_tautulli: bool = True) -> CoverageReport:
+async def build_coverage(
+    bundle: IntegrationBundle,
+    *,
+    use_tautulli: bool = True,
+    probe_store: Any = None,  # ProbeStore | None — avoid circular import
+) -> CoverageReport:
     sources: dict[str, dict] = {}
 
     bz_eps, bz_movs = await _fetch_bazarr(bundle.bazarr, sources)
@@ -299,6 +374,23 @@ async def build_coverage(bundle: IntegrationBundle, *, use_tautulli: bool = True
                        for m in radarr_movies if isinstance(m, dict)}
     tt_signals = _tautulli_signals(history) if history else {}
 
+    # Probe-cache index: { series_canonical_prefix → [(file_canonical, ProbeResult)] }
+    # Pre-build once so per-row lookup is O(files-under-this-series) not O(total-cache).
+    probe_by_series_prefix: dict[str, list[tuple[str, Any]]] = {}
+    if probe_store is not None:
+        sources["probe_cache"] = {"ok": True, "entries": 0}
+        for path in probe_store.all_paths():
+            entry = probe_store.get(path)  # non-strict — accept whatever's cached
+            if entry is None:
+                continue
+            sources["probe_cache"]["entries"] += 1
+            # Index under all ancestor prefixes so a single all-series cache scan
+            # finds matches for any series-level Bazarr row.
+            parts = path.split("/")
+            for i in range(2, len(parts)):  # skip top-level (TV/Movies)
+                prefix = "/".join(parts[:i])
+                probe_by_series_prefix.setdefault(prefix, []).append((path, entry))
+
     items: list[CoverageItem] = []
 
     # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
@@ -323,6 +415,7 @@ async def build_coverage(bundle: IntegrationBundle, *, use_tautulli: bool = True
             missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
                                for ms in (w.get("missing_subtitles") or [])],
         )
+        _attach_probe_episode(item, probe_by_series_prefix)
         _score(item, tt_signals)
         items.append(item)
 
@@ -346,6 +439,7 @@ async def build_coverage(bundle: IntegrationBundle, *, use_tautulli: bool = True
             missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
                                for ms in (w.get("missing_subtitles") or [])],
         )
+        _attach_probe_movie(item, probe_by_series_prefix)
         _score(item, tt_signals)
         items.append(item)
 

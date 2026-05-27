@@ -101,6 +101,8 @@
             <th>lang</th>
             <th>monitored</th>
             <th>disk srt</th>
+            <th>embedded</th>
+            <th>audio</th>
             <th>missing</th>
             <th>tags</th>
             <th></th>
@@ -165,6 +167,15 @@
         </table>
         <h3 class="muted">Top-level (SUBGEN_KWARGS)</h3>
         <pre id="kwargs-top" class="codeblock">…</pre>
+      </div>
+      <div class="card">
+        <h2>Probe walk (ffprobe)</h2>
+        <p class="muted small">Deep-scan media files to detect embedded subtitles and audio language tags. Populates the cache the Coverage tab reads — rows with a full English embedded sub get demoted automatically.</p>
+        <div class="action-row">
+          <input type="text" id="probe-walk-path" placeholder="canonical path, e.g. TV/Nicolas Le Floch" style="flex:1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;">
+          <button class="primary" id="probe-walk-start">Start walk</button>
+        </div>
+        <div id="probe-walks-list" class="muted small" style="margin-top:8px"></div>
       </div>
       <div class="card">
         <h2>Schedule &amp; Auto-queue</h2>

@@ -1,6 +1,14 @@
 FROM python:3.12-slim AS base
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 
+# ffmpeg package ships both ffmpeg + ffprobe. Some distros split the package;
+# Debian slim keeps them together. Pin to `ffmpeg` (not `ffprobe`) for that
+# reason. Adds ~150MB to the image but it's the canonical install path and
+# the probe subsystem (v1.1 batch 1 hotfix) needs it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install build deps only if/when we add native wheels. Keep image lean for now.

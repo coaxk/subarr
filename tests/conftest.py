@@ -56,9 +56,10 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     from subarr import app as app_mod
     from subarr import (
         auto_queue, completion_watcher, config, coverage_engine, docker_client,
-        enrichment as enrichment_mod, paths, provenance as prov_mod,
-        scan_runner, scan_store, schedule_store as sched_store_mod,
-        scheduler as scheduler_mod, subgen_client,
+        enrichment as enrichment_mod, media_probe, paths,
+        probe_store as probe_store_mod, probe_walker as probe_walker_mod,
+        provenance as prov_mod, scan_runner, scan_store,
+        schedule_store as sched_store_mod, scheduler as scheduler_mod, subgen_client,
     )
     from subarr.integrations import bazarr as iz_bazarr
     from subarr.integrations import base as iz_base
@@ -67,20 +68,23 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     from subarr.integrations import sonarr as iz_sonarr
     from subarr.integrations import tautulli as iz_tautulli
     from subarr.routers import (
-        admin, browse, coverage, coverage_actions,
+        admin, bazarr_sync, browse, coverage, coverage_actions,
         enrichment as r_enrichment,
         gpu, integrations as r_integrations,
-        logs, mode, provenance as r_provenance, queue, scan,
+        logs, mode, probe as r_probe,
+        provenance as r_provenance, queue, scan,
         schedule as r_schedule,
     )
 
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
         prov_mod, completion_watcher, sched_store_mod, auto_queue, scheduler_mod,
+        media_probe, probe_store_mod, probe_walker_mod,
         iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, iz_ollama,
         enrichment_mod, coverage_engine,
         browse, mode, queue, scan, gpu, logs, admin, r_integrations,
-        coverage, coverage_actions, r_provenance, r_schedule, r_enrichment, app_mod,
+        coverage, coverage_actions, r_provenance, r_schedule, r_enrichment,
+        r_probe, bazarr_sync, app_mod,
     ]:
         importlib.reload(m)
 

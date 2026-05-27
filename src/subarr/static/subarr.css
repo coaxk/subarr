@@ -359,6 +359,38 @@ button.ghost:hover { background: var(--bg-elev2); }
 .coverage-table .lang-enrich-btn { padding: 2px 6px; font-size: 10px; color: var(--accent); border-color: var(--accent-dim); }
 .coverage-table .lang-enriched { color: var(--ok); font-family: var(--font-mono); }
 
+.coverage-table .embedded-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.coverage-table .embedded-full { color: var(--ok); border-color: var(--ok); }
+.coverage-table .embedded-partial { color: var(--warn); border-color: var(--warn); }
+.coverage-table .embedded-none { color: var(--muted); }
+.coverage-table .audio-langs { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.coverage-table .probe-btn { padding: 2px 6px; font-size: 10px; color: var(--accent); border-color: var(--accent-dim); }
+.coverage-table .bazarr-resync-btn { padding: 2px 6px; font-size: 10px; color: var(--warn); border-color: var(--warn); margin-left: 4px; }
+
+/* Probe walks panel */
+.probe-walk-row {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.probe-walk-row .pw-head { display: flex; justify-content: space-between; }
+.probe-walk-row .pw-bar { background: var(--bg-elev2); border-radius: 3px; height: 6px; overflow: hidden; margin-top: 4px; }
+.probe-walk-row .pw-bar .pw-fill { background: var(--accent); height: 100%; transition: width 0.4s ease; }
+.probe-walk-row .pw-status-running { color: var(--accent); }
+.probe-walk-row .pw-status-done { color: var(--ok); }
+.probe-walk-row .pw-status-error { color: var(--err); }
+.probe-walk-row .pw-status-cancelled { color: var(--muted); }
+
 /* ───── Queue board (Monitor tab) ───── */
 .queue-board {
   display: grid;

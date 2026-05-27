@@ -16,11 +16,14 @@ from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
 from .enrichment import EnrichmentStore
 from .integrations.ollama import OllamaClient
+from .probe_store import ProbeStore
+from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
 from .routers import (
-    admin, browse, coverage, coverage_actions, enrichment as r_enrichment,
-    gpu, integrations, logs, mode,
-    provenance as r_provenance, queue, scan, schedule as r_schedule,
+    admin, bazarr_sync, browse, coverage, coverage_actions,
+    enrichment as r_enrichment, gpu, integrations, logs, mode,
+    probe as r_probe, provenance as r_provenance, queue, scan,
+    schedule as r_schedule,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -53,6 +56,9 @@ async def lifespan(app_: FastAPI):
     app_.state.ollama = OllamaClient()
     app_.state.enrichment = EnrichmentStore(settings.db_path)
     app_.state.enrichment.init_schema()
+    app_.state.probe_store = ProbeStore(settings.db_path)
+    app_.state.probe_store.init_schema()
+    app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         bundle=app_.state.integrations,
@@ -64,6 +70,7 @@ async def lifespan(app_: FastAPI):
     try:
         yield
     finally:
+        await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
         await app_.state.watcher.stop()
         await app_.state.runner.aclose()
@@ -74,6 +81,7 @@ async def lifespan(app_: FastAPI):
         app_.state.provenance.close()
         app_.state.schedule.close()
         app_.state.enrichment.close()
+        app_.state.probe_store.close()
         app_.state.docker.close()
 
 
@@ -92,6 +100,8 @@ app.include_router(coverage_actions.router)
 app.include_router(r_provenance.router)
 app.include_router(r_schedule.router)
 app.include_router(r_enrichment.router)
+app.include_router(r_probe.router)
+app.include_router(bazarr_sync.router)
 
 
 @app.get("/api/health")

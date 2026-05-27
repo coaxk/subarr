@@ -13,7 +13,7 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); }
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); }
     if (tab === 'coverage') loadCoverage();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
@@ -514,6 +514,58 @@
     }
   }
 
+  // ───── Probe walks ─────
+  async function loadProbeWalks() {
+    try {
+      const data = await fetch('/api/probe/walks').then((r) => r.json());
+      const list = $('#probe-walks-list');
+      list.innerHTML = '';
+      if (!data.walks || data.walks.length === 0) {
+        list.innerHTML = '<span class="muted">No walks yet. Enter a path above and click Start walk.</span>';
+        return;
+      }
+      for (const w of data.walks.slice().reverse()) {
+        const row = document.createElement('div');
+        row.className = 'probe-walk-row';
+        const pct = w.total_files > 0 ? Math.round((w.processed / w.total_files) * 100) : 0;
+        row.innerHTML = `
+          <div class="pw-head">
+            <span><span class="pw-status-${w.status}">${escape(w.status)}</span> · ${escape(w.root)}</span>
+            <span>${w.processed}/${w.total_files} files · ${w.probed} probed · ${w.cached_hits} cached · ${w.errors.length} err</span>
+          </div>
+          <div class="pw-bar"><div class="pw-fill" style="width: ${pct}%"></div></div>
+        `;
+        list.appendChild(row);
+      }
+    } catch (e) {
+      $('#probe-walks-list').textContent = 'error: ' + e.message;
+    }
+  }
+
+  $('#probe-walk-start').addEventListener('click', async () => {
+    const path = $('#probe-walk-path').value.trim();
+    if (!path) { alert('Enter a canonical path (e.g. TV/Foo Bar)'); return; }
+    try {
+      const r = await fetch('/api/probe/walk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      // Subscribe to SSE for live updates.
+      const src = new EventSource(`/api/probe/walk/${body.id}/events`);
+      src.addEventListener('snapshot', () => loadProbeWalks());
+      src.addEventListener('progress', () => loadProbeWalks());
+      src.addEventListener('done', () => { loadProbeWalks(); src.close(); });
+      src.addEventListener('error', () => { loadProbeWalks(); });
+      src.addEventListener('cancelled', () => { loadProbeWalks(); src.close(); });
+      loadProbeWalks();
+    } catch (e) {
+      alert('walk failed: ' + e.message);
+    }
+  });
+
   // ───── Schedule + Auto-queue rules ─────
   function listOrEmpty(s) {
     if (!s) return [];
@@ -756,6 +808,22 @@
       }
       if (!canQueue) queueBtnTitle = 'No sonarr episode id or canonical path — nothing to queue';
       tr.dataset.rowKey = rowKey || '';
+      // Embedded badge column
+      const filePath = item.file_canonical_path || item.canonical_path || '';
+      let embeddedHtml;
+      if (item.embedded_en === 'EN') {
+        const bazarrBtn = item.suggest_bazarr_rescan
+          ? `<button class="ghost small bazarr-resync-btn" data-series-id="${item.bazarr?.sonarr_id ?? ''}" data-canonical="${escape(filePath)}" title="Tell Bazarr to rescan disk — it missed this embedded English track">→Bazarr</button>`
+          : '';
+        embeddedHtml = `<span class="embedded-badge embedded-full" title="Full English subtitle track embedded in container">EN</span>${bazarrBtn}`;
+      } else if (item.embedded_en === 'EN(forced)' || item.embedded_en === 'EN(SDH)' || item.embedded_en === 'EN(commentary)') {
+        embeddedHtml = `<span class="embedded-badge embedded-partial" title="Partial English: ${item.embedded_en}">${escape(item.embedded_en)}</span>`;
+      } else {
+        embeddedHtml = `<button class="ghost small probe-btn" data-canonical="${escape(filePath)}" title="Run ffprobe now (single file)">probe</button>`;
+      }
+      const audioHtml = (item.audio_langs && item.audio_langs.length)
+        ? `<span class="audio-langs" title="audio language tags">${escape(item.audio_langs.join(','))}</span>`
+        : '<span class="audio-langs">—</span>';
       tr.innerHTML = `
         <td class="score ${scoreCls}" title="${escape((item.score_reasons || []).join(' · '))}">${item.score}</td>
         <td>${escape(item.media_type)}</td>
@@ -764,6 +832,8 @@
         <td class="lang">${item.original_language ? escape(item.original_language) : `<button class="ghost small lang-enrich-btn" data-row-key="${escape(rowKey || '')}" data-canonical="${escape(item.canonical_path || '')}" data-title="${escape(item.title || '')}" title="Ask ollama to infer original language">? enrich</button>`}</td>
         <td>${item.monitored === null ? '—' : (item.monitored ? '✓' : '✗')}</td>
         <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}" title="${item.has_sub_on_disk ? 'Disk has .srt: Bazarr view is stale. Re-scan only if the existing sub is bad.' : ''}">${item.has_sub_on_disk ? '!' : '—'}</td>
+        <td>${embeddedHtml}</td>
+        <td>${audioHtml}</td>
         <td>${escape((item.bazarr?.missing_subtitles || []).join(', '))}</td>
         <td>${escape((item.tags || []).join(', '))}</td>
         <td><button class="ghost small cov-queue-btn ${isAlreadyQueued ? 'queued' : ''}"
@@ -827,6 +897,56 @@
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
+
+  // Per-row probe button (run ffprobe on a single file)
+  $('#cov-table').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.probe-btn');
+    if (!btn || btn.disabled) return;
+    const canonical = btn.dataset.canonical;
+    if (!canonical) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const r = await fetch(`/api/probe?path=${encodeURIComponent(canonical)}`);
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      // Refresh coverage to fold the new probe data in.
+      btn.textContent = '✓';
+      setTimeout(() => loadCoverage(true), 400);
+    } catch (e) {
+      btn.textContent = '✗';
+      btn.title = e.message;
+      setTimeout(() => { btn.textContent = 'probe'; btn.disabled = false; }, 5000);
+    }
+  });
+
+  // Bazarr resync button (when our probe found EN that Bazarr missed)
+  $('#cov-table').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.bazarr-resync-btn');
+    if (!btn || btn.disabled) return;
+    const seriesId = btn.dataset.seriesId ? Number(btn.dataset.seriesId) : null;
+    const canonical = btn.dataset.canonical || null;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const body = {};
+      if (seriesId) body.series_id = seriesId;
+      if (canonical) body.canonical_path = canonical;
+      const r = await fetch('/api/bazarr/sync-disk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      btn.textContent = '✓ rescan';
+      btn.title = `triggered ${data.task_id}`;
+    } catch (e) {
+      btn.textContent = '✗';
+      btn.title = e.message;
+      setTimeout(() => { btn.textContent = '→Bazarr'; btn.disabled = false; }, 6000);
+    }
+  });
 
   // Per-row enrichment button (event-delegated).
   $('#cov-table').addEventListener('click', async (ev) => {
