@@ -25,6 +25,18 @@ def test_scan_rejects_unknown_path(app_with_stub):
     assert r.status_code == 404
 
 
+def test_scan_accepts_individual_file_path(app_with_stub):
+    """The Scan tab's file-leaf checkboxes pass an individual .mkv path
+    rather than a directory. Subgen's v4.1 transcribe_existing has the
+    `if os.path.isfile(path)` branch so this works end-to-end."""
+    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show/ep.mkv"]})
+    assert r.status_code == 202
+    scan_id = r.json()["id"]
+    final = _wait_done(app_with_stub, scan_id)
+    assert final["status"] == "done"
+    assert final["paths"] == ["TV/Show/ep.mkv"]
+
+
 def test_scan_rejects_traversal(app_with_stub):
     r = app_with_stub.post("/api/scan", json={"paths": ["../etc"]})
     assert r.status_code == 400

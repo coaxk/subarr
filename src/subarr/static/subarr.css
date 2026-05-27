@@ -94,9 +94,14 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
-  min-height: 70vh;
+  /* Fixed height so each pane gets bounded scrolling. Without this the
+     library tree pushes the Start Scan button below the fold when TV/
+     expands to several hundred shows. Compute against viewport minus the
+     header+tab strip+main padding so the content always fits one screen. */
+  height: calc(100vh - 200px);
+  min-height: 500px;
 }
-@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; height: auto; } }
 
 .pane {
   background: var(--bg-elev);
@@ -113,11 +118,31 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
   justify-content: space-between;
   align-items: center;
 }
+.tree-filter {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.tree-filter input[type="text"] {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 9px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.tree-filter button.small { padding: 4px 8px; font-size: 11px; }
+
 .tree, .scan-list {
   padding: 8px 4px 8px 12px;
   overflow: auto;
   flex: 1;
   margin: 0;
+  min-height: 0; /* required so flex:1 inside a column flex actually shrinks */
 }
 .tree details { padding-left: 0; }
 .tree summary {
@@ -137,6 +162,25 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
 .tree .badge-srt { color: var(--ok); }
 .tree input[type="checkbox"] { accent-color: var(--accent); }
 .tree .err { color: var(--err); }
+
+/* File leaf rows (no <details>, no expansion arrow). */
+.tree .file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 24px; /* indent matches an open <details> with no caret */
+  border-radius: 3px;
+  user-select: none;
+}
+.tree .file-row:hover { background: var(--bg-elev2); }
+.tree .file-row .icon { color: var(--muted); font-size: 10px; }
+.tree .file-row.has-srt .name { color: var(--muted); }
+.tree .file-row.has-srt .icon { color: var(--ok); }
+.tree .file-row .size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-left: 6px; }
+
+/* Filter highlight + hide */
+.tree .hide-by-filter { display: none; }
+.tree details.match-by-filter > summary { background: rgba(93, 163, 255, 0.08); }
 
 .scan-list { list-style: none; padding: 0; }
 .scan-list li {
@@ -308,3 +352,5 @@ button.ghost:hover { background: var(--bg-elev2); }
 .coverage-table .disk-srt-no { color: var(--muted); }
 .coverage-table tr:hover { background: var(--bg-elev2); cursor: pointer; }
 .coverage-table .row-stale { opacity: 0.55; }
+.coverage-table .cov-queue-btn { padding: 3px 8px; font-size: 11px; }
+.coverage-table .cov-queue-btn:disabled { opacity: 0.4; cursor: not-allowed; }

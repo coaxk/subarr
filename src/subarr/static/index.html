@@ -43,7 +43,12 @@
         <div class="pane tree-pane">
           <div class="pane-head">
             <strong>Library</strong>
+            <span class="muted small" id="tree-meta"></span>
             <button class="ghost" id="tree-refresh" title="Reload root">↻</button>
+          </div>
+          <div class="tree-filter">
+            <input type="text" id="tree-filter-input" placeholder="filter (substring, all loaded subfolders/files)">
+            <button class="ghost small" id="tree-clear-selection" title="Untick everything">clear</button>
           </div>
           <div class="tree" id="tree-root">loading…</div>
         </div>
@@ -98,6 +103,7 @@
             <th>disk srt</th>
             <th>missing</th>
             <th>tags</th>
+            <th></th>
           </tr></thead>
           <tbody></tbody>
         </table>

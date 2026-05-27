@@ -58,8 +58,45 @@
 
   const selectedPaths = new Set();
 
+  function renderFileLeaf(entry) {
+    // Video file row — flat checkbox + name + size; no <details>.
+    const row = document.createElement('div');
+    row.className = 'file-row' + (entry.has_sibling_srt ? ' has-srt' : '');
+    row.dataset.path = entry.path;
+    row.dataset.searchKey = entry.name.toLowerCase();
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = selectedPaths.has(entry.path);
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedPaths.add(entry.path);
+      else selectedPaths.delete(entry.path);
+      renderSelectedList();
+    });
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.textContent = entry.has_sibling_srt ? '◉' : '▸';
+    icon.title = entry.has_sibling_srt ? 'has sibling .srt already' : 'no sibling .srt';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = entry.name;
+    row.appendChild(cb);
+    row.appendChild(icon);
+    row.appendChild(name);
+    if (entry.size_mb != null) {
+      const size = document.createElement('span');
+      size.className = 'size';
+      size.textContent = `${entry.size_mb} MB`;
+      row.appendChild(size);
+    }
+    return row;
+  }
+
   function renderEntry(entry) {
+    if (!entry.is_dir) return renderFileLeaf(entry);
+
     const item = document.createElement('details');
+    item.dataset.path = entry.path;
+    item.dataset.searchKey = entry.name.toLowerCase();
     const summary = document.createElement('summary');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
@@ -83,6 +120,7 @@
       const b = document.createElement('span');
       b.className = 'badge-vid';
       b.textContent = `${entry.video_count}v`;
+      b.title = `${entry.video_count} video file${entry.video_count === 1 ? '' : 's'} in this folder`;
       badges.appendChild(b);
     }
     if (entry.srt_count > 0) {
@@ -90,6 +128,7 @@
       const b = document.createElement('span');
       b.className = 'badge-srt';
       b.textContent = `${entry.srt_count}srt`;
+      b.title = `${entry.srt_count} existing .srt file${entry.srt_count === 1 ? '' : 's'} in this folder`;
       badges.appendChild(b);
     }
     summary.appendChild(badges);
@@ -107,11 +146,16 @@
       try {
         const data = await browse(entry.path);
         inner.innerHTML = '';
+        inner.className = '';
         if (data.entries.length === 0) {
-          inner.textContent = '(no subfolders)';
+          const empty = document.createElement('div');
+          empty.className = 'muted small';
+          empty.textContent = '(empty)';
+          inner.appendChild(empty);
         } else {
           for (const child of data.entries) inner.appendChild(renderEntry(child));
         }
+        applyTreeFilter();
       } catch (e) {
         inner.innerHTML = '';
         inner.className = 'err small';
@@ -122,6 +166,55 @@
     return item;
   }
 
+  // ───── Tree filter ─────
+  let treeFilter = '';
+  function applyTreeFilter() {
+    const f = treeFilter.toLowerCase();
+    // Walk every node carrying a searchKey; hide rows that don't match and
+    // (for dirs) don't have a matching descendant. Show ancestors of any
+    // matching node so the path is preserved.
+    const root = $('#tree-root');
+    const nodes = root.querySelectorAll('[data-search-key]');
+    if (!f) {
+      nodes.forEach((n) => {
+        n.classList.remove('hide-by-filter', 'match-by-filter');
+      });
+      return;
+    }
+    // Two passes: first mark direct matches, then propagate "visible" up
+    // through ancestors. Anything not visible gets hidden.
+    const visible = new Set();
+    nodes.forEach((n) => {
+      const direct = n.dataset.searchKey.includes(f);
+      if (direct) {
+        visible.add(n);
+        // Mark ancestors visible.
+        let p = n.parentElement;
+        while (p && p !== root) {
+          if (p.dataset && p.dataset.searchKey) visible.add(p);
+          p = p.parentElement;
+        }
+        if (n.tagName === 'DETAILS') n.classList.add('match-by-filter');
+      }
+    });
+    nodes.forEach((n) => {
+      n.classList.toggle('hide-by-filter', !visible.has(n));
+      if (visible.has(n) && n.tagName === 'DETAILS' && !n.dataset.searchKey.includes(f)) {
+        // Show as ancestor — keep open so the match is reachable.
+        n.open = true;
+      }
+    });
+  }
+  $('#tree-filter-input').addEventListener('input', (e) => {
+    treeFilter = e.target.value.trim();
+    applyTreeFilter();
+  });
+  $('#tree-clear-selection').addEventListener('click', () => {
+    selectedPaths.clear();
+    $$('.tree input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+    renderSelectedList();
+  });
+
   async function loadRoot() {
     const root = $('#tree-root');
     root.textContent = 'loading…';
@@ -130,9 +223,14 @@
       root.innerHTML = '';
       if (data.entries.length === 0) {
         root.innerHTML = '<span class="muted">empty — check SUBARR_MEDIA_ROOT</span>';
+        $('#tree-meta').textContent = '';
         return;
       }
       for (const entry of data.entries) root.appendChild(renderEntry(entry));
+      const dirs = data.entries.filter((e) => e.is_dir).length;
+      const files = data.entries.length - dirs;
+      $('#tree-meta').textContent = `${dirs} folder${dirs === 1 ? '' : 's'}${files ? ` · ${files} file${files === 1 ? '' : 's'}` : ''}`;
+      applyTreeFilter();
     } catch (e) {
       root.innerHTML = `<span class="err">${e.message}</span>`;
     }
@@ -145,7 +243,7 @@
     if (selectedPaths.size === 0) {
       const li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = 'No paths selected. Tick folders in the tree.';
+      li.textContent = 'No paths selected. Tick folders or files in the tree.';
       list.appendChild(li);
       $('#start-scan').disabled = true;
     } else {
@@ -445,6 +543,11 @@
       const tr = document.createElement('tr');
       if (item.has_sub_on_disk) tr.classList.add('row-stale');
       const scoreCls = item.score >= 1000 ? 'high' : item.score >= 200 ? 'mid' : item.score < 0 ? 'neg' : 'low';
+      const canQueue = !!item.canonical_path;
+      const queueBtnLabel = item.has_sub_on_disk ? 'Re-scan' : '→ Queue';
+      const queueBtnTitle = canQueue
+        ? `Send ${item.canonical_path} to subgen via /api/scan`
+        : 'No path available (Sonarr/Radarr metadata missing for this row)';
       tr.innerHTML = `
         <td class="score ${scoreCls}" title="${escape((item.score_reasons || []).join(' · '))}">${item.score}</td>
         <td>${escape(item.media_type)}</td>
@@ -452,9 +555,10 @@
         <td>${escape(item.episode_number ? item.episode_number + ' ' : '')}${escape(item.episode_title || '')}</td>
         <td class="lang">${escape(item.original_language || '—')}</td>
         <td>${item.monitored === null ? '—' : (item.monitored ? '✓' : '✗')}</td>
-        <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}">${item.has_sub_on_disk ? '!' : '—'}</td>
+        <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}" title="${item.has_sub_on_disk ? 'Disk has .srt: Bazarr view is stale. Re-scan only if the existing sub is bad.' : ''}">${item.has_sub_on_disk ? '!' : '—'}</td>
         <td>${escape((item.bazarr?.missing_subtitles || []).join(', '))}</td>
         <td>${escape((item.tags || []).join(', '))}</td>
+        <td><button class="ghost small cov-queue-btn" data-path="${escape(item.canonical_path || '')}" title="${escape(queueBtnTitle)}" ${canQueue ? '' : 'disabled'}>${queueBtnLabel}</button></td>
       `;
       tbody.appendChild(tr);
     }
@@ -511,6 +615,33 @@
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
+
+  // Per-row Queue button (event-delegated so we don't rebind every render).
+  $('#cov-table').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.cov-queue-btn');
+    if (!btn || btn.disabled) return;
+    const path = btn.dataset.path;
+    if (!path) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const r = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paths: [path], reverse: false }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      btn.textContent = '✓ queued';
+      btn.title = `scan_id ${body.id}`;
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 4000);
+    } catch (e) {
+      btn.textContent = '✗ ' + (e.message.length > 40 ? e.message.slice(0, 40) + '…' : e.message);
+      btn.title = e.message;
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 6000);
+    }
+  });
 
   // ───── helpers ─────
   function escape(s) {

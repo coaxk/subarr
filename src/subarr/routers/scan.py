@@ -29,8 +29,12 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
             target = canonical_to_fs(p)
         except PathOutsideRootError:
             raise HTTPException(400, detail=f"path escapes media root: {raw!r}")
-        if not target.exists() or not target.is_dir():
-            raise HTTPException(404, detail=f"not a directory: {raw!r}")
+        if not target.exists():
+            raise HTTPException(404, detail=f"not found: {raw!r}")
+        # Both directories and individual files are valid scan targets —
+        # subgen's v4.1 transcribe_existing handles os.path.isfile(path) too.
+        if not (target.is_dir() or target.is_file()):
+            raise HTTPException(400, detail=f"not a file or directory: {raw!r}")
         cleaned.append(p)
 
     store = request.app.state.scans

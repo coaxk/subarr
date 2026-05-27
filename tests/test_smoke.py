@@ -68,9 +68,16 @@ def test_browse_root_lists_tv():
 
 
 def test_browse_counts_video_and_srt():
+    # Browsing into the show folder returns the .mkv as a file entry now
+    # (the .srt is not a leaf — only video files surface — but the file's
+    # has_sibling_srt flag picks up the .srt sibling).
     r = _client().get("/api/browse", params={"path": "TV/Show"})
     assert r.status_code == 200
-    assert r.json()["entries"] == []
+    entries = r.json()["entries"]
+    files = [e for e in entries if not e["is_dir"]]
+    assert len(files) == 1
+    assert files[0]["name"] == "episode.mkv"
+    assert files[0]["has_sibling_srt"] is True
 
     r = _client().get("/api/browse", params={"path": "TV"})
     show_entry = next(e for e in r.json()["entries"] if e["name"] == "Show")
