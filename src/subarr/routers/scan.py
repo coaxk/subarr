@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..paths import PathOutsideRootError, canonical_to_fs
+from ..provenance import SOURCE_SUBGENSCAN
 
 router = APIRouter(prefix="/api", tags=["scan"])
 
@@ -41,6 +42,19 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
     runner = request.app.state.runner
     scan = store.create(cleaned, reverse=req.reverse)
     runner.start(scan)
+
+    # Provenance: record each submitted path so /api/provenance can find it.
+    # series_id is unknown here (Scan-tab picks don't carry one) — the
+    # completion watcher will still mark completed_at, but won't trigger
+    # Bazarr scan-disk for these. That's correct: manual Scan-tab picks are
+    # power-user surgery; Coverage-tab queues are the Bazarr-aware path.
+    provenance = request.app.state.provenance
+    for p in cleaned:
+        provenance.record(
+            canonical_path=p,
+            scan_id=scan.id,
+            source=SOURCE_SUBGENSCAN,
+        )
     return {"id": scan.id, "paths": scan.paths, "status": scan.status, "reverse": scan.reverse}
 
 

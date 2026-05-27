@@ -41,3 +41,34 @@ class BazarrClient(IntegrationClient):
     async def movies_wanted(self) -> list[dict[str, Any]]:
         d = await self._get("/api/movies/wanted")
         return d.get("data", []) if isinstance(d, dict) else []
+
+    async def episodes_history(self, sonarr_episode_id: int | None = None,
+                                length: int = 50) -> list[dict[str, Any]]:
+        """Per-episode subtitle download history (provider, score, timestamp).
+        If sonarr_episode_id supplied, Bazarr returns rows for that episode."""
+        params: dict[str, Any] = {"length": length}
+        if sonarr_episode_id is not None:
+            params["sonarrEpisodeId"] = sonarr_episode_id
+        d = await self._get("/api/episodes/history", params=params)
+        return d.get("data", []) if isinstance(d, dict) else []
+
+    async def movies_history(self, radarr_movie_id: int | None = None,
+                              length: int = 50) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"length": length}
+        if radarr_movie_id is not None:
+            params["radarrId"] = radarr_movie_id
+        d = await self._get("/api/movies/history", params=params)
+        return d.get("data", []) if isinstance(d, dict) else []
+
+    async def trigger_task(self, task_id: str) -> None:
+        """POST /api/system/tasks?taskid=<id> — kicks a scheduled task to
+        run now. We use this to fire 'sync_episodes' / 'update_series' /
+        per-series scan-disk after subgen writes a new .srt.
+
+        Task IDs Bazarr exposes (verified against bazarr 1.5.x): see
+        /api/system/tasks GET for the live list."""
+        await self._post("/api/system/tasks", params={"taskid": task_id})
+
+    async def list_tasks(self) -> list[dict[str, Any]]:
+        d = await self._get("/api/system/tasks")
+        return d.get("data", []) if isinstance(d, dict) else []

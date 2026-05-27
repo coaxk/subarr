@@ -107,6 +107,19 @@
       else selectedPaths.delete(entry.path);
       renderSelectedList();
     });
+    cb.addEventListener('change', () => {
+      // Cascade to children that are currently rendered. Children loaded
+      // later (after an expand) won't auto-tick — that's intentional, so
+      // ticking a parent doesn't silently include thousands of unseen files.
+      const childCheckboxes = item.querySelectorAll('details input[type="checkbox"], .file-row input[type="checkbox"]');
+      childCheckboxes.forEach((child) => {
+        if (child === cb) return;
+        if (child.checked !== cb.checked) {
+          child.checked = cb.checked;
+          child.dispatchEvent(new Event('change'));
+        }
+      });
+    });
     summary.appendChild(cb);
 
     const name = document.createElement('span');

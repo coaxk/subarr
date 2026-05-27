@@ -10,11 +10,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .completion_watcher import CompletionWatcher
 from .config import settings
 from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
+from .provenance import ProvenanceStore
 from .routers import (
-    admin, browse, coverage, coverage_actions, gpu, integrations, logs, mode, queue, scan,
+    admin, browse, coverage, coverage_actions, gpu, integrations, logs, mode,
+    provenance as r_provenance, queue, scan,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -32,13 +35,23 @@ async def lifespan(app_: FastAPI):
     app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
+    app_.state.provenance = ProvenanceStore(settings.db_path)
+    app_.state.provenance.init_schema()
+    app_.state.watcher = CompletionWatcher(
+        subgen=app_.state.subgen,
+        bazarr=app_.state.integrations.bazarr,
+        provenance=app_.state.provenance,
+    )
+    app_.state.watcher.start()
     try:
         yield
     finally:
+        await app_.state.watcher.stop()
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         await app_.state.integrations.aclose()
         app_.state.scans.close()
+        app_.state.provenance.close()
         app_.state.docker.close()
 
 
@@ -54,6 +67,7 @@ app.include_router(admin.router)
 app.include_router(integrations.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
+app.include_router(r_provenance.router)
 
 
 @app.get("/api/health")

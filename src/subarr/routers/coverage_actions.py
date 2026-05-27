@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..integrations import IntegrationError
 from ..paths import PathOutsideRootError, canonical_to_fs
+from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import PATH_STATUS_PENDING
 
 router = APIRouter(prefix="/api", tags=["coverage"])
@@ -51,6 +52,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
 
     canonical: str | None = None
     resolved_via: str = ""
+    series_id: int | None = None
 
     if req.sonarr_episode_id is not None:
         if not bundle.sonarr.is_configured():
@@ -60,6 +62,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         except IntegrationError as e:
             raise HTTPException(502, detail=f"sonarr episode lookup failed: {e}")
 
+        series_id = ep.get("seriesId")
         ep_file_id = ep.get("episodeFileId")
         if not ep_file_id:
             raise HTTPException(
@@ -107,10 +110,24 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
     runner = request.app.state.runner
     scan = store.create([canonical], reverse=req.reverse)
     runner.start(scan)
+
+    # Provenance: record the submission so the completion watcher can
+    # detect when subgen finishes + trigger Bazarr's scan-disk task.
+    provenance = request.app.state.provenance
+    ledger_id = provenance.record(
+        canonical_path=canonical,
+        scan_id=scan.id,
+        source=SOURCE_SUBGENSCAN,
+        series_id=series_id,
+        sonarr_episode_id=req.sonarr_episode_id,
+    )
+
     return {
         "id": scan.id,
         "canonical_path": canonical,
         "resolved_via": resolved_via,
         "status": scan.status,
         "is_file": target.is_file(),
+        "series_id": series_id,
+        "ledger_id": ledger_id,
     }

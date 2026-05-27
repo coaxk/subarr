@@ -52,21 +52,26 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     monkeypatch.setenv("ARR_PATH_PREFIX", "/data/Media/")
 
     from subarr import app as app_mod
-    from subarr import config, coverage_engine, docker_client, paths, scan_runner, scan_store, subgen_client
+    from subarr import (
+        completion_watcher, config, coverage_engine, docker_client, paths,
+        provenance as prov_mod, scan_runner, scan_store, subgen_client,
+    )
     from subarr.integrations import bazarr as iz_bazarr
     from subarr.integrations import base as iz_base
     from subarr.integrations import radarr as iz_radarr
     from subarr.integrations import sonarr as iz_sonarr
     from subarr.integrations import tautulli as iz_tautulli
     from subarr.routers import (
-        admin, browse, coverage, gpu, integrations as r_integrations,
-        logs, mode, queue, scan,
+        admin, browse, coverage, coverage_actions, gpu, integrations as r_integrations,
+        logs, mode, provenance as r_provenance, queue, scan,
     )
 
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
+        prov_mod, completion_watcher,
         iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, coverage_engine,
-        browse, mode, queue, scan, gpu, logs, admin, r_integrations, coverage, app_mod,
+        browse, mode, queue, scan, gpu, logs, admin, r_integrations,
+        coverage, coverage_actions, r_provenance, app_mod,
     ]:
         importlib.reload(m)
 
