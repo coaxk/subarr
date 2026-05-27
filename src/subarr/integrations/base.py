@@ -10,9 +10,11 @@ from . import IntegrationError
 
 log = logging.getLogger(__name__)
 
-# Most arr/bazarr/tautulli requests return in <2s. /api/v3/series with 1500+
-# entries can take 10s+ on a busy server, so read timeout is generous.
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=3.0)
+# Most arr/bazarr/tautulli requests return in <2s, BUT /api/v3/series with
+# 1500+ entries serialises to ~5MB and takes 30-60s on a busy Sonarr. Read
+# timeout is sized for the heaviest known endpoint with headroom. Connect
+# stays tight so a downed upstream surfaces fast.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=90.0, write=10.0, pool=3.0)
 
 
 class IntegrationClient:

@@ -45,12 +45,15 @@ class TautulliClient(IntegrationClient):
         """Return playback history rows (newest first).
 
         `length` caps the number of rows. `days` filters to recent activity
-        when set; Tautulli's `start_date` accepts unix epoch seconds.
+        when set; Tautulli's `start_date` must be YYYY-MM-DD format in
+        practice — the docs claim epoch is supported but it silently returns
+        0 rows when an epoch is passed (verified against tautulli 2.15+).
         """
         params: dict[str, Any] = {"length": length}
         if days is not None:
-            import time
-            params["start_date"] = int(time.time() - days * 86400)
+            import datetime
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+            params["start_date"] = cutoff.strftime("%Y-%m-%d")
         d = await self._cmd("get_history", **params)
         if isinstance(d, dict):
             return d.get("data", []) or []

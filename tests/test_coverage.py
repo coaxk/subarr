@@ -89,6 +89,11 @@ def _tautulli_handler(req: httpx.Request) -> httpx.Response:
     if cmd == "status":
         return httpx.Response(200, json={"response": {"result": "success", "data": None}})
     if cmd == "get_history":
+        # start_date must be YYYY-MM-DD (Tautulli silently 0-rows on epoch).
+        sd = req.url.params.get("start_date") or ""
+        if sd and not (len(sd) == 10 and sd[4] == "-" and sd[7] == "-"):
+            return httpx.Response(200, json={"response": {"result": "success",
+                "data": {"data": [], "recordsFiltered": 0, "recordsTotal": 0}}})
         # Foreign Drama watched yesterday -> +1000
         return httpx.Response(200, json={"response": {"result": "success", "data": {
             "data": [
