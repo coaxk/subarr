@@ -12,6 +12,12 @@ services:
         limits:
           cpus: '1.0'
           memory: 512M
+        reservations:
+          devices:
+          - driver: nvidia
+            count: 1
+            capabilities:
+            - utility
     environment:
       TZ: Australia/Sydney
       PUID: '1000'
@@ -29,7 +35,7 @@ services:
     - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen:ro
     - /mnt/c/DockerContainers/subarr/data:/data
     labels:
-    - maintenance_log=[2026-05-27] Rev2 rename subgenscan-gui to subarr; mode-switching dropped (per-language kwargs handle this); mount /dockercontainers/subgen as read-only
+    - maintenance_log=[2026-05-27] GPU passthrough (utility capability only) for /api/gpu nvidia-smi access
     env_file:
     - .env
     logging:
@@ -41,4 +47,4 @@ networks:
   safe-bridge:
     external: true
 
-# [2026-05-27] Rev2: rename to subarr, drop mode-switching, /dockercontainers/subgen mount now read-only.
+# [2026-05-27] GPU passthrough added (utility capability only) so /api/gpu can run nvidia-smi for the Monitor tab.
