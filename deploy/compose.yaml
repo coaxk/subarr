@@ -1,0 +1,46 @@
+services:
+  subgenscan-gui:
+    image: ghcr.io/coaxk/subgenscan-gui:latest
+    container_name: subgenscan-gui
+    restart: unless-stopped
+    networks:
+    - safe-bridge
+    ports:
+    - 9922:9922
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    environment:
+      TZ: Australia/Sydney
+      PUID: '1000'
+      PGID: '1000'
+      UMASK: '022'
+      SUBGENSCAN_PORT: '9922'
+      SUBGENSCAN_MEDIA_ROOT: /media/library
+      SUBGEN_COMPOSE_PATH: /dockercontainers/subgen/compose.yaml
+      SUBGEN_COMPOSE_EUROPEAN: /dockercontainers/subgen/compose.european.yaml
+      SUBGEN_COMPOSE_JAPANESE: /dockercontainers/subgen/compose.japanese.yaml
+      SUBGEN_URL: http://subgen:9000
+      SUBGEN_CONTAINER: subgen
+      SUBGENSCAN_DB_PATH: /data/subgenscan-gui.db
+    volumes:
+    - /mnt/nas/Media:/media/library:ro
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen
+    - /mnt/c/DockerContainers/subgenscan-gui/data:/data
+    labels:
+    - maintenance_log=[2026-05-27] Initial scaffold (phase 1)
+    env_file:
+    - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+networks:
+  safe-bridge:
+    external: true
+
+# [2026-05-27] Initial scaffold: phase 1 endpoints (health, browse, mode GET).

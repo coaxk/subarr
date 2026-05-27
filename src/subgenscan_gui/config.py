@@ -1,0 +1,58 @@
+"""Runtime config. Env-driven so dev (host) and prod (container) both work."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Settings:
+    # Root of the media library the folder tree browses. Inside container: /media/library.
+    # On dev host: point at Z:/Media/TV (or wherever). Browse paths are canonical: relative to this.
+    media_root: Path
+
+    # Path to subgen's compose.yaml — read for mode detection, swapped for mode switching.
+    subgen_compose_path: Path
+
+    # Path to subgen's european/japanese mode templates.
+    subgen_compose_european: Path
+    subgen_compose_japanese: Path
+
+    # HTTP base for subgen's API (in-cluster: http://subgen:9000; dev: http://localhost:9007).
+    subgen_url: str
+
+    # Subgen container name (for docker logs/restart).
+    subgen_container: str
+
+    # SQLite path for scan queue persistence.
+    db_path: Path
+
+    # Port the GUI listens on.
+    port: int
+
+
+def load() -> Settings:
+    return Settings(
+        media_root=Path(os.environ.get("SUBGENSCAN_MEDIA_ROOT", "/media/library")),
+        subgen_compose_path=Path(
+            os.environ.get("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")
+        ),
+        subgen_compose_european=Path(
+            os.environ.get(
+                "SUBGEN_COMPOSE_EUROPEAN", "/dockercontainers/subgen/compose.european.yaml"
+            )
+        ),
+        subgen_compose_japanese=Path(
+            os.environ.get(
+                "SUBGEN_COMPOSE_JAPANESE", "/dockercontainers/subgen/compose.japanese.yaml"
+            )
+        ),
+        subgen_url=os.environ.get("SUBGEN_URL", "http://subgen:9000"),
+        subgen_container=os.environ.get("SUBGEN_CONTAINER", "subgen"),
+        db_path=Path(os.environ.get("SUBGENSCAN_DB_PATH", "/data/subgenscan-gui.db")),
+        port=int(os.environ.get("SUBGENSCAN_PORT", "9922")),
+    )
+
+
+settings = load()
