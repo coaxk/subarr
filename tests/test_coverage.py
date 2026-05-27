@@ -176,7 +176,7 @@ def coverage_media_root(monkeypatch, tmp_path, media_root):
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_basic(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
     assert r.status_code == 200
     body = r.json()
     assert body["totals"]["items"] == 2
@@ -192,7 +192,7 @@ def test_coverage_basic(app_with_stub, coverage_media_root):
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_scores_prioritise_watched_foreign(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
     items = r.json()["items"]
     foreign = next(i for i in items if i["title"] == "Foreign Drama")
     stale = next(i for i in items if i["title"] == "Already Subbed")
@@ -207,7 +207,7 @@ def test_coverage_scores_prioritise_watched_foreign(app_with_stub, coverage_medi
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_disk_reconcile(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
     items = {i["title"]: i for i in r.json()["items"]}
     assert items["Already Subbed"]["has_sub_on_disk"] is True
     assert "S01E01.en.srt" in items["Already Subbed"]["sub_files_seen"]
@@ -227,7 +227,7 @@ def test_coverage_cache(app_with_stub, coverage_media_root):
 @pytest.mark.integrations_stub(sonarr_handler=_sonarr_handler, radarr_handler=_radarr_handler,
                                 tautulli_handler=_tautulli_handler)  # bazarr unconfigured
 def test_coverage_handles_missing_bazarr(app_with_stub):
-    r = app_with_stub.get("/api/coverage?fresh=true")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
     assert r.status_code == 200
     body = r.json()
     assert body["sources"]["bazarr"]["configured"] is False

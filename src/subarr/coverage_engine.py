@@ -148,7 +148,13 @@ def _strip_arr_prefix(arr_path: str | None) -> str | None:
 
 def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
     """Shallow check: does any *.srt exist directly under <media_root>/<canonical>?
-    Returns (has_any, list_of_filenames). Best-effort; errors swallowed."""
+    Returns (has_any, list_of_filenames). Best-effort; errors swallowed.
+
+    Kept for the movie path (Radarr's path IS the movie folder, with the
+    video + sibling .srt at the same level). For episodes use
+    `_scan_for_srt_recursive` + `_match_episode_srt_pattern` because the
+    series dir contains Season N/ subfolders the .srt actually lives in.
+    """
     if not canonical_dir:
         return False, []
     try:
@@ -159,6 +165,44 @@ def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
         return bool(srts), srts
     except (OSError, ValueError):
         return False, []
+
+
+def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
+    """Walk every .srt under <media_root>/<canonical_dir> and return
+    relative paths. Cached per series during one coverage build via the
+    caller — series with 200 episodes only rglob once.
+
+    Returns relative paths so the caller can match per-episode by looking
+    for an S01E03-style substring in the path.
+    """
+    if not canonical_dir:
+        return []
+    try:
+        full = settings.media_root / Path(canonical_dir)
+        if not full.is_dir():
+            return []
+        return sorted(
+            str(p.relative_to(full))
+            for p in full.rglob("*.srt")
+            if p.is_file()
+        )
+    except (OSError, ValueError):
+        return []
+
+
+def _match_episode_srt_pattern(srt_paths: list[str], episode_number: str | None) -> tuple[bool, list[str]]:
+    """Given a list of relative .srt paths under a series dir and an
+    episode_number ('1x3'), return (any_match, matching_paths).
+    Match is case-insensitive S<NN>E<NN> substring in the srt filename."""
+    if not episode_number or "x" not in episode_number or not srt_paths:
+        return False, []
+    try:
+        season, ep = episode_number.split("x")
+        pat = f"s{int(season):02d}e{int(ep):02d}"
+    except (ValueError, TypeError):
+        return False, []
+    matches = [p for p in srt_paths if pat in p.lower()]
+    return bool(matches), matches
 
 
 def _tags_for(arr_record: dict[str, Any], tag_map: dict[int, str]) -> list[str]:
@@ -323,9 +367,12 @@ def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
         s += 50
         reasons.append("monitored")
     if item.has_sub_on_disk:
-        # Strong negative — disk has a sub, Bazarr's view is stale.
+        # Strong negative — disk has a sub, Bazarr's view is stale. Flip
+        # suggest_bazarr_rescan too so the UI can offer the →Bazarr action
+        # (the existing /api/bazarr/sync-disk endpoint).
         s -= 5000
         reasons.append("stale: disk already has .srt (Bazarr needs scan-disk)")
+        item.suggest_bazarr_rescan = True
     # v1.1 hotfix + 2026-05-27 SDH collapse: SDH counts the same as a
     # clean English track for scoring purposes (an SDH track IS English).
     # Forced + commentary tracks remain partial (those genuinely aren't
@@ -397,12 +444,19 @@ async def build_coverage(
 
     items: list[CoverageItem] = []
 
+    # Per-series srt index cache so 12 episodes of one show only walk the
+    # filesystem once.
+    series_srt_index: dict[str, list[str]] = {}
+
     # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
     for w in bz_eps:
         sonarr_id = w.get("sonarrSeriesId")
         s = sonarr_by_id.get(sonarr_id, {})
         canonical = _strip_arr_prefix(s.get("path"))
-        has_srt, srts = _scan_for_srt(canonical) if canonical else (False, [])
+        if canonical and canonical not in series_srt_index:
+            series_srt_index[canonical] = _scan_for_srt_recursive(canonical)
+        srt_paths = series_srt_index.get(canonical or "", [])
+        has_srt, srts = _match_episode_srt_pattern(srt_paths, w.get("episode_number"))
         item = CoverageItem(
             media_type="episode",
             title=w.get("seriesTitle") or s.get("title") or "(unknown)",

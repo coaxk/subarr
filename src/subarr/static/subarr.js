@@ -910,6 +910,9 @@
     const tbody = $('#cov-table tbody');
     tbody.innerHTML = '';
     var covQueuedMap = loadQueuedMap();
+    // Server already filtered hide_stale_disk + hide_embedded_en. Frontend
+    // hide-stale logic dropped; the toggle is now show-stale and flips the
+    // server param instead. Keep the flat-table render unchanged otherwise.
     const hideStale = $('#cov-hide-stale').checked;
     const filter = ($('#cov-filter').value || '').toLowerCase().trim();
     let shown = 0;
@@ -1017,8 +1020,10 @@
     try {
       const useTautulli = $('#cov-tautulli').checked;
       const showSuppressed = $('#cov-show-suppressed')?.checked;
+      const showStale = $('#cov-show-stale')?.checked;
       const hideEmbedded = showSuppressed ? 'false' : 'true';
-      const url = `/api/coverage?tautulli=${useTautulli}&hide_embedded_en=${hideEmbedded}${fresh ? '&fresh=true' : ''}`;
+      const hideStale = showStale ? 'false' : 'true';
+      const url = `/api/coverage?tautulli=${useTautulli}&hide_embedded_en=${hideEmbedded}&hide_stale_disk=${hideStale}${fresh ? '&fresh=true' : ''}`;
       const r = await fetch(url);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
@@ -1034,7 +1039,7 @@
   $('#cov-refresh').addEventListener('click', () => loadCoverage(true));
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
   $('#cov-show-suppressed').addEventListener('change', () => loadCoverage(true));
-  $('#cov-hide-stale').addEventListener('change', renderCoverage);
+  $('#cov-show-stale').addEventListener('change', () => loadCoverage(true));
   $('#cov-filter').addEventListener('input', renderCoverage);
   $('#cov-group')?.addEventListener('change', renderCoverage);
 
@@ -1088,7 +1093,7 @@
     const root = $('#cov-tree');
     root.innerHTML = '';
     const covQueuedMap = loadQueuedMap();
-    const hideStale = $('#cov-hide-stale').checked;
+    // Server filters stale + embedded-EN; frontend just applies the text filter.
     const filter = ($('#cov-filter').value || '').toLowerCase().trim();
 
     // Movies render as flat rows under a synthetic 'Movies' group at the bottom.
@@ -1098,7 +1103,6 @@
     let visible = 0;
 
     function _passes(item) {
-      if (hideStale && item.has_sub_on_disk) return false;
       if (filter) {
         const hay = [item.title, item.episode_title, item.original_language, ...(item.tags || [])]
           .filter(Boolean).join(' ').toLowerCase();
@@ -1268,6 +1272,7 @@
       `${visible} ep${visible === 1 ? '' : 's'} shown across ${groups.length} show${groups.length === 1 ? '' : 's'} · ` +
       `${t.items} total (${t.episodes} ep + ${t.movies} mv) · ` +
       `${t.suppressed_by_embedded_en || 0} probe-suppressed · ` +
+      `${t.suppressed_by_stale_disk || 0} stale-disk-suppressed · ` +
       `generated ${ts}${coverageRaw.cached ? ` (cached ${coverageRaw.cache_age_s}s)` : ''}`;
   }
 

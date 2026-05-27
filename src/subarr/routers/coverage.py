@@ -45,8 +45,21 @@ async def get_coverage(
             "to see them, e.g. when diagnosing Bazarr-probe disagreements."
         ),
     ),
+    hide_stale_disk: bool = Query(
+        True,
+        description=(
+            "Hide rows where subarr's recursive scan found a sibling .srt on "
+            "disk that Bazarr doesn't know about yet (common when subgen "
+            "wrote it out-of-band). Default True — same logic as "
+            "hide_embedded_en. Set False to see them + use the →Bazarr "
+            "button to trigger Bazarr's scan-disk task."
+        ),
+    ),
 ) -> dict[str, Any]:
-    cache_key = f"tautulli={tautulli}&probe={probe}&hide_emb={hide_embedded_en}"
+    cache_key = (
+        f"tautulli={tautulli}&probe={probe}"
+        f"&hide_emb={hide_embedded_en}&hide_stale={hide_stale_disk}"
+    )
     now = time.time()
     if not fresh:
         entry = _cache.get(cache_key)
@@ -63,13 +76,23 @@ async def get_coverage(
     )
     body = report.to_dict()
 
-    if hide_embedded_en:
+    if hide_embedded_en or hide_stale_disk:
         items = body["items"]
         original = len(items)
-        kept = [i for i in items if i.get("embedded_en") not in _SUPPRESSED_EMBEDDED]
+        kept = []
+        emb_dropped = stale_dropped = 0
+        for it in items:
+            if hide_embedded_en and it.get("embedded_en") in _SUPPRESSED_EMBEDDED:
+                emb_dropped += 1
+                continue
+            if hide_stale_disk and it.get("has_sub_on_disk"):
+                stale_dropped += 1
+                continue
+            kept.append(it)
         body["items"] = kept
         body["totals"]["items"] = len(kept)
-        body["totals"]["suppressed_by_embedded_en"] = original - len(kept)
+        body["totals"]["suppressed_by_embedded_en"] = emb_dropped
+        body["totals"]["suppressed_by_stale_disk"] = stale_dropped
         body["totals"]["episodes"] = sum(1 for i in kept if i["media_type"] == "episode")
         body["totals"]["movies"] = sum(1 for i in kept if i["media_type"] == "movie")
 
