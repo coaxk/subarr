@@ -73,6 +73,7 @@ class AutoQueueRules:
     deny_tags: list[str] = field(default_factory=list)
     require_monitored: bool = True
     skip_stale_disk: bool = True   # don't auto-queue rows where .srt already on disk
+    skip_embedded_en: bool = True  # don't auto-queue rows where probe confirmed EN/EN(SDH)
     max_per_run: int = 50
 
     def to_dict(self) -> dict[str, Any]:
@@ -85,6 +86,7 @@ class AutoQueueRules:
             "deny_tags": self.deny_tags,
             "require_monitored": self.require_monitored,
             "skip_stale_disk": self.skip_stale_disk,
+            "skip_embedded_en": self.skip_embedded_en,
             "max_per_run": self.max_per_run,
         }
 

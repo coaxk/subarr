@@ -15,6 +15,7 @@
     if (tab === 'monitor') refreshMonitor();
     if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); }
     if (tab === 'coverage') loadCoverage();
+    if (tab === 'library') loadLibrary();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
 
@@ -597,6 +598,8 @@
       $('#rule-max-per-run').value = rules.max_per_run ?? 50;
       $('#rule-require-monitored').checked = !!rules.require_monitored;
       $('#rule-skip-stale').checked = !!rules.skip_stale_disk;
+      const skipEmb = $('#rule-skip-embedded');
+      if (skipEmb) skipEmb.checked = rules.skip_embedded_en !== false;
       $('#rule-allow-langs').value = (rules.allow_languages || []).join(', ');
       $('#rule-deny-langs').value = (rules.deny_languages || []).join(', ');
     } catch (e) {
@@ -647,6 +650,7 @@
       max_per_run: Number($('#rule-max-per-run').value),
       require_monitored: $('#rule-require-monitored').checked,
       skip_stale_disk: $('#rule-skip-stale').checked,
+      skip_embedded_en: $('#rule-skip-embedded')?.checked ?? true,
       allow_languages: listOrEmpty($('#rule-allow-langs').value),
       deny_languages: listOrEmpty($('#rule-deny-langs').value),
     };
@@ -880,7 +884,9 @@
     meta.textContent = fresh ? 'refreshing (this can take ~10s on first run)…' : 'loading…';
     try {
       const useTautulli = $('#cov-tautulli').checked;
-      const url = `/api/coverage?tautulli=${useTautulli}${fresh ? '&fresh=true' : ''}`;
+      const showSuppressed = $('#cov-show-suppressed')?.checked;
+      const hideEmbedded = showSuppressed ? 'false' : 'true';
+      const url = `/api/coverage?tautulli=${useTautulli}&hide_embedded_en=${hideEmbedded}${fresh ? '&fresh=true' : ''}`;
       const r = await fetch(url);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
@@ -895,8 +901,62 @@
   }
   $('#cov-refresh').addEventListener('click', () => loadCoverage(true));
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
+  $('#cov-show-suppressed').addEventListener('change', () => loadCoverage(true));
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
+
+  // ───── Library Probe tab ─────
+  async function loadLibrary() {
+    const meta = $('#library-meta');
+    meta.textContent = 'loading…';
+    try {
+      const params = new URLSearchParams({
+        filter_text: $('#lib-filter-text').value || '',
+        sub_kind: $('#lib-filter-kind').value || '',
+        only_with_eng: $('#lib-only-eng').checked ? 'true' : 'false',
+        limit: '500',
+      });
+      const data = await fetch(`/api/probe/library?${params}`).then((r) => r.json());
+      const tbody = $('#lib-table tbody');
+      tbody.innerHTML = '';
+      if (data.items.length === 0) {
+        tbody.innerHTML = `<tr class="empty-row"><td colspan="5">no matches — run a probe walk from Settings to populate the cache</td></tr>`;
+      } else {
+        for (const it of data.items) {
+          const tr = document.createElement('tr');
+          let badge;
+          if (it.english_track === 'EN') badge = '<span class="embedded-badge embedded-full">EN</span>';
+          else if (it.english_track === 'EN(SDH)') badge = '<span class="embedded-badge embedded-full" title="SDH track — treated as English coverage">EN(SDH)</span>';
+          else if (it.english_track === 'EN(forced)') badge = '<span class="embedded-badge embedded-partial">EN(forced)</span>';
+          else if (it.english_track === 'EN(commentary)') badge = '<span class="embedded-badge embedded-partial">EN(commentary)</span>';
+          else badge = '<span class="embedded-badge embedded-none">—</span>';
+          const subSummary = (it.subtitle_streams || []).map((s) => {
+            const flags = [];
+            if (s.forced) flags.push('forced');
+            if (s.sdh) flags.push('SDH');
+            if (s.commentary) flags.push('comm');
+            return `${escape(s.language || '?')}${flags.length ? '(' + flags.join(',') + ')' : ''}`;
+          }).join(', ');
+          const dur = it.duration_s ? `${Math.round(it.duration_s/60)}m` : '—';
+          tr.innerHTML = `
+            <td>${badge}</td>
+            <td style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;">${escape(it.canonical_path)}</td>
+            <td class="audio-langs">${escape((it.audio_langs || []).join(',') || '—')}</td>
+            <td class="audio-langs">${escape(subSummary || '—')}</td>
+            <td class="audio-langs">${dur}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+      meta.textContent = `${data.shown} shown of ${data.total_cached} cached probes${data.shown < data.total_cached ? ' (filter applied)' : ''}`;
+    } catch (e) {
+      meta.textContent = `error: ${e.message}`;
+    }
+  }
+  $('#lib-refresh').addEventListener('click', loadLibrary);
+  $('#lib-filter-text').addEventListener('input', loadLibrary);
+  $('#lib-filter-kind').addEventListener('change', loadLibrary);
+  $('#lib-only-eng').addEventListener('change', loadLibrary);
 
   // Per-row probe button (run ffprobe on a single file)
   $('#cov-table').addEventListener('click', async (ev) => {

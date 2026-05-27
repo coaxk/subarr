@@ -326,12 +326,16 @@ def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
         # Strong negative — disk has a sub, Bazarr's view is stale.
         s -= 5000
         reasons.append("stale: disk already has .srt (Bazarr needs scan-disk)")
-    # v1.1 hotfix: embedded English in the container itself.
-    if item.embedded_en == "EN":
+    # v1.1 hotfix + 2026-05-27 SDH collapse: SDH counts the same as a
+    # clean English track for scoring purposes (an SDH track IS English).
+    # Forced + commentary tracks remain partial (those genuinely aren't
+    # full subs for the show).
+    if item.embedded_en in {"EN", "EN(SDH)"}:
         s -= 3000
-        reasons.append("embedded: full English sub in file (Bazarr missed it)")
+        label = "full English" if item.embedded_en == "EN" else "English SDH"
+        reasons.append(f"embedded: {label} sub in file (Bazarr missed it)")
         item.suggest_bazarr_rescan = True
-    elif item.embedded_en in {"EN(forced)", "EN(SDH)", "EN(commentary)"}:
+    elif item.embedded_en in {"EN(forced)", "EN(commentary)"}:
         s -= 500
         reasons.append(f"embedded: {item.embedded_en} — partial coverage")
     item.score = s

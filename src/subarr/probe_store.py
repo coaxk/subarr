@@ -108,3 +108,27 @@ class ProbeStore:
                 "SELECT canonical_path FROM media_probe"
             ).fetchall()
         return [r[0] for r in rows]
+
+    def all_entries(self) -> list[ProbeResult]:
+        """Return every cached probe as a hydrated ProbeResult. Used by
+        the Library Probe tab to render the full cache."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, mtime, size, duration_s, audio_json, sub_json, probed_at "
+                "FROM media_probe ORDER BY canonical_path"
+            ).fetchall()
+        out: list[ProbeResult] = []
+        for row in rows:
+            try:
+                audio = json.loads(row[4] or "[]")
+                subs = json.loads(row[5] or "[]")
+            except (ValueError, TypeError):
+                continue
+            r = ProbeResult(canonical_path=row[0])
+            r.duration_s = row[3]
+            r.probed_at = row[6]
+            r.cached = True
+            r.audio = [AudioStream(**a) for a in audio if isinstance(a, dict)]
+            r.subtitles = [SubtitleStream(**s) for s in subs if isinstance(s, dict)]
+            out.append(r)
+        return out

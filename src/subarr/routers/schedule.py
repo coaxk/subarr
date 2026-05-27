@@ -32,6 +32,7 @@ class RulesUpdate(BaseModel):
     deny_tags: list[str] | None = None
     require_monitored: bool | None = None
     skip_stale_disk: bool | None = None
+    skip_embedded_en: bool | None = None
     max_per_run: int | None = None
 
 

@@ -95,38 +95,53 @@ def test_forced_english_is_not_usable(subarr_env):
     assert has_forced_or_sdh_english(r) is True
 
 
-def test_sdh_by_disposition_is_not_usable(subarr_env):
+def test_sdh_by_disposition_is_usable_eng(subarr_env):
+    """Post-2026-05-27 collapse: SDH counts as usable English.
+    Forced/commentary stay non-usable."""
     from subarr.media_probe import (
-        has_forced_or_sdh_english, has_usable_embedded_english, parse_ffprobe_json,
+        has_forced_or_commentary_english, has_usable_embedded_english, parse_ffprobe_json,
     )
     r = parse_ffprobe_json("X", EN_SDH_ONLY)
-    assert has_usable_embedded_english(r) is False
-    assert has_forced_or_sdh_english(r) is True
+    assert has_usable_embedded_english(r) is True
+    assert has_forced_or_commentary_english(r) is False
+    # SDH metadata still preserved on the stream — Library tab uses it.
     assert r.subtitles[0].sdh is True
 
 
-def test_sdh_by_title_alone_is_classified_sdh(subarr_env):
+def test_sdh_by_title_alone_is_usable_eng(subarr_env):
     from subarr.media_probe import (
-        has_forced_or_sdh_english, has_usable_embedded_english, parse_ffprobe_json,
+        has_forced_or_commentary_english, has_usable_embedded_english, parse_ffprobe_json,
     )
     r = parse_ffprobe_json("X", EN_TITLE_SDH_NO_DISPOSITION)
-    assert has_usable_embedded_english(r) is False
-    assert has_forced_or_sdh_english(r) is True
+    assert has_usable_embedded_english(r) is True
+    assert has_forced_or_commentary_english(r) is False
+    assert r.subtitles[0].sdh is True
 
 
 def test_no_english_track(subarr_env):
     from subarr.media_probe import (
-        has_forced_or_sdh_english, has_usable_embedded_english, parse_ffprobe_json,
+        has_forced_or_commentary_english, has_usable_embedded_english, parse_ffprobe_json,
     )
     r = parse_ffprobe_json("X", NO_EN)
     assert has_usable_embedded_english(r) is False
-    assert has_forced_or_sdh_english(r) is False
+    assert has_forced_or_commentary_english(r) is False
+
+
+def test_forced_only_stays_partial(subarr_env):
+    """Forced is not collapsed — that classification stays partial."""
+    from subarr.media_probe import (
+        has_forced_or_commentary_english, has_usable_embedded_english, parse_ffprobe_json,
+    )
+    r = parse_ffprobe_json("X", EN_FORCED_ONLY)
+    assert has_usable_embedded_english(r) is False
+    assert has_forced_or_commentary_english(r) is True
 
 
 def test_track_summary_labels(subarr_env):
     from subarr.media_probe import english_track_summary, parse_ffprobe_json
     assert english_track_summary(parse_ffprobe_json("X", EN_ONLY)) == "EN"
     assert english_track_summary(parse_ffprobe_json("X", EN_FORCED_ONLY)) == "EN(forced)"
+    # Post-collapse: SDH label preserved for UI honesty but classified usable.
     assert english_track_summary(parse_ffprobe_json("X", EN_SDH_ONLY)) == "EN(SDH)"
     assert english_track_summary(parse_ffprobe_json("X", NO_EN)) is None
 

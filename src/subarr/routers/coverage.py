@@ -26,14 +26,27 @@ _CACHE_TTL_SECONDS = 60
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
+# Score values that suppress a row from "actually needs queuing" view.
+# Treated as "subarr/probe confirmed English present" rows.
+_SUPPRESSED_EMBEDDED = {"EN", "EN(SDH)"}
+
+
 @router.get("/coverage")
 async def get_coverage(
     request: Request,
     fresh: bool = Query(False, description="Bypass the 60s cache"),
     tautulli: bool = Query(True, description="Include Tautulli scoring"),
     probe: bool = Query(True, description="Fold ProbeStore embedded-sub data into rows"),
+    hide_embedded_en: bool = Query(
+        True,
+        description=(
+            "Hide rows where our probe confirmed an embedded English track "
+            "(full or SDH). Default True — these aren't real gaps. Set False "
+            "to see them, e.g. when diagnosing Bazarr-probe disagreements."
+        ),
+    ),
 ) -> dict[str, Any]:
-    cache_key = f"tautulli={tautulli}&probe={probe}"
+    cache_key = f"tautulli={tautulli}&probe={probe}&hide_emb={hide_embedded_en}"
     now = time.time()
     if not fresh:
         entry = _cache.get(cache_key)
@@ -49,6 +62,17 @@ async def get_coverage(
         bundle, use_tautulli=tautulli, probe_store=probe_store,
     )
     body = report.to_dict()
+
+    if hide_embedded_en:
+        items = body["items"]
+        original = len(items)
+        kept = [i for i in items if i.get("embedded_en") not in _SUPPRESSED_EMBEDDED]
+        body["items"] = kept
+        body["totals"]["items"] = len(kept)
+        body["totals"]["suppressed_by_embedded_en"] = original - len(kept)
+        body["totals"]["episodes"] = sum(1 for i in kept if i["media_type"] == "episode")
+        body["totals"]["movies"] = sum(1 for i in kept if i["media_type"] == "movie")
+
     body["cached"] = False
     _cache[cache_key] = (now, body)
     return body

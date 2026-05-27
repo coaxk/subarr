@@ -262,7 +262,10 @@ def test_coverage_attaches_embedded_en_from_probe_cache(app_with_stub, monkeypat
     _wrap(bundle.sonarr, _sonarr, {"X-Api-Key": "sn"})
     _wrap(bundle.radarr, _radarr, {"X-Api-Key": "rd"})
 
-    r = app_with_stub.get("/api/coverage?fresh=true&tautulli=false&probe=true")
+    # hide_embedded_en=false so the embedded-EN row stays visible; the
+    # default (true) would filter it out — that path is tested in
+    # test_library_probe.test_coverage_hides_embedded_by_default.
+    r = app_with_stub.get("/api/coverage?fresh=true&tautulli=false&probe=true&hide_embedded_en=false")
     assert r.status_code == 200
     body = r.json()
     items = body["items"]

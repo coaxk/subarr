@@ -31,6 +31,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="scan" role="tab">Scan</button>
     <button class="tab" data-tab="coverage" role="tab">Coverage</button>
+    <button class="tab" data-tab="library" role="tab">Library</button>
     <button class="tab" data-tab="logs" role="tab">Logs</button>
     <button class="tab" data-tab="monitor" role="tab">Monitor</button>
     <button class="tab" data-tab="settings" role="tab">Settings</button>
@@ -87,6 +88,7 @@
           <div class="coverage-actions">
             <label class="check"><input type="checkbox" id="cov-tautulli" checked> Tautulli scoring</label>
             <label class="check"><input type="checkbox" id="cov-hide-stale"> hide stale (has .srt on disk)</label>
+          <label class="check"><input type="checkbox" id="cov-show-suppressed"> show probe-suppressed</label>
             <input type="text" id="cov-filter" placeholder="filter title / lang">
             <button class="ghost" id="cov-refresh">Refresh</button>
           </div>
@@ -106,6 +108,42 @@
             <th>missing</th>
             <th>tags</th>
             <th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ───── Library (probe cache) ───── -->
+    <section class="tabpanel" id="tab-library">
+      <div class="card">
+        <div class="coverage-head">
+          <div>
+            <h2>Library probe cache</h2>
+            <p class="muted small" id="library-meta">loading…</p>
+          </div>
+          <div class="coverage-actions">
+            <select id="lib-filter-kind">
+              <option value="">all classifications</option>
+              <option value="full">full EN</option>
+              <option value="sdh">EN(SDH)</option>
+              <option value="forced">EN(forced)</option>
+              <option value="commentary">EN(commentary)</option>
+              <option value="none">no English sub</option>
+            </select>
+            <label class="check"><input type="checkbox" id="lib-only-eng"> with EN only</label>
+            <input type="text" id="lib-filter-text" placeholder="path substring">
+            <button class="ghost" id="lib-refresh">Refresh</button>
+          </div>
+        </div>
+        <p class="muted small">Probe-confirmed embedded subs feed back to Coverage — rows here with full EN or SDH are filtered out of Coverage (and excluded from auto-queue) by default.</p>
+        <table class="tbl coverage-table" id="lib-table">
+          <thead><tr>
+            <th>english</th>
+            <th>path</th>
+            <th>audio</th>
+            <th>subtitle streams</th>
+            <th>duration</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -221,6 +259,9 @@
           </label>
           <label>Skip stale (.srt on disk)
             <input type="checkbox" id="rule-skip-stale" checked>
+          </label>
+          <label>Skip embedded EN
+            <input type="checkbox" id="rule-skip-embedded" checked>
           </label>
           <label class="full">Allow languages (comma-separated; empty = all)
             <input type="text" id="rule-allow-langs" placeholder="e.g. Korean, Japanese, Polish">

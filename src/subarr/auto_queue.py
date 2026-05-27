@@ -81,6 +81,8 @@ def evaluate(items: list[CoverageItem], rules: AutoQueueRules) -> list[Decision]
 def _filter_reason(item: CoverageItem, rules: AutoQueueRules) -> str | None:
     if rules.skip_stale_disk and item.has_sub_on_disk:
         return "stale: .srt already on disk"
+    if rules.skip_embedded_en and item.embedded_en in {"EN", "EN(SDH)"}:
+        return f"embedded English already present ({item.embedded_en})"
     if rules.require_monitored and item.monitored is False:
         return "not monitored"
     if item.score < rules.min_score:

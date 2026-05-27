@@ -196,39 +196,61 @@ async def probe(path: Path, timeout_s: float = 30.0) -> ProbeResult:
 
 def has_usable_embedded_english(result: ProbeResult) -> bool:
     """True if at least one subtitle stream is English AND not forced AND
-    not SDH AND not commentary. This is what would let us legitimately
-    suppress a Bazarr-wanted gap — the embedded sub would serve the user."""
+    not commentary. SDH counts as usable per user feedback 2026-05-27:
+    'I can play the SDH track in VLC, it IS English' — so the demote-
+    score and the Bazarr rescan trigger apply to SDH too.
+
+    Forced subs (only translate non-English dialogue snippets) and
+    director's commentary tracks remain non-usable — those genuinely
+    aren't full subtitles for the show."""
     for s in result.subtitles:
         if (s.language or "").lower() in ENGLISH_TAGS \
-                and not s.forced and not s.sdh and not s.commentary:
+                and not s.forced and not s.commentary:
             return True
     return False
 
 
-def has_forced_or_sdh_english(result: ProbeResult) -> bool:
-    """True if an English sub exists but ONLY as forced or SDH or
-    commentary — Coverage rows in this state should be demoted (the
-    user has *something*) but not fully suppressed (the embedded track
-    may not be appropriate)."""
+def has_forced_or_commentary_english(result: ProbeResult) -> bool:
+    """True if an English sub exists but ONLY as forced or commentary —
+    Coverage rows in this state get demoted but not fully suppressed.
+    (Renamed from has_forced_or_sdh_english — SDH no longer counts here.)"""
     has_english = any((s.language or "").lower() in ENGLISH_TAGS for s in result.subtitles)
     if not has_english:
         return False
     return not has_usable_embedded_english(result)
 
 
+# Back-compat shim: keep the old name for any callers we missed; points at
+# the new partial check. Will be removed in a later cleanup.
+has_forced_or_sdh_english = has_forced_or_commentary_english
+
+
 def english_track_summary(result: ProbeResult) -> str | None:
-    """Short label for the UI: 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None."""
+    """Short label for the UI: 'EN' / 'EN(SDH)' / 'EN(forced)' /
+    'EN(commentary)' / None.
+
+    'EN(SDH)' is preserved as metadata so the Library Probe tab can show
+    which tracks include hearing-impaired markers, but coverage scoring
+    treats 'EN' and 'EN(SDH)' identically (see _score in coverage_engine).
+    """
     if has_usable_embedded_english(result):
+        # Prefer the clean label if there's a non-SDH English track;
+        # otherwise note SDH so the UI is honest about what's there.
+        for s in result.subtitles:
+            if (s.language or "").lower() in ENGLISH_TAGS \
+                    and not s.forced and not s.commentary and not s.sdh:
+                return "EN"
+        for s in result.subtitles:
+            if (s.language or "").lower() in ENGLISH_TAGS \
+                    and not s.forced and not s.commentary and s.sdh:
+                return "EN(SDH)"
         return "EN"
     for s in result.subtitles:
         if (s.language or "").lower() in ENGLISH_TAGS:
             if s.forced:
                 return "EN(forced)"
-            if s.sdh:
-                return "EN(SDH)"
             if s.commentary:
                 return "EN(commentary)"
-            return "EN"
     return None
 
 
