@@ -16,6 +16,7 @@ from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
 from .enrichment import EnrichmentStore
 from .integrations.ollama import OllamaClient
+from .pending_store import PendingStore
 from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
@@ -59,6 +60,8 @@ async def lifespan(app_: FastAPI):
     app_.state.probe_store = ProbeStore(settings.db_path)
     app_.state.probe_store.init_schema()
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
+    app_.state.pending = PendingStore(settings.db_path)
+    app_.state.pending.init_schema()
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         bundle=app_.state.integrations,
@@ -66,6 +69,7 @@ async def lifespan(app_: FastAPI):
         runner=app_.state.runner,
         provenance=app_.state.provenance,
         probe_walker=app_.state.probe_walker,
+        pending_store=app_.state.pending,
     )
     app_.state.scheduler.start()
     try:
@@ -83,6 +87,7 @@ async def lifespan(app_: FastAPI):
         app_.state.schedule.close()
         app_.state.enrichment.close()
         app_.state.probe_store.close()
+        app_.state.pending.close()
         app_.state.docker.close()
 
 

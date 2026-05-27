@@ -28,12 +28,13 @@ from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
 from .integrations import IntegrationError
 from .paths import PathOutsideRootError, canonical_to_fs
+from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
 from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .schedule_store import (
-    KIND_DAILY, KIND_INTERVAL, KIND_WEEKLY,
+    KIND_DAILY, KIND_INTERVAL, KIND_WEEKLY, MODE_MANUAL_CONFIRM,
     ScheduleConfig, ScheduleStore,
 )
 
@@ -111,6 +112,7 @@ class Scheduler:
         runner: ScanRunner,
         provenance: ProvenanceStore,
         probe_walker: ProbeWalker | None = None,
+        pending_store: PendingStore | None = None,
         tick_s: int = TICK_S,
     ):
         self._schedule = schedule_store
@@ -119,6 +121,7 @@ class Scheduler:
         self._runner = runner
         self._provenance = provenance
         self._probe_walker = probe_walker
+        self._pending = pending_store
         self._tick_s = tick_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -226,12 +229,37 @@ class Scheduler:
             return {"ok": False, "error": str(e), "probe": probe_summary}
 
         decisions = evaluate(report.items, rules)
+        queue_decisions = [d for d in decisions if d.action == "queue"]
+
+        # manual_confirm: stash the queue decisions for user review;
+        # DON'T enqueue. User approves via /api/schedule/pending/{id}/approve.
+        if rules.mode == MODE_MANUAL_CONFIRM and self._pending is not None:
+            pending = self._pending.create_walk(
+                considered=len(report.items),
+                items=[d.to_dict() for d in queue_decisions],
+            )
+            log.info(
+                "coverage_walk[manual_confirm]: %d items considered, %d pending approval (walk_id=%s)",
+                len(report.items), len(queue_decisions), pending.id,
+            )
+            return {
+                "ok": True,
+                "considered": len(report.items),
+                "decisions_queue": len(queue_decisions),
+                "decisions_skip": len(decisions) - len(queue_decisions),
+                "queued": 0,
+                "pending_walk_id": pending.id,
+                "pending_count": len(queue_decisions),
+                "mode": rules.mode,
+                "probe": probe_summary,
+            }
+
+        # dashboard / auto_rules: dashboard ends up with zero queue_decisions
+        # because evaluate() already skipped everything; auto_rules enqueues.
         queued = 0
         errors: list[str] = []
         scan_ids: list[str] = []
-        for d in decisions:
-            if d.action != "queue":
-                continue
+        for d in queue_decisions:
             scan_id, err = await self._enqueue(d)
             if scan_id:
                 queued += 1
@@ -246,14 +274,109 @@ class Scheduler:
         return {
             "ok": True,
             "considered": len(report.items),
-            "decisions_queue": sum(1 for d in decisions if d.action == "queue"),
-            "decisions_skip": sum(1 for d in decisions if d.action == "skip"),
+            "decisions_queue": len(queue_decisions),
+            "decisions_skip": len(decisions) - len(queue_decisions),
             "queued": queued,
             "errors": errors[:10],
             "scan_ids": scan_ids[:20],
             "mode": rules.mode,
             "probe": probe_summary,
         }
+
+    async def approve_pending(self, walk_id: str, decision_ids: list[int] | None = None) -> dict[str, Any]:
+        """Enqueue the approved decisions and finalise the walk's status.
+        If decision_ids is None or empty, approve all undecided rows."""
+        if not self._pending:
+            raise RuntimeError("pending store not configured")
+        walk = self._pending.get_walk(walk_id)
+        if walk is None:
+            return {"ok": False, "error": "walk not found"}
+        target_ids = set(decision_ids or [])
+        approve_all = not target_ids
+        queued = 0
+        errors: list[str] = []
+        scan_ids: list[str] = []
+        for d in walk.decisions:
+            if d.approved is not None:
+                continue  # already decided
+            if not approve_all and d.id not in target_ids:
+                continue
+            # Re-hydrate a Decision-like wrapper to reuse _enqueue.
+            scan_id, err = await self._enqueue_from_item(d.item)
+            if scan_id:
+                queued += 1
+                scan_ids.append(scan_id)
+                self._pending.mark_decision(d.id, approved=True, scan_id=scan_id)
+            else:
+                self._pending.mark_decision(d.id, approved=False, scan_id=None)
+                if err:
+                    errors.append(err)
+        final_status = self._pending.finalise_walk(walk_id)
+        return {
+            "ok": True,
+            "walk_id": walk_id,
+            "queued": queued,
+            "errors": errors[:10],
+            "scan_ids": scan_ids[:20],
+            "final_status": final_status,
+        }
+
+    async def reject_pending(self, walk_id: str, decision_ids: list[int] | None = None) -> dict[str, Any]:
+        if not self._pending:
+            raise RuntimeError("pending store not configured")
+        walk = self._pending.get_walk(walk_id)
+        if walk is None:
+            return {"ok": False, "error": "walk not found"}
+        target_ids = set(decision_ids or [])
+        reject_all = not target_ids
+        rejected = 0
+        for d in walk.decisions:
+            if d.approved is not None:
+                continue
+            if not reject_all and d.id not in target_ids:
+                continue
+            self._pending.mark_decision(d.id, approved=False)
+            rejected += 1
+        final_status = self._pending.finalise_walk(walk_id)
+        return {"ok": True, "walk_id": walk_id, "rejected": rejected, "final_status": final_status}
+
+    async def _enqueue_from_item(self, item_dict: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Mirror of _enqueue but takes the decision-row's item dict
+        (since the pending store doesn't preserve CoverageItem objects)."""
+        sonarr_ep_id = item_dict.get("sonarr_episode_id")
+        canonical = item_dict.get("canonical_path")
+        title = item_dict.get("title", "?")
+        series_id: int | None = None
+
+        if sonarr_ep_id and self._bundle.sonarr.is_configured():
+            try:
+                ep = await self._bundle.sonarr.episode(sonarr_ep_id)
+                series_id = ep.get("seriesId")
+                ep_file_id = ep.get("episodeFileId")
+                if ep_file_id:
+                    ep_file = await self._bundle.sonarr.episode_file(ep_file_id)
+                    arr_path = ep_file.get("path")
+                    if arr_path:
+                        canonical = _strip_arr_prefix(arr_path)
+            except IntegrationError as e:
+                return None, f"{title}: sonarr resolve failed: {e}"
+
+        if not canonical:
+            return None, f"{title}: no canonical path"
+        try:
+            target = canonical_to_fs(canonical)
+        except PathOutsideRootError:
+            return None, f"{title}: path escapes media root"
+        if not target.exists():
+            return None, f"{title}: {canonical!r} missing on disk"
+
+        scan = self._scan_store.create([canonical], reverse=False)
+        self._runner.start(scan)
+        self._provenance.record(
+            canonical_path=canonical, scan_id=scan.id, source=SOURCE_SUBGENSCAN,
+            series_id=series_id, sonarr_episode_id=sonarr_ep_id,
+        )
+        return scan.id, None
 
     async def _enqueue(self, decision: Decision) -> tuple[str | None, str | None]:
         """Mirror of routers/coverage_actions logic but inline so the scheduler

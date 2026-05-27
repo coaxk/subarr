@@ -25,6 +25,10 @@
         <span class="label">vram</span>
         <span class="value" id="gpu-summary">…</span>
       </div>
+      <div class="stat" id="stat-pending" hidden>
+        <span class="label">pending</span>
+        <span class="value" id="pending-summary">0</span>
+      </div>
     </div>
   </header>
 
@@ -242,6 +246,10 @@
           <input type="text" id="sched-probe-roots" placeholder="leave empty to skip probe step" style="display:block; width:100%; margin-top:4px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 9px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;">
         </label>
         <div class="muted small" id="sched-meta">loading…</div>
+
+        <h3>Pending approvals</h3>
+        <p class="muted small" id="pending-meta">none</p>
+        <div id="pending-walks-list"></div>
 
         <h3>Rules</h3>
         <div class="rules-grid">

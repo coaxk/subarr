@@ -513,3 +513,37 @@ button.ghost:hover { background: var(--bg-elev2); }
   letter-spacing: 0;
 }
 .rules-grid input[type="checkbox"] { width: 16px; height: 16px; }
+
+.pending-walk {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.pending-walk .pw-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.pending-walk .pw-actions { display: flex; gap: 6px; }
+.pending-walk .pw-actions button { font-size: 11px; padding: 3px 8px; }
+.pending-walk .pw-decisions {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-height: 240px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.pending-walk .pw-decision {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+}
+.pending-walk .pw-decision label { flex: 1; cursor: pointer; }
+.pending-walk .pw-decision.approved { color: var(--ok); }
+.pending-walk .pw-decision.rejected { color: var(--muted); text-decoration: line-through; }
+#stat-pending .value { color: var(--warn); font-weight: 600; }

@@ -81,6 +81,35 @@ async def run_now(request: Request) -> dict[str, Any]:
     return await scheduler.run_coverage_walk()
 
 
+class ApproveRequest(BaseModel):
+    decision_ids: list[int] | None = None  # None / empty = approve all
+
+
+@router.get("/schedule/pending")
+async def list_pending(request: Request, status: str | None = None) -> dict[str, Any]:
+    store = request.app.state.pending
+    walks = store.list_walks(status=status)
+    # Return each walk's decisions inline for convenience.
+    out = []
+    for w in walks:
+        full = store.get_walk(w.id)
+        if full:
+            out.append(full.to_dict())
+    return {"pending_count": store.pending_count(), "walks": out}
+
+
+@router.post("/schedule/pending/{walk_id}/approve")
+async def approve_pending(walk_id: str, req: ApproveRequest, request: Request) -> dict[str, Any]:
+    scheduler = request.app.state.scheduler
+    return await scheduler.approve_pending(walk_id, req.decision_ids)
+
+
+@router.post("/schedule/pending/{walk_id}/reject")
+async def reject_pending(walk_id: str, req: ApproveRequest, request: Request) -> dict[str, Any]:
+    scheduler = request.app.state.scheduler
+    return await scheduler.reject_pending(walk_id, req.decision_ids)
+
+
 @router.post("/schedule/preview")
 async def preview(request: Request) -> dict[str, Any]:
     """Dry-run: pull coverage + evaluate current rules WITHOUT enqueueing.

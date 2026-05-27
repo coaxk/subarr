@@ -13,7 +13,7 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); }
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); loadPending(); }
     if (tab === 'coverage') loadCoverage();
     if (tab === 'library') loadLibrary();
   }
@@ -30,6 +30,20 @@
         fetch('/api/container').then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
       if (h) $('#version').textContent = `v${h.version}`;
+      // Pending approvals badge — fire-and-forget, separate from header stats.
+      fetch('/api/schedule/pending?status=pending')
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (!d) return;
+          const stat = $('#stat-pending');
+          if (d.pending_count > 0) {
+            stat.hidden = false;
+            $('#pending-summary').textContent = `${d.pending_count} walk${d.pending_count === 1 ? '' : 's'}`;
+          } else {
+            stat.hidden = true;
+          }
+        })
+        .catch(() => {});
       $('#container-status').textContent = c
         ? (c.running ? 'running' : (c.status || 'down'))
         : '—';
@@ -514,6 +528,94 @@
       $('#settings-compose-path').textContent = `error: ${e.message}`;
     }
   }
+
+  // ───── Pending approvals (manual_confirm mode) ─────
+  async function loadPending() {
+    try {
+      const data = await fetch('/api/schedule/pending?status=pending').then((r) => r.json());
+      const list = $('#pending-walks-list');
+      const meta = $('#pending-meta');
+      list.innerHTML = '';
+      if (!data.walks || data.walks.length === 0) {
+        meta.textContent = 'No pending walks. (manual_confirm mode populates this when the scheduler fires.)';
+        return;
+      }
+      meta.textContent = `${data.pending_count} walk${data.pending_count === 1 ? '' : 's'} awaiting your review.`;
+      for (const w of data.walks) {
+        const wrap = document.createElement('div');
+        wrap.className = 'pending-walk';
+        const when = w.created_at ? new Date(w.created_at * 1000).toLocaleString() : '?';
+        wrap.innerHTML = `
+          <div class="pw-head">
+            <span><strong>${w.decisions_total}</strong> matching · ${w.considered} considered · ${escape(when)}</span>
+            <div class="pw-actions">
+              <button class="primary" data-walk="${w.id}" data-act="approve-selected">Approve selected</button>
+              <button class="ghost" data-walk="${w.id}" data-act="approve-all">Approve all</button>
+              <button class="ghost" data-walk="${w.id}" data-act="reject-all">Reject all</button>
+            </div>
+          </div>
+          <div class="pw-decisions" id="pw-${w.id}-decisions"></div>
+        `;
+        list.appendChild(wrap);
+        const decBox = $('#pw-' + w.id + '-decisions');
+        for (const d of w.decisions || []) {
+          if (d.approved !== null) continue; // already decided
+          const item = d.item || {};
+          const cell = document.createElement('div');
+          cell.className = 'pw-decision';
+          const ep = (item.episode_number ? item.episode_number + ' ' : '') + (item.title || '?');
+          cell.innerHTML = `
+            <input type="checkbox" data-decision-id="${d.id}" checked>
+            <label>[${item.score ?? 0}] ${escape(ep)} <span class="muted">${escape(item.canonical_path || '')}</span></label>
+          `;
+          decBox.appendChild(cell);
+        }
+      }
+    } catch (e) {
+      $('#pending-meta').textContent = 'error: ' + e.message;
+    }
+  }
+
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.pw-actions button');
+    if (!btn) return;
+    const walkId = btn.dataset.walk;
+    const act = btn.dataset.act;
+    if (!walkId || !act) return;
+    btn.disabled = true;
+    try {
+      let url, body;
+      if (act === 'approve-all') {
+        url = `/api/schedule/pending/${walkId}/approve`;
+        body = { decision_ids: null };
+      } else if (act === 'reject-all') {
+        url = `/api/schedule/pending/${walkId}/reject`;
+        body = { decision_ids: null };
+      } else if (act === 'approve-selected') {
+        const ids = $$('#pw-' + walkId + '-decisions input[type="checkbox"]:checked')
+          .map((cb) => Number(cb.dataset.decisionId));
+        if (ids.length === 0) {
+          alert('No rows selected.');
+          btn.disabled = false;
+          return;
+        }
+        url = `/api/schedule/pending/${walkId}/approve`;
+        body = { decision_ids: ids };
+      }
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+      await loadPending();
+    } catch (e) {
+      alert('failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   // ───── Probe walks ─────
   async function loadProbeWalks() {

@@ -57,6 +57,7 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     from subarr import (
         auto_queue, completion_watcher, config, coverage_engine, docker_client,
         enrichment as enrichment_mod, media_probe, paths,
+        pending_store as pending_store_mod,
         probe_store as probe_store_mod, probe_walker as probe_walker_mod,
         provenance as prov_mod, scan_runner, scan_store,
         schedule_store as sched_store_mod, scheduler as scheduler_mod, subgen_client,
@@ -78,7 +79,8 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
 
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
-        prov_mod, completion_watcher, sched_store_mod, auto_queue, scheduler_mod,
+        prov_mod, completion_watcher, sched_store_mod, auto_queue,
+        pending_store_mod, scheduler_mod,
         media_probe, probe_store_mod, probe_walker_mod,
         iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, iz_ollama,
         enrichment_mod, coverage_engine,
