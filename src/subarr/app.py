@@ -70,6 +70,21 @@ if _STATIC_DIR.is_dir():
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
+else:
+    # Packaging regression — static assets weren't installed alongside the
+    # package. Log loudly + return a useful 503 at / so the failure mode is
+    # visible. See pyproject.toml [tool.setuptools.package-data] for the
+    # canonical fix.
+    log.error(
+        "subarr static directory not found at %s — frontend will 404. "
+        "Check pyproject.toml [tool.setuptools.package-data] subarr = ['static/**/*'].",
+        _STATIC_DIR,
+    )
+
+    @app.get("/")
+    def index_missing() -> dict:
+        from fastapi import HTTPException
+        raise HTTPException(503, detail=f"frontend not packaged — expected static dir at {_STATIC_DIR}")
 
 
 def main() -> None:

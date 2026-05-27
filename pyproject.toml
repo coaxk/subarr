@@ -28,6 +28,14 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Static assets (HTML/CSS/JS) ship inside the installed package so the
+# container image's /usr/local/lib/python3.12/site-packages/subarr/static
+# directory exists. Without this, setuptools only copies *.py files and
+# the frontend is silently missing in the wheel (404 at / + /static/*).
+# Caught 2026-05-27 after v1.1 deploy.
+[tool.setuptools.package-data]
+subarr = ["static/**/*"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"
