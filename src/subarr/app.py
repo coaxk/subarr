@@ -65,6 +65,7 @@ async def lifespan(app_: FastAPI):
         scan_store=app_.state.scans,
         runner=app_.state.runner,
         provenance=app_.state.provenance,
+        probe_walker=app_.state.probe_walker,
     )
     app_.state.scheduler.start()
     try:

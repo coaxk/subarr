@@ -586,6 +586,7 @@
         $('#sched-hhmm').value = sched.daily_hhmm || '03:00';
         $('#sched-dow').value = String(sched.day_of_week ?? 0);
         $('#sched-interval').value = String(sched.interval_minutes ?? 360);
+        $('#sched-probe-roots').value = (sched.probe_roots || []).join(', ');
         applyKindVisibility();
         $('#sched-meta').innerHTML =
           `last run: ${escape(fmtTs(sched.last_run_at))} · ` +
@@ -621,6 +622,7 @@
       daily_hhmm: $('#sched-hhmm').value || '03:00',
       day_of_week: Number($('#sched-dow').value || 0),
       interval_minutes: Number($('#sched-interval').value || 360),
+      probe_roots: $('#sched-probe-roots').value || '',
     };
     const r = await fetch('/api/schedule/coverage_walk', {
       method: 'PATCH',

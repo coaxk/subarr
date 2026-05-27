@@ -28,6 +28,7 @@ from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
 from .integrations import IntegrationError
 from .paths import PathOutsideRootError, canonical_to_fs
+from .probe_walker import ProbeWalker
 from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -109,6 +110,7 @@ class Scheduler:
         scan_store: ScanStore,
         runner: ScanRunner,
         provenance: ProvenanceStore,
+        probe_walker: ProbeWalker | None = None,
         tick_s: int = TICK_S,
     ):
         self._schedule = schedule_store
@@ -116,6 +118,7 @@ class Scheduler:
         self._scan_store = scan_store
         self._runner = runner
         self._provenance = provenance
+        self._probe_walker = probe_walker
         self._tick_s = tick_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -167,14 +170,60 @@ class Scheduler:
                 last_result=str(result)[:1000],
             )
 
+    async def _run_probe_walks(self, roots: list[str]) -> dict[str, Any]:
+        """Chain incremental probe walks before coverage. Each root's walker
+        skips unchanged files via mtime/size cache check, so a re-walk is
+        mostly stat() calls — cheap. Errors don't abort coverage_walk —
+        we log + return partial stats."""
+        if not self._probe_walker or not roots:
+            return {"ran": False, "reason": "no probe walker or no roots configured"}
+        results = []
+        for root in roots:
+            try:
+                state = await self._probe_walker.start_walk(root)
+                # Wait for terminal state. start_walk returns immediately
+                # (asyncio.create_task); poll the state object until status
+                # is no longer 'running'. We don't subscribe via SSE here
+                # because that's a frontend channel.
+                while state.status == "running":
+                    await asyncio.sleep(0.5)
+                results.append({
+                    "root": root, "status": state.status,
+                    "total": state.total_files, "probed": state.probed,
+                    "cached_hits": state.cached_hits, "errors": len(state.errors),
+                })
+            except Exception as e:
+                log.warning("probe walk %r failed: %s", root, e)
+                results.append({"root": root, "status": "error", "error": str(e)})
+        return {"ran": True, "walks": results}
+
     async def run_coverage_walk(self) -> dict[str, Any]:
-        """Public entry point — also called by POST /api/schedule/run-now."""
+        """Public entry point — also called by POST /api/schedule/run-now.
+
+        Order: incremental probe walks (cheap on re-runs — cached files
+        skip ffprobe via mtime+size check) → build_coverage with the
+        freshly-refreshed probe cache → evaluate rules → enqueue. Probe
+        roots are configured per-schedule (schedule_config.probe_roots,
+        comma-separated). Empty means no probe step.
+        """
         rules = self._schedule.get_rules()
+        sched = self._schedule.get_schedule("coverage_walk")
+        roots_csv = (sched.probe_roots if sched else "") or ""
+        roots = [p.strip() for p in roots_csv.split(",") if p.strip()]
+
+        probe_summary: dict[str, Any] = {"ran": False}
+        if roots:
+            log.info("coverage_walk: probe walks first: %s", roots)
+            probe_summary = await self._run_probe_walks(roots)
+
         try:
-            report = await build_coverage(self._bundle, use_tautulli=True)
+            probe_store = getattr(self._probe_walker, "_store", None) if self._probe_walker else None
+            report = await build_coverage(
+                self._bundle, use_tautulli=True, probe_store=probe_store,
+            )
         except Exception as e:
             log.exception("coverage_walk: build_coverage failed: %s", e)
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": str(e), "probe": probe_summary}
 
         decisions = evaluate(report.items, rules)
         queued = 0
@@ -203,6 +252,7 @@ class Scheduler:
             "errors": errors[:10],
             "scan_ids": scan_ids[:20],
             "mode": rules.mode,
+            "probe": probe_summary,
         }
 
     async def _enqueue(self, decision: Decision) -> tuple[str | None, str | None]:

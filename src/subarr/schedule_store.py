@@ -48,6 +48,11 @@ class ScheduleConfig:
     last_run_at: float | None
     next_run_at: float | None
     last_result: str | None
+    # 2026-05-27: comma-separated canonical paths to probe-walk BEFORE
+    # this schedule's coverage_walk runs. Empty = no probe step. Incremental
+    # (probe cache skips unchanged files via mtime+size check) so re-walking
+    # the same root is cheap after the first run.
+    probe_roots: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +65,7 @@ class ScheduleConfig:
             "last_run_at": self.last_run_at,
             "next_run_at": self.next_run_at,
             "last_result": self.last_result,
+            "probe_roots": [p.strip() for p in (self.probe_roots or "").split(",") if p.strip()],
         }
 
 
@@ -106,7 +112,8 @@ CREATE TABLE IF NOT EXISTS schedule_config (
     day_of_week      INTEGER NOT NULL DEFAULT 0,
     last_run_at      REAL,
     next_run_at      REAL,
-    last_result      TEXT
+    last_result      TEXT,
+    probe_roots      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS auto_queue_rules (
     id               INTEGER PRIMARY KEY CHECK (id = 1),
@@ -114,6 +121,11 @@ CREATE TABLE IF NOT EXISTS auto_queue_rules (
     updated_at       REAL NOT NULL
 );
 """
+
+# Cheap idempotent migration for installs predating the probe_roots column.
+_MIGRATIONS = [
+    "ALTER TABLE schedule_config ADD COLUMN probe_roots TEXT NOT NULL DEFAULT ''",
+]
 
 
 _DEFAULT_SCHEDULE = ScheduleConfig(
@@ -139,6 +151,14 @@ class ScheduleStore:
     def init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Apply additive column migrations; ignore "duplicate column" errors
+            # so we don't fail on fresh DBs where _SCHEMA already created them.
+            for stmt in _MIGRATIONS:
+                try:
+                    self._conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
             row = self._conn.execute(
                 "SELECT name FROM schedule_config WHERE name = ?",
                 (_DEFAULT_SCHEDULE.name,),
@@ -177,7 +197,7 @@ class ScheduleStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT name, enabled, kind, interval_minutes, daily_hhmm, day_of_week, "
-                "       last_run_at, next_run_at, last_result "
+                "       last_run_at, next_run_at, last_result, probe_roots "
                 "FROM schedule_config WHERE name = ?",
                 (name,),
             ).fetchone()
@@ -187,13 +207,14 @@ class ScheduleStore:
             name=row[0], enabled=bool(row[1]), kind=row[2],
             interval_minutes=row[3], daily_hhmm=row[4], day_of_week=row[5],
             last_run_at=row[6], next_run_at=row[7], last_result=row[8],
+            probe_roots=row[9] or "",
         )
 
     def list_schedules(self) -> list[ScheduleConfig]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT name, enabled, kind, interval_minutes, daily_hhmm, day_of_week, "
-                "       last_run_at, next_run_at, last_result "
+                "       last_run_at, next_run_at, last_result, probe_roots "
                 "FROM schedule_config ORDER BY name"
             ).fetchall()
         return [
@@ -201,6 +222,7 @@ class ScheduleStore:
                 name=r[0], enabled=bool(r[1]), kind=r[2],
                 interval_minutes=r[3], daily_hhmm=r[4], day_of_week=r[5],
                 last_run_at=r[6], next_run_at=r[7], last_result=r[8],
+                probe_roots=r[9] or "",
             ) for r in rows
         ]
 
@@ -208,10 +230,11 @@ class ScheduleStore:
                          kind: str | None = None,
                          interval_minutes: int | None = None,
                          daily_hhmm: str | None = None,
-                         day_of_week: int | None = None) -> ScheduleConfig:
+                         day_of_week: int | None = None,
+                         probe_roots: str | None = None) -> ScheduleConfig:
         with self._lock:
             current = self._conn.execute(
-                "SELECT enabled, kind, interval_minutes, daily_hhmm, day_of_week "
+                "SELECT enabled, kind, interval_minutes, daily_hhmm, day_of_week, probe_roots "
                 "FROM schedule_config WHERE name = ?",
                 (name,),
             ).fetchone()
@@ -223,10 +246,11 @@ class ScheduleStore:
                 interval_minutes if interval_minutes is not None else current[2],
                 daily_hhmm or current[3],
                 day_of_week if day_of_week is not None else current[4],
+                probe_roots if probe_roots is not None else current[5],
             )
             self._conn.execute(
                 "UPDATE schedule_config SET enabled=?, kind=?, interval_minutes=?, "
-                "       daily_hhmm=?, day_of_week=? WHERE name=?",
+                "       daily_hhmm=?, day_of_week=?, probe_roots=? WHERE name=?",
                 (*new, name),
             )
         return self.get_schedule(name)  # type: ignore[return-value]

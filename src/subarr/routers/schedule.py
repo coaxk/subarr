@@ -21,6 +21,7 @@ class ScheduleUpdate(BaseModel):
     interval_minutes: int | None = None
     daily_hhmm: str | None = None
     day_of_week: int | None = None
+    probe_roots: str | None = None  # comma-separated canonical paths
 
 
 class RulesUpdate(BaseModel):
@@ -56,6 +57,7 @@ async def update_schedule(name: str, req: ScheduleUpdate, request: Request) -> d
             interval_minutes=req.interval_minutes,
             daily_hhmm=req.daily_hhmm,
             day_of_week=req.day_of_week,
+            probe_roots=req.probe_roots,
         )
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
