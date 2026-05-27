@@ -433,3 +433,49 @@ button.ghost:hover { background: var(--bg-elev2); }
   opacity: 0.5;
 }
 .queue-list .q-empty { color: var(--muted); padding: 8px 10px; }
+
+/* ───── Schedule + Rules ───── */
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0 4px;
+}
+.sched-row select, .sched-row input[type="time"], .sched-row input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 9px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.rules-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.rules-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+.rules-grid label.full { grid-column: 1 / -1; }
+.rules-grid input[type="text"], .rules-grid input[type="number"], .rules-grid select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 9px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.rules-grid input[type="checkbox"] { width: 16px; height: 16px; }

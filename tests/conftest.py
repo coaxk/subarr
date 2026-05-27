@@ -53,8 +53,9 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
 
     from subarr import app as app_mod
     from subarr import (
-        completion_watcher, config, coverage_engine, docker_client, paths,
-        provenance as prov_mod, scan_runner, scan_store, subgen_client,
+        auto_queue, completion_watcher, config, coverage_engine, docker_client,
+        paths, provenance as prov_mod, scan_runner, scan_store,
+        schedule_store as sched_store_mod, scheduler as scheduler_mod, subgen_client,
     )
     from subarr.integrations import bazarr as iz_bazarr
     from subarr.integrations import base as iz_base
@@ -64,14 +65,15 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     from subarr.routers import (
         admin, browse, coverage, coverage_actions, gpu, integrations as r_integrations,
         logs, mode, provenance as r_provenance, queue, scan,
+        schedule as r_schedule,
     )
 
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
-        prov_mod, completion_watcher,
+        prov_mod, completion_watcher, sched_store_mod, auto_queue, scheduler_mod,
         iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, coverage_engine,
         browse, mode, queue, scan, gpu, logs, admin, r_integrations,
-        coverage, coverage_actions, r_provenance, app_mod,
+        coverage, coverage_actions, r_provenance, r_schedule, app_mod,
     ]:
         importlib.reload(m)
 

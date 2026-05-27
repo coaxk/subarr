@@ -167,6 +167,64 @@
         <pre id="kwargs-top" class="codeblock">…</pre>
       </div>
       <div class="card">
+        <h2>Schedule &amp; Auto-queue</h2>
+        <p class="muted small">Background coverage walks that re-pull the gap list, apply your auto-queue rules, and (in <code>auto_rules</code> mode) enqueue matching rows automatically. Off by default; opt in below.</p>
+        <div class="sched-row">
+          <label class="check">
+            <input type="checkbox" id="sched-enabled"> Enabled
+          </label>
+          <select id="sched-kind">
+            <option value="daily">Daily at</option>
+            <option value="weekly">Weekly</option>
+            <option value="interval">Every N minutes</option>
+          </select>
+          <input type="time" id="sched-hhmm" value="03:00">
+          <select id="sched-dow" hidden>
+            <option value="0">Mon</option><option value="1">Tue</option><option value="2">Wed</option>
+            <option value="3">Thu</option><option value="4">Fri</option><option value="5">Sat</option>
+            <option value="6">Sun</option>
+          </select>
+          <input type="number" id="sched-interval" value="360" min="5" max="10080" hidden>
+          <button class="ghost" id="sched-save">Save</button>
+          <button class="primary" id="sched-run-now">Run now</button>
+        </div>
+        <div class="muted small" id="sched-meta">loading…</div>
+
+        <h3>Rules</h3>
+        <div class="rules-grid">
+          <label>Mode
+            <select id="rule-mode">
+              <option value="dashboard">dashboard (display only)</option>
+              <option value="manual_confirm">manual_confirm (button)</option>
+              <option value="auto_rules">auto_rules (scheduler queues)</option>
+            </select>
+          </label>
+          <label>Min score
+            <input type="number" id="rule-min-score" value="200">
+          </label>
+          <label>Max per run
+            <input type="number" id="rule-max-per-run" value="50" min="1" max="500">
+          </label>
+          <label>Require monitored
+            <input type="checkbox" id="rule-require-monitored" checked>
+          </label>
+          <label>Skip stale (.srt on disk)
+            <input type="checkbox" id="rule-skip-stale" checked>
+          </label>
+          <label class="full">Allow languages (comma-separated; empty = all)
+            <input type="text" id="rule-allow-langs" placeholder="e.g. Korean, Japanese, Polish">
+          </label>
+          <label class="full">Deny languages
+            <input type="text" id="rule-deny-langs" placeholder="e.g. English">
+          </label>
+        </div>
+        <div class="action-row">
+          <button class="ghost" id="rules-save">Save rules</button>
+          <button class="ghost" id="rules-preview">Preview (no enqueue)</button>
+        </div>
+        <pre class="codeblock" id="rules-preview-out" hidden></pre>
+      </div>
+      <div class="card">
         <h2>Integrations</h2>
         <p class="muted small">Status of upstream services. Configure URLs + API keys via env vars (BAZARR_URL/BAZARR_API_KEY, SONARR_URL/SONARR_API_KEY, etc).</p>
         <div class="integrations-grid" id="integrations-grid">loading…</div>

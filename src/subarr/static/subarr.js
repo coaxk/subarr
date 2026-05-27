@@ -13,7 +13,7 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') { loadSettings(); loadIntegrations(); }
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); }
     if (tab === 'coverage') loadCoverage();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
@@ -513,6 +513,117 @@
       $('#settings-compose-path').textContent = `error: ${e.message}`;
     }
   }
+
+  // ───── Schedule + Auto-queue rules ─────
+  function listOrEmpty(s) {
+    if (!s) return [];
+    return s.split(',').map((x) => x.trim()).filter(Boolean);
+  }
+  function fmtTs(ts) {
+    if (!ts) return '—';
+    try { return new Date(ts * 1000).toLocaleString(); } catch { return '—'; }
+  }
+  async function loadSchedule() {
+    try {
+      const data = await fetch('/api/schedule').then((r) => r.json());
+      const sched = (data.schedules || []).find((s) => s.name === 'coverage_walk');
+      if (sched) {
+        $('#sched-enabled').checked = sched.enabled;
+        $('#sched-kind').value = sched.kind;
+        $('#sched-hhmm').value = sched.daily_hhmm || '03:00';
+        $('#sched-dow').value = String(sched.day_of_week ?? 0);
+        $('#sched-interval').value = String(sched.interval_minutes ?? 360);
+        applyKindVisibility();
+        $('#sched-meta').innerHTML =
+          `last run: ${escape(fmtTs(sched.last_run_at))} · ` +
+          `next: ${escape(fmtTs(sched.next_run_at))} · ` +
+          `last result: <code>${escape(sched.last_result || '—')}</code>`;
+      }
+      const rules = data.rules || {};
+      $('#rule-mode').value = rules.mode || 'dashboard';
+      $('#rule-min-score').value = rules.min_score ?? 200;
+      $('#rule-max-per-run').value = rules.max_per_run ?? 50;
+      $('#rule-require-monitored').checked = !!rules.require_monitored;
+      $('#rule-skip-stale').checked = !!rules.skip_stale_disk;
+      $('#rule-allow-langs').value = (rules.allow_languages || []).join(', ');
+      $('#rule-deny-langs').value = (rules.deny_languages || []).join(', ');
+    } catch (e) {
+      $('#sched-meta').textContent = `error: ${e.message}`;
+    }
+  }
+  function applyKindVisibility() {
+    const k = $('#sched-kind').value;
+    $('#sched-hhmm').hidden = k === 'interval';
+    $('#sched-dow').hidden = k !== 'weekly';
+    $('#sched-interval').hidden = k !== 'interval';
+  }
+  $('#sched-kind').addEventListener('change', applyKindVisibility);
+
+  $('#sched-save').addEventListener('click', async () => {
+    const body = {
+      enabled: $('#sched-enabled').checked,
+      kind: $('#sched-kind').value,
+      daily_hhmm: $('#sched-hhmm').value || '03:00',
+      day_of_week: Number($('#sched-dow').value || 0),
+      interval_minutes: Number($('#sched-interval').value || 360),
+    };
+    const r = await fetch('/api/schedule/coverage_walk', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { $('#sched-meta').textContent = 'save failed: ' + (await r.text()); return; }
+    await loadSchedule();
+  });
+
+  $('#sched-run-now').addEventListener('click', async () => {
+    $('#sched-meta').textContent = 'running coverage_walk…';
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', { method: 'POST' });
+      const body = await r.json();
+      $('#sched-meta').textContent = `result: ${JSON.stringify(body)}`;
+    } catch (e) {
+      $('#sched-meta').textContent = 'error: ' + e.message;
+    }
+    await loadSchedule();
+  });
+
+  $('#rules-save').addEventListener('click', async () => {
+    const body = {
+      mode: $('#rule-mode').value,
+      min_score: Number($('#rule-min-score').value),
+      max_per_run: Number($('#rule-max-per-run').value),
+      require_monitored: $('#rule-require-monitored').checked,
+      skip_stale_disk: $('#rule-skip-stale').checked,
+      allow_languages: listOrEmpty($('#rule-allow-langs').value),
+      deny_languages: listOrEmpty($('#rule-deny-langs').value),
+    };
+    const r = await fetch('/api/schedule/rules', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { alert('save rules failed: ' + (await r.text())); return; }
+    await loadSchedule();
+  });
+
+  $('#rules-preview').addEventListener('click', async () => {
+    const out = $('#rules-preview-out');
+    out.hidden = false;
+    out.textContent = 'evaluating…';
+    try {
+      const r = await fetch('/api/schedule/preview', { method: 'POST' });
+      const body = await r.json();
+      out.textContent = JSON.stringify({
+        considered: body.considered,
+        would_queue: body.would_queue,
+        would_skip: body.would_skip,
+        queue_preview_first_10: body.queue_preview.slice(0, 10),
+      }, null, 2);
+    } catch (e) {
+      out.textContent = 'error: ' + e.message;
+    }
+  });
 
   $('#btn-restart').addEventListener('click', async () => {
     if (!confirm('Restart the subgen container? In-flight transcribes will be lost.')) return;

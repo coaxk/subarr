@@ -17,10 +17,12 @@ from .docker_client import DockerOps
 from .provenance import ProvenanceStore
 from .routers import (
     admin, browse, coverage, coverage_actions, gpu, integrations, logs, mode,
-    provenance as r_provenance, queue, scan,
+    provenance as r_provenance, queue, scan, schedule as r_schedule,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
+from .schedule_store import ScheduleStore
+from .scheduler import Scheduler
 from .subgen_client import SubgenClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -43,15 +45,27 @@ async def lifespan(app_: FastAPI):
         provenance=app_.state.provenance,
     )
     app_.state.watcher.start()
+    app_.state.schedule = ScheduleStore(settings.db_path)
+    app_.state.schedule.init_schema()
+    app_.state.scheduler = Scheduler(
+        schedule_store=app_.state.schedule,
+        bundle=app_.state.integrations,
+        scan_store=app_.state.scans,
+        runner=app_.state.runner,
+        provenance=app_.state.provenance,
+    )
+    app_.state.scheduler.start()
     try:
         yield
     finally:
+        await app_.state.scheduler.stop()
         await app_.state.watcher.stop()
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         await app_.state.integrations.aclose()
         app_.state.scans.close()
         app_.state.provenance.close()
+        app_.state.schedule.close()
         app_.state.docker.close()
 
 
@@ -68,6 +82,7 @@ app.include_router(integrations.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
 app.include_router(r_provenance.router)
+app.include_router(r_schedule.router)
 
 
 @app.get("/api/health")
