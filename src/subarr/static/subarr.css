@@ -356,6 +356,66 @@ button.ghost:hover { background: var(--bg-elev2); }
 .coverage-table .cov-queue-btn { padding: 3px 8px; font-size: 11px; }
 .coverage-table .cov-queue-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .coverage-table .cov-queue-btn.queued { background: var(--ok); color: #06101e; border-color: var(--ok); }
+
+/* ───── Coverage tree (group by show) ───── */
+.coverage-tree {
+  font-size: 12px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.coverage-tree details {
+  border-bottom: 1px solid var(--border);
+}
+.coverage-tree details summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.coverage-tree details summary:hover { background: var(--bg-elev2); }
+.coverage-tree details details summary {
+  padding-left: 32px;
+  background: rgba(255,255,255,0.01);
+}
+.coverage-tree .lvl-name { flex: 1; }
+.coverage-tree .lvl-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+.coverage-tree .lvl-score {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  min-width: 50px;
+  text-align: right;
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.coverage-tree .lvl-score.high { color: var(--ok); border-color: var(--ok); }
+.coverage-tree .lvl-score.mid { color: var(--accent); border-color: var(--accent-dim); }
+.coverage-tree .lvl-score.low { color: var(--muted); }
+.coverage-tree .lvl-score.neg { color: var(--warn); border-color: var(--warn); }
+.coverage-tree input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+.coverage-tree .ep-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 56px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.coverage-tree .ep-row:hover { background: var(--bg-elev2); }
+.coverage-tree .ep-num { color: var(--muted); width: 50px; }
+.coverage-tree .ep-title { flex: 1; }
+.coverage-tree .ep-embedded { color: var(--ok); }
+.coverage-tree .ep-disk { color: var(--warn); }
+.coverage-tree .ep-row.row-queued { opacity: 0.6; }
+.coverage-tree .ep-row.row-stale { opacity: 0.5; }
 .coverage-table .lang-enrich-btn { padding: 2px 6px; font-size: 10px; color: var(--accent); border-color: var(--accent-dim); }
 .coverage-table .lang-enriched { color: var(--ok); font-family: var(--font-mono); }
 

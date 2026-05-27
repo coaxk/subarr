@@ -877,8 +877,36 @@
     if (item?.canonical_path) return `mv:${item.canonical_path}`;
     return null;
   }
+  // Tracks per-row episode_id when user ticks a Coverage tree checkbox.
+  // Cleared every renderCoverage(). Bulk Queue button drains this.
+  const covSelectedEps = new Set();
+  const covSelectedManualPaths = new Map();  // ep_id (or '__path:X') → {episode_id, canonical_path, title}
+
+  function updateBulkQueueBtn() {
+    const btn = $('#cov-queue-selected');
+    if (!btn) return;
+    const n = covSelectedManualPaths.size;
+    btn.textContent = `Queue selected (${n})`;
+    btn.disabled = n === 0;
+  }
+
+  function _epRowKey(item) {
+    return coverageRowKey(item) || (item.canonical_path ? `mv:${item.canonical_path}` : null);
+  }
+
   function renderCoverage() {
     if (!coverageRaw) return;
+    covSelectedEps.clear();
+    covSelectedManualPaths.clear();
+    updateBulkQueueBtn();
+    if ($('#cov-group')?.checked) {
+      $('#cov-table').hidden = true;
+      $('#cov-tree').hidden = false;
+      renderCoverageTree();
+      return;
+    }
+    $('#cov-table').hidden = false;
+    $('#cov-tree').hidden = true;
     const tbody = $('#cov-table tbody');
     tbody.innerHTML = '';
     var covQueuedMap = loadQueuedMap();
@@ -1008,6 +1036,274 @@
   $('#cov-show-suppressed').addEventListener('change', () => loadCoverage(true));
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
+  $('#cov-group')?.addEventListener('change', renderCoverage);
+
+  function scoreCss(score) {
+    return score >= 1000 ? 'high' : score >= 200 ? 'mid' : score < 0 ? 'neg' : 'low';
+  }
+
+  // Group flat item list by show title → season number → episodes.
+  function groupItemsByShow(items) {
+    const tree = new Map();  // title → { items: [...], seasons: Map<seasonNum, [eps]> }
+    for (const it of items) {
+      if (it.media_type !== 'episode') continue;
+      const title = it.title || '(unknown)';
+      let entry = tree.get(title);
+      if (!entry) {
+        entry = { title, items: [], seasons: new Map() };
+        tree.set(title, entry);
+      }
+      entry.items.push(it);
+      let season = '?';
+      if (it.episode_number && it.episode_number.includes('x')) {
+        season = it.episode_number.split('x')[0];
+      }
+      let bucket = entry.seasons.get(season);
+      if (!bucket) {
+        bucket = [];
+        entry.seasons.set(season, bucket);
+      }
+      bucket.push(it);
+    }
+    // Sort each show's seasons numerically, episodes numerically.
+    for (const entry of tree.values()) {
+      entry.seasonsSorted = [...entry.seasons.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+      for (const [, eps] of entry.seasonsSorted) {
+        eps.sort((a, b) => {
+          const an = Number((a.episode_number || '').split('x')[1] || 0);
+          const bn = Number((b.episode_number || '').split('x')[1] || 0);
+          return an - bn;
+        });
+      }
+    }
+    // Sort shows by max score in the group (descending).
+    return [...tree.values()].sort((a, b) => {
+      const ma = Math.max(...a.items.map((x) => x.score || 0));
+      const mb = Math.max(...b.items.map((x) => x.score || 0));
+      return mb - ma;
+    });
+  }
+
+  function renderCoverageTree() {
+    const root = $('#cov-tree');
+    root.innerHTML = '';
+    const covQueuedMap = loadQueuedMap();
+    const hideStale = $('#cov-hide-stale').checked;
+    const filter = ($('#cov-filter').value || '').toLowerCase().trim();
+
+    // Movies render as flat rows under a synthetic 'Movies' group at the bottom.
+    const movieItems = coverageRaw.items.filter((i) => i.media_type === 'movie');
+    const groups = groupItemsByShow(coverageRaw.items);
+
+    let visible = 0;
+
+    function _passes(item) {
+      if (hideStale && item.has_sub_on_disk) return false;
+      if (filter) {
+        const hay = [item.title, item.episode_title, item.original_language, ...(item.tags || [])]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(filter)) return false;
+      }
+      return true;
+    }
+
+    for (const grp of groups) {
+      const visEpsByseason = grp.seasonsSorted
+        .map(([season, eps]) => [season, eps.filter(_passes)])
+        .filter(([, eps]) => eps.length > 0);
+      if (visEpsByseason.length === 0) continue;
+      const totalVis = visEpsByseason.reduce((a, [, eps]) => a + eps.length, 0);
+      visible += totalVis;
+
+      const maxScore = Math.max(...grp.items.map((i) => i.score || 0));
+      const showDet = document.createElement('details');
+      const showSum = document.createElement('summary');
+      showSum.innerHTML = `
+        <input type="checkbox" class="lvl-show-cb">
+        <span class="lvl-score ${scoreCss(maxScore)}">${maxScore}</span>
+        <span class="lvl-name"><strong>${escape(grp.title)}</strong></span>
+        <span class="lvl-meta">${totalVis} ep${totalVis === 1 ? '' : 's'} wanted · ${visEpsByseason.length} season${visEpsByseason.length === 1 ? '' : 's'}</span>
+      `;
+      showDet.appendChild(showSum);
+
+      for (const [season, eps] of visEpsByseason) {
+        const seasonDet = document.createElement('details');
+        const seasonMax = Math.max(...eps.map((i) => i.score || 0));
+        const seasonSum = document.createElement('summary');
+        seasonSum.innerHTML = `
+          <input type="checkbox" class="lvl-season-cb">
+          <span class="lvl-score ${scoreCss(seasonMax)}">${seasonMax}</span>
+          <span class="lvl-name">Season ${escape(season)}</span>
+          <span class="lvl-meta">${eps.length} ep${eps.length === 1 ? '' : 's'} wanted</span>
+        `;
+        seasonDet.appendChild(seasonSum);
+
+        for (const ep of eps) {
+          const epRow = document.createElement('div');
+          epRow.className = 'ep-row';
+          if (ep.has_sub_on_disk) epRow.classList.add('row-stale');
+          const rowKey = _epRowKey(ep);
+          const isQueued = rowKey && (covQueuedMap[rowKey] !== undefined);
+          if (isQueued) epRow.classList.add('row-queued');
+          const epId = ep.bazarr?.episode_id ?? '';
+          const canonical = ep.canonical_path || '';
+          const epNum = ep.episode_number || '';
+          const epTitle = ep.episode_title || '';
+          const reasons = (ep.score_reasons || []).join(' · ');
+          const emb = ep.embedded_en
+            ? `<span class="ep-embedded">${escape(ep.embedded_en)}</span>`
+            : '';
+          const disk = ep.has_sub_on_disk ? `<span class="ep-disk">!srt</span>` : '';
+          const lang = ep.original_language || '';
+          epRow.innerHTML = `
+            <input type="checkbox" class="ep-cb"
+                   data-episode-id="${epId}" data-canonical="${escape(canonical)}"
+                   data-title="${escape(ep.title || '')}" data-row-key="${escape(rowKey || '')}"
+                   ${isQueued ? 'disabled' : ''}>
+            <span class="lvl-score ${scoreCss(ep.score || 0)}" title="${escape(reasons)}">${ep.score || 0}</span>
+            <span class="ep-num">${escape(epNum)}</span>
+            <span class="ep-title">${escape(epTitle)}${lang ? ` <span class="muted">[${escape(lang)}]</span>` : ''}</span>
+            ${emb} ${disk}
+            ${isQueued ? '<span class="muted small">✓ queued</span>' : ''}
+          `;
+          seasonDet.appendChild(epRow);
+        }
+
+        // Season-level cascade: tick season → tick all its eps.
+        const seasonCb = seasonSum.querySelector('.lvl-season-cb');
+        seasonCb.addEventListener('change', () => {
+          for (const cb of seasonDet.querySelectorAll('.ep-cb')) {
+            if (!cb.disabled && cb.checked !== seasonCb.checked) {
+              cb.checked = seasonCb.checked;
+              cb.dispatchEvent(new Event('change'));
+            }
+          }
+        });
+        seasonCb.addEventListener('click', (e) => e.stopPropagation());
+
+        showDet.appendChild(seasonDet);
+      }
+
+      // Show-level cascade.
+      const showCb = showSum.querySelector('.lvl-show-cb');
+      showCb.addEventListener('change', () => {
+        for (const cb of showDet.querySelectorAll('.lvl-season-cb, .ep-cb')) {
+          if (!cb.disabled && cb.checked !== showCb.checked) {
+            cb.checked = showCb.checked;
+            cb.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+      showCb.addEventListener('click', (e) => e.stopPropagation());
+
+      root.appendChild(showDet);
+    }
+
+    // Movies (if any) as a flat group.
+    const movsVisible = movieItems.filter(_passes);
+    if (movsVisible.length > 0) {
+      const movDet = document.createElement('details');
+      const maxScore = Math.max(...movsVisible.map((i) => i.score || 0));
+      const movSum = document.createElement('summary');
+      movSum.innerHTML = `
+        <input type="checkbox" class="lvl-show-cb">
+        <span class="lvl-score ${scoreCss(maxScore)}">${maxScore}</span>
+        <span class="lvl-name"><strong>Movies</strong></span>
+        <span class="lvl-meta">${movsVisible.length} wanted</span>
+      `;
+      movDet.appendChild(movSum);
+      for (const m of movsVisible) {
+        const r = document.createElement('div');
+        r.className = 'ep-row';
+        const rowKey = _epRowKey(m);
+        const isQueued = rowKey && (loadQueuedMap()[rowKey] !== undefined);
+        const canonical = m.canonical_path || '';
+        r.innerHTML = `
+          <input type="checkbox" class="ep-cb" data-episode-id=""
+                 data-canonical="${escape(canonical)}" data-title="${escape(m.title || '')}"
+                 data-row-key="${escape(rowKey || '')}" ${isQueued ? 'disabled' : ''}>
+          <span class="lvl-score ${scoreCss(m.score || 0)}">${m.score || 0}</span>
+          <span class="ep-title">${escape(m.title)}</span>
+        `;
+        movDet.appendChild(r);
+      }
+      const showCb = movSum.querySelector('.lvl-show-cb');
+      showCb.addEventListener('change', () => {
+        for (const cb of movDet.querySelectorAll('.ep-cb')) {
+          if (!cb.disabled && cb.checked !== showCb.checked) {
+            cb.checked = showCb.checked;
+            cb.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+      showCb.addEventListener('click', (e) => e.stopPropagation());
+      visible += movsVisible.length;
+      root.appendChild(movDet);
+    }
+
+    // Episode checkbox change → update selection set.
+    root.addEventListener('change', (ev) => {
+      const cb = ev.target.closest('.ep-cb');
+      if (!cb) return;
+      const epId = cb.dataset.episodeId;
+      const canonical = cb.dataset.canonical;
+      const title = cb.dataset.title;
+      const key = epId || `__path:${canonical}`;
+      if (cb.checked) {
+        covSelectedManualPaths.set(key, {
+          episode_id: epId ? Number(epId) : null,
+          canonical_path: canonical,
+          title,
+        });
+      } else {
+        covSelectedManualPaths.delete(key);
+      }
+      updateBulkQueueBtn();
+    });
+
+    // Update meta
+    const t = coverageRaw.totals || {};
+    const ts = coverageRaw.generated_at ? new Date(coverageRaw.generated_at * 1000).toLocaleTimeString() : '?';
+    $('#coverage-meta').textContent =
+      `${visible} ep${visible === 1 ? '' : 's'} shown across ${groups.length} show${groups.length === 1 ? '' : 's'} · ` +
+      `${t.items} total (${t.episodes} ep + ${t.movies} mv) · ` +
+      `${t.suppressed_by_embedded_en || 0} probe-suppressed · ` +
+      `generated ${ts}${coverageRaw.cached ? ` (cached ${coverageRaw.cache_age_s}s)` : ''}`;
+  }
+
+  // Bulk queue button — drains covSelectedManualPaths.
+  $('#cov-queue-selected')?.addEventListener('click', async () => {
+    const btn = $('#cov-queue-selected');
+    const items = [...covSelectedManualPaths.values()];
+    btn.disabled = true;
+    let ok = 0, fail = 0;
+    const map = loadQueuedMap();
+    for (const it of items) {
+      try {
+        const body = {};
+        if (it.episode_id) body.sonarr_episode_id = it.episode_id;
+        else if (it.canonical_path) body.canonical_path = it.canonical_path;
+        else continue;
+        const r = await fetch('/api/coverage/queue', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        ok++;
+        const key = it.episode_id ? `ep:${it.episode_id}` : `mv:${it.canonical_path}`;
+        map[key] = { scan_id: data.id, canonical: data.canonical_path, queued_at_ms: Date.now() };
+      } catch (e) {
+        fail++;
+        console.warn('bulk queue fail:', it, e);
+      }
+    }
+    saveQueuedMap(map);
+    btn.textContent = `Queued ${ok}${fail ? ` · ${fail} failed` : ''}`;
+    covSelectedManualPaths.clear();
+    setTimeout(() => { btn.textContent = 'Queue selected (0)'; loadCoverage(true); }, 2500);
+  });
 
   // ───── Library Probe tab ─────
   async function loadLibrary() {

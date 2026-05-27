@@ -93,12 +93,17 @@
             <label class="check"><input type="checkbox" id="cov-tautulli" checked> Tautulli scoring</label>
             <label class="check"><input type="checkbox" id="cov-hide-stale"> hide stale (has .srt on disk)</label>
           <label class="check"><input type="checkbox" id="cov-show-suppressed"> show probe-suppressed</label>
+          <label class="check"><input type="checkbox" id="cov-group" checked> group by show</label>
+          <button class="primary" id="cov-queue-selected" disabled>Queue selected (0)</button>
             <input type="text" id="cov-filter" placeholder="filter title / lang">
             <button class="ghost" id="cov-refresh">Refresh</button>
           </div>
         </div>
         <div class="coverage-sources" id="cov-sources"></div>
-        <table class="tbl coverage-table" id="cov-table">
+        <!-- Tree view: rendered when 'group by show' is on. -->
+        <div id="cov-tree" class="coverage-tree" hidden></div>
+        <!-- Flat fallback: full table. Toggle to show. -->
+        <table class="tbl coverage-table" id="cov-table"
           <thead><tr>
             <th>score</th>
             <th>media</th>
