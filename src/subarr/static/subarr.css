@@ -29,6 +29,16 @@ a { color: var(--accent); }
 code, pre { font-family: var(--font-mono); }
 
 /* ───── Header ───── */
+/* Sticky header+tab container — wraps both so they pin to the viewport
+   top as a single unit. Avoids the overlapping-siblings problem you'd
+   get with position:sticky on both elements individually. */
+.app-shell {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
 header {
   display: flex;
   align-items: center;
