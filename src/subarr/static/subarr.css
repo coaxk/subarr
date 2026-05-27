@@ -241,6 +241,7 @@ button.ghost:hover { background: var(--bg-elev2); }
 .results .pending { color: var(--muted); }
 .results .running { color: var(--info); }
 .results .ok { color: var(--ok); }
+.results .skipped { color: var(--warn); }
 .results .empty { color: var(--warn); }
 .results .error { color: var(--err); }
 

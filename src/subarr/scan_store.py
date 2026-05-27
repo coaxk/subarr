@@ -25,8 +25,11 @@ SCAN_STATUS_CANCELLED = "cancelled"
 
 PATH_STATUS_PENDING = "pending"
 PATH_STATUS_RUNNING = "running"
-PATH_STATUS_OK = "ok"
-PATH_STATUS_EMPTY = "empty"  # subgen returned 404 / walked == 0
+PATH_STATUS_OK = "ok"           # subgen accepted + queued at least one file
+PATH_STATUS_SKIPPED = "skipped"  # subgen walked + skipped all (e.g. embedded EN
+                                 # already present, audio language matches
+                                 # SKIP_IF_AUDIO_LANGUAGES, etc.)
+PATH_STATUS_EMPTY = "empty"      # subgen returned 404 / walked == 0
 PATH_STATUS_ERROR = "error"
 
 

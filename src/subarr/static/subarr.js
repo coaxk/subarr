@@ -314,10 +314,21 @@
       const status = document.createElement('span');
       status.className = `res-status ${r.status}`;
       status.textContent = r.status;
+      // Distinct tooltip for skipped — subgen's reasoning is in r.error.
+      if (r.status === 'skipped' && r.error) status.title = r.error;
+      if (r.status === 'empty') status.title = 'subgen returned walked=0 — path resolved to no transcribable files';
       const path = document.createElement('span');
       path.textContent = r.path;
       li.appendChild(status);
       li.appendChild(path);
+      // For skipped, surface a one-line reason inline so user doesn't have
+      // to hover the badge to understand why nothing happened.
+      if (r.status === 'skipped' && r.error) {
+        const reason = document.createElement('span');
+        reason.className = 'muted small';
+        reason.textContent = ' — ' + r.error;
+        li.appendChild(reason);
+      }
       ul.appendChild(li);
     }
     if (scan.current_index < scan.paths.length && scan.status === 'running') {

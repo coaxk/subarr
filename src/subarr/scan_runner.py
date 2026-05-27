@@ -20,6 +20,7 @@ from .scan_store import (
     PATH_STATUS_ERROR,
     PATH_STATUS_OK,
     PATH_STATUS_RUNNING,
+    PATH_STATUS_SKIPPED,
     SCAN_STATUS_DONE,
     SCAN_STATUS_ERROR,
     SCAN_STATUS_RUNNING,
@@ -115,9 +116,35 @@ class ScanRunner:
                 status_code, body = await self._subgen.batch(directory, reverse=scan.reverse)
                 result.subgen_status_code = status_code
                 result.subgen_body = body
-                if status_code == 200 and isinstance(body, dict) and body.get("walked", 0) > 0:
+                walked = body.get("walked", 0) if isinstance(body, dict) else 0
+                queued = body.get("queued", 0) if isinstance(body, dict) else 0
+                skipped = body.get("skipped", 0) if isinstance(body, dict) else 0
+                if status_code == 200 and walked > 0 and queued > 0:
                     result.status = PATH_STATUS_OK
-                elif status_code == 404 or (isinstance(body, dict) and body.get("walked", 0) == 0):
+                elif status_code == 200 and walked > 0 and queued == 0 and skipped > 0:
+                    # Subgen walked the path but skipped everything — usually
+                    # because SKIP_IF_TARGET_SUBTITLES_EXIST hit (embedded EN
+                    # already present) or SKIP_IF_AUDIO_LANGUAGES matched.
+                    # NOT an error; the user just doesn't need subs for this.
+                    result.status = PATH_STATUS_SKIPPED
+                    reasons = []
+                    pending_detect = body.get("pending_language_detect", 0)
+                    already_q = body.get("already_in_queue", 0)
+                    no_audio = body.get("no_audio", 0)
+                    if skipped:
+                        reasons.append(f"subgen skipped {skipped} (target sub exists / audio lang match)")
+                    if already_q:
+                        reasons.append(f"{already_q} already in queue")
+                    if no_audio:
+                        reasons.append(f"{no_audio} no audio")
+                    if pending_detect:
+                        reasons.append(f"{pending_detect} pending lang detect")
+                    result.error = "; ".join(reasons) if reasons else "skipped"
+                elif status_code == 200 and walked > 0 and queued == 0 \
+                        and (body.get("already_in_queue", 0) > 0):
+                    # Already in subgen's queue — treat as OK; it'll process.
+                    result.status = PATH_STATUS_OK
+                elif status_code == 404 or walked == 0:
                     result.status = PATH_STATUS_EMPTY
                 else:
                     result.status = PATH_STATUS_ERROR
