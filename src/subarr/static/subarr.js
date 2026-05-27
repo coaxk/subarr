@@ -73,50 +73,96 @@
 
   const selectedPaths = new Set();
 
+  // ───── Unified coverage badge ─────
+  // Single source of truth for how a "does this file have English?" signal
+  // gets rendered. Used by Scan tree leaves, Library tab rows, and Coverage
+  // tree episode rows so the vocabulary + colours line up across views.
+  //
+  // Inputs:
+  //   embedded_en: 'EN' | 'EN(SDH)' | 'EN(forced)' | 'EN(commentary)' | null
+  //   has_sibling_srt: bool | undefined
+  // Output: { label, cls, tooltip, coversFully (bool — used for confirm dialog) }
+  function coverageSignal(embedded_en, has_sibling_srt) {
+    if (embedded_en === 'EN') {
+      const both = !!has_sibling_srt;
+      return {
+        label: 'EN', cls: 'embedded-full',
+        tooltip: both
+          ? 'sibling .srt + embedded English subtitle'
+          : 'embedded English subtitle stream',
+        coversFully: true,
+      };
+    }
+    if (embedded_en === 'EN(SDH)') return {
+      label: 'EN(SDH)', cls: 'embedded-full',
+      tooltip: 'embedded English SDH track — counts as full coverage',
+      coversFully: true,
+    };
+    if (embedded_en === 'EN(forced)') return {
+      label: 'EN(forced)', cls: 'embedded-partial',
+      tooltip: 'partial: forced subs only',
+      coversFully: false,
+    };
+    if (embedded_en === 'EN(commentary)') return {
+      label: 'EN(commentary)', cls: 'embedded-partial',
+      tooltip: 'partial: commentary only',
+      coversFully: false,
+    };
+    if (has_sibling_srt) return {
+      label: 'srt', cls: 'embedded-full',
+      tooltip: 'sibling .srt file on disk',
+      coversFully: true,
+    };
+    return {
+      label: '—', cls: 'embedded-none',
+      tooltip: 'no English subtitle detected (probe cache may be empty — run a probe walk)',
+      coversFully: false,
+    };
+  }
+
+  function coverageBadgeHtml(embedded_en, has_sibling_srt) {
+    const s = coverageSignal(embedded_en, has_sibling_srt);
+    return `<span class="embedded-badge ${s.cls}" title="${escape(s.tooltip)}">${escape(s.label)}</span>`;
+  }
+
   function renderFileLeaf(entry) {
-    // Video file row — flat checkbox + name + size; no <details>.
-    // Coverage signals: sibling .srt OR embedded-EN (from probe cache).
-    // The orb fills green when EITHER is true so the user can see at a
-    // glance that English coverage exists, regardless of where it lives.
+    // Video file row — checkbox + unified badge + name + size.
     const row = document.createElement('div');
-    const embFull = entry.embedded_en === 'EN' || entry.embedded_en === 'EN(SDH)';
-    const embPartial = entry.embedded_en === 'EN(forced)' || entry.embedded_en === 'EN(commentary)';
-    const hasCoverage = entry.has_sibling_srt || embFull;
-    row.className = 'file-row' + (hasCoverage ? ' has-srt' : '');
+    const sig = coverageSignal(entry.embedded_en, entry.has_sibling_srt);
+    row.className = 'file-row' + (sig.coversFully ? ' has-srt' : '');
     row.dataset.path = entry.path;
     row.dataset.searchKey = entry.name.toLowerCase();
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = selectedPaths.has(entry.path);
     cb.addEventListener('change', () => {
+      // Confirm before adding a file we already know has English coverage —
+      // subgen will SKIP_IF_TARGET_SUBTITLES_EXIST and we'd get nothing in
+      // the queue, leading to the 'where did it go?' confusion.
+      if (cb.checked && sig.coversFully) {
+        const msg = (
+          `${entry.name} already has English coverage (${sig.label}).\n` +
+          `subgen will most likely skip it (SKIP_IF_TARGET_SUBTITLES_EXIST=true).\n\n` +
+          `Scan anyway?`
+        );
+        if (!confirm(msg)) {
+          cb.checked = false;
+          return;
+        }
+      }
       if (cb.checked) selectedPaths.add(entry.path);
       else selectedPaths.delete(entry.path);
       renderSelectedList();
     });
-    const icon = document.createElement('span');
-    icon.className = 'icon';
-    // Pick the symbol + tooltip from the most informative signal.
-    if (entry.has_sibling_srt && embFull) {
-      icon.textContent = '◉';
-      icon.title = `sibling .srt on disk + embedded ${entry.embedded_en}`;
-    } else if (entry.has_sibling_srt) {
-      icon.textContent = '◉';
-      icon.title = 'sibling .srt on disk';
-    } else if (embFull) {
-      icon.textContent = '◉';
-      icon.title = `embedded subtitle stream (${entry.embedded_en})`;
-    } else if (embPartial) {
-      icon.textContent = '◐';
-      icon.title = `partial: ${entry.embedded_en} only`;
-    } else {
-      icon.textContent = '▸';
-      icon.title = 'no English subtitle detected (sibling or embedded)';
-    }
+    const badge = document.createElement('span');
+    badge.className = `embedded-badge ${sig.cls} file-row-badge`;
+    badge.textContent = sig.label;
+    badge.title = sig.tooltip;
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = entry.name;
     row.appendChild(cb);
-    row.appendChild(icon);
+    row.appendChild(badge);
     row.appendChild(name);
     if (entry.size_mb != null) {
       const size = document.createElement('span');
@@ -979,16 +1025,16 @@
       }
       if (!canQueue) queueBtnTitle = 'No sonarr episode id or canonical path — nothing to queue';
       tr.dataset.rowKey = rowKey || '';
-      // Embedded badge column
+      // Embedded badge column — uses the unified coverageBadgeHtml helper,
+      // plus the →Bazarr action when a probe-confirmed EN row needs Bazarr's
+      // wanted list refreshed, and a 'probe' fallback when nothing's cached.
       const filePath = item.file_canonical_path || item.canonical_path || '';
       let embeddedHtml;
-      if (item.embedded_en === 'EN') {
-        const bazarrBtn = item.suggest_bazarr_rescan
-          ? `<button class="ghost small bazarr-resync-btn" data-series-id="${item.bazarr?.sonarr_id ?? ''}" data-canonical="${escape(filePath)}" title="Tell Bazarr to rescan disk — it missed this embedded English track">→Bazarr</button>`
-          : '';
-        embeddedHtml = `<span class="embedded-badge embedded-full" title="Full English subtitle track embedded in container">EN</span>${bazarrBtn}`;
-      } else if (item.embedded_en === 'EN(forced)' || item.embedded_en === 'EN(SDH)' || item.embedded_en === 'EN(commentary)') {
-        embeddedHtml = `<span class="embedded-badge embedded-partial" title="Partial English: ${item.embedded_en}">${escape(item.embedded_en)}</span>`;
+      if (item.embedded_en) {
+        embeddedHtml = coverageBadgeHtml(item.embedded_en, false);
+        if (item.suggest_bazarr_rescan) {
+          embeddedHtml += `<button class="ghost small bazarr-resync-btn" data-series-id="${item.bazarr?.sonarr_id ?? ''}" data-canonical="${escape(filePath)}" title="Tell Bazarr to rescan disk — it missed this English track">→Bazarr</button>`;
+        }
       } else {
         embeddedHtml = `<button class="ghost small probe-btn" data-canonical="${escape(filePath)}" title="Run ffprobe now (single file)">probe</button>`;
       }
@@ -1186,10 +1232,11 @@
           const epNum = ep.episode_number || '';
           const epTitle = ep.episode_title || '';
           const reasons = (ep.score_reasons || []).join(' · ');
-          const emb = ep.embedded_en
-            ? `<span class="ep-embedded">${escape(ep.embedded_en)}</span>`
+          // Unified badge for the embedded signal (shared with Scan tree + Library).
+          const emb = ep.embedded_en ? coverageBadgeHtml(ep.embedded_en, false) : '';
+          const disk = ep.has_sub_on_disk
+            ? coverageBadgeHtml(null, true)
             : '';
-          const disk = ep.has_sub_on_disk ? `<span class="ep-disk">!srt</span>` : '';
           const lang = ep.original_language || '';
           epRow.innerHTML = `
             <input type="checkbox" class="ep-cb"
@@ -1343,12 +1390,10 @@
   });
 
   // ───── Library Probe tab ─────
+  // Library only has embedded data (no sibling-srt context per row),
+  // so it always passes has_sibling_srt=undefined. Same helper covers it.
   function libBadge(track) {
-    if (track === 'EN') return '<span class="embedded-badge embedded-full">EN</span>';
-    if (track === 'EN(SDH)') return '<span class="embedded-badge embedded-full" title="SDH track — treated as English coverage">EN(SDH)</span>';
-    if (track === 'EN(forced)') return '<span class="embedded-badge embedded-partial">EN(forced)</span>';
-    if (track === 'EN(commentary)') return '<span class="embedded-badge embedded-partial">EN(commentary)</span>';
-    return '<span class="embedded-badge embedded-none">—</span>';
+    return coverageBadgeHtml(track, false);
   }
   function libSubSummary(streams) {
     return (streams || []).map((s) => {
