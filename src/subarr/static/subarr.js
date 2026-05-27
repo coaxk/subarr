@@ -654,9 +654,20 @@
     const grid = $('#integrations-grid');
     grid.textContent = 'loading…';
     try {
-      const data = await fetch('/api/integrations/health').then((r) => r.json());
+      const [data, ollama] = await Promise.all([
+        fetch('/api/integrations/health').then((r) => r.json()),
+        fetch('/api/enrichment/health').then((r) => r.json()).catch(() => null),
+      ]);
       grid.innerHTML = '';
-      for (const it of (data.integrations || [])) {
+      const allInts = [...(data.integrations || [])];
+      if (ollama) allInts.push({
+        name: 'ollama',
+        online: ollama.online,
+        configured: ollama.configured,
+        version: ollama.model + (ollama.model_available ? ' ✓' : ' (model missing)'),
+        error: ollama.error,
+      });
+      for (const it of allInts) {
         const cell = document.createElement('div');
         cell.className = 'integration';
         const dotCls = !it.configured ? 'unconf' : (it.online ? 'up' : 'down');
@@ -750,7 +761,7 @@
         <td>${escape(item.media_type)}</td>
         <td>${escape(item.title)}</td>
         <td>${escape(item.episode_number ? item.episode_number + ' ' : '')}${escape(item.episode_title || '')}</td>
-        <td class="lang">${escape(item.original_language || '—')}</td>
+        <td class="lang">${item.original_language ? escape(item.original_language) : `<button class="ghost small lang-enrich-btn" data-row-key="${escape(rowKey || '')}" data-canonical="${escape(item.canonical_path || '')}" data-title="${escape(item.title || '')}" title="Ask ollama to infer original language">? enrich</button>`}</td>
         <td>${item.monitored === null ? '—' : (item.monitored ? '✓' : '✗')}</td>
         <td class="${item.has_sub_on_disk ? 'disk-srt-yes' : 'disk-srt-no'}" title="${item.has_sub_on_disk ? 'Disk has .srt: Bazarr view is stale. Re-scan only if the existing sub is bad.' : ''}">${item.has_sub_on_disk ? '!' : '—'}</td>
         <td>${escape((item.bazarr?.missing_subtitles || []).join(', '))}</td>
@@ -816,6 +827,35 @@
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
   $('#cov-hide-stale').addEventListener('change', renderCoverage);
   $('#cov-filter').addEventListener('input', renderCoverage);
+
+  // Per-row enrichment button (event-delegated).
+  $('#cov-table').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.lang-enrich-btn');
+    if (!btn || btn.disabled) return;
+    const canonical = btn.dataset.canonical;
+    const title = btn.dataset.title;
+    if (!canonical || !title) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const r = await fetch('/api/enrichment/lang?gate=true', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ canonical_path: canonical, title }),
+      });
+      const body = await r.json();
+      if (r.status === 429) throw new Error(`GPU busy: ${body.detail}`);
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      btn.textContent = body.iso_code || 'und';
+      btn.title = `model=${body.model} raw=${body.raw_response}${body.cached ? ' (cached)' : ''}`;
+      btn.classList.remove('lang-enrich-btn');
+      btn.classList.add('lang-enriched');
+    } catch (e) {
+      btn.textContent = '✗';
+      btn.title = e.message;
+      setTimeout(() => { btn.textContent = '? enrich'; btn.disabled = false; }, 5000);
+    }
+  });
 
   // Per-row Queue button (event-delegated). Posts to /api/coverage/queue
   // which resolves the sonarr_episode_id to a single .mkv file before

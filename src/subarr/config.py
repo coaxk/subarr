@@ -53,6 +53,11 @@ class Settings:
     tautulli_url: str
     tautulli_api_key: str
 
+    # Ollama LLM endpoint for v1.2 enrichment (originalLanguage inference
+    # for rows where Sonarr returned null/und).
+    ollama_url: str
+    ollama_model: str
+
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
     # canonical-to-subarr form used everywhere else (relative to media_root).
@@ -85,6 +90,8 @@ def load() -> Settings:
         tautulli_url=os.environ.get("TAUTULLI_URL", "http://tautulli:8181"),
         tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", ""),
         arr_path_prefix=os.environ.get("ARR_PATH_PREFIX", "/data/Media/"),
+        ollama_url=os.environ.get("OLLAMA_URL", "http://ollama:11434"),
+        ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
     )
 
 

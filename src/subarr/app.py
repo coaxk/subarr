@@ -14,9 +14,12 @@ from .completion_watcher import CompletionWatcher
 from .config import settings
 from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
+from .enrichment import EnrichmentStore
+from .integrations.ollama import OllamaClient
 from .provenance import ProvenanceStore
 from .routers import (
-    admin, browse, coverage, coverage_actions, gpu, integrations, logs, mode,
+    admin, browse, coverage, coverage_actions, enrichment as r_enrichment,
+    gpu, integrations, logs, mode,
     provenance as r_provenance, queue, scan, schedule as r_schedule,
 )
 from .scan_runner import ScanRunner
@@ -47,6 +50,9 @@ async def lifespan(app_: FastAPI):
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
     app_.state.schedule.init_schema()
+    app_.state.ollama = OllamaClient()
+    app_.state.enrichment = EnrichmentStore(settings.db_path)
+    app_.state.enrichment.init_schema()
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         bundle=app_.state.integrations,
@@ -63,9 +69,11 @@ async def lifespan(app_: FastAPI):
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         await app_.state.integrations.aclose()
+        await app_.state.ollama.aclose()
         app_.state.scans.close()
         app_.state.provenance.close()
         app_.state.schedule.close()
+        app_.state.enrichment.close()
         app_.state.docker.close()
 
 
@@ -83,6 +91,7 @@ app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
 app.include_router(r_provenance.router)
 app.include_router(r_schedule.router)
+app.include_router(r_enrichment.router)
 
 
 @app.get("/api/health")

@@ -356,6 +356,8 @@ button.ghost:hover { background: var(--bg-elev2); }
 .coverage-table .cov-queue-btn { padding: 3px 8px; font-size: 11px; }
 .coverage-table .cov-queue-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .coverage-table .cov-queue-btn.queued { background: var(--ok); color: #06101e; border-color: var(--ok); }
+.coverage-table .lang-enrich-btn { padding: 2px 6px; font-size: 10px; color: var(--accent); border-color: var(--accent-dim); }
+.coverage-table .lang-enriched { color: var(--ok); font-family: var(--font-mono); }
 
 /* ───── Queue board (Monitor tab) ───── */
 .queue-board {

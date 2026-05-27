@@ -50,20 +50,26 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     monkeypatch.setenv("TAUTULLI_URL", "http://tautulli.test:8181")
     monkeypatch.setenv("TAUTULLI_API_KEY", "tt-test-key")
     monkeypatch.setenv("ARR_PATH_PREFIX", "/data/Media/")
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test:11434")
+    monkeypatch.setenv("OLLAMA_MODEL", "test-model")
 
     from subarr import app as app_mod
     from subarr import (
         auto_queue, completion_watcher, config, coverage_engine, docker_client,
-        paths, provenance as prov_mod, scan_runner, scan_store,
-        schedule_store as sched_store_mod, scheduler as scheduler_mod, subgen_client,
+        enrichment as enrichment_mod, paths, provenance as prov_mod,
+        scan_runner, scan_store, schedule_store as sched_store_mod,
+        scheduler as scheduler_mod, subgen_client,
     )
     from subarr.integrations import bazarr as iz_bazarr
     from subarr.integrations import base as iz_base
+    from subarr.integrations import ollama as iz_ollama
     from subarr.integrations import radarr as iz_radarr
     from subarr.integrations import sonarr as iz_sonarr
     from subarr.integrations import tautulli as iz_tautulli
     from subarr.routers import (
-        admin, browse, coverage, coverage_actions, gpu, integrations as r_integrations,
+        admin, browse, coverage, coverage_actions,
+        enrichment as r_enrichment,
+        gpu, integrations as r_integrations,
         logs, mode, provenance as r_provenance, queue, scan,
         schedule as r_schedule,
     )
@@ -71,9 +77,10 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     for m in [
         config, paths, scan_store, subgen_client, scan_runner, docker_client,
         prov_mod, completion_watcher, sched_store_mod, auto_queue, scheduler_mod,
-        iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, coverage_engine,
+        iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, iz_ollama,
+        enrichment_mod, coverage_engine,
         browse, mode, queue, scan, gpu, logs, admin, r_integrations,
-        coverage, coverage_actions, r_provenance, r_schedule, app_mod,
+        coverage, coverage_actions, r_provenance, r_schedule, r_enrichment, app_mod,
     ]:
         importlib.reload(m)
 
@@ -130,8 +137,41 @@ def app_with_stub(subarr_env, request):
     integ_kwargs = integ_marker.kwargs if integ_marker else {}
     app_mod.IntegrationBundle = _make_integration_bundle(**integ_kwargs)  # type: ignore[attr-defined]
 
+    ollama_marker = request.node.get_closest_marker("ollama_stub")
+    ollama_kwargs = ollama_marker.kwargs if ollama_marker else {}
+    app_mod.OllamaClient = _make_ollama_stub(**ollama_kwargs)  # type: ignore[attr-defined]
+
     with TestClient(app) as c:
         yield c
+
+
+def _make_ollama_stub(handler=None):
+    """OllamaClient stub backed by an httpx.MockTransport. handler is a
+    callable httpx.Request -> httpx.Response. If None, the stub is
+    'configured' but every request fails — letting tests assert error
+    paths if needed."""
+    from subarr.integrations.ollama import OllamaClient
+
+    def _default(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "test-model"}]})
+        if req.url.path == "/api/generate":
+            return httpx.Response(200, json={"response": "und"})
+        return httpx.Response(404)
+
+    real_handler = handler or _default
+    transport = httpx.MockTransport(real_handler)
+
+    class _StubOllama(OllamaClient):
+        def __init__(self):
+            self._base_url = "http://ollama.test:11434"
+            self._model = "test-model"
+            self._configured = True
+            self._client = httpx.AsyncClient(
+                base_url="http://ollama.test:11434", transport=transport,
+            )
+
+    return _StubOllama
 
 
 def _make_integration_bundle(
@@ -247,3 +287,4 @@ def pytest_configure(config):
         "markers",
         "integrations_stub(bazarr_handler=..., sonarr_handler=..., radarr_handler=..., tautulli_handler=...)",
     )
+    config.addinivalue_line("markers", "ollama_stub(handler=...): override ollama mock response handler")
