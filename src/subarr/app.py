@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import settings
-from .routers import browse, mode, queue, scan
+from .docker_client import DockerOps
+from .routers import admin, browse, gpu, logs, mode, queue, scan
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .subgen_client import SubgenClient
@@ -26,12 +27,14 @@ async def lifespan(app_: FastAPI):
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
     app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
+    app_.state.docker = DockerOps()
     try:
         yield
     finally:
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         app_.state.scans.close()
+        app_.state.docker.close()
 
 
 app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
@@ -40,6 +43,9 @@ app.include_router(browse.router)
 app.include_router(mode.router)
 app.include_router(queue.router)
 app.include_router(scan.router)
+app.include_router(gpu.router)
+app.include_router(logs.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health")

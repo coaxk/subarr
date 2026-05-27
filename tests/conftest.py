@@ -37,14 +37,17 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     monkeypatch.setenv("SUBGEN_COMPOSE_PATH", str(compose))
     monkeypatch.setenv("SUBARR_DB_PATH", str(tmp_path / "subarr.db"))
     monkeypatch.setenv("SUBGEN_URL", "http://subgen.test:9000")
+    monkeypatch.setenv("PLEX_URL", "http://plex.test:32400")
+    monkeypatch.setenv("PLEX_TOKEN", "test-token")
+    monkeypatch.setenv("PLEX_SECTION", "all")
 
     from subarr import app as app_mod
-    from subarr import config, paths, scan_runner, scan_store, subgen_client
-    from subarr.routers import browse, mode, queue, scan
+    from subarr import config, docker_client, paths, scan_runner, scan_store, subgen_client
+    from subarr.routers import admin, browse, gpu, logs, mode, queue, scan
 
     for m in [
-        config, paths, scan_store, subgen_client, scan_runner,
-        browse, mode, queue, scan, app_mod,
+        config, paths, scan_store, subgen_client, scan_runner, docker_client,
+        browse, mode, queue, scan, gpu, logs, admin, app_mod,
     ]:
         importlib.reload(m)
 
@@ -89,13 +92,64 @@ def app_with_stub(subarr_env, request):
             # swap the transport on the inner httpx.AsyncClient
             self._client = httpx.AsyncClient(base_url="http://subgen.test:9000", transport=transport)
 
-    # TestClient triggers lifespan; intercept the subgen client creation.
+    # TestClient triggers lifespan; intercept the subgen client + docker ops.
     import subarr.app as app_mod
     app_mod.SubgenClient = _StubClient  # type: ignore[attr-defined]
+
+    docker_marker = request.node.get_closest_marker("docker_stub")
+    docker_kwargs = docker_marker.kwargs if docker_marker else {}
+    app_mod.DockerOps = _make_docker_stub(**docker_kwargs)  # type: ignore[attr-defined]
 
     with TestClient(app) as c:
         yield c
 
 
+def _make_docker_stub(
+    container_running: bool = True,
+    container_unavailable: bool = False,
+    log_lines: list[str] | None = None,
+):
+    from subarr.docker_client import DockerOps, DockerUnavailable
+
+    class _StubDocker(DockerOps):
+        def __init__(self):
+            super().__init__()
+            self._restart_calls = 0
+
+        def _get(self):
+            if container_unavailable:
+                raise DockerUnavailable("stub: docker unavailable")
+            return object()  # never actually used in stub methods below
+
+        async def restart_subgen(self, timeout: int = 30) -> None:
+            if container_unavailable:
+                raise DockerUnavailable("stub: docker unavailable")
+            self._restart_calls += 1
+
+        async def container_info(self) -> dict:
+            if container_unavailable:
+                raise DockerUnavailable("stub: docker unavailable")
+            return {
+                "name": "subgen",
+                "status": "running" if container_running else "exited",
+                "running": container_running,
+                "started_at": "2026-05-27T20:40:15Z",
+                "image": "mccloud/subgen:latest",
+                "id_short": "abc123def456",
+            }
+
+        async def stream_subgen_logs(self, tail: int = 200):
+            if container_unavailable:
+                raise DockerUnavailable("stub: docker unavailable")
+            for line in (log_lines or ["INFO:root:line one", "INFO:root:line two"]):
+                yield line
+
+    return _StubDocker
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "subgen(handler=...): override subgen mock response handler")
+    config.addinivalue_line(
+        "markers",
+        "docker_stub(container_running=..., container_unavailable=..., log_lines=...): override docker stub",
+    )

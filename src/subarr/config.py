@@ -32,6 +32,12 @@ class Settings:
     # Port the GUI listens on.
     port: int
 
+    # Plex library refresh target. URL is the LAN-direct PMS; token is from
+    # the user's PMS settings. Section ID 0 means "all libraries" (Plex spec).
+    plex_url: str
+    plex_token: str
+    plex_section: str  # "all" or numeric section ID
+
 
 def load() -> Settings:
     return Settings(
@@ -43,6 +49,9 @@ def load() -> Settings:
         subgen_container=os.environ.get("SUBGEN_CONTAINER", "subgen"),
         db_path=Path(os.environ.get("SUBARR_DB_PATH", "/data/subarr.db")),
         port=int(os.environ.get("SUBARR_PORT", "9922")),
+        plex_url=os.environ.get("PLEX_URL", "http://192.168.1.105:32400"),
+        plex_token=os.environ.get("PLEX_TOKEN", ""),
+        plex_section=os.environ.get("PLEX_SECTION", "all"),
     )
 
 

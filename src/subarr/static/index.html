@@ -2,20 +2,140 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>subgenscan-gui</title>
+  <title>Subarr</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0f1115; color: #e8ebf0; }
-    header { padding: 14px 20px; background: #161a22; border-bottom: 1px solid #232936; }
-    h1 { font-size: 18px; margin: 0; font-weight: 600; }
-    main { padding: 20px; }
-    .pre-alpha { color: #888; font-size: 13px; }
-  </style>
+  <link rel="stylesheet" href="/static/subarr.css">
 </head>
 <body>
-  <header><h1>subgenscan-gui</h1></header>
+  <header>
+    <div class="brand">
+      <h1>Subarr</h1>
+      <span class="version" id="version">…</span>
+    </div>
+    <div class="status-row">
+      <div class="stat" id="stat-container">
+        <span class="label">subgen</span>
+        <span class="value" id="container-status">…</span>
+      </div>
+      <div class="stat" id="stat-queue">
+        <span class="label">queue</span>
+        <span class="value" id="queue-summary">…</span>
+      </div>
+      <div class="stat" id="stat-gpu">
+        <span class="label">vram</span>
+        <span class="value" id="gpu-summary">…</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="scan" role="tab">Scan</button>
+    <button class="tab" data-tab="logs" role="tab">Logs</button>
+    <button class="tab" data-tab="monitor" role="tab">Monitor</button>
+    <button class="tab" data-tab="settings" role="tab">Settings</button>
+  </nav>
+
   <main>
-    <p class="pre-alpha">Phase 1 scaffold. Backend live at <code>/api/health</code>, <code>/api/browse</code>, <code>/api/mode</code>.</p>
+    <!-- ───── Scan ───── -->
+    <section class="tabpanel active" id="tab-scan">
+      <div class="split">
+        <div class="pane tree-pane">
+          <div class="pane-head">
+            <strong>Library</strong>
+            <button class="ghost" id="tree-refresh" title="Reload root">↻</button>
+          </div>
+          <div class="tree" id="tree-root">loading…</div>
+        </div>
+        <div class="pane queue-pane">
+          <div class="pane-head">
+            <strong>Scan queue</strong>
+            <span class="muted" id="queue-count">0 paths</span>
+          </div>
+          <ul class="scan-list" id="scan-list"></ul>
+          <div class="controls">
+            <label class="check">
+              <input type="checkbox" id="opt-reverse"> reverse order (process newest first)
+            </label>
+            <button class="primary" id="start-scan" disabled>Start scan</button>
+          </div>
+          <div class="active-scan" id="active-scan" hidden>
+            <div class="active-scan-head">
+              <strong>Active scan</strong>
+              <span class="muted" id="active-scan-id"></span>
+            </div>
+            <div id="active-scan-current" class="muted">—</div>
+            <ul class="results" id="active-scan-results"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───── Logs ───── -->
+    <section class="tabpanel" id="tab-logs">
+      <div class="logs-controls">
+        <input type="text" id="log-filter" placeholder="filter (substring, case-insensitive)">
+        <label class="check"><input type="checkbox" id="log-autoscroll" checked> auto-scroll</label>
+        <button class="ghost" id="log-pause">Pause</button>
+        <button class="ghost" id="log-clear">Clear</button>
+        <span class="muted" id="log-status">disconnected</span>
+      </div>
+      <pre class="logs" id="logs"></pre>
+    </section>
+
+    <!-- ───── Monitor ───── -->
+    <section class="tabpanel" id="tab-monitor">
+      <div class="cards">
+        <div class="card">
+          <h2>GPU</h2>
+          <div id="gpu-card" class="kv">loading…</div>
+        </div>
+        <div class="card">
+          <h2>Container</h2>
+          <div id="container-card" class="kv">loading…</div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Queue (subgen v4.2)</h2>
+        <div id="queue-card" class="kv">loading…</div>
+        <table class="tbl" id="queue-table">
+          <thead><tr><th>state</th><th>type</th><th>path</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ───── Settings ───── -->
+    <section class="tabpanel" id="tab-settings">
+      <div class="card">
+        <h2>Per-language tuning (read-only)</h2>
+        <p class="muted">
+          From <code id="settings-compose-path">…</code>. Subgen applies these
+          automatically based on detected/forced language — no mode swap needed.
+        </p>
+        <table class="tbl" id="kwargs-table">
+          <thead><tr><th>lang</th><th>kwargs</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 class="muted">Top-level (SUBGEN_KWARGS)</h3>
+        <pre id="kwargs-top" class="codeblock">…</pre>
+      </div>
+      <div class="card">
+        <h2>Actions</h2>
+        <div class="action-row">
+          <button id="btn-restart" class="warn">Restart subgen</button>
+          <button id="btn-plex-scan" class="primary">Trigger Plex library scan</button>
+        </div>
+        <div id="action-result" class="muted small" aria-live="polite"></div>
+      </div>
+      <div class="card">
+        <h2>Path format reference</h2>
+        <p class="muted">Canonical = forward slashes, relative to <code>/media/library/</code>.</p>
+        <pre class="codeblock">TV/Show Name/Season 1
+Movies/Movie Name (Year)</pre>
+      </div>
+    </section>
   </main>
+
+  <script src="/static/subarr.js" defer></script>
 </body>
 </html>

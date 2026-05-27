@@ -1,0 +1,169 @@
+"""Tests for /api/gpu, /api/restart, /api/container, /api/plex/scan, /api/logs/events."""
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+
+
+# ───── GPU ──────────────────────────────────────────────────────────────────
+
+def test_gpu_returns_offline_when_smi_missing(app_with_stub, monkeypatch):
+    # Force nvidia-smi resolution to fail.
+    from subarr.routers import gpu as gpu_mod
+    monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: None)
+
+    r = app_with_stub.get("/api/gpu")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["online"] is False
+    assert "not found" in body["error"]
+
+
+def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
+    from subarr.routers import gpu as gpu_mod
+
+    async def fake_run_smi(exe, args):
+        if any(a.startswith("--query-gpu") for a in args):
+            return "NVIDIA RTX 4090, 8192, 24576, 16384, 35, 12, 62, 220.5, 450.0\n"
+        if any(a.startswith("--query-compute-apps") for a in args):
+            return "12345, python.exe, 7000\n"
+        return ""
+
+    monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: "fake-smi")
+    monkeypatch.setattr(gpu_mod, "_run_smi", fake_run_smi)
+
+    r = app_with_stub.get("/api/gpu")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["online"] is True
+    assert body["name"] == "NVIDIA RTX 4090"
+    assert body["memory"]["used_mib"] == 8192.0
+    assert body["memory"]["total_mib"] == 24576.0
+    assert body["utilization"]["gpu_pct"] == 35.0
+    assert body["temperature_c"] == 62.0
+    assert body["processes"] == [{"pid": 12345, "name": "python.exe", "memory_mib": 7000.0}]
+
+
+# ───── Container info + restart ─────────────────────────────────────────────
+
+def test_container_info(app_with_stub):
+    r = app_with_stub.get("/api/container")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "subgen"
+    assert body["running"] is True
+
+
+def test_restart_subgen(app_with_stub):
+    r = app_with_stub.post("/api/restart")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["restarted"] is True
+    assert body["container"]["running"] is True
+
+
+@pytest.mark.docker_stub(container_unavailable=True)
+def test_restart_returns_503_when_docker_down(app_with_stub):
+    r = app_with_stub.post("/api/restart")
+    assert r.status_code == 503
+
+
+# ───── Plex scan ────────────────────────────────────────────────────────────
+
+def _plex_handler(req: httpx.Request) -> httpx.Response:
+    if req.url.path == "/library/sections/all/refresh":
+        return httpx.Response(200, content=b"")
+    if req.url.path == "/queue":
+        return httpx.Response(200, json={
+            "queued": [], "processing": [], "queued_count": 0,
+            "processing_count": 0, "idle": True, "version": "test",
+        })
+    if req.url.path == "/batch":
+        return httpx.Response(200, json={"walked": 0, "queued": 0, "skipped": 0})
+    return httpx.Response(404)
+
+
+@pytest.mark.subgen(handler=_plex_handler)
+def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
+    # The plex endpoint uses a fresh httpx.AsyncClient, not the stubbed subgen
+    # client. Monkeypatch AsyncClient to intercept that single call.
+    import subarr.routers.admin as admin_mod
+
+    calls = []
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **kw):
+            self._kw = kw
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return None
+        async def get(self, url, params=None):
+            calls.append((url, dict(params or {})))
+            return httpx.Response(200, content=b"")
+
+    monkeypatch.setattr(admin_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    r = app_with_stub.post("/api/plex/scan")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["triggered"] is True
+    assert body["section"] == "all"
+    assert len(calls) == 1
+    url, params = calls[0]
+    assert url.endswith("/library/sections/all/refresh")
+    assert params == {"X-Plex-Token": "test-token"}
+
+
+def test_plex_scan_503_when_token_missing(app_with_stub, monkeypatch):
+    # Reload settings with empty PLEX_TOKEN
+    monkeypatch.setenv("PLEX_TOKEN", "")
+    from subarr import config
+    import importlib
+    importlib.reload(config)
+    from subarr.routers import admin
+    importlib.reload(admin)
+
+    r = app_with_stub.post("/api/plex/scan")
+    assert r.status_code == 503
+
+
+# ───── Logs SSE ─────────────────────────────────────────────────────────────
+
+@pytest.mark.docker_stub(log_lines=["INFO:root:hello", "ERROR:root:bad thing happened"])
+def test_logs_sse_streams_lines(app_with_stub):
+    with app_with_stub.stream("GET", "/api/logs/events?tail=10") as resp:
+        assert resp.status_code == 200
+        events: list[tuple[str, str]] = []
+        current = None
+        for chunk in resp.iter_lines():
+            if not chunk:
+                continue
+            if chunk.startswith("event:"):
+                current = chunk.split(":", 1)[1].strip()
+            elif chunk.startswith("data:"):
+                events.append((current, json.loads(chunk.split(":", 1)[1].strip())))
+
+    assert ("log", "INFO:root:hello") in events
+    assert ("log", "ERROR:root:bad thing happened") in events
+
+
+@pytest.mark.docker_stub(container_unavailable=True)
+def test_logs_sse_emits_error_when_docker_down(app_with_stub):
+    with app_with_stub.stream("GET", "/api/logs/events") as resp:
+        assert resp.status_code == 200
+        events = []
+        current = None
+        for chunk in resp.iter_lines():
+            if not chunk:
+                continue
+            if chunk.startswith("event:"):
+                current = chunk.split(":", 1)[1].strip()
+            elif chunk.startswith("data:"):
+                events.append((current, json.loads(chunk.split(":", 1)[1].strip())))
+                break
+
+    assert events
+    assert events[0][0] == "error"
