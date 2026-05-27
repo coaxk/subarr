@@ -1,8 +1,6 @@
 """Phase-1 smoke tests. Run with: pytest -q"""
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,26 +17,30 @@ def _isolated_env(monkeypatch, tmp_path: Path):
 
     compose = tmp_path / "compose.yaml"
     compose.write_text(
-        'services:\n  subgen:\n    environment:\n'
-        '      SUBGEN_KWARGS: \'{"patience": 1.5, "length_penalty": 0.85}\'\n'
+        "services:\n"
+        "  subgen:\n"
+        "    environment:\n"
+        "      SUBGEN_KWARGS: '{\"patience\": 1.5, \"length_penalty\": 0.85, \"beam_size\": 5}'\n"
+        "      SUBGEN_KWARGS_LANG_JA: '{\"patience\": 1.0, \"length_penalty\": 1.3}'\n"
+        "      SUBGEN_KWARGS_LANG_DE: '{\"patience\": 1.8, \"length_penalty\": 0.8}'\n"
+        "      UNRELATED_VAR: hello\n"
     )
 
-    monkeypatch.setenv("SUBGENSCAN_MEDIA_ROOT", str(media))
+    monkeypatch.setenv("SUBARR_MEDIA_ROOT", str(media))
     monkeypatch.setenv("SUBGEN_COMPOSE_PATH", str(compose))
-    monkeypatch.setenv("SUBGENSCAN_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setenv("SUBARR_DB_PATH", str(tmp_path / "db.sqlite"))
 
-    # Force config reload — module-level settings cached load() output.
     import importlib
 
-    from subgenscan_gui import config, paths
-    from subgenscan_gui.routers import browse, mode
+    from subarr import config, paths
+    from subarr.routers import browse, mode
 
     importlib.reload(config)
     importlib.reload(paths)
     importlib.reload(browse)
     importlib.reload(mode)
 
-    from subgenscan_gui import app as app_mod
+    from subarr import app as app_mod
 
     importlib.reload(app_mod)
     yield
@@ -46,7 +48,7 @@ def _isolated_env(monkeypatch, tmp_path: Path):
 
 def _client():
     from fastapi.testclient import TestClient
-    from subgenscan_gui.app import app
+    from subarr.app import app
 
     return TestClient(app)
 
@@ -68,9 +70,7 @@ def test_browse_root_lists_tv():
 def test_browse_counts_video_and_srt():
     r = _client().get("/api/browse", params={"path": "TV/Show"})
     assert r.status_code == 200
-    entries = r.json()["entries"]
-    # Show contains only files, no subdirs — entries should be empty (we only list dirs).
-    assert entries == []
+    assert r.json()["entries"] == []
 
     r = _client().get("/api/browse", params={"path": "TV"})
     show_entry = next(e for e in r.json()["entries"] if e["name"] == "Show")
@@ -83,10 +83,22 @@ def test_browse_rejects_traversal():
     assert r.status_code == 400
 
 
-def test_mode_european():
+def test_mode_returns_top_level_kwargs():
     r = _client().get("/api/mode")
     assert r.status_code == 200
     body = r.json()
-    assert body["mode"] == "european"
-    assert body["patience"] == 1.5
-    assert body["length_penalty"] == 0.85
+    assert body["top_level_kwargs"]["patience"] == 1.5
+    assert body["top_level_kwargs"]["length_penalty"] == 0.85
+    assert body["top_level_kwargs"]["beam_size"] == 5
+    assert body["top_level_parse_error"] is None
+
+
+def test_mode_returns_per_language_kwargs():
+    r = _client().get("/api/mode")
+    body = r.json()
+    codes = [lk["code"] for lk in body["per_language_kwargs"]]
+    assert codes == ["DE", "JA"]  # sorted alphabetically
+    ja = next(lk for lk in body["per_language_kwargs"] if lk["code"] == "JA")
+    assert ja["parsed"]["patience"] == 1.0
+    assert ja["parsed"]["length_penalty"] == 1.3
+    assert ja["parse_error"] is None

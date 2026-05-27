@@ -1,7 +1,7 @@
 services:
-  subgenscan-gui:
-    image: ghcr.io/coaxk/subgenscan-gui:latest
-    container_name: subgenscan-gui
+  subarr:
+    image: ghcr.io/coaxk/subarr:latest
+    container_name: subarr
     restart: unless-stopped
     networks:
     - safe-bridge
@@ -17,21 +17,19 @@ services:
       PUID: '1000'
       PGID: '1000'
       UMASK: '022'
-      SUBGENSCAN_PORT: '9922'
-      SUBGENSCAN_MEDIA_ROOT: /media/library
+      SUBARR_PORT: '9922'
+      SUBARR_MEDIA_ROOT: /media/library
       SUBGEN_COMPOSE_PATH: /dockercontainers/subgen/compose.yaml
-      SUBGEN_COMPOSE_EUROPEAN: /dockercontainers/subgen/compose.european.yaml
-      SUBGEN_COMPOSE_JAPANESE: /dockercontainers/subgen/compose.japanese.yaml
       SUBGEN_URL: http://subgen:9000
       SUBGEN_CONTAINER: subgen
-      SUBGENSCAN_DB_PATH: /data/subgenscan-gui.db
+      SUBARR_DB_PATH: /data/subarr.db
     volumes:
     - /mnt/nas/Media:/media/library:ro
     - /var/run/docker.sock:/var/run/docker.sock
-    - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen
-    - /mnt/c/DockerContainers/subgenscan-gui/data:/data
+    - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen:ro
+    - /mnt/c/DockerContainers/subarr/data:/data
     labels:
-    - maintenance_log=[2026-05-27] Initial scaffold (phase 1)
+    - maintenance_log=[2026-05-27] Rev2 rename subgenscan-gui to subarr; mode-switching dropped (per-language kwargs handle this); mount /dockercontainers/subgen as read-only
     env_file:
     - .env
     logging:
@@ -43,4 +41,4 @@ networks:
   safe-bridge:
     external: true
 
-# [2026-05-27] Initial scaffold: phase 1 endpoints (health, browse, mode GET).
+# [2026-05-27] Rev2: rename to subarr, drop mode-switching, /dockercontainers/subgen mount now read-only.

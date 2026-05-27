@@ -15,7 +15,7 @@ from .routers import browse, mode
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="subgenscan-gui", version=__version__)
+app = FastAPI(title="subarr", version=__version__)
 
 app.include_router(browse.router)
 app.include_router(mode.router)
@@ -43,8 +43,8 @@ if _STATIC_DIR.is_dir():
 def main() -> None:
     import uvicorn
 
-    log.info("subgenscan-gui %s on port %d", __version__, settings.port)
-    uvicorn.run("subgenscan_gui.app:app", host="0.0.0.0", port=settings.port, reload=False)
+    log.info("subarr %s on port %d", __version__, settings.port)
+    uvicorn.run("subarr.app:app", host="0.0.0.0", port=settings.port, reload=False)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 [project]
-name = "subgenscan-gui"
+name = "subarr"
 version = "0.1.0"
-description = "Web UI for subgen — folder tree, scan queue, log tail, mode swap"
+description = "Subarr — *arr-family service for subtitle coordination (subgen driver, coverage dashboard, automation)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
