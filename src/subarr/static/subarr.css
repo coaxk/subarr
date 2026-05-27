@@ -186,6 +186,7 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
 .tree .file-row .icon { color: var(--muted); font-size: 10px; }
 .tree .file-row.has-srt .name { color: var(--muted); }
 .tree .file-row.has-srt .icon { color: var(--ok); }
+.tree .file-row .icon { font-size: 12px; }
 .tree .file-row .size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-left: 6px; }
 
 /* Filter highlight + hide */

@@ -6,17 +6,22 @@ Subgen's /batch handler accepts both directories and single files (the
 v4.1-patched transcribe_existing branch handles `os.path.isfile(path)`),
 so a leaf-file checkbox queues just that one file.
 
-Existing-srt detection per file: an entry's `has_sibling_srt` is True if
-any `<basename>.*.srt` exists in the same directory. That lets the UI
-gray out files Bazarr/subgen already wrote subs for.
+Existing-coverage signals per file:
+- `has_sibling_srt`: any `<basename>.*.srt` exists in the same directory.
+- `embedded_en`: the probe cache's classification ('EN' / 'EN(SDH)' /
+  'EN(forced)' / 'EN(commentary)' / None). Folds the same data the
+  Coverage tab uses into the Scan tab tree so users can see at a glance
+  which files already have English coverage (sibling OR embedded)
+  before kicking off a scan.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from ..media_probe import english_track_summary
 from ..paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
 
 router = APIRouter(prefix="/api", tags=["browse"])
@@ -31,6 +36,7 @@ class BrowseEntry(BaseModel):
     srt_count: int = 0
     # File-only fields (false for dirs):
     has_sibling_srt: bool = False
+    embedded_en: str | None = None  # 'EN' / 'EN(SDH)' / 'EN(forced)' / 'EN(commentary)' / None
     size_mb: float | None = None
 
 
@@ -41,7 +47,10 @@ class BrowseResponse(BaseModel):
 
 
 @router.get("/browse", response_model=BrowseResponse)
-def browse(path: str = Query("", description="Canonical path relative to media root")) -> BrowseResponse:
+def browse(
+    request: Request,
+    path: str = Query("", description="Canonical path relative to media root"),
+) -> BrowseResponse:
     try:
         target = canonical_to_fs(path)
     except PathOutsideRootError:
@@ -93,16 +102,28 @@ def browse(path: str = Query("", description="Canonical path relative to media r
             video_count=video_count,
             srt_count=srt_count,
         ))
+    # Probe cache lookup is best-effort — if the store isn't on app.state
+    # (e.g. during a unit test that didn't wire it) we silently skip.
+    probe_store = getattr(request.app.state, "probe_store", None)
     for f in files:
         try:
-            size_mb = round(f.stat().st_size / (1024 * 1024), 1)
+            st = f.stat()
+            size_mb = round(st.st_size / (1024 * 1024), 1)
         except OSError:
+            st = None
             size_mb = None
+        canonical = fs_to_canonical(f)
+        embedded = None
+        if probe_store is not None and st is not None:
+            cached = probe_store.get(canonical, mtime=st.st_mtime, size=st.st_size)
+            if cached is not None:
+                embedded = english_track_summary(cached)
         entries.append(BrowseEntry(
             name=f.name,
-            path=fs_to_canonical(f),
+            path=canonical,
             is_dir=False,
             has_sibling_srt=_has_sibling_srt(f),
+            embedded_en=embedded,
             size_mb=size_mb,
         ))
 

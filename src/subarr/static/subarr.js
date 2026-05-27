@@ -75,8 +75,14 @@
 
   function renderFileLeaf(entry) {
     // Video file row — flat checkbox + name + size; no <details>.
+    // Coverage signals: sibling .srt OR embedded-EN (from probe cache).
+    // The orb fills green when EITHER is true so the user can see at a
+    // glance that English coverage exists, regardless of where it lives.
     const row = document.createElement('div');
-    row.className = 'file-row' + (entry.has_sibling_srt ? ' has-srt' : '');
+    const embFull = entry.embedded_en === 'EN' || entry.embedded_en === 'EN(SDH)';
+    const embPartial = entry.embedded_en === 'EN(forced)' || entry.embedded_en === 'EN(commentary)';
+    const hasCoverage = entry.has_sibling_srt || embFull;
+    row.className = 'file-row' + (hasCoverage ? ' has-srt' : '');
     row.dataset.path = entry.path;
     row.dataset.searchKey = entry.name.toLowerCase();
     const cb = document.createElement('input');
@@ -89,8 +95,23 @@
     });
     const icon = document.createElement('span');
     icon.className = 'icon';
-    icon.textContent = entry.has_sibling_srt ? '◉' : '▸';
-    icon.title = entry.has_sibling_srt ? 'has sibling .srt already' : 'no sibling .srt';
+    // Pick the symbol + tooltip from the most informative signal.
+    if (entry.has_sibling_srt && embFull) {
+      icon.textContent = '◉';
+      icon.title = `sibling .srt on disk + embedded ${entry.embedded_en}`;
+    } else if (entry.has_sibling_srt) {
+      icon.textContent = '◉';
+      icon.title = 'sibling .srt on disk';
+    } else if (embFull) {
+      icon.textContent = '◉';
+      icon.title = `embedded subtitle stream (${entry.embedded_en})`;
+    } else if (embPartial) {
+      icon.textContent = '◐';
+      icon.title = `partial: ${entry.embedded_en} only`;
+    } else {
+      icon.textContent = '▸';
+      icon.title = 'no English subtitle detected (sibling or embedded)';
+    }
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = entry.name;
