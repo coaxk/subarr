@@ -16,6 +16,7 @@
     if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); loadPending(); }
     if (tab === 'coverage') loadCoverage();
     if (tab === 'library') loadLibrary();
+    if (tab === 'activity') startActivity(); else stopActivity();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
 
@@ -606,6 +607,73 @@
       $('#settings-compose-path').textContent = `error: ${e.message}`;
     }
   }
+
+  // ───── Activity tab ─────
+  // Polls /api/provenance/recent on a 5s tick while the tab is active.
+  // Stops the timer on tab switch so we don't keep the request log noisy
+  // for a tab the user isn't looking at.
+  let activityTimer = null;
+  function startActivity() {
+    loadActivity();
+    if (!activityTimer) activityTimer = setInterval(loadActivity, 5000);
+  }
+  function stopActivity() {
+    if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
+  }
+  function fmtAgo(ts) {
+    if (!ts) return '—';
+    const now = Date.now() / 1000;
+    const s = Math.max(0, now - ts);
+    if (s < 60) return `${Math.round(s)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  }
+  function rowStatus(entry) {
+    if (entry.completed_at && entry.bazarr_scan_triggered_at) return { cls: 'bazarr', label: 'bazarr-notified' };
+    if (entry.completed_at) return { cls: 'done', label: 'completed' };
+    return { cls: 'pending', label: 'pending' };
+  }
+  async function loadActivity() {
+    const meta = $('#activity-meta');
+    try {
+      const data = await fetch('/api/provenance/recent').then((r) => r.json());
+      const rows = data.entries || [];
+      const onlyPending = $('#activity-only-pending')?.checked;
+      const shown = onlyPending ? rows.filter((r) => !r.completed_at) : rows;
+      const tbody = $('#activity-table tbody');
+      tbody.innerHTML = '';
+      if (shown.length === 0) {
+        tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${rows.length === 0 ? 'no activity yet — queue something from Coverage or Scan' : 'no rows match (uncheck pending-only to see completed)'}</td></tr>`;
+      } else {
+        for (const r of shown) {
+          const s = rowStatus(r);
+          const tr = document.createElement('tr');
+          const fileBase = (r.canonical_path || '').split('/').pop() || r.canonical_path || '?';
+          const bazarrCell = r.bazarr_scan_triggered_at
+            ? `<span class="activity-cell-time" title="${escape(new Date(r.bazarr_scan_triggered_at * 1000).toLocaleString())}">notified ${escape(fmtAgo(r.bazarr_scan_triggered_at))}</span>`
+            : (r.series_id ? '<span class="muted">awaiting completion</span>' : '<span class="muted">n/a (no series id)</span>');
+          tr.innerHTML = `
+            <td><span class="activity-status ${s.cls}">${s.label}</span></td>
+            <td class="activity-cell-time" title="${escape(new Date(r.queued_at * 1000).toLocaleString())}">${escape(fmtAgo(r.queued_at))}</td>
+            <td class="activity-cell-path" title="${escape(r.canonical_path)}">${escape(fileBase)}</td>
+            <td class="activity-cell-time" title="${r.completed_at ? escape(new Date(r.completed_at * 1000).toLocaleString()) : ''}">${r.completed_at ? escape(fmtAgo(r.completed_at)) : '—'}</td>
+            <td>${bazarrCell}</td>
+            <td class="activity-cell-id">${escape(r.scan_id || '')}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+      const pending = rows.filter((r) => !r.completed_at).length;
+      const completed = rows.length - pending;
+      const bazarrFired = rows.filter((r) => r.bazarr_scan_triggered_at).length;
+      meta.textContent = `${rows.length} recent · ${pending} pending · ${completed} completed · ${bazarrFired} bazarr-notified · last 50 entries shown`;
+    } catch (e) {
+      meta.textContent = `error: ${e.message}`;
+    }
+  }
+  $('#activity-refresh')?.addEventListener('click', loadActivity);
+  $('#activity-only-pending')?.addEventListener('change', loadActivity);
 
   // ───── Pending approvals (manual_confirm mode) ─────
   async function loadPending() {
