@@ -117,7 +117,10 @@ def load() -> Settings:
         ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
         docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),
         docker_socket_path=os.environ.get("SUBARR_DOCKER_SOCKET_PATH", ""),
-        telemetry_endpoint=os.environ.get("SUBARR_TELEMETRY_ENDPOINT", ""),
+        telemetry_endpoint=os.environ.get(
+            "SUBARR_TELEMETRY_ENDPOINT",
+            "https://telemetry.subarr.com/v1/ping",
+        ),
         auth_user=os.environ.get("SUBARR_USER", ""),
         auth_pass=os.environ.get("SUBARR_PASS", ""),
     )

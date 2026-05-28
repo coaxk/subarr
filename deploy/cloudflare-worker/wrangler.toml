@@ -1,0 +1,38 @@
+# wrangler.toml — subarr telemetry worker config.
+#
+# Use this if you prefer the CLI deploy path:
+#   npm install -g wrangler
+#   cd deploy/cloudflare-worker
+#   wrangler login
+#   wrangler kv:namespace create PINGS
+#   wrangler kv:namespace create STATS
+#   # copy the returned IDs into the kv_namespaces block below, then:
+#   wrangler deploy
+#
+# Alternative: paste worker.js directly into the Cloudflare dashboard
+# Quick Edit tab. Same outcome, no CLI install needed.
+
+name = "subarr-telemetry"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+workers_dev = false   # we use the custom domain telemetry.subarr.com
+
+# Custom domain — set up in the Cloudflare UI under Settings → Domains
+# & Routes → + Add → Custom Domain. The DNS record is auto-created.
+# This block is here for documentation only — wrangler doesn't bind
+# custom domains via TOML (use the UI).
+
+# KV bindings — create these first via the CLI commands above OR via
+# Cloudflare dashboard → Storage & Databases → KV → Create namespace.
+[[kv_namespaces]]
+binding = "PINGS"
+id = ""                # paste the namespace ID after creating
+
+[[kv_namespaces]]
+binding = "STATS"
+id = ""                # paste the namespace ID after creating
+
+# Observability — enable so Cloudflare's Worker Logs UI shows fetches
+# with rate-limit decisions etc.
+[observability]
+enabled = true
