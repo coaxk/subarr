@@ -21,7 +21,7 @@ from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
 from .routers import (
-    admin, bazarr_sync, browse, coverage, coverage_actions,
+    admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
     enrichment as r_enrichment, gpu, integrations, logs, mode,
     probe as r_probe, provenance as r_provenance, queue, scan,
     schedule as r_schedule, updates as r_updates,
@@ -104,9 +104,28 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.update_checker.start()
 
+    # Tier-2 docker discovery for the onboarding wizard. Optional —
+    # disabled if neither SUBARR_DOCKER_PROXY_URL nor a socket path
+    # is configured. The wizard probes via GET /api/discovery and
+    # gracefully falls back to manual entry when unavailable.
+    if settings.docker_proxy_url or settings.docker_socket_path:
+        from .docker_discovery import DockerDiscovery
+        app_.state.docker_discovery = DockerDiscovery(
+            base_url=settings.docker_proxy_url or None,
+            unix_socket=settings.docker_socket_path or None,
+        )
+        log.info(
+            "docker discovery enabled (transport=%s)",
+            "proxy" if settings.docker_proxy_url else "socket",
+        )
+    else:
+        app_.state.docker_discovery = None
+
     try:
         yield
     finally:
+        if app_.state.docker_discovery is not None:
+            await app_.state.docker_discovery.aclose()
         await app_.state.update_checker.stop()
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
@@ -142,6 +161,7 @@ app.include_router(r_enrichment.router)
 app.include_router(r_probe.router)
 app.include_router(bazarr_sync.router)
 app.include_router(r_updates.router)
+app.include_router(r_discovery.router)
 
 
 @app.get("/api/health")
