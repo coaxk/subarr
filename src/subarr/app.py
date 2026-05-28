@@ -50,6 +50,12 @@ async def lifespan(app_: FastAPI):
         log.info("schema migrations applied this boot: %s",
                  [m.name for m in applied])
     app_.state.subgen = SubgenClient()
+    # Probe subgen capabilities once. The result drives:
+    #   - whether the header counter shows queue depth
+    #   - whether completion_watcher polls /queue vs the provenance table
+    #   - whether the scan-submit UI is enabled or shows "needs subarr-subgen"
+    # Stored on app.state for the health endpoint + downstream gating.
+    app_.state.subgen_caps = await app_.state.subgen.probe_capabilities()
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
     app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
