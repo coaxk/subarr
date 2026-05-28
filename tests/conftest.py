@@ -109,6 +109,12 @@ def app_with_stub(subarr_env, request):
     handler = marker.kwargs.get("handler") if marker else None
 
     def default_handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/status":
+            # Required for the capability probe — without it, subgen looks
+            # unreachable and the scan-runner compat-mode gate blocks scans.
+            return httpx.Response(200, json={
+                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
+            })
         if req.url.path == "/queue":
             return httpx.Response(200, json={
                 "queued": [], "processing": [], "queued_count": 0,

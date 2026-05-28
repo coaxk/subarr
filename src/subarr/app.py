@@ -58,7 +58,10 @@ async def lifespan(app_: FastAPI):
     app_.state.subgen_caps = await app_.state.subgen.probe_capabilities()
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
-    app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
+    app_.state.runner = ScanRunner(
+        app_.state.subgen, app_.state.scans,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+    )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
@@ -67,6 +70,7 @@ async def lifespan(app_: FastAPI):
         subgen=app_.state.subgen,
         bazarr=app_.state.integrations.bazarr,
         provenance=app_.state.provenance,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)

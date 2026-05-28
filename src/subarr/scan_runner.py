@@ -27,18 +27,51 @@ from .scan_store import (
     Scan,
     ScanStore,
 )
-from .subgen_client import SubgenClient, SubgenUnavailable
+from .subgen_client import SubgenCapabilities, SubgenClient, SubgenUnavailable
 
 log = logging.getLogger(__name__)
 
 
+class CompatModeError(RuntimeError):
+    """The detected subgen build doesn't support a capability subarr's
+    scan flow needs. Surfaces a clear UI message instead of a vague
+    HTTP error or silent no-op."""
+
+
 class ScanRunner:
-    def __init__(self, subgen: SubgenClient, store: ScanStore):
+    def __init__(self, subgen: SubgenClient, store: ScanStore,
+                 caps_provider=None):
         self._subgen = subgen
         self._store = store
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._lock = asyncio.Lock()
+        # Callable returning the cached SubgenCapabilities snapshot.
+        # We don't probe per-scan — caps are stable per app boot.
+        # The provider may return None (caps not yet probed) — treated
+        # as "assume capable" so first-boot scans don't fail spuriously.
+        self._caps_provider = caps_provider or (lambda: None)
+
+    def _check_can_scan(self) -> None:
+        """Raise CompatModeError when /batch isn't available.
+
+        Called at scan submission. Fails fast with a structured reason
+        instead of dispatching an async task that errors mid-flight."""
+        caps: SubgenCapabilities | None = self._caps_provider()
+        if caps is None:
+            return  # caps not probed yet — let it proceed
+        if not caps.reachable:
+            raise CompatModeError(
+                "subgen is not reachable. Check the subgen container is "
+                "running + SUBGEN_URL points at it."
+            )
+        if not caps.has_batch:
+            raise CompatModeError(
+                "Scan submission requires the /batch endpoint, which "
+                "vanilla mccloud/subgen doesn't ship. Switch to "
+                "ghcr.io/coaxk/subarr-subgen for full functionality. "
+                "See docs at https://github.com/coaxk/subarr#compat-mode"
+            )
 
     async def aclose(self) -> None:
         async with self._lock:

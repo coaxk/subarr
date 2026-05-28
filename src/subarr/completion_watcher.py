@@ -59,7 +59,8 @@ _BAZARR_SCAN_TASK_HINTS = (
 
 class CompletionWatcher:
     def __init__(self, subgen: SubgenClient, bazarr: BazarrClient,
-                 provenance: ProvenanceStore, interval_s: int = WATCHER_INTERVAL_S):
+                 provenance: ProvenanceStore, interval_s: int = WATCHER_INTERVAL_S,
+                 caps_provider=None):
         self._subgen = subgen
         self._bazarr = bazarr
         self._provenance = provenance
@@ -68,6 +69,12 @@ class CompletionWatcher:
         self._stop = asyncio.Event()
         self._bazarr_task_id: str | None = None
         self._bazarr_task_lookup_attempted = False
+        # Cached caps. When /queue is missing (vanilla subgen), the
+        # _pass_pending queue-poll is skipped + a one-time warning logs.
+        # v1.x will add a file-watch fallback that detects .srt sidecars
+        # landing on disk so provenance entries can still auto-complete.
+        self._caps_provider = caps_provider or (lambda: None)
+        self._warned_no_queue = False
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -112,6 +119,21 @@ class CompletionWatcher:
     async def _pass_pending(self) -> None:
         pending = self._provenance.pending()
         if not pending:
+            return
+        # Compat-mode check: if subgen lacks /queue, this pass can't work.
+        # Log once + bail; v1.x adds the file-watch fallback.
+        caps = self._caps_provider()
+        if caps is not None and caps.reachable and not caps.has_queue:
+            if not self._warned_no_queue:
+                log.warning(
+                    "completion watcher: subgen has no /queue endpoint "
+                    "(compat mode — vanilla subgen). %d pending provenance "
+                    "entries won't auto-complete via queue polling. "
+                    "File-watch fallback is v1.x; for now, restart subgen "
+                    "or use subarr-subgen image for auto-completion.",
+                    len(pending),
+                )
+                self._warned_no_queue = True
             return
         try:
             q = await self._subgen.queue()
