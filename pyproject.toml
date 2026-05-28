@@ -34,7 +34,7 @@ where = ["src"]
 # the frontend is silently missing in the wheel (404 at / + /static/*).
 # Caught 2026-05-27 after v1.1 deploy.
 [tool.setuptools.package-data]
-subarr = ["static/**/*"]
+subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md"]
 
 [tool.ruff]
 line-length = 110

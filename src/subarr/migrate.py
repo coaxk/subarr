@@ -1,0 +1,194 @@
+"""SQLite schema migration runner.
+
+Reads `.sql` files from a migrations directory in lexical order, applies
+each in a transaction if its version hasn't been recorded in the
+`schema_versions` table, records the application.
+
+Design notes:
+
+- One shared `schema_versions` table tracks applied migrations across the
+  entire `subarr.db`. We don't shard per-store because all the stores
+  share one SQLite file anyway, and a single source of truth for "which
+  schema is on disk" beats per-store version-tracking by a mile.
+
+- Migrations are SQL-only. No Python hooks, no env-var references. The
+  point is that anyone reading `migrations/NNN_*.sql` can see exactly
+  what changes the file makes, and that the change is the same on every
+  machine. Backfills go in SQL; if the backfill logic is too complex
+  for SQL we re-think the schema, not extend the migration system.
+
+- Each migration runs in a transaction. Failure mid-file rolls back; the
+  version row is not inserted; the app's startup aborts with the SQL
+  error visible. This is the right failure mode — silent partial-apply
+  is the worst possible outcome.
+
+- Idempotent. Running `.run()` on an already-up-to-date DB is a no-op
+  (just a SELECT on schema_versions per migration to check).
+
+- We use `executescript` per file. A single migration file MAY contain
+  multiple statements separated by `;`. The transaction wraps the
+  whole executescript.
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Migration:
+    """One numbered .sql file on disk."""
+    version: int            # parsed from filename prefix (e.g. 001 → 1)
+    name: str               # filename without .sql (e.g. "001_baseline")
+    path: Path              # full path to the .sql file
+
+
+class MigrationRunner:
+    """Applies pending migrations to a SQLite database.
+
+    Usage:
+        runner = MigrationRunner(db_path, migrations_dir)
+        runner.run()
+    """
+
+    def __init__(self, db_path: Path, migrations_dir: Path):
+        self._db_path = db_path
+        self._dir = migrations_dir
+
+    # ─── Public API ──────────────────────────────────────────────────
+
+    def run(self) -> list[Migration]:
+        """Apply all pending migrations. Returns the list of migrations
+        that were applied this call (empty if DB was already up-to-date).
+        """
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._ensure_version_table(conn)
+            applied_now: list[Migration] = []
+            already = self._applied_versions(conn)
+            for m in self._discover():
+                if m.version in already:
+                    log.debug("migration %s already applied", m.name)
+                    continue
+                self._apply_one(conn, m)
+                applied_now.append(m)
+                log.info("migration applied: %s", m.name)
+            if not applied_now:
+                log.info("migrations: already up to date (%d applied)", len(already))
+            else:
+                log.info("migrations: applied %d new (now at %d total)",
+                         len(applied_now), len(already) + len(applied_now))
+            return applied_now
+        finally:
+            conn.close()
+
+    def applied_versions(self) -> list[int]:
+        """Public read-only view of which versions are recorded as applied
+        on disk. Useful for diagnostics / Settings → System info."""
+        conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        try:
+            self._ensure_version_table(conn)
+            return self._applied_versions(conn)
+        finally:
+            conn.close()
+
+    def discover(self) -> list[Migration]:
+        """Public view of the migrations on disk in apply order."""
+        return self._discover()
+
+    # ─── Internal ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _ensure_version_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_versions (
+                version     INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL,
+                applied_at  REAL NOT NULL
+            )
+            """
+        )
+
+    @staticmethod
+    def _applied_versions(conn: sqlite3.Connection) -> list[int]:
+        rows = conn.execute(
+            "SELECT version FROM schema_versions ORDER BY version"
+        ).fetchall()
+        return sorted([r[0] for r in rows])
+
+    def _discover(self) -> list[Migration]:
+        if not self._dir.is_dir():
+            return []
+        out: list[Migration] = []
+        for p in sorted(self._dir.glob("*.sql")):
+            stem = p.stem  # e.g. "001_baseline"
+            prefix = stem.split("_", 1)[0]
+            try:
+                version = int(prefix)
+            except ValueError:
+                log.warning(
+                    "ignoring migration with non-numeric prefix: %s", p.name
+                )
+                continue
+            out.append(Migration(version=version, name=stem, path=p))
+        return out
+
+    @staticmethod
+    def _apply_one(conn: sqlite3.Connection, m: Migration) -> None:
+        import time
+        sql = m.path.read_text(encoding="utf-8")
+        # We can't use sqlite3.executescript() — it issues an implicit
+        # COMMIT before running, which breaks our atomic-per-migration
+        # contract. Split on ';' and execute one statement at a time
+        # inside a manual transaction so failure mid-file rolls back
+        # cleanly and the version row is NOT recorded.
+        statements = []
+        for raw in sql.split(";"):
+            # Strip per-line SQL comments + whitespace; skip empty results.
+            lines = [ln for ln in raw.splitlines()
+                     if not ln.strip().startswith("--")]
+            clean = "\n".join(lines).strip()
+            if clean:
+                statements.append(clean)
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for stmt in statements:
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT INTO schema_versions (version, name, applied_at) "
+                "VALUES (?, ?, ?)",
+                (m.version, m.name, time.time()),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass  # transaction already aborted by sqlite itself
+            raise
+
+
+def run_migrations(db_path: Path, migrations_dir: Path | None = None) -> list[Migration]:
+    """Convenience: discover the bundled migrations dir + run.
+
+    Used from app.py's lifespan setup before any store calls init_schema().
+    """
+    if migrations_dir is None:
+        migrations_dir = Path(__file__).parent / "migrations"
+    return MigrationRunner(db_path, migrations_dir).run()
+
+
+def _migration_versions(db_path: Path) -> list[int]:
+    """Public helper for /api/admin or Settings → System surface."""
+    return MigrationRunner(db_path, Path(__file__).parent / "migrations").applied_versions()

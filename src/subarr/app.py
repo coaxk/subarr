@@ -38,6 +38,17 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    # Schema migrations run BEFORE any store touches the DB. After they
+    # complete the DB has the v1.0 baseline (+ any newer migrations). The
+    # per-store init_schema() calls below become no-ops on a migrated DB
+    # (CREATE TABLE IF NOT EXISTS); kept during the v0.x→v1.0 transition
+    # so a half-deployed wheel can still self-heal. Remove the
+    # init_schema() calls after v1.0 ships.
+    from .migrate import run_migrations
+    applied = run_migrations(settings.db_path)
+    if applied:
+        log.info("schema migrations applied this boot: %s",
+                 [m.name for m in applied])
     app_.state.subgen = SubgenClient()
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
