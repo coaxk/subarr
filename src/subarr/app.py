@@ -124,9 +124,18 @@ _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-    @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(_STATIC_DIR / "index.html")
+    # Index template is rendered with the app version baked into the static
+    # asset query strings (?v=<version>) so browsers fetch fresh CSS/JS on
+    # every rebuild instead of serving stale cache. Cheap — index.html is
+    # tiny + the substitution runs once per startup if we cache it.
+    _INDEX_TEMPLATE = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    _INDEX_RENDERED = _INDEX_TEMPLATE.replace("__SUBARR_VERSION__", __version__)
+
+    from fastapi.responses import HTMLResponse
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> HTMLResponse:
+        return HTMLResponse(_INDEX_RENDERED)
 else:
     # Packaging regression — static assets weren't installed alongside the
     # package. Log loudly + return a useful 503 at / so the failure mode is

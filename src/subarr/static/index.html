@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <title>Subarr</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/static/subarr.css">
+  <!-- Cache-bust: query string updated server-side on each rebuild via the
+       app version. Browser fetches fresh CSS/JS without needing hard-refresh. -->
+  <link rel="stylesheet" href="/static/subarr.css?v=__SUBARR_VERSION__">
 </head>
 <body>
   <div class="app-shell">
@@ -358,6 +360,6 @@ Movies/Movie Name (Year)</pre>
     </section>
   </main>
 
-  <script src="/static/subarr.js" defer></script>
+  <script src="/static/subarr.js?v=__SUBARR_VERSION__" defer></script>
 </body>
 </html>
