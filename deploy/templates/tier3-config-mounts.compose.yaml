@@ -1,0 +1,117 @@
+# subarr — Tier 3 deployment (opt-in convenience)
+# ================================================
+#
+# Scope: Tier 2 + read-only mounts of your *arr config dirs so subarr
+# can auto-extract API keys directly from disk. Zero manual key entry
+# in the wizard.
+#
+# Security trade-off: subarr can now read any file under each mounted
+# /config dir. Bazarr's config.yaml contains the API key in plain
+# text; same for Sonarr/Radarr's config.xml. Mounting these into
+# subarr means: if subarr is compromised, the attacker can read these
+# files and obtain your *arr API keys.
+#
+# This is fine for most homelab setups but is more permission than
+# Tier 2. Only enable for integrations you want auto-extracted —
+# you can mix-and-match.
+#
+# Per-integration opt-in: comment out volume mounts for services you
+# want to paste manually instead.
+
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:v1.0.0
+    container_name: subarr
+    restart: unless-stopped
+    networks:
+      - subarr-internal
+      - media-stack
+    ports:
+      - "9922:9922"
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      SUBARR_PORT: "9922"
+      SUBARR_MEDIA_ROOT: /media/library
+      SUBARR_DB_PATH: /data/subarr.db
+      SUBARR_DOCKER_PROXY_URL: http://docker-proxy:2375
+      SUBGEN_URL: http://subgen:9000
+      # Tier-3 hint: tell subarr where to look for *arr configs.
+      # The path inside subarr's container; corresponds to the
+      # volumes block below. Leave empty to skip auto-extract per
+      # integration.
+      SUBARR_BAZARR_CONFIG_DIR:   /host-configs/bazarr
+      SUBARR_SONARR_CONFIG_DIR:   /host-configs/sonarr
+      SUBARR_RADARR_CONFIG_DIR:   /host-configs/radarr
+      SUBARR_TAUTULLI_CONFIG_DIR: /host-configs/tautulli
+    volumes:
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media/library:ro
+      - ./data:/data
+      # ─── Tier-3 config mounts ────────────────────────────────────
+      # Update the HOST paths to match where your *arr stack stores
+      # its /config dirs. All mounted READ-ONLY — subarr never writes
+      # to your other services' configs.
+      # Comment out any you don't want auto-extracted.
+      - ${BAZARR_CONFIG:-./bazarr-config}:/host-configs/bazarr:ro
+      - ${SONARR_CONFIG:-./sonarr-config}:/host-configs/sonarr:ro
+      - ${RADARR_CONFIG:-./radarr-config}:/host-configs/radarr:ro
+      - ${TAUTULLI_CONFIG:-./tautulli-config}:/host-configs/tautulli:ro
+    depends_on:
+      - docker-proxy
+    labels:
+      - maintenance_log=[2026-05-29] Tier-3 deployment (config-mount auto-extract)
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: subarr-docker-proxy
+    restart: unless-stopped
+    networks:
+      - subarr-internal
+    environment:
+      CONTAINERS: "1"
+      NETWORKS:   "1"
+      IMAGES:     "1"
+      INFO:       "1"
+      POST:       "0"
+      EXEC:       "0"   # critical
+      DELETE:     "0"
+      BUILD:      "0"
+      VOLUMES:    "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs: ["/run"]
+    logging: { driver: json-file, options: { max-size: 5m, max-file: "3" } }
+
+  subgen:
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r1
+    container_name: subgen
+    restart: unless-stopped
+    networks:
+      - subarr-internal
+      - media-stack
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      TZ: ${TZ:-UTC}
+      WHISPER_MODEL: large-v3
+      TRANSCRIBE_DEVICE: cuda
+      MODEL_PATH: /subgen/models
+      COMPUTE_TYPE: float16
+    volumes:
+      - ./subgen-models:/subgen/models
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+
+networks:
+  subarr-internal:
+    driver: bridge
+  media-stack:
+    external: true
