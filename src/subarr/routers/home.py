@@ -233,6 +233,43 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
             ),
             "configured": True,
         })
+
+    # Add Ollama tile — it's a standalone client on app.state, not part
+    # of the integrations bundle. Probe via /api/tags (cheap — lists
+    # installed models) so we can show "ok · <model-count> models".
+    ollama = getattr(state, "ollama", None)
+    if ollama is not None:
+        if ollama.is_configured():
+            try:
+                tags = await ollama.tags()
+                model_count = len(tags.get("models") or [])
+                out.append({
+                    "name": "ollama",
+                    "status": "ok",
+                    "version": "",  # ollama /api/tags doesn't surface server version
+                    "ping": 0,
+                    "extra": f"{model_count} models · {ollama.model}",
+                    "configured": True,
+                })
+            except Exception as e:
+                log.debug("ollama probe error: %s", e)
+                out.append({
+                    "name": "ollama",
+                    "status": "error",
+                    "version": "",
+                    "ping": 0,
+                    "extra": "unreachable",
+                    "configured": True,
+                })
+        else:
+            out.append({
+                "name": "ollama",
+                "status": "muted",
+                "version": "",
+                "ping": 0,
+                "extra": "not configured",
+                "configured": False,
+            })
     return out
 
 
