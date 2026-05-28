@@ -123,6 +123,17 @@ jobs:
           load: true
           tags: subarr:scan
           cache-from: type=gha
+      # First invocation: human-readable table to the job log so failures
+      # tell us WHICH CVE without spelunking SARIF. exit-code 0 here — the
+      # next step is the actual gate.
+      - name: trivy scan (table, for logs)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: subarr:scan
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true
       - name: trivy scan
         # Action tags use the "v" prefix on this publisher's repo.
         uses: aquasecurity/trivy-action@v0.36.0
