@@ -323,6 +323,47 @@ function GpuStat({ label, value, sub, bar }) {
   );
 }
 
+// ─── Service brand colors ────────────────────────────────────────
+// Letterform badges — each service gets a 16px rounded square with
+// the project's actual brand color + its initial. Recognizable at a
+// glance, zero external assets, scales cleanly. v1.x can swap in
+// vendored SVG logos if we want pixel-perfect brand marks.
+const SERVICE_BRAND = {
+  bazarr:   { color: '#A41818', initial: 'B' },  // Bazarr red
+  sonarr:   { color: '#35C5F0', initial: 'S' },  // Sonarr blue
+  radarr:   { color: '#FFC830', initial: 'R' },  // Radarr amber
+  tautulli: { color: '#E8A33D', initial: 'T' },  // Tautulli orange
+  subgen:   { color: 'var(--violet-500)', initial: 'σ' },  // sigma — our brand
+  ollama:   { color: '#000000', initial: '🦙' },  // llama mascot
+  plex:     { color: '#E5A00D', initial: 'P' },  // Plex amber
+  jellyfin: { color: '#00A4DC', initial: 'J' },  // Jellyfin blue
+};
+
+function titleCase(s) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ServiceBadge({ name, size = 16 }) {
+  const brand = SERVICE_BRAND[name?.toLowerCase()] || {
+    color: 'var(--bg-4)', initial: name?.[0]?.toUpperCase() || '?',
+  };
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: size, height: size,
+      borderRadius: 3,
+      background: brand.color,
+      color: '#fff',
+      fontSize: Math.round(size * 0.6),
+      fontWeight: 700,
+      fontFamily: 'var(--font-display)',
+      lineHeight: 1,
+      flex: '0 0 auto',
+    }}>{brand.initial}</span>
+  );
+}
+
 // ─── Integration tile ────────────────────────────────────────────
 function IntegrationTile({ i }) {
   const isError = i.status === 'error';
@@ -337,10 +378,11 @@ function IntegrationTile({ i }) {
       gap: 4,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <ServiceBadge name={i.name} size={16} />
+        <span style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>{titleCase(i.name)}</span>
         <StatusDot kind={i.status} />
-        <span style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>{i.name}</span>
         <span style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>{i.ver}</span>
+        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>{i.version || i.ver || ''}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{
