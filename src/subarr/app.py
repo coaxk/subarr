@@ -142,20 +142,37 @@ if _STATIC_DIR.is_dir():
     def index() -> HTMLResponse:
         return HTMLResponse(_INDEX_RENDERED)
 
-    # v1.0 Home page — high-fidelity React mockup from Claude Design.
-    # Lives under /static/v1/ so the embedded relative paths
-    # (home-hifi/tokens.css, home-hifi/atoms.jsx, etc.) resolve correctly
-    # via the existing StaticFiles mount.
+    # v1.0 screens — high-fidelity React mockups from Claude Design.
+    # All live under /static/v1/ so embedded relative paths
+    # (home-hifi/tokens.css, home-hifi/atoms.jsx, etc.) resolve via the
+    # existing StaticFiles mount. Each route below is a tidy URL that
+    # redirects to the underlying .html so cross-screen <a href="/coverage">
+    # navigation in the React chrome resolves naturally.
     # Coexists with the legacy vanilla-JS UI at / during the migration.
-    # As more screens (Coverage, Onboarding, Rules, etc.) land from design,
-    # they'll join /static/v1/ and eventually replace / entirely.
-    _V1_HOME = _STATIC_DIR / "v1" / "home.html"
-    if _V1_HOME.is_file():
+    _V1_DIR = _STATIC_DIR / "v1"
+    if _V1_DIR.is_dir():
         from fastapi.responses import RedirectResponse
 
-        @app.get("/home")
-        def v1_home():
-            return RedirectResponse(url="/static/v1/home.html", status_code=302)
+        # Screen → static-file map. Add a route per screen as design ships.
+        # The pretty URL is the source of truth for cross-screen links in
+        # chrome.jsx; the underlying .html file is an implementation detail.
+        _V1_SCREENS = {
+            "/home":       "home.html",
+            "/coverage":   "coverage.html",
+            "/onboarding": "onboarding.html",
+            "/rules":      "rules.html",
+            "/settings":   "settings.html",
+            "/file-modal": "file-modal.html",
+        }
+
+        def _make_v1_route(html_file: str):
+            def _v1_screen():
+                return RedirectResponse(url=f"/static/v1/{html_file}", status_code=302)
+            return _v1_screen
+
+        for _path, _html in _V1_SCREENS.items():
+            if (_V1_DIR / _html).is_file():
+                app.add_api_route(_path, _make_v1_route(_html), methods=["GET"])
 else:
     # Packaging regression — static assets weren't installed alongside the
     # package. Log loudly + return a useful 503 at / so the failure mode is

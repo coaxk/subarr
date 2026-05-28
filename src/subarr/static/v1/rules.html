@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Subarr · Home</title>
+<title>Subarr · Rules</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,48 +12,21 @@
 <link rel="stylesheet" href="home-hifi/tokens.css">
 
 <style>
-  /* Page-specific */
   html, body, #root { height: 100%; }
-  body { overflow: hidden; }
-
-  /* Stage tile hover */
-  .stage-tile:hover {
-    background: var(--bg-2) !important;
-    border-color: var(--bg-5) !important;
-  }
-
-  /* Pulse animation for status dots */
-  @keyframes pulse {
-    0%   { transform: scale(1);   opacity: 0.6; }
-    70%  { transform: scale(2.4); opacity: 0;   }
-    100% { transform: scale(2.4); opacity: 0;   }
-  }
-
   .app-shell {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
-    /* Desktop-first design: hold a minimum width so the layout
-       degrades by horizontal scroll, not by squeezing tiles. */
     min-width: 1280px;
   }
-
   body { overflow: auto; }
-
-  .app-body {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-  }
-
+  .app-body { flex: 1; display: flex; min-height: 0; }
   .main-canvas {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
-    padding: 22px 24px 20px;
-    gap: 18px;
   }
 </style>
 
@@ -63,36 +36,23 @@
 
 <script type="text/babel" src="home-hifi/atoms.jsx"></script>
 <script type="text/babel" src="home-hifi/chrome.jsx"></script>
-<script type="text/babel" src="home-hifi/dashboard.jsx"></script>
+<script type="text/babel" src="home-hifi/rules.jsx"></script>
 </head>
 <body>
 <div id="root"></div>
 
 <script type="text/babel" data-presets="env,react">
 function App() {
-  const [now, setNow] = React.useState('14:32:08');
-  React.useEffect(() => {
-    const id = setInterval(() => setNow(fmtTime(new Date())), 1000);
-    // Anchor the initial clock to a static time for screenshot stability.
-    return () => clearInterval(id);
-  }, []);
-
   return (
     <div className="app-shell">
-      <TopBar section="overview" />
+      <TopBar section="operations" />
       <div className="app-body">
-        <SubRail section="overview" activeId="dashboard" />
-        <main className="main-canvas">
-          <PageHeader now={now} />
-          <StagesRow />
-          <HostStrip />
-          <NextRunActivitySplit />
-        </main>
+        <SubRail section="operations" activeId="rules" />
+        <RulesPage />
       </div>
     </div>
   );
 }
-
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
 </body>
