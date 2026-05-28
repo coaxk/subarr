@@ -123,28 +123,37 @@ jobs:
           load: true
           tags: subarr:scan
           cache-from: type=gha
-      # First invocation: human-readable table to the job log so failures
-      # tell us WHICH CVE without spelunking SARIF. exit-code 0 here — the
-      # next step is the actual gate.
-      - name: trivy scan (table, for logs)
+      # The table-format invocation is the actual PR gate. Why not the
+      # SARIF one? In format=sarif mode, trivy-action internally scans
+      # with "all severities" to populate the GitHub code-scanning UI,
+      # and the `severity` + `ignore-unfixed` filters DON'T propagate to
+      # the exit-code check — so the SARIF step exits 1 on unfixed LOW
+      # CVEs in upstream Debian packages we can do nothing about.
+      # Filed: https://github.com/aquasecurity/trivy-action/issues/389
+      #
+      # Split: table step is the gate (filters apply correctly here),
+      # SARIF step is exit-code 0 (best-effort artifact producer).
+      - name: trivy scan (gate)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: subarr:scan
           format: table
+          # Fail on HIGH and CRITICAL only — the noise from MEDIUM+below
+          # in upstream Python base images would be unmanageable.
           severity: HIGH,CRITICAL
-          exit-code: "0"
+          exit-code: "1"
           ignore-unfixed: true
-      - name: trivy scan
+      - name: trivy scan (SARIF artifact)
         # Action tags use the "v" prefix on this publisher's repo.
+        # exit-code 0 here — the gate above already decided pass/fail.
+        if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: subarr:scan
           format: sarif
           output: trivy.sarif
-          # Fail on HIGH and CRITICAL only — the noise from MEDIUM+below
-          # in upstream Python base images would be unmanageable.
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
       - if: always()
         continue-on-error: true
