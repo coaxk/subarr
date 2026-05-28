@@ -54,7 +54,13 @@ jobs:
                  --skip B101 \
                  -f sarif -o bandit.sarif || true
           bandit -r src/subarr -ll -ii --skip B101
+      # SARIF upload requires "Code Scanning" enabled in repo settings →
+      # Security → Code security and analysis. Until that's flipped on,
+      # upload would fail every run. We don't want that to block PRs
+      # (the bandit step above already produces the pass/fail signal),
+      # so this is best-effort only.
       - if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: bandit.sarif
@@ -73,12 +79,13 @@ jobs:
         # awareness; can be downgraded with --ignore-vuln on a per-CVE
         # basis if upstream hasn't released a fix yet.
         #
-        # --skip-editable: subarr itself isn't on PyPI; auditing it
-        # produces a "Dependency not found" error. We want pip-audit
-        # to scan our DEPS, not the project itself.
+        # subarr itself isn't on PyPI — auditing it produces "distribution
+        # marked as editable" errors. Filter our own package out of the
+        # frozen deps and feed pip-audit the cleaned requirements file.
         run: |
           pip install -e .
-          pip-audit --strict --desc --skip-editable
+          pip freeze --exclude-editable > requirements-audit.txt
+          pip-audit --strict --desc -r requirements-audit.txt
 
   semgrep:
     name: semgrep (pattern security)
@@ -96,6 +103,7 @@ jobs:
             p/owasp-top-ten
         run: semgrep ci --sarif --output=semgrep.sarif || true
       - if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
@@ -116,7 +124,8 @@ jobs:
           tags: subarr:scan
           cache-from: type=gha
       - name: trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
+        # Action tags use the "v" prefix on this publisher's repo.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: subarr:scan
           format: sarif
@@ -127,6 +136,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
       - if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
