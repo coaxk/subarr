@@ -39,7 +39,7 @@
     <button class="tab" data-tab="library" role="tab">Library</button>
     <button class="tab" data-tab="logs" role="tab">Logs</button>
     <button class="tab" data-tab="monitor" role="tab">Monitor</button>
-    <button class="tab" data-tab="activity" role="tab">Activity</button>
+    <button class="tab" data-tab="activity" role="tab">Activity<span class="tab-badge" id="activity-tab-badge" hidden></span></button>
     <button class="tab" data-tab="settings" role="tab">Settings</button>
   </nav>
   </div>
@@ -214,12 +214,22 @@
             <p class="muted small" id="activity-meta">loading…</p>
           </div>
           <div class="coverage-actions">
-            <label class="check"><input type="checkbox" id="activity-only-pending"> pending only</label>
+            <div class="filter-chips" id="activity-status-chips">
+              <button class="chip active" data-status="all">all</button>
+              <button class="chip" data-status="pending">pending</button>
+              <button class="chip" data-status="done">completed</button>
+              <button class="chip" data-status="bazarr">bazarr-notified</button>
+            </div>
+            <input type="text" id="activity-filter" placeholder="filter show/file">
+            <label class="check"><input type="checkbox" id="activity-group" checked> group by show</label>
             <button class="ghost" id="activity-refresh">Refresh</button>
           </div>
         </div>
-        <p class="muted small">Every transcribe subarr submits to subgen lands here. Restart-safe — the ledger lives in subarr.db and survives container restarts. Completion is detected by the background watcher polling subgen's queue; Bazarr scan-disk fires automatically when a row completes with a known series id.</p>
-        <table class="tbl coverage-table" id="activity-table">
+        <p class="muted small">Every transcribe subarr submits to subgen lands here. Restart-safe — ledger persists across container restarts. Completion is detected by the background watcher polling subgen's queue; Bazarr scan-disk fires automatically when a row completes with a known series id. Click a row to expand its details.</p>
+        <!-- Tree view (default) -->
+        <div id="activity-tree" class="coverage-tree"></div>
+        <!-- Flat fallback table -->
+        <table class="tbl coverage-table" id="activity-table" hidden>
           <thead><tr>
             <th>status</th>
             <th>queued</th>

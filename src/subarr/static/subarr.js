@@ -610,9 +610,14 @@
 
   // ───── Activity tab ─────
   // Polls /api/provenance/recent on a 5s tick while the tab is active.
-  // Stops the timer on tab switch so we don't keep the request log noisy
-  // for a tab the user isn't looking at.
+  // Tab badge is updated by the header poller independently so the count
+  // is visible even when you're on another tab.
   let activityTimer = null;
+  let activityStatusFilter = 'all';
+  let activityRows = [];
+  const activityExpanded = new Set();  // entry ids that have been expanded
+  const activityScanCache = new Map(); // scan_id → fetched detail
+
   function startActivity() {
     loadActivity();
     if (!activityTimer) activityTimer = setInterval(loadActivity, 5000);
@@ -634,46 +639,278 @@
     if (entry.completed_at) return { cls: 'done', label: 'completed' };
     return { cls: 'pending', label: 'pending' };
   }
+  function activityPasses(r) {
+    if (activityStatusFilter !== 'all') {
+      const s = rowStatus(r);
+      if (s.cls !== activityStatusFilter) return false;
+    }
+    const filter = ($('#activity-filter')?.value || '').toLowerCase().trim();
+    if (filter) {
+      const hay = (r.canonical_path || '').toLowerCase();
+      if (!hay.includes(filter)) return false;
+    }
+    return true;
+  }
+
+  function showFromPath(canonical) {
+    const parts = (canonical || '').split('/').filter(Boolean);
+    if (parts[0] === 'TV' && parts.length >= 2) return parts[1];
+    if (parts[0] === 'Movies' && parts.length >= 2) return parts[1];
+    return parts[0] || '(unknown)';
+  }
+  function seasonFromPath(canonical) {
+    const parts = (canonical || '').split('/').filter(Boolean);
+    if (parts[0] === 'TV' && parts.length >= 3) return parts[2];
+    return null;
+  }
+
+  function renderActivityDetail(entry) {
+    // Build the expanded detail block — fetches /api/scan/{id} lazily.
+    const wrap = document.createElement('div');
+    wrap.className = 'activity-detail';
+    const series = entry.series_id != null ? entry.series_id : '—';
+    const sonarrEp = entry.sonarr_episode_id != null ? entry.sonarr_episode_id : '—';
+    const radarrMov = entry.radarr_movie_id != null ? entry.radarr_movie_id : '—';
+    wrap.innerHTML = `
+      <div class="kv-line"><span class="kv-k">canonical path</span><span class="kv-v">${escape(entry.canonical_path || '')}</span></div>
+      <div class="kv-line"><span class="kv-k">scan_id</span><span class="kv-v">${escape(entry.scan_id || '')}</span></div>
+      <div class="kv-line"><span class="kv-k">source</span><span class="kv-v">${escape(entry.source || '')}</span></div>
+      <div class="kv-line"><span class="kv-k">queued_at</span><span class="kv-v">${entry.queued_at ? escape(new Date(entry.queued_at * 1000).toISOString()) : '—'}</span></div>
+      <div class="kv-line"><span class="kv-k">completed_at</span><span class="kv-v">${entry.completed_at ? escape(new Date(entry.completed_at * 1000).toISOString()) : '—'}</span></div>
+      <div class="kv-line"><span class="kv-k">bazarr_triggered_at</span><span class="kv-v">${entry.bazarr_scan_triggered_at ? escape(new Date(entry.bazarr_scan_triggered_at * 1000).toISOString()) : '—'}</span></div>
+      <div class="kv-line"><span class="kv-k">sonarr_episode_id</span><span class="kv-v">${sonarrEp}</span></div>
+      <div class="kv-line"><span class="kv-k">series_id</span><span class="kv-v">${series}</span></div>
+      <div class="kv-line"><span class="kv-k">radarr_movie_id</span><span class="kv-v">${radarrMov}</span></div>
+      <div class="kv-line"><span class="kv-k">subgen response</span><span class="kv-v" id="ad-scan-${entry.id}">loading…</span></div>
+    `;
+    // Lazy-fetch scan detail and inject. Cached so repeated expand is free.
+    (async () => {
+      const target = wrap.querySelector(`#ad-scan-${entry.id}`);
+      if (!target) return;
+      try {
+        let detail = activityScanCache.get(entry.scan_id);
+        if (!detail) {
+          detail = await fetch(`/api/scan/${entry.scan_id}`).then((r) => r.ok ? r.json() : null);
+          if (detail) activityScanCache.set(entry.scan_id, detail);
+        }
+        if (!detail) { target.textContent = '(scan record not found)'; return; }
+        const ourPath = entry.canonical_path;
+        const result = (detail.results || []).find((r) => r.path === ourPath) || (detail.results || [])[0];
+        if (!result) { target.textContent = '(no matching result in scan)'; return; }
+        const body = result.subgen_body || {};
+        target.innerHTML = `
+          <pre>status: ${escape(result.status)}
+subgen_status_code: ${result.subgen_status_code}
+walked: ${body.walked ?? '?'} · queued: ${body.queued ?? '?'} · skipped: ${body.skipped ?? '?'} · already_in_queue: ${body.already_in_queue ?? '?'} · no_audio: ${body.no_audio ?? '?'} · pending_language_detect: ${body.pending_language_detect ?? '?'}
+${result.error ? 'note: ' + escape(result.error) : ''}</pre>
+        `;
+      } catch (e) {
+        target.textContent = 'error: ' + e.message;
+      }
+    })();
+    return wrap;
+  }
+
+  function activityRowEl(entry) {
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+    row.dataset.entryId = entry.id;
+    const s = rowStatus(entry);
+    const fileBase = (entry.canonical_path || '').split('/').pop() || entry.canonical_path || '?';
+    const bazarrCell = entry.bazarr_scan_triggered_at
+      ? `notified ${escape(fmtAgo(entry.bazarr_scan_triggered_at))}`
+      : (entry.series_id ? 'awaiting completion' : 'n/a');
+    row.innerHTML = `
+      <span class="ar-status"><span class="activity-status ${s.cls}">${s.label}</span></span>
+      <span class="ar-time" title="${escape(new Date(entry.queued_at * 1000).toLocaleString())}">${escape(fmtAgo(entry.queued_at))}</span>
+      <span class="ar-file" title="${escape(entry.canonical_path)}">${escape(fileBase)}</span>
+      <span class="ar-time">${entry.completed_at ? escape(fmtAgo(entry.completed_at)) : '—'}</span>
+      <span class="ar-bazarr">${bazarrCell}</span>
+      <span class="ar-id">${escape((entry.scan_id || '').slice(0, 8))}</span>
+    `;
+    row.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const isExpanded = activityExpanded.has(entry.id);
+      const next = row.nextElementSibling;
+      if (isExpanded && next && next.classList.contains('activity-detail')) {
+        next.remove();
+        activityExpanded.delete(entry.id);
+      } else {
+        const detail = renderActivityDetail(entry);
+        row.parentNode.insertBefore(detail, row.nextSibling);
+        activityExpanded.add(entry.id);
+      }
+    });
+    return row;
+  }
+
+  function renderActivityTree(rows) {
+    const root = $('#activity-tree');
+    root.innerHTML = '';
+    if (rows.length === 0) {
+      root.innerHTML = '<p class="muted">no rows match — try adjusting the status chips or filter</p>';
+      return;
+    }
+    // Group by show (TV/<show> or Movies/<title>); then by season for TV.
+    const byShow = new Map();
+    for (const r of rows) {
+      const show = showFromPath(r.canonical_path);
+      let entry = byShow.get(show);
+      if (!entry) { entry = { items: [], seasons: new Map() }; byShow.set(show, entry); }
+      entry.items.push(r);
+      const season = seasonFromPath(r.canonical_path) || '(files)';
+      let bucket = entry.seasons.get(season);
+      if (!bucket) { bucket = []; entry.seasons.set(season, bucket); }
+      bucket.push(r);
+    }
+    // Sort shows by most-recent-queued
+    const sorted = [...byShow.entries()].sort((a, b) => {
+      const aMax = Math.max(...a[1].items.map((x) => x.queued_at || 0));
+      const bMax = Math.max(...b[1].items.map((x) => x.queued_at || 0));
+      return bMax - aMax;
+    });
+    for (const [show, grp] of sorted) {
+      const showDet = document.createElement('details');
+      showDet.open = true; // default open since we're already filtered down
+      const sum = document.createElement('summary');
+      const pending = grp.items.filter((x) => !x.completed_at).length;
+      const done = grp.items.length - pending;
+      sum.innerHTML = `
+        <span class="lvl-name"><strong>${escape(show)}</strong></span>
+        <span class="lvl-meta">${grp.items.length} · ${pending} pending · ${done} done</span>
+      `;
+      showDet.appendChild(sum);
+      const seasonsSorted = [...grp.seasons.entries()].sort((a, b) => {
+        const am = (a[0].match(/(\d+)/) || [])[1];
+        const bm = (b[0].match(/(\d+)/) || [])[1];
+        if (am && bm) return Number(am) - Number(bm);
+        return a[0].localeCompare(b[0]);
+      });
+      for (const [season, items] of seasonsSorted) {
+        items.sort((a, b) => (b.queued_at || 0) - (a.queued_at || 0));
+        if (seasonsSorted.length === 1 && season === '(files)') {
+          for (const it of items) showDet.appendChild(activityRowEl(it));
+        } else {
+          const seasonDet = document.createElement('details');
+          seasonDet.open = true;
+          const seasonSum = document.createElement('summary');
+          const sPending = items.filter((x) => !x.completed_at).length;
+          seasonSum.innerHTML = `
+            <span class="lvl-name">${escape(season)}</span>
+            <span class="lvl-meta">${items.length} · ${sPending} pending</span>
+          `;
+          seasonDet.appendChild(seasonSum);
+          for (const it of items) seasonDet.appendChild(activityRowEl(it));
+          showDet.appendChild(seasonDet);
+        }
+      }
+      root.appendChild(showDet);
+    }
+  }
+
+  function renderActivityFlat(rows) {
+    const tbody = $('#activity-table tbody');
+    tbody.innerHTML = '';
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">no rows match — try adjusting the status chips or filter</td></tr>`;
+      return;
+    }
+    for (const r of rows) {
+      const s = rowStatus(r);
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      const fileBase = (r.canonical_path || '').split('/').pop() || r.canonical_path || '?';
+      const bazarrCell = r.bazarr_scan_triggered_at
+        ? `<span class="activity-cell-time" title="${escape(new Date(r.bazarr_scan_triggered_at * 1000).toLocaleString())}">notified ${escape(fmtAgo(r.bazarr_scan_triggered_at))}</span>`
+        : (r.series_id ? '<span class="muted">awaiting completion</span>' : '<span class="muted">n/a</span>');
+      tr.innerHTML = `
+        <td><span class="activity-status ${s.cls}">${s.label}</span></td>
+        <td class="activity-cell-time" title="${escape(new Date(r.queued_at * 1000).toLocaleString())}">${escape(fmtAgo(r.queued_at))}</td>
+        <td class="activity-cell-path" title="${escape(r.canonical_path)}">${escape(fileBase)}</td>
+        <td class="activity-cell-time">${r.completed_at ? escape(fmtAgo(r.completed_at)) : '—'}</td>
+        <td>${bazarrCell}</td>
+        <td class="activity-cell-id">${escape(r.scan_id || '')}</td>
+      `;
+      tr.addEventListener('click', () => {
+        const next = tr.nextElementSibling;
+        if (next && next.classList.contains('activity-detail-row')) {
+          next.remove();
+        } else {
+          const detailTr = document.createElement('tr');
+          detailTr.className = 'activity-detail-row';
+          const td = document.createElement('td');
+          td.colSpan = 6;
+          td.appendChild(renderActivityDetail(r));
+          detailTr.appendChild(td);
+          tr.parentNode.insertBefore(detailTr, tr.nextSibling);
+        }
+      });
+      tbody.appendChild(tr);
+    }
+  }
+
   async function loadActivity() {
     const meta = $('#activity-meta');
     try {
       const data = await fetch('/api/provenance/recent').then((r) => r.json());
-      const rows = data.entries || [];
-      const onlyPending = $('#activity-only-pending')?.checked;
-      const shown = onlyPending ? rows.filter((r) => !r.completed_at) : rows;
-      const tbody = $('#activity-table tbody');
-      tbody.innerHTML = '';
-      if (shown.length === 0) {
-        tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${rows.length === 0 ? 'no activity yet — queue something from Coverage or Scan' : 'no rows match (uncheck pending-only to see completed)'}</td></tr>`;
+      activityRows = data.entries || [];
+      const shown = activityRows.filter(activityPasses);
+      const grouped = $('#activity-group')?.checked;
+      if (grouped) {
+        $('#activity-tree').hidden = false;
+        $('#activity-table').hidden = true;
+        renderActivityTree(shown);
       } else {
-        for (const r of shown) {
-          const s = rowStatus(r);
-          const tr = document.createElement('tr');
-          const fileBase = (r.canonical_path || '').split('/').pop() || r.canonical_path || '?';
-          const bazarrCell = r.bazarr_scan_triggered_at
-            ? `<span class="activity-cell-time" title="${escape(new Date(r.bazarr_scan_triggered_at * 1000).toLocaleString())}">notified ${escape(fmtAgo(r.bazarr_scan_triggered_at))}</span>`
-            : (r.series_id ? '<span class="muted">awaiting completion</span>' : '<span class="muted">n/a (no series id)</span>');
-          tr.innerHTML = `
-            <td><span class="activity-status ${s.cls}">${s.label}</span></td>
-            <td class="activity-cell-time" title="${escape(new Date(r.queued_at * 1000).toLocaleString())}">${escape(fmtAgo(r.queued_at))}</td>
-            <td class="activity-cell-path" title="${escape(r.canonical_path)}">${escape(fileBase)}</td>
-            <td class="activity-cell-time" title="${r.completed_at ? escape(new Date(r.completed_at * 1000).toLocaleString()) : ''}">${r.completed_at ? escape(fmtAgo(r.completed_at)) : '—'}</td>
-            <td>${bazarrCell}</td>
-            <td class="activity-cell-id">${escape(r.scan_id || '')}</td>
-          `;
-          tbody.appendChild(tr);
-        }
+        $('#activity-tree').hidden = true;
+        $('#activity-table').hidden = false;
+        renderActivityFlat(shown);
       }
-      const pending = rows.filter((r) => !r.completed_at).length;
-      const completed = rows.length - pending;
-      const bazarrFired = rows.filter((r) => r.bazarr_scan_triggered_at).length;
-      meta.textContent = `${rows.length} recent · ${pending} pending · ${completed} completed · ${bazarrFired} bazarr-notified · last 50 entries shown`;
+      const pending = activityRows.filter((r) => !r.completed_at).length;
+      const completed = activityRows.length - pending;
+      const bazarrFired = activityRows.filter((r) => r.bazarr_scan_triggered_at).length;
+      meta.textContent = `${shown.length} shown of ${activityRows.length} recent · ${pending} pending · ${completed} completed · ${bazarrFired} bazarr-notified · last 50 entries`;
+      updateActivityTabBadge(pending);
     } catch (e) {
       meta.textContent = `error: ${e.message}`;
     }
   }
+
+  function updateActivityTabBadge(pendingCount) {
+    const badge = $('#activity-tab-badge');
+    if (!badge) return;
+    if (pendingCount > 0) {
+      badge.hidden = false;
+      badge.textContent = String(pendingCount);
+    } else {
+      badge.hidden = true;
+    }
+  }
+
   $('#activity-refresh')?.addEventListener('click', loadActivity);
-  $('#activity-only-pending')?.addEventListener('change', loadActivity);
+  $('#activity-group')?.addEventListener('change', loadActivity);
+  $('#activity-filter')?.addEventListener('input', loadActivity);
+  // Status chip switcher
+  document.addEventListener('click', (ev) => {
+    const chip = ev.target.closest('#activity-status-chips .chip');
+    if (!chip) return;
+    $$('#activity-status-chips .chip').forEach((c) => c.classList.toggle('active', c === chip));
+    activityStatusFilter = chip.dataset.status;
+    loadActivity();
+  });
+
+  // Keep the tab badge fresh even when user is on another tab — piggyback
+  // on the header 2s poll. Activity panel itself uses its own 5s loop while
+  // the tab is active.
+  async function pollActivityBadge() {
+    try {
+      const data = await fetch('/api/provenance/recent').then((r) => r.ok ? r.json() : null);
+      if (!data) return;
+      const pending = (data.entries || []).filter((r) => !r.completed_at).length;
+      updateActivityTabBadge(pending);
+    } catch {}
+  }
+  setInterval(pollActivityBadge, 10000);
+  pollActivityBadge();
 
   // ───── Pending approvals (manual_confirm mode) ─────
   async function loadPending() {
