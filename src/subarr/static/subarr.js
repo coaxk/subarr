@@ -1572,7 +1572,7 @@ ${result.error ? 'note: ' + escape(result.error) : ''}</pre>
           for (const cb of seasonDet.querySelectorAll('.ep-cb')) {
             if (!cb.disabled && cb.checked !== seasonCb.checked) {
               cb.checked = seasonCb.checked;
-              cb.dispatchEvent(new Event('change'));
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
             }
           }
         });
