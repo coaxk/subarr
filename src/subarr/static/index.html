@@ -42,6 +42,7 @@
     <button class="tab" data-tab="logs" role="tab">Logs</button>
     <button class="tab" data-tab="monitor" role="tab">Monitor</button>
     <button class="tab" data-tab="activity" role="tab">Activity<span class="tab-badge" id="activity-tab-badge" hidden></span></button>
+    <button class="tab" data-tab="automation" role="tab">Automation</button>
     <button class="tab" data-tab="settings" role="tab">Settings</button>
   </nav>
   </div>
@@ -261,17 +262,101 @@
         <pre id="kwargs-top" class="codeblock">…</pre>
       </div>
       <div class="card">
+        <h2>Integrations</h2>
+        <p class="muted small">Status of upstream services. Configure URLs + API keys via env vars (BAZARR_URL/BAZARR_API_KEY, SONARR_URL/SONARR_API_KEY, etc).</p>
+        <div class="integrations-grid" id="integrations-grid">loading…</div>
+      </div>
+      <div class="card">
+        <h2>Actions</h2>
+        <div class="action-row">
+          <button id="btn-restart" class="warn">Restart subgen</button>
+          <button id="btn-plex-scan" class="primary">Trigger Plex library scan</button>
+        </div>
+        <div id="action-result" class="muted small" aria-live="polite"></div>
+      </div>
+      <div class="card">
+        <h2>Path format reference</h2>
+        <p class="muted">Canonical = forward slashes, relative to <code>/media/library/</code>.</p>
+        <pre class="codeblock">TV/Show Name/Season 1
+Movies/Movie Name (Year)</pre>
+      </div>
+    </section>
+
+    <!-- ───── Automation ───── -->
+    <section class="tabpanel" id="tab-automation">
+      <div class="card">
+        <h2>What is Automation?</h2>
+        <p>
+          Subarr can run on autopilot. Instead of you clicking through Coverage every
+          day and queuing missing-subtitle episodes by hand, two background jobs do
+          it for you:
+        </p>
+        <ol class="muted small" style="line-height: 1.6;">
+          <li>
+            <strong>Probe walk</strong> — looks <em>inside</em> your video files
+            (using ffprobe) to detect embedded subtitles and the audio language.
+            This is what lets subarr know that <code>S01E03.mkv</code> already has
+            a usable English sub baked in, so it can skip it.
+          </li>
+          <li>
+            <strong>Scheduled coverage walk</strong> — on a schedule you choose
+            (e.g. nightly at 3am), subarr re-pulls Bazarr's wanted list, applies
+            your auto-queue rules, and either shows you a confirm list, queues
+            matches automatically, or just displays the gap — your call.
+          </li>
+        </ol>
+        <p class="muted small">
+          <strong>Recommended first-time setup:</strong> kick off a <em>probe walk</em>
+          on each library root (<code>TV</code>, <code>Movies</code>) so Coverage
+          becomes accurate. Then enable the <em>schedule</em> in
+          <code>manual_confirm</code> mode — you'll get a Pending Approvals list
+          each morning to review before anything submits. Once you trust it,
+          switch to <code>auto_rules</code>.
+        </p>
+      </div>
+
+      <div class="card">
         <h2>Probe walk (ffprobe)</h2>
-        <p class="muted small">Deep-scan media files to detect embedded subtitles and audio language tags. Populates the cache the Coverage tab reads — rows with a full English embedded sub get demoted automatically.</p>
+        <p class="muted small">
+          Deep-scans a folder, opens each video with ffprobe, and records which
+          subtitle/audio tracks are embedded. Results land in the cache that
+          Coverage and the Library tab read — rows with a usable English embedded
+          sub get demoted to "ok" automatically, so they stop nagging you.
+        </p>
+        <p class="muted small">
+          <strong>How to use:</strong> type a canonical path (relative to your
+          library root — see Settings → Path format reference) and hit
+          <em>Start walk</em>. Big libraries take a while; you can keep using
+          subarr while it runs. Re-run any time you add new media or want fresh
+          data.
+        </p>
         <div class="action-row">
           <input type="text" id="probe-walk-path" placeholder="canonical path, e.g. TV/Nicolas Le Floch" style="flex:1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;">
           <button class="primary" id="probe-walk-start">Start walk</button>
         </div>
+        <p class="muted small" style="margin-top:6px;">
+          Tip: leave the field blank to walk every library root that subarr knows
+          about. Recent walks appear below — click one to see per-file progress.
+        </p>
         <div id="probe-walks-list" class="muted small" style="margin-top:8px"></div>
       </div>
       <div class="card">
         <h2>Schedule &amp; Auto-queue</h2>
-        <p class="muted small">Background coverage walks that re-pull the gap list, apply your auto-queue rules, and (in <code>auto_rules</code> mode) enqueue matching rows automatically. Off by default; opt in below.</p>
+        <p class="muted small">
+          Runs a background coverage walk on a recurring schedule. Each run
+          re-pulls Bazarr's wanted list, applies your auto-queue rules below, and
+          — depending on <em>Mode</em> — either shows you the gap, queues a
+          confirmation list, or submits scans straight to subgen. Off by default;
+          flip <em>Enabled</em> when you're ready.
+        </p>
+        <p class="muted small">
+          <strong>Modes explained:</strong>
+        </p>
+        <ul class="muted small" style="line-height: 1.55;">
+          <li><code>dashboard</code> — runs the walk for fresh stats only. Nothing gets queued. Safe starting point.</li>
+          <li><code>manual_confirm</code> — runs the walk + builds a list of candidates that match your rules. They show up under <em>Pending approvals</em> below for you to approve/reject in bulk.</li>
+          <li><code>auto_rules</code> — full autopilot. Matching candidates get submitted to subgen automatically, every run. Switch on once you trust the rules.</li>
+        </ul>
         <div class="sched-row">
           <label class="check">
             <input type="checkbox" id="sched-enabled"> Enabled
@@ -302,6 +387,16 @@
         <div id="pending-walks-list"></div>
 
         <h3>Rules</h3>
+        <p class="muted small">
+          Filters that decide which missing-subtitle candidates the scheduler
+          picks up. <em>Min score</em> is Bazarr's wanted-row score (higher =
+          more confident the episode actually needs subs). <em>Skip stale</em>
+          ignores rows where a .srt file already exists on disk (catches Bazarr
+          listings that haven't refreshed yet). <em>Skip embedded EN</em> uses
+          the probe cache to skip files that already have a usable English sub
+          baked in. Allow/Deny languages let you target only the languages you
+          care about.
+        </p>
         <div class="rules-grid">
           <label>Mode
             <select id="rule-mode">
@@ -337,25 +432,6 @@
           <button class="ghost" id="rules-preview">Preview (no enqueue)</button>
         </div>
         <pre class="codeblock" id="rules-preview-out" hidden></pre>
-      </div>
-      <div class="card">
-        <h2>Integrations</h2>
-        <p class="muted small">Status of upstream services. Configure URLs + API keys via env vars (BAZARR_URL/BAZARR_API_KEY, SONARR_URL/SONARR_API_KEY, etc).</p>
-        <div class="integrations-grid" id="integrations-grid">loading…</div>
-      </div>
-      <div class="card">
-        <h2>Actions</h2>
-        <div class="action-row">
-          <button id="btn-restart" class="warn">Restart subgen</button>
-          <button id="btn-plex-scan" class="primary">Trigger Plex library scan</button>
-        </div>
-        <div id="action-result" class="muted small" aria-live="polite"></div>
-      </div>
-      <div class="card">
-        <h2>Path format reference</h2>
-        <p class="muted">Canonical = forward slashes, relative to <code>/media/library/</code>.</p>
-        <pre class="codeblock">TV/Show Name/Season 1
-Movies/Movie Name (Year)</pre>
       </div>
     </section>
   </main>

@@ -13,7 +13,8 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); startPendingPoll(); }
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); }
+    if (tab === 'automation') { loadSchedule(); loadProbeWalks(); startPendingPoll(); }
     else stopPendingPoll();
     if (tab === 'coverage') loadCoverage();
     if (tab === 'library') loadLibrary();
