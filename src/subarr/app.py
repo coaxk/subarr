@@ -24,7 +24,7 @@ from .routers import (
     admin, bazarr_sync, browse, coverage, coverage_actions,
     enrichment as r_enrichment, gpu, integrations, logs, mode,
     probe as r_probe, provenance as r_provenance, queue, scan,
-    schedule as r_schedule,
+    schedule as r_schedule, updates as r_updates,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -89,9 +89,25 @@ async def lifespan(app_: FastAPI):
         pending_store=app_.state.pending,
     )
     app_.state.scheduler.start()
+
+    # Update notification poller — once-per-24h GitHub release check
+    # cached to update_checks table. Backs /api/updates which the UI
+    # consumes for the header pill + Home tile + Settings panel.
+    from .update_checker import UpdateChecker
+    current_versions = {
+        "subarr": __version__,
+        "subarr-subgen": app_.state.subgen_caps.version if app_.state.subgen_caps else None,
+    }
+    app_.state.update_checker = UpdateChecker(
+        db_path=settings.db_path,
+        current_version_resolver=current_versions,
+    )
+    app_.state.update_checker.start()
+
     try:
         yield
     finally:
+        await app_.state.update_checker.stop()
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
         await app_.state.watcher.stop()
@@ -125,6 +141,7 @@ app.include_router(r_schedule.router)
 app.include_router(r_enrichment.router)
 app.include_router(r_probe.router)
 app.include_router(bazarr_sync.router)
+app.include_router(r_updates.router)
 
 
 @app.get("/api/health")

@@ -1,0 +1,125 @@
+# Security scans — on every PR + weekly schedule.
+#
+# Four independent jobs run in parallel; any can fail without blocking
+# the others (so a single tool's false-positive doesn't block a PR).
+# Each posts a SARIF report to GitHub's code-scanning UI when relevant.
+#
+# Tools:
+#   - bandit       — Python static security analysis (insecure_use, etc)
+#   - pip-audit    — CVE check on pinned + transitive deps
+#   - semgrep      — pattern-based scan with security rulesets
+#   - trivy        — container-image CVE scan against the built image
+#
+# Weekly run catches CVEs in our deps even when nobody opened a PR.
+
+name: security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Mondays 07:00 UTC — staggered so it doesn't pile on with rebase-test
+    # in the sibling subarr-subgen repo (06:00 UTC).
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  bandit:
+    name: bandit (Python static analysis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install bandit[sarif]
+      - name: bandit -r src/
+        # -ll = report only medium+high severity, skip low.
+        # -ii = report only medium+high confidence, skip low.
+        # B101 (assert_used) excluded — pytest depends on it.
+        # B608 (sql injection via string-format) handled case-by-case.
+        run: |
+          bandit -r src/subarr \
+                 -ll -ii \
+                 --skip B101 \
+                 -f sarif -o bandit.sarif || true
+          bandit -r src/subarr -ll -ii --skip B101
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  pip-audit:
+    name: pip-audit (dep CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pip-audit
+      - name: pip-audit on declared deps
+        # --strict fails on any vuln. We want this to fail PRs to force
+        # awareness; can be downgraded with --ignore-vuln on a per-CVE
+        # basis if upstream hasn't released a fix yet.
+        run: |
+          pip install -e .
+          pip-audit --strict --desc
+
+  semgrep:
+    name: semgrep (pattern security)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: semgrep ci
+        env:
+          SEMGREP_RULES: >-
+            p/python
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+        run: semgrep ci --sarif --output=semgrep.sarif || true
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  trivy:
+    name: trivy (container image CVEs)
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: subarr:scan
+          cache-from: type=gha
+      - name: trivy scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: subarr:scan
+          format: sarif
+          output: trivy.sarif
+          # Fail on HIGH and CRITICAL only — the noise from MEDIUM+below
+          # in upstream Python base images would be unmanageable.
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy

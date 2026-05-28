@@ -152,12 +152,29 @@ class MigrationRunner:
         # contract. Split on ';' and execute one statement at a time
         # inside a manual transaction so failure mid-file rolls back
         # cleanly and the version row is NOT recorded.
+        #
+        # CRITICAL: strip comments BEFORE splitting on ';' — a ';' inside
+        # a comment ('writes; the next') would otherwise split a comment
+        # in two and leave the trailing fragment to be parsed as SQL.
+        # We strip line-level `--` comments first (the only kind we use),
+        # then split.
+        stripped_lines = []
+        for line in sql.splitlines():
+            s = line.strip()
+            if s.startswith("--"):
+                continue
+            # Also strip inline `-- foo` trailing comments. Naive but
+            # safe given we don't put `--` literally inside string
+            # literals in any migration (and never will — it's banned
+            # in migrations/README.md).
+            if "--" in line:
+                line = line.split("--", 1)[0].rstrip()
+            stripped_lines.append(line)
+        sql_no_comments = "\n".join(stripped_lines)
+
         statements = []
-        for raw in sql.split(";"):
-            # Strip per-line SQL comments + whitespace; skip empty results.
-            lines = [ln for ln in raw.splitlines()
-                     if not ln.strip().startswith("--")]
-            clean = "\n".join(lines).strip()
+        for raw in sql_no_comments.split(";"):
+            clean = raw.strip()
             if clean:
                 statements.append(clean)
 

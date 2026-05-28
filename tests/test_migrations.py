@@ -178,7 +178,10 @@ def test_existing_v0x_db_upgrades_cleanly(db_path: Path):
     conn.close()
 
     applied = run_migrations(db_path)
-    assert [m.version for m in applied] == [1]
+    # Baseline (001) applies as a no-op against existing tables;
+    # any further bundled migrations (002+) apply too. Just assert
+    # 001 is included and the user's data survived.
+    assert 1 in [m.version for m in applied]
 
     # User's data intact + new tables present
     conn = sqlite3.connect(str(db_path))
