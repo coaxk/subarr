@@ -279,7 +279,7 @@ def main() -> None:
     import uvicorn
 
     log.info("subarr %s on port %d", __version__, settings.port)
-    uvicorn.run("subarr.app:app", host="0.0.0.0", port=settings.port, reload=False)
+    uvicorn.run("subarr.app:app", host="0.0.0.0", port=settings.port, reload=False)  # nosec B104 — container deployment must bind 0.0.0.0 to be reachable from sibling containers
 
 
 if __name__ == "__main__":

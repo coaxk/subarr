@@ -29,6 +29,10 @@ permissions:
   contents: read
   security-events: write
   pull-requests: read
+  # actions: read is required by codeql-action/upload-sarif so it can
+  # read the workflow run metadata. Without it the SARIF upload step
+  # fails with "Resource not accessible by integration".
+  actions: read
 
 jobs:
   bandit:
@@ -68,9 +72,13 @@ jobs:
         # --strict fails on any vuln. We want this to fail PRs to force
         # awareness; can be downgraded with --ignore-vuln on a per-CVE
         # basis if upstream hasn't released a fix yet.
+        #
+        # --skip-editable: subarr itself isn't on PyPI; auditing it
+        # produces a "Dependency not found" error. We want pip-audit
+        # to scan our DEPS, not the project itself.
         run: |
           pip install -e .
-          pip-audit --strict --desc
+          pip-audit --strict --desc --skip-editable
 
   semgrep:
     name: semgrep (pattern security)
@@ -108,7 +116,7 @@ jobs:
           tags: subarr:scan
           cache-from: type=gha
       - name: trivy scan
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: subarr:scan
           format: sarif

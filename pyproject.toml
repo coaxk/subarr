@@ -11,6 +11,9 @@ dependencies = [
     "docker>=7.0",
     "pyyaml>=6.0",
     "pydantic>=2.6",
+    # defusedxml replaces stdlib xml.etree for parsing untrusted *arr config.
+    # Bandit B314 flagged the raw stdlib usage; defusedxml is the drop-in fix.
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
