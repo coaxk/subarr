@@ -40,7 +40,15 @@ function ProbeMark({ size = 20, color }) {
 
 // ─── Sparkline ───────────────────────────────────────────────────
 function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4 }) {
+  // Empty data → render an empty svg without path elements. Otherwise
+  // the d attribute becomes a malformed string and Chromium logs
+  // 'Expected moveto path command' to the console (caught by the
+  // Playwright smoke suite). Live data returns spark=[] until we
+  // wire sparkline history in v1.1.
   const c = color || 'var(--violet-500)';
+  if (!data || data.length === 0) {
+    return <svg width={width} height={height} style={{ display: 'block' }} />;
+  }
   const max = Math.max(...data, 1);
   const min = Math.min(...data, 0);
   const range = max - min || 1;

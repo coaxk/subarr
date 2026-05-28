@@ -67,17 +67,23 @@ test.describe('Home dashboard', () => {
 
   test('integration tiles populate from live data', async ({ page }) => {
     await page.goto('/home');
-    // Wait for the live data fetch (5s tick, but first fetch is immediate)
-    await page.waitForResponse((res) => res.url().includes('/api/home/dashboard') && res.status() === 200, { timeout: 10000 });
-    // Bazarr tile should show its label after live data lands
-    await expect(page.getByText('Bazarr')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('Subgen')).toBeVisible();
+    // Wait for the live data fetch (5s tick, first fetch is immediate)
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/home/dashboard') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    // 'Bazarr' appears in BOTH the SubRail link and the IntegrationTile —
+    // assert at least one match is visible.
+    await expect(page.getByText('Bazarr').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Subgen').first()).toBeVisible();
   });
 
   test('coverage page reachable', async ({ page }) => {
     await page.goto('/coverage');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByText('Coverage', { exact: true })).toBeVisible({ timeout: 5000 });
+    // 'Coverage' appears as a SubRail link AND as the page heading. Match
+    // the heading specifically.
+    await expect(page.getByRole('heading', { name: 'Coverage' })).toBeVisible({ timeout: 5000 });
   });
 });
 
