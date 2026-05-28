@@ -58,6 +58,29 @@ class Settings:
     ollama_url: str
     ollama_model: str
 
+    # Docker discovery (Tier-2 read-only introspection) — optional. When
+    # set, the onboarding wizard pre-fills integration URLs by reading
+    # docker container metadata. RECOMMENDED form is the tecnativa
+    # docker-socket-proxy with CONTAINERS+NETWORKS+IMAGES+INFO scopes
+    # only; raw /var/run/docker.sock works but exposes more API surface.
+    # Empty disables auto-discovery; wizard falls back to manual entry.
+    docker_proxy_url: str
+    docker_socket_path: str
+
+    # Telemetry endpoint. When empty, telemetry is collected locally
+    # (visible in Settings) but never transmitted. Set to e.g.
+    # https://telemetry.subarr.com/v1/ping when we publish that worker.
+    telemetry_endpoint: str
+
+    # Optional HTTP Basic auth. When BOTH SUBARR_USER and SUBARR_PASS
+    # are set, every non-allowlisted request requires creds. When
+    # unset (default), no auth. Recommended production posture is a
+    # reverse proxy with proper auth (Authelia, Caddy basicauth, etc.);
+    # this is the in-product fallback for users who can't put subarr
+    # behind a proxy.
+    auth_user: str
+    auth_pass: str
+
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
     # canonical-to-subarr form used everywhere else (relative to media_root).
@@ -92,6 +115,14 @@ def load() -> Settings:
         arr_path_prefix=os.environ.get("ARR_PATH_PREFIX", "/data/Media/"),
         ollama_url=os.environ.get("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
+        docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),
+        docker_socket_path=os.environ.get("SUBARR_DOCKER_SOCKET_PATH", ""),
+        telemetry_endpoint=os.environ.get(
+            "SUBARR_TELEMETRY_ENDPOINT",
+            "https://telemetry.subarr.com/v1/ping",
+        ),
+        auth_user=os.environ.get("SUBARR_USER", ""),
+        auth_pass=os.environ.get("SUBARR_PASS", ""),
     )
 
 

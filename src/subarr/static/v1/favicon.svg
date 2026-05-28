@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Subarr favicon — wordmark-derived. Dark rounded square + violet
+       's' letterform. Same design tokens as the rest of the UI:
+       bg = --bg-0 #1a1a1c, accent = --violet-500 #8b5cf6.
+       SVG favicons work in all modern browsers; the docstring above
+       documents intent in case we add PNG fallbacks later. -->
+  <rect width="32" height="32" rx="6" fill="#1a1a1c"/>
+  <text x="16" y="22"
+        font-family="'Space Grotesk', 'Inter', sans-serif"
+        font-size="22"
+        font-weight="700"
+        text-anchor="middle"
+        fill="#8b5cf6">s</text>
+</svg>

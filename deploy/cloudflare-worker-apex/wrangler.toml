@@ -1,0 +1,24 @@
+# wrangler.toml — subarr.com apex redirect worker.
+#
+# Deploy via CLI:
+#   cd deploy/cloudflare-worker-apex
+#   wrangler login
+#   wrangler deploy
+#
+# Then bind the apex routes in the Cloudflare dashboard under Workers
+# & Pages → subarr-apex-redirect → Settings → Domains & Routes:
+#   Route: subarr.com/*       Zone: subarr.com
+#   Route: www.subarr.com/*   Zone: subarr.com
+#
+# Or paste worker.js directly into the dashboard Quick Edit tab — same
+# outcome, no CLI install needed.
+
+name = "subarr-apex-redirect"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+workers_dev = false
+
+# No KV bindings — the worker is pure logic, no state.
+
+[observability]
+enabled = true

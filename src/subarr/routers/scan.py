@@ -40,6 +40,27 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
 
     store = request.app.state.scans
     runner = request.app.state.runner
+
+    # Compat-mode gate: refuse the scan upfront if subgen lacks /batch.
+    # 503 carries a structured `reason` so the UI can surface a clear
+    # "needs subarr-subgen" notice instead of generic "scan failed".
+    try:
+        runner._check_can_scan()
+    except Exception as e:
+        from .. import scan_runner as _sr
+        if isinstance(e, _sr.CompatModeError):
+            raise HTTPException(
+                503,
+                detail={
+                    "error": "compat_mode",
+                    "reason": str(e),
+                    "remedy": "Switch SUBGEN_URL to ghcr.io/coaxk/subarr-subgen, "
+                              "or see Settings → Integrations → subgen for the "
+                              "current compat-mode status.",
+                },
+            )
+        raise
+
     scan = store.create(cleaned, reverse=req.reverse)
     runner.start(scan)
 

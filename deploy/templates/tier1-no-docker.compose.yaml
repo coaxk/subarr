@@ -1,0 +1,86 @@
+# subarr — Tier 1 deployment (no docker access)
+# ==============================================
+#
+# Scope: subarr can't see your container layout. The onboarding wizard
+# falls back to manual entry of every integration URL + API key. Works
+# fine, just takes a few more clicks. Choose this if you don't want
+# subarr touching your docker daemon at all.
+#
+# What you get: subarr + the subarr-subgen image. No discovery, no
+# Tier-3 API-key auto-extract. Maximum isolation.
+#
+# Place this file at C:\DockerContainers\subarr\compose.yaml (or your
+# equivalent stack dir). Fill in the .env values from .env.example.
+
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:v1.0.0   # pin to a release tag in production
+    container_name: subarr
+    restart: unless-stopped
+    networks:
+      - media-stack  # join your *arr stack's network — rename to match
+    ports:
+      - "9922:9922"
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      SUBARR_PORT: "9922"
+      SUBARR_MEDIA_ROOT: /media/library
+      SUBARR_DB_PATH: /data/subarr.db
+      # NOTE: no SUBARR_DOCKER_PROXY_URL / SUBARR_DOCKER_SOCKET_PATH —
+      # discovery is disabled, the wizard relies entirely on the env-var
+      # overrides you set below.
+      BAZARR_URL:     ${BAZARR_URL:-}
+      BAZARR_API_KEY: ${BAZARR_API_KEY:-}
+      SONARR_URL:     ${SONARR_URL:-}
+      SONARR_API_KEY: ${SONARR_API_KEY:-}
+      RADARR_URL:     ${RADARR_URL:-}
+      RADARR_API_KEY: ${RADARR_API_KEY:-}
+      TAUTULLI_URL:   ${TAUTULLI_URL:-}
+      TAUTULLI_API_KEY: ${TAUTULLI_API_KEY:-}
+      SUBGEN_URL:     http://subgen:9000
+    volumes:
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media/library:ro
+      - ./data:/data
+    labels:
+      - maintenance_log=[2026-05-29] Tier-1 deployment (no docker access)
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  subgen:
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r1   # pin exactly
+    container_name: subgen
+    restart: unless-stopped
+    networks:
+      - media-stack
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      TZ: ${TZ:-UTC}
+      WHISPER_MODEL: large-v3
+      TRANSCRIBE_DEVICE: cuda
+      MODEL_PATH: /subgen/models
+      COMPUTE_TYPE: float16
+    volumes:
+      - ./subgen-models:/subgen/models
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  media-stack:
+    external: true
+    # Rename to match your *arr stack's existing network. Subarr only
+    # uses the shared net to reach Bazarr/Sonarr/etc by container name.

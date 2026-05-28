@@ -1,0 +1,16 @@
+{
+  "name": "subarr-e2e",
+  "version": "1.0.0",
+  "description": "Playwright smoke tests for subarr v1.0",
+  "private": true,
+  "scripts": {
+    "install:deps": "npx playwright install --with-deps chromium",
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:ui": "npx playwright test --ui",
+    "report": "npx playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Subarr · Per-file verdict</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<link rel="icon" type="image/svg+xml" href="/static/v1/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="home-hifi/tokens.css">
+
+<style>
+  html, body, #root { height: 100%; }
+  .app-shell {
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-0);
+    min-width: 1280px;
+  }
+  body { overflow: auto; }
+  .app-body { flex: 1; display: flex; min-height: 0; }
+  .main-canvas { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .act-row:hover { background: var(--bg-2) !important; }
+  @keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="home-hifi/file-modal.bundle.js" defer></script>
+</body>
+</html>

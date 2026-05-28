@@ -1,0 +1,145 @@
+# subarr — Tier 2 deployment (RECOMMENDED)
+# =========================================
+#
+# Scope: subarr reads docker container metadata via a hardened
+# read-only socket-proxy. The wizard auto-detects your *arr stack
+# containers, pre-fills URLs + versions, and tells you what to do
+# next. You still paste API keys manually (Tier 3 if you want those
+# auto-extracted too).
+#
+# Security trade-off: the docker-proxy container has full read access
+# to the docker daemon. Subarr only sees a curated subset of the
+# docker API via the proxy. Compromising subarr does NOT give an
+# attacker the ability to pull images, exec into containers, or kill
+# them — the proxy refuses those endpoints.
+#
+# Place this file at C:\DockerContainers\subarr\compose.yaml (or your
+# equivalent stack dir). Fill in the .env values.
+
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:v1.0.0
+    container_name: subarr
+    restart: unless-stopped
+    networks:
+      - subarr-internal   # owns docker-proxy + subgen
+      - media-stack       # joins your *arr stack to reach Bazarr/Sonarr/etc
+    ports:
+      - "9922:9922"
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      SUBARR_PORT: "9922"
+      SUBARR_MEDIA_ROOT: /media/library
+      SUBARR_DB_PATH: /data/subarr.db
+      # Tier 2: subarr talks to docker-proxy, NOT the raw socket.
+      # The proxy exposes only CONTAINERS+NETWORKS+IMAGES+INFO scopes.
+      SUBARR_DOCKER_PROXY_URL: http://docker-proxy:2375
+      SUBGEN_URL: http://subgen:9000
+      # Optional env-var overrides — leave empty for the wizard's
+      # auto-detect-then-manual-confirm flow.
+      BAZARR_URL:       ${BAZARR_URL:-}
+      BAZARR_API_KEY:   ${BAZARR_API_KEY:-}
+      SONARR_URL:       ${SONARR_URL:-}
+      SONARR_API_KEY:   ${SONARR_API_KEY:-}
+      RADARR_URL:       ${RADARR_URL:-}
+      RADARR_API_KEY:   ${RADARR_API_KEY:-}
+      TAUTULLI_URL:     ${TAUTULLI_URL:-}
+      TAUTULLI_API_KEY: ${TAUTULLI_API_KEY:-}
+    volumes:
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media/library:ro
+      - ./data:/data
+    depends_on:
+      - docker-proxy
+    labels:
+      - maintenance_log=[2026-05-29] Tier-2 deployment (read-only socket-proxy)
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  docker-proxy:
+    # Tecnativa's read-only docker-API proxy. Whitelist of endpoints —
+    # everything not explicitly enabled below is 403'd.
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: subarr-docker-proxy
+    restart: unless-stopped
+    networks:
+      - subarr-internal
+    environment:
+      # ─── ENABLED (read-only metadata) ───
+      CONTAINERS: "1"   # GET /containers/json + /containers/{id}/json
+      NETWORKS:   "1"   # GET /networks
+      IMAGES:     "1"   # GET /images/{id}/json (for version labels)
+      INFO:       "1"   # GET /info — used by reachability checks
+      # ─── EVERYTHING ELSE IS DISABLED ───
+      # Subarr will never need any of these. Listed explicitly so a
+      # future copy-paste of this file doesn't accidentally enable
+      # something dangerous.
+      POST:       "0"   # blocks all writes (no exec, no kill, no restart)
+      DELETE:     "0"
+      BUILD:      "0"
+      COMMIT:     "0"
+      CONFIGS:    "0"
+      DISTRIBUTION: "0"
+      EVENTS:     "0"
+      EXEC:       "0"   # critical: no shell-into-container
+      GRPC:       "0"
+      NODES:      "0"
+      PLUGINS:    "0"
+      SECRETS:    "0"
+      SERVICES:   "0"
+      SESSION:    "0"
+      SWARM:      "0"
+      SYSTEM:     "0"
+      TASKS:      "0"
+      VOLUMES:    "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
+
+  subgen:
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r1
+    container_name: subgen
+    restart: unless-stopped
+    networks:
+      - subarr-internal
+      - media-stack   # optional — only if Bazarr's Whisper provider points here
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      TZ: ${TZ:-UTC}
+      WHISPER_MODEL: large-v3
+      TRANSCRIBE_DEVICE: cuda
+      MODEL_PATH: /subgen/models
+      COMPUTE_TYPE: float16
+    volumes:
+      - ./subgen-models:/subgen/models
+      - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  subarr-internal:
+    driver: bridge   # local to this compose project
+  media-stack:
+    external: true
+    # Rename to match your existing *arr-stack network. If unsure:
+    # docker network ls   shows what's available

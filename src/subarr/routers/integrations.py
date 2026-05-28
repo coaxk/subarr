@@ -57,4 +57,10 @@ async def integrations_health(request: Request) -> dict[str, Any]:
         _probe("radarr", integrations.radarr),
         _probe("tautulli", integrations.tautulli),
     )
-    return {"integrations": probes}
+    # Subgen capabilities probed once at boot, cached on app.state.
+    # Surfaced here so the UI can show "compat mode" badges + gate
+    # scan-submit on has_batch.
+    caps = getattr(request.app.state, "subgen_caps", None)
+    subgen_block = caps.to_dict() if caps else {"reachable": False}
+    subgen_block["name"] = "subgen"
+    return {"integrations": probes, "subgen": subgen_block}

@@ -20,11 +20,13 @@ from .pending_store import PendingStore
 from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
+from .onboarding import OnboardingStore
 from .routers import (
-    admin, bazarr_sync, browse, coverage, coverage_actions,
-    enrichment as r_enrichment, gpu, integrations, logs, mode,
-    probe as r_probe, provenance as r_provenance, queue, scan,
-    schedule as r_schedule,
+    admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
+    enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
+    onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
+    queue, scan, schedule as r_schedule, telemetry as r_telemetry,
+    updates as r_updates,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -38,10 +40,30 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    # Schema migrations run BEFORE any store touches the DB. After they
+    # complete the DB has the v1.0 baseline (+ any newer migrations). The
+    # per-store init_schema() calls below become no-ops on a migrated DB
+    # (CREATE TABLE IF NOT EXISTS); kept during the v0.x→v1.0 transition
+    # so a half-deployed wheel can still self-heal. Remove the
+    # init_schema() calls after v1.0 ships.
+    from .migrate import run_migrations
+    applied = run_migrations(settings.db_path)
+    if applied:
+        log.info("schema migrations applied this boot: %s",
+                 [m.name for m in applied])
     app_.state.subgen = SubgenClient()
+    # Probe subgen capabilities once. The result drives:
+    #   - whether the header counter shows queue depth
+    #   - whether completion_watcher polls /queue vs the provenance table
+    #   - whether the scan-submit UI is enabled or shows "needs subarr-subgen"
+    # Stored on app.state for the health endpoint + downstream gating.
+    app_.state.subgen_caps = await app_.state.subgen.probe_capabilities()
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
-    app_.state.runner = ScanRunner(app_.state.subgen, app_.state.scans)
+    app_.state.runner = ScanRunner(
+        app_.state.subgen, app_.state.scans,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+    )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
@@ -50,6 +72,7 @@ async def lifespan(app_: FastAPI):
         subgen=app_.state.subgen,
         bazarr=app_.state.integrations.bazarr,
         provenance=app_.state.provenance,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
@@ -62,6 +85,7 @@ async def lifespan(app_: FastAPI):
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.pending.init_schema()
+    app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         bundle=app_.state.integrations,
@@ -72,9 +96,58 @@ async def lifespan(app_: FastAPI):
         pending_store=app_.state.pending,
     )
     app_.state.scheduler.start()
+
+    # Update notification poller — once-per-24h GitHub release check
+    # cached to update_checks table. Backs /api/updates which the UI
+    # consumes for the header pill + Home tile + Settings panel.
+    from .update_checker import UpdateChecker
+    current_versions = {
+        "subarr": __version__,
+        "subarr-subgen": app_.state.subgen_caps.version if app_.state.subgen_caps else None,
+    }
+    app_.state.update_checker = UpdateChecker(
+        db_path=settings.db_path,
+        current_version_resolver=current_versions,
+    )
+    app_.state.update_checker.start()
+
+    # Anonymous telemetry — ON by default per v1.0 product decision.
+    # Opt-out one-click in Settings. Stats published publicly at
+    # subarr.com/stats so users see what we see.
+    from .telemetry import TelemetryCollector, make_default_stats_provider
+    app_.state.telemetry = TelemetryCollector(
+        db_path=settings.db_path,
+        endpoint=settings.telemetry_endpoint,
+        subarr_version=__version__,
+        stats_provider=make_default_stats_provider(app_.state),
+        subgen_caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+    )
+    app_.state.telemetry.start()
+
+    # Tier-2 docker discovery for the onboarding wizard. Optional —
+    # disabled if neither SUBARR_DOCKER_PROXY_URL nor a socket path
+    # is configured. The wizard probes via GET /api/discovery and
+    # gracefully falls back to manual entry when unavailable.
+    if settings.docker_proxy_url or settings.docker_socket_path:
+        from .docker_discovery import DockerDiscovery
+        app_.state.docker_discovery = DockerDiscovery(
+            base_url=settings.docker_proxy_url or None,
+            unix_socket=settings.docker_socket_path or None,
+        )
+        log.info(
+            "docker discovery enabled (transport=%s)",
+            "proxy" if settings.docker_proxy_url else "socket",
+        )
+    else:
+        app_.state.docker_discovery = None
+
     try:
         yield
     finally:
+        if app_.state.docker_discovery is not None:
+            await app_.state.docker_discovery.aclose()
+        await app_.state.telemetry.stop()
+        await app_.state.update_checker.stop()
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
         await app_.state.watcher.stop()
@@ -88,10 +161,17 @@ async def lifespan(app_: FastAPI):
         app_.state.enrichment.close()
         app_.state.probe_store.close()
         app_.state.pending.close()
+        app_.state.onboarding.close()
         app_.state.docker.close()
 
 
 app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
+
+# Basic auth — no-op when SUBARR_USER/SUBARR_PASS unset. Added first
+# so the middleware wraps everything below (including static asset
+# serving and the legacy / route).
+from .auth import BasicAuthMiddleware  # noqa: E402
+app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
 
 app.include_router(browse.router)
 app.include_router(mode.router)
@@ -108,6 +188,11 @@ app.include_router(r_schedule.router)
 app.include_router(r_enrichment.router)
 app.include_router(r_probe.router)
 app.include_router(bazarr_sync.router)
+app.include_router(r_updates.router)
+app.include_router(r_discovery.router)
+app.include_router(r_telemetry.router)
+app.include_router(r_home.router)
+app.include_router(r_onboarding.router)
 
 
 @app.get("/api/health")
@@ -141,6 +226,38 @@ if _STATIC_DIR.is_dir():
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         return HTMLResponse(_INDEX_RENDERED)
+
+    # v1.0 screens — high-fidelity React mockups from Claude Design.
+    # All live under /static/v1/ so embedded relative paths
+    # (home-hifi/tokens.css, home-hifi/atoms.jsx, etc.) resolve via the
+    # existing StaticFiles mount. Each route below is a tidy URL that
+    # redirects to the underlying .html so cross-screen <a href="/coverage">
+    # navigation in the React chrome resolves naturally.
+    # Coexists with the legacy vanilla-JS UI at / during the migration.
+    _V1_DIR = _STATIC_DIR / "v1"
+    if _V1_DIR.is_dir():
+        from fastapi.responses import RedirectResponse
+
+        # Screen → static-file map. Add a route per screen as design ships.
+        # The pretty URL is the source of truth for cross-screen links in
+        # chrome.jsx; the underlying .html file is an implementation detail.
+        _V1_SCREENS = {
+            "/home":       "home.html",
+            "/coverage":   "coverage.html",
+            "/onboarding": "onboarding.html",
+            "/rules":      "rules.html",
+            "/settings":   "settings.html",
+            "/file-modal": "file-modal.html",
+        }
+
+        def _make_v1_route(html_file: str):
+            def _v1_screen():
+                return RedirectResponse(url=f"/static/v1/{html_file}", status_code=302)
+            return _v1_screen
+
+        for _path, _html in _V1_SCREENS.items():
+            if (_V1_DIR / _html).is_file():
+                app.add_api_route(_path, _make_v1_route(_html), methods=["GET"])
 else:
     # Packaging regression — static assets weren't installed alongside the
     # package. Log loudly + return a useful 503 at / so the failure mode is
@@ -162,7 +279,7 @@ def main() -> None:
     import uvicorn
 
     log.info("subarr %s on port %d", __version__, settings.port)
-    uvicorn.run("subarr.app:app", host="0.0.0.0", port=settings.port, reload=False)
+    uvicorn.run("subarr.app:app", host="0.0.0.0", port=settings.port, reload=False)  # nosec B104 — container deployment must bind 0.0.0.0 to be reachable from sibling containers
 
 
 if __name__ == "__main__":

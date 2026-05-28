@@ -1,0 +1,52 @@
+# Frontend drift check — run on every PR that touches the SPA.
+#
+# Why: the v1 SPA bundles (src/subarr/static/v1/home-hifi/*.bundle.js +
+# .map) are committed pre-built so `pip install` ships a working app
+# without a Node toolchain. That tradeoff requires a guardrail: if
+# someone edits a .jsx source without rebuilding, the bundle goes
+# stale and runtime behaviour silently diverges from the source.
+#
+# This job runs `npm run check:frontend` which rebuilds + asserts
+# `git diff --exit-code` on the static dir. If the working tree differs
+# after a fresh build, the PR fails.
+
+name: frontend
+
+on:
+  pull_request:
+    paths:
+      - "src/subarr/static/v1/**"
+      - "scripts/build-frontend.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/frontend.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/subarr/static/v1/**"
+      - "scripts/build-frontend.mjs"
+      - "package.json"
+      - "package-lock.json"
+
+jobs:
+  drift:
+    name: bundle drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build bundles and assert no drift
+        run: |
+          npm run build:frontend
+          if ! git diff --exit-code -- src/subarr/static/v1/home-hifi; then
+            echo ""
+            echo "::error::Frontend bundles are stale. Run 'npm run build:frontend' locally and commit the result."
+            exit 1
+          fi

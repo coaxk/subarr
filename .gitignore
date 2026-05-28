@@ -22,3 +22,9 @@ Thumbs.db
 .idea/
 .vscode/
 !.vscode/extensions.json
+
+# Frontend build tooling — Node deps only, never committed.
+# The compiled *.bundle.js + *.bundle.js.map ARE committed (under
+# src/subarr/static/v1/home-hifi/) so `pip install` ships a working
+# SPA without a Node toolchain on consumer machines.
+node_modules/

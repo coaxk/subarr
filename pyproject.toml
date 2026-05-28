@@ -11,6 +11,9 @@ dependencies = [
     "docker>=7.0",
     "pyyaml>=6.0",
     "pydantic>=2.6",
+    # defusedxml replaces stdlib xml.etree for parsing untrusted *arr config.
+    # Bandit B314 flagged the raw stdlib usage; defusedxml is the drop-in fix.
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +37,13 @@ where = ["src"]
 # the frontend is silently missing in the wheel (404 at / + /static/*).
 # Caught 2026-05-27 after v1.1 deploy.
 [tool.setuptools.package-data]
-subarr = ["static/**/*"]
+subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md"]
+
+[tool.pytest.ini_options]
+# Playwright suite lives at tests/e2e/ — JS/TS, not Python. Excluding
+# keeps `pytest` running just the Python unit tests.
+testpaths = ["tests"]
+norecursedirs = ["tests/e2e"]
 
 [tool.ruff]
 line-length = 110
