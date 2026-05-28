@@ -124,12 +124,17 @@ _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-    # Index template is rendered with the app version baked into the static
-    # asset query strings (?v=<version>) so browsers fetch fresh CSS/JS on
-    # every rebuild instead of serving stale cache. Cheap — index.html is
-    # tiny + the substitution runs once per startup if we cache it.
+    # Index template is rendered with a startup-time cache-bust string baked
+    # into static asset query strings (?v=<version>-<startupTs>). Same-
+    # version rebuilds (in-place compose recreates) still bust browser
+    # caches because the container's startup timestamp changes every boot.
+    # Pure version-based busting was insufficient — caught when stuck-walk
+    # badge showed stale data after a rebuild reused the same version
+    # string. (2026-05-28)
+    import time as _time
     _INDEX_TEMPLATE = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    _INDEX_RENDERED = _INDEX_TEMPLATE.replace("__SUBARR_VERSION__", __version__)
+    _CACHE_BUST = f"{__version__}-{int(_time.time())}"
+    _INDEX_RENDERED = _INDEX_TEMPLATE.replace("__SUBARR_VERSION__", _CACHE_BUST)
 
     from fastapi.responses import HTMLResponse
 
