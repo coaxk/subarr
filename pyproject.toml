@@ -36,6 +36,12 @@ where = ["src"]
 [tool.setuptools.package-data]
 subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md"]
 
+[tool.pytest.ini_options]
+# Playwright suite lives at tests/e2e/ — JS/TS, not Python. Excluding
+# keeps `pytest` running just the Python unit tests.
+testpaths = ["tests"]
+norecursedirs = ["tests/e2e"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"
