@@ -141,6 +141,21 @@ if _STATIC_DIR.is_dir():
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         return HTMLResponse(_INDEX_RENDERED)
+
+    # v1.0 Home page — high-fidelity React mockup from Claude Design.
+    # Lives under /static/v1/ so the embedded relative paths
+    # (home-hifi/tokens.css, home-hifi/atoms.jsx, etc.) resolve correctly
+    # via the existing StaticFiles mount.
+    # Coexists with the legacy vanilla-JS UI at / during the migration.
+    # As more screens (Coverage, Onboarding, Rules, etc.) land from design,
+    # they'll join /static/v1/ and eventually replace / entirely.
+    _V1_HOME = _STATIC_DIR / "v1" / "home.html"
+    if _V1_HOME.is_file():
+        from fastapi.responses import RedirectResponse
+
+        @app.get("/home")
+        def v1_home():
+            return RedirectResponse(url="/static/v1/home.html", status_code=302)
 else:
     # Packaging regression — static assets weren't installed alongside the
     # package. Log loudly + return a useful 503 at / so the failure mode is

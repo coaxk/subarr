@@ -1,0 +1,200 @@
+/* Subarr v1.0 — design tokens, from the brief. */
+
+:root {
+  /* ─── Neutral scale (warm dark) ─── */
+  --bg-0: #1a1a1c;
+  --bg-1: #202022;
+  --bg-2: #26262a;
+  --bg-3: #2e2e33;
+  --bg-4: #3a3a40;
+  --bg-5: #4a4a52;
+  --bg-6: #6a6a74;
+
+  --fg-0: #f2f2f4;
+  --fg-1: #c8c8cc;
+  --fg-2: #9a9aa2;
+  --fg-3: #6e6e76;
+
+  /* ─── Brand accents ─── */
+  --violet-500: #8b5cf6;
+  --violet-400: #a78bfa;
+  --violet-600: #7c3aed;
+  --violet-900: #2e1065;
+
+  --cyan-500: #22d3ee;
+  --cyan-400: #67e8f9;
+  --cyan-900: #164e63;
+
+  /* ─── Status ─── */
+  --success-500: #34d399;
+  --success-900: #064e3b;
+  --warn-500:    #f59e0b;
+  --warn-900:    #78350f;
+  --error-500:   #ef4444;
+  --error-900:   #7f1d1d;
+  --info-500:    #22d3ee;
+
+  /* ─── Spacing ─── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+
+  /* ─── Radii ─── */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-pill: 9999px;
+
+  /* ─── Motion ─── */
+  --ease-out:    cubic-bezier(0.2, 0.6, 0.2, 1);
+  --dur-fast:    90ms;
+  --dur-base:    150ms;
+  --dur-slow:    220ms;
+
+  /* ─── Type ─── */
+  --font-ui:      'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --font-display: 'Space Grotesk', 'Inter', sans-serif;
+
+  --text-2xs: 10px;  --lh-2xs: 14px;
+  --text-xs:  11px;  --lh-xs:  16px;
+  --text-sm:  12px;  --lh-sm:  18px;
+  --text-base:13px;  --lh-base:20px;
+  --text-md:  14px;  --lh-md:  22px;
+  --text-lg:  16px;  --lh-lg:  24px;
+  --text-xl:  20px;  --lh-xl:  28px;
+  --text-2xl: 28px;  --lh-2xl: 34px;
+
+  --border:        1px solid var(--bg-4);
+  --border-strong: 1px solid var(--bg-5);
+
+  --shadow-modal:   0 8px 32px rgba(0,0,0,0.45), 0 0 0 1px var(--bg-4);
+  --shadow-tooltip: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.display {
+  font-family: var(--font-display);
+}
+
+.label {
+  font-size: var(--text-2xs);
+  line-height: var(--lh-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+/* Scrollbars — keep them visible but understated. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 4px; border: 2px solid var(--bg-0); }
+::-webkit-scrollbar-thumb:hover { background: var(--bg-5); }
+
+/* ─── Common atoms ─── */
+
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; vertical-align: middle; }
+.dot.lg { width: 8px; height: 8px; }
+.dot.ok    { background: var(--success-500); }
+.dot.warn  { background: var(--warn-500); }
+.dot.error { background: var(--error-500); }
+.dot.info  { background: var(--cyan-500); }
+.dot.violet { background: var(--violet-500); }
+.dot.muted { background: var(--fg-3); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+  color: var(--fg-1);
+  background: var(--bg-3);
+  border: 1px solid var(--bg-4);
+}
+.chip.violet { color: var(--violet-400); background: rgba(139,92,246,0.10); border-color: rgba(139,92,246,0.35); }
+.chip.info   { color: var(--cyan-400);   background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.30); }
+.chip.warn   { color: var(--warn-500);   background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.30); }
+.chip.error  { color: var(--error-500);  background: rgba(239,68,68,0.10);  border-color: rgba(239,68,68,0.30); }
+.chip.ok     { color: var(--success-500); background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.28); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-0);
+  background: var(--bg-3);
+  border: 1px solid var(--bg-4);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  user-select: none;
+}
+.btn:hover { background: var(--bg-4); border-color: var(--bg-5); }
+.btn.primary {
+  background: var(--violet-500);
+  border-color: var(--violet-500);
+  color: #fff;
+  font-weight: 600;
+}
+.btn.primary:hover { background: var(--violet-400); border-color: var(--violet-400); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--fg-1); }
+.btn.ghost:hover { background: var(--bg-3); color: var(--fg-0); }
+.btn.sm { height: 24px; padding: 0 10px; font-size: var(--text-xs); }
+
+.panel {
+  background: var(--bg-1);
+  border: var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.panel-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg-0);
+  margin: 0;
+}
+
+/* Sparkline canvas just sits inline; no styling needed. */
