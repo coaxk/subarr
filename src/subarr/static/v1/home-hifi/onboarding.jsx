@@ -288,7 +288,7 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
     sonarr:   { display: 'Sonarr',   port: '8989', help: "Subarr resolves episode → file paths via Sonarr to skip stale-disk gaps." },
     radarr:   { display: 'Radarr',   port: '7878', help: "Same as Sonarr but for movies." },
     tautulli: { display: 'Tautulli', port: '8181', help: "Watch history boosts the gap-list scoring — recently-watched shows get priority." },
-    subgen:   { display: 'subgen',   port: '9000', help: "The Whisper worker. Use ghcr.io/coaxk/subarr-subgen for full features, or vanilla mccloud/subgen for compat mode." },
+    subgen:   { display: 'subgen',   port: '9000', help: "The Whisper worker. Use ghcr.io/coaxk/subarr-subgen for full features, or vanilla mccloud/subgen for compat mode. Model size + precision (tiny → large-v3, float16/int8) are set on subgen's own env vars (WHISPER_MODEL, WHISPER_COMPUTE_TYPE) — subarr just dispatches." },
     ollama:   { display: 'Ollama',   port: '11434', help: "Optional. Used for originalLanguage inference on shows where Sonarr returned null/und." },
   }[svc];
   const placeholderUrl = `http://${svc}:${labels.port}`;
