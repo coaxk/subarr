@@ -5,6 +5,8 @@
 // where the user left off. The wizard is one-shot per install but
 // re-runnable from Settings → Re-run setup.
 
+import { Wordmark, StatusDot } from './atoms.jsx';
+
 const { useState, useEffect, useCallback } = React;
 
 // Step IDs MUST match the backend's STEP_* constants (subarr/onboarding.py).
@@ -444,7 +446,7 @@ function WizardFooter({ canBack, canContinue, onBack, onSkip, onContinue, contin
 // ─── Page ────────────────────────────────────────────────────────
 
 
-function OnboardingPage() {
+export function OnboardingPage() {
   const [state, setState] = useState({ step: 0, progress: {} });
   const [loaded, setLoaded] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -616,4 +618,3 @@ function OnboardingPage() {
   );
 }
 
-Object.assign(window, { OnboardingPage });

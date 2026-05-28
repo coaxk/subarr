@@ -1,0 +1,15 @@
+{
+  "name": "subarr-frontend-build",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build-time tooling for the subarr static SPA bundles. Not published.",
+  "type": "module",
+  "scripts": {
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "dev:frontend": "node scripts/build-frontend.mjs --watch",
+    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- src/subarr/static/v1/home-hifi"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0"
+  }
+}

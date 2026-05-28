@@ -1,5 +1,13 @@
 // Home dashboard body — stages, host telemetry, next run + activity.
 
+import { Sparkline, Delta, StatusDot, Glyph, genSpark } from './atoms.jsx';
+
+// Hooks come from the global React (CDN). Under the old in-browser
+// Babel pipeline this destructure lived in atoms.jsx and leaked across
+// the shared global scope; under the ESM bundle each module needs its
+// own.
+const { useMemo } = React;
+
 // ─── Live data hook ──────────────────────────────────────────────
 // Fetches GET /api/home/dashboard every 5s. Returns the live payload
 // or null if the endpoint hasn't responded yet (during first paint or
@@ -7,7 +15,7 @@
 // falls back to the demo constants below when live data is null —
 // so previews + dev render fine even without a running backend.
 
-function useLiveDashboard(intervalMs = 5000) {
+export function useLiveDashboard(intervalMs = 5000) {
   const [data, setData] = React.useState(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -115,7 +123,7 @@ const KIND_STYLE = {
 };
 
 // ─── Page header ─────────────────────────────────────────────────
-function PageHeader({ now }) {
+export function PageHeader({ now }) {
   return (
     <div style={{
       display: 'flex',
@@ -230,7 +238,7 @@ function StageTile({ s }) {
   );
 }
 
-function StagesRow({ data }) {
+export function StagesRow({ data }) {
   // data is the array from /api/home/dashboard's `stages` block. When
   // null (first paint / backend down), fall back to the demo STAGES.
   const stages = (data && data.length) ? data : STAGES;
@@ -402,7 +410,7 @@ function IntegrationTile({ i }) {
   );
 }
 
-function HostStrip({ integrations, gpu }) {
+export function HostStrip({ integrations, gpu }) {
   // integrations: live array or null → fall back to demo INTEGRATIONS
   // gpu: live GPU snapshot or null → GpuWidget uses demo if null
   const tiles = (integrations && integrations.length) ? integrations : INTEGRATIONS;
@@ -571,7 +579,7 @@ function ActivityCard({ data }) {
   );
 }
 
-function NextRunActivitySplit({ nextRun, activity }) {
+export function NextRunActivitySplit({ nextRun, activity }) {
   return (
     <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
       <NextRunCard data={nextRun} />
@@ -580,4 +588,3 @@ function NextRunActivitySplit({ nextRun, activity }) {
   );
 }
 
-Object.assign(window, { PageHeader, StagesRow, HostStrip, NextRunActivitySplit, useLiveDashboard });

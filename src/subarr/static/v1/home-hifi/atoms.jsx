@@ -1,9 +1,13 @@
 // Shared atoms for the hi-fi mockup.
+//
+// React + ReactDOM come from the CDN <script> tags in the HTML — they
+// resolve as runtime globals, no import needed. esbuild's IIFE format
+// leaves the unresolved `React` identifier as a global ref.
 
 const { useMemo, useState, useEffect } = React;
 
 // ─── Wordmark ────────────────────────────────────────────────────
-function Wordmark({ size = 18 }) {
+export function Wordmark({ size = 18 }) {
   // [·] glyph — probe bracket — plus the wordmark.
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -22,7 +26,7 @@ function Wordmark({ size = 18 }) {
 }
 
 // Logo Option A from the brief — probe bracket "[·]" with a centred dot.
-function ProbeMark({ size = 20, color }) {
+export function ProbeMark({ size = 20, color }) {
   const c = color || 'var(--violet-500)';
   const stroke = 1.8;
   // viewBox 24x24
@@ -39,7 +43,7 @@ function ProbeMark({ size = 20, color }) {
 }
 
 // ─── Sparkline ───────────────────────────────────────────────────
-function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4 }) {
+export function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4 }) {
   // Empty data → render an empty svg without path elements. Otherwise
   // the d attribute becomes a malformed string and Chromium logs
   // 'Expected moveto path command' to the console (caught by the
@@ -69,7 +73,7 @@ function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4 })
 }
 
 // ─── Delta indicator ─────────────────────────────────────────────
-function Delta({ value, suffix = '/h' }) {
+export function Delta({ value, suffix = '/h' }) {
   const n = Number(value);
   const isUp = n > 0;
   const isFlat = n === 0;
@@ -87,7 +91,7 @@ function Delta({ value, suffix = '/h' }) {
 }
 
 // ─── Status dot with optional pulse ──────────────────────────────
-function StatusDot({ kind = 'ok', pulse, size }) {
+export function StatusDot({ kind = 'ok', pulse, size }) {
   const cls = `dot ${size === 'lg' ? 'lg' : ''} ${kind}`.trim();
   if (!pulse) return <span className={cls} />;
   return (
@@ -99,7 +103,7 @@ function StatusDot({ kind = 'ok', pulse, size }) {
 }
 
 // ─── Tiny icon glyph (no real icons in mockup — just mono char) ──
-function Glyph({ char, size = 14, color }) {
+export function Glyph({ char, size = 14, color }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -113,7 +117,7 @@ function Glyph({ char, size = 14, color }) {
 }
 
 // ─── Time string helpers ─────────────────────────────────────────
-function fmtTime(d) {
+export function fmtTime(d) {
   const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
@@ -121,11 +125,10 @@ function fmtTime(d) {
 }
 
 // Demo data store — generated once, used everywhere.
-function genSpark(n, base, vol) {
+export function genSpark(n, base, vol) {
   return Array.from({ length: n }, (_, i) => {
     const t = i / n;
     return Math.max(0, base + Math.sin(t * 6) * vol * 0.4 + (Math.random() - 0.5) * vol);
   });
 }
 
-Object.assign(window, { Wordmark, ProbeMark, Sparkline, Delta, StatusDot, Glyph, fmtTime, genSpark });

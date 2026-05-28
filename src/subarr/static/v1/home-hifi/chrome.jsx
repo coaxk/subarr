@@ -1,5 +1,7 @@
 // Top nav (Nav variant B) + contextual sub-rail.
 
+import { Wordmark, Glyph, StatusDot } from './atoms.jsx';
+
 // hrefs are subarr server routes — kept clean (no Subarr+...html design-asset
 // filenames). The route layer in app.py maps each path to its rendered
 // static HTML under /static/v1/.
@@ -38,7 +40,7 @@ const SUB_RAIL_BY_SECTION = {
 };
 
 // ─── Top bar ─────────────────────────────────────────────────────
-function TopBar({ section = 'overview', healthKind = 'warn', healthLabel = '4/5 healthy' }) {
+export function TopBar({ section = 'overview', healthKind = 'warn', healthLabel = '4/5 healthy' }) {
   return (
     <header style={{
       height: 48,
@@ -119,7 +121,7 @@ function TopBar({ section = 'overview', healthKind = 'warn', healthLabel = '4/5 
 }
 
 // ─── Contextual sub-rail ─────────────────────────────────────────
-function SubRail({ section = 'overview', activeId, footer }) {
+export function SubRail({ section = 'overview', activeId, footer }) {
   const items = SUB_RAIL_BY_SECTION[section] || [];
   return (
     <aside style={{
@@ -180,4 +182,3 @@ function RailItem({ item }) {
   );
 }
 
-Object.assign(window, { TopBar, SubRail });

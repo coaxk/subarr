@@ -1,5 +1,9 @@
 // Rules editor — Build / Test / Deploy triad.
 
+import { StatusDot } from './atoms.jsx';
+
+const { useState } = React;
+
 const RULE = {
   name: 'nightly_walk',
   mode: 'manual_confirm',
@@ -372,7 +376,7 @@ function ModeDeploy() {
 }
 
 // ─── Page wrapper ────────────────────────────────────────────────
-function RulesPage() {
+export function RulesPage() {
   const [mode, setMode] = useState('test');
 
   return (
@@ -445,4 +449,3 @@ function RulesPage() {
   );
 }
 
-Object.assign(window, { RulesPage });

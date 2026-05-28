@@ -1,5 +1,7 @@
 // Settings — grouped left rail + Bazarr detail panel + dirty action bar.
 
+import { StatusDot } from './atoms.jsx';
+
 const SETTINGS_GROUPS = [
   {
     label: 'integrations',
@@ -303,7 +305,7 @@ function DirtyBar({ visible }) {
 }
 
 // ─── Page wrapper ────────────────────────────────────────────────
-function SettingsPage() {
+export function SettingsPage() {
   return (
     <div className="app-body" style={{ position: 'relative' }}>
       <SettingsRail />
@@ -334,4 +336,3 @@ function SettingsPage() {
   );
 }
 
-Object.assign(window, { SettingsPage });

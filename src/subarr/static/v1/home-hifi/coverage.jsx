@@ -1,5 +1,9 @@
 // Coverage — flat dense gap-list table.
 
+import { Glyph, StatusDot } from './atoms.jsx';
+
+const { useState } = React;
+
 // ─── Demo dataset ───────────────────────────────────────────────
 const COVERAGE_ROWS = [
   { id: 1,  score: 9.4, type: 'tv',  title: 'Severance',                ep: 'S02E08', langs: ['eng','spa','fre'], mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: true,  size: '4.2 GB' },
@@ -362,7 +366,7 @@ function SelectionBar({ n, reasonFilter }) {
 }
 
 // ─── Page ────────────────────────────────────────────────────────
-function CoveragePage() {
+export function CoveragePage() {
   const [groupBy, setGroupBy] = useState('flat');
   const rows = COVERAGE_ROWS;
   const selectedCount = rows.filter(r => r.sel).length;
@@ -412,4 +416,3 @@ function CoveragePage() {
   );
 }
 
-Object.assign(window, { CoveragePage });

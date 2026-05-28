@@ -1,5 +1,9 @@
 // Per-file verdict modal — over an Activity page surface.
 
+import { StatusDot } from './atoms.jsx';
+
+const { useState } = React;
+
 const FILE_EVENTS = [
   {
     t: '14:32:08',
@@ -364,7 +368,7 @@ function FileModal({ onClose }) {
 }
 
 // ─── Page wrapper ────────────────────────────────────────────────
-function FileModalPage() {
+export function FileModalPage() {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -386,4 +390,3 @@ function FileModalPage() {
   );
 }
 
-Object.assign(window, { FileModalPage });
