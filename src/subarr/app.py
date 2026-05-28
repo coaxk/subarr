@@ -22,7 +22,7 @@ from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
 from .routers import (
     admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
-    enrichment as r_enrichment, gpu, integrations, logs, mode,
+    enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
     probe as r_probe, provenance as r_provenance, queue, scan,
     schedule as r_schedule, telemetry as r_telemetry, updates as r_updates,
 )
@@ -187,6 +187,7 @@ app.include_router(bazarr_sync.router)
 app.include_router(r_updates.router)
 app.include_router(r_discovery.router)
 app.include_router(r_telemetry.router)
+app.include_router(r_home.router)
 
 
 @app.get("/api/health")

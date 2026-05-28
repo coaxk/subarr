@@ -1,6 +1,36 @@
 // Home dashboard body — stages, host telemetry, next run + activity.
 
-// ─── Demo data ───────────────────────────────────────────────────
+// ─── Live data hook ──────────────────────────────────────────────
+// Fetches GET /api/home/dashboard every 5s. Returns the live payload
+// or null if the endpoint hasn't responded yet (during first paint or
+// when the backend is unreachable). Each section component below
+// falls back to the demo constants below when live data is null —
+// so previews + dev render fine even without a running backend.
+
+function useLiveDashboard(intervalMs = 5000) {
+  const [data, setData] = React.useState(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const r = await fetch('/api/home/dashboard', { credentials: 'same-origin' });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled) setData(d);
+      } catch (e) {
+        // Network or server error — keep stale data, retry next tick.
+        // eslint-disable-next-line no-console
+        console.debug('home/dashboard fetch failed:', e);
+      }
+    }
+    tick();
+    const id = setInterval(tick, intervalMs);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [intervalMs]);
+  return data;
+}
+
+// ─── Demo data (fallback) ────────────────────────────────────────
 const STAGES = [
   {
     id: 'discovered',
@@ -200,18 +230,32 @@ function StageTile({ s }) {
   );
 }
 
-function StagesRow() {
+function StagesRow({ data }) {
+  // data is the array from /api/home/dashboard's `stages` block. When
+  // null (first paint / backend down), fall back to the demo STAGES.
+  const stages = (data && data.length) ? data : STAGES;
   return (
     <div style={{ display: 'flex', gap: 12 }}>
-      {STAGES.map(s => <StageTile key={s.id} s={s} />)}
+      {stages.map(s => <StageTile key={s.id} s={s} />)}
     </div>
   );
 }
 
 // ─── GPU widget ──────────────────────────────────────────────────
-function GpuWidget() {
+function GpuWidget({ data }) {
+  // data shape (from /api/home/dashboard.gpu):
+  //   { name, util_pct, vram_used_mb, vram_total_mb, temp_c, power_w,
+  //     power_cap_w, processes }
+  // null → fall back to demo numbers (mock until a GPU is detected).
   const spark = useMemo(() => genSpark(40, 0.5, 0.35).map(v => Math.min(1, Math.max(0.1, v))), []);
-  const util = 67;
+  const util = data ? Math.round(data.util_pct) : 67;
+  const vramUsedGB = data ? (data.vram_used_mb / 1024) : 8.4;
+  const vramTotalGB = data ? (data.vram_total_mb / 1024) : 12;
+  const tempC = data ? Math.round(data.temp_c) : 64;
+  const powerW = data ? Math.round(data.power_w) : 142;
+  const powerCapW = data ? Math.round(data.power_cap_w) : 200;
+  const gpuName = data ? data.name : 'NVIDIA RTX 4070';
+  const busy = util > 5;
   return (
     <div style={{
       background: 'var(--bg-1)',
@@ -225,20 +269,24 @@ function GpuWidget() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="label">GPU</span>
-          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-1)', fontWeight: 500 }}>NVIDIA RTX 4070</span>
-          <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>· 535.86</span>
+          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-1)', fontWeight: 500 }}>{gpuName}</span>
         </div>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', color: 'var(--cyan-400)' }}>
-          <StatusDot kind="info" pulse />
-          <span style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>busy</span>
-        </span>
+        {busy && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', color: 'var(--cyan-400)' }}>
+            <StatusDot kind="info" pulse />
+            <span style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>busy</span>
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(60px, 0.85fr) minmax(112px, 1.4fr) minmax(56px, 0.85fr) minmax(72px, 1fr)', gap: 14, alignItems: 'end' }}>
         <GpuStat label="util" value={`${util}%`} bar={util / 100} />
-        <GpuStat label="vram" value="8.4 / 12 GB" sub="70%" />
-        <GpuStat label="temp" value="64°C" sub="safe" />
-        <GpuStat label="power" value="142 W" sub="of 200 W" />
+        <GpuStat label="vram"
+                 value={`${vramUsedGB.toFixed(1)} / ${vramTotalGB.toFixed(0)} GB`}
+                 sub={`${Math.round((vramUsedGB / vramTotalGB) * 100)}%`} />
+        <GpuStat label="temp" value={`${tempC}°C`}
+                 sub={tempC < 75 ? 'safe' : (tempC < 85 ? 'warm' : 'hot')} />
+        <GpuStat label="power" value={`${powerW} W`} sub={`of ${powerCapW} W`} />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -312,21 +360,42 @@ function IntegrationTile({ i }) {
   );
 }
 
-function HostStrip() {
+function HostStrip({ integrations, gpu }) {
+  // integrations: live array or null → fall back to demo INTEGRATIONS
+  // gpu: live GPU snapshot or null → GpuWidget uses demo if null
+  const tiles = (integrations && integrations.length) ? integrations : INTEGRATIONS;
   return (
     <div style={{ display: 'flex', gap: 12 }}>
       <div style={{ flex: '1.5 1 0', minWidth: 360 }}>
-        <GpuWidget />
+        <GpuWidget data={gpu} />
       </div>
       <div style={{ flex: '3 1 0', display: 'flex', gap: 12, minWidth: 0 }}>
-        {INTEGRATIONS.map(i => <IntegrationTile key={i.name} i={i} />)}
+        {tiles.map(i => <IntegrationTile key={i.name} i={i} />)}
       </div>
     </div>
   );
 }
 
 // ─── Next scheduled run ──────────────────────────────────────────
-function NextRunCard() {
+function NextRunCard({ data }) {
+  // data shape (from /api/home/dashboard.next_run):
+  //   { enabled, rule, mode, targets, next_run_at, countdown_s,
+  //     last_run_at, last_result }
+  // When enabled=false (no schedule yet), the card shows a "not
+  // configured" state instead of the live values.
+  const enabled = data ? data.enabled : true;
+  const rule = (data && data.rule) || 'nightly_walk';
+  const mode = (data && data.mode) || 'manual_confirm';
+  const targets = (data && data.targets && data.targets.length)
+                   ? data.targets : ['/TV', '/Movies', '/Anime'];
+  const countdown = data && data.countdown_s != null
+                     ? fmtCountdown(data.countdown_s) : '4h 12m';
+  const localClock = data && data.next_run_at
+                     ? fmtTimeFromTs(data.next_run_at)
+                     : '18:44';
+  const lastRun = data && data.last_run_at
+                   ? `${fmtTimeFromTs(data.last_run_at)} · ${data.last_result || '—'}`
+                   : '10:32 · wrote 39 · skipped 8';
   return (
     <div style={{
       background: 'var(--bg-1)',
@@ -340,21 +409,22 @@ function NextRunCard() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span className="label">Next scheduled run</span>
-        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>18:44 local</span>
+        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>{localClock} local</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span className="display num" style={{
           fontSize: 32, lineHeight: 1,
           fontWeight: 500,
           letterSpacing: '-0.01em',
-        }}>4h 12m</span>
+          color: enabled ? 'var(--fg-0)' : 'var(--fg-3)',
+        }}>{enabled ? countdown : 'disabled'}</span>
       </div>
       <div style={{ height: 1, background: 'var(--bg-3)' }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <KV k="rule"    v={<span className="mono">nightly_walk</span>} />
-        <KV k="mode"    v={<span className="mono">manual_confirm</span>} />
-        <KV k="targets" v={<span className="mono" style={{ color: 'var(--fg-1)' }}>/TV, /Movies, /Anime</span>} />
-        <KV k="last run" v={<span><span className="mono">10:32</span> <span style={{ color: 'var(--fg-3)' }}>· wrote 39 · skipped 8</span></span>} />
+        <KV k="rule"    v={<span className="mono">{rule}</span>} />
+        <KV k="mode"    v={<span className="mono">{mode}</span>} />
+        <KV k="targets" v={<span className="mono" style={{ color: 'var(--fg-1)' }}>{targets.join(', ')}</span>} />
+        <KV k="last run" v={<span style={{ color: 'var(--fg-3)' }} className="mono">{lastRun}</span>} />
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', gap: 8 }}>
@@ -363,6 +433,18 @@ function NextRunCard() {
       </div>
     </div>
   );
+}
+
+function fmtCountdown(sec) {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}h ${m.toString().padStart(2, '0')}m`;
+}
+function fmtTimeFromTs(ts) {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 function KV({ k, v }) {
@@ -404,7 +486,10 @@ function ActivityRow({ a, last }) {
   );
 }
 
-function ActivityCard() {
+function ActivityCard({ data }) {
+  // data: live array from /api/home/dashboard.activity, or null → fall
+  // back to demo ACTIVITY.
+  const rows = (data && data.length) ? data : ACTIVITY;
   return (
     <div style={{
       flex: 1, minWidth: 0,
@@ -426,10 +511,16 @@ function ActivityCard() {
           <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>failed</span>
           <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>written-back</span>
         </div>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing last {ACTIVITY.length}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing last {rows.length}</span>
       </div>
       <div>
-        {ACTIVITY.map((a, i) => <ActivityRow key={i} a={a} last={i === ACTIVITY.length - 1} />)}
+        {rows.length === 0 ? (
+          <div style={{ padding: '24px 16px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
+            no activity yet — submit a scan to get started.
+          </div>
+        ) : (
+          rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
+        )}
       </div>
       <div style={{ marginTop: 'auto', padding: '8px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>View full activity →</span>
@@ -438,13 +529,13 @@ function ActivityCard() {
   );
 }
 
-function NextRunActivitySplit() {
+function NextRunActivitySplit({ nextRun, activity }) {
   return (
     <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
-      <NextRunCard />
-      <ActivityCard />
+      <NextRunCard data={nextRun} />
+      <ActivityCard data={activity} />
     </div>
   );
 }
 
-Object.assign(window, { PageHeader, StagesRow, HostStrip, NextRunActivitySplit });
+Object.assign(window, { PageHeader, StagesRow, HostStrip, NextRunActivitySplit, useLiveDashboard });

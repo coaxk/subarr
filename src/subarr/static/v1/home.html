@@ -71,12 +71,18 @@
 
 <script type="text/babel" data-presets="env,react">
 function App() {
-  const [now, setNow] = React.useState('14:32:08');
+  // Live clock (1s tick) — purely client-side, independent of API.
+  const [now, setNow] = React.useState(fmtTime(new Date()));
   React.useEffect(() => {
     const id = setInterval(() => setNow(fmtTime(new Date())), 1000);
-    // Anchor the initial clock to a static time for screenshot stability.
     return () => clearInterval(id);
   }, []);
+
+  // Live dashboard data — fetches /api/home/dashboard every 5s.
+  // Each section falls back to demo constants when its slice is null
+  // (first paint, or backend unreachable). useLiveDashboard is
+  // exported from dashboard.jsx onto window.
+  const live = useLiveDashboard();
 
   return (
     <div className="app-shell">
@@ -85,9 +91,15 @@ function App() {
         <SubRail section="overview" activeId="dashboard" />
         <main className="main-canvas">
           <PageHeader now={now} />
-          <StagesRow />
-          <HostStrip />
-          <NextRunActivitySplit />
+          <StagesRow data={live && live.stages} />
+          <HostStrip
+            integrations={live && live.integrations}
+            gpu={live && live.gpu}
+          />
+          <NextRunActivitySplit
+            nextRun={live && live.next_run}
+            activity={live && live.activity}
+          />
         </main>
       </div>
     </div>
