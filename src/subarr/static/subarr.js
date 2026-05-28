@@ -1414,11 +1414,10 @@ ${result.error ? 'note: ' + escape(result.error) : ''}</pre>
     meta.textContent = fresh ? 'refreshing (this can take ~10s on first run)…' : 'loading…';
     try {
       const useTautulli = $('#cov-tautulli').checked;
-      const showSuppressed = $('#cov-show-suppressed')?.checked;
-      const showStale = $('#cov-show-stale')?.checked;
-      const hideEmbedded = showSuppressed ? 'false' : 'true';
-      const hideStale = showStale ? 'false' : 'true';
-      const url = `/api/coverage?tautulli=${useTautulli}&hide_embedded_en=${hideEmbedded}&hide_stale_disk=${hideStale}${fresh ? '&fresh=true' : ''}`;
+      // Gap list is authoritative: always hide rows where disk already has a
+      // usable sub (probe-suppressed or sidecar-stale). If a row appears here
+      // it genuinely needs work — no toggles to second-guess.
+      const url = `/api/coverage?tautulli=${useTautulli}&hide_embedded_en=true&hide_stale_disk=true${fresh ? '&fresh=true' : ''}`;
       const r = await fetch(url);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
@@ -1433,8 +1432,6 @@ ${result.error ? 'note: ' + escape(result.error) : ''}</pre>
   }
   $('#cov-refresh').addEventListener('click', () => loadCoverage(true));
   $('#cov-tautulli').addEventListener('change', () => loadCoverage(true));
-  $('#cov-show-suppressed').addEventListener('change', () => loadCoverage(true));
-  $('#cov-show-stale').addEventListener('change', () => loadCoverage(true));
   $('#cov-filter').addEventListener('input', renderCoverage);
   $('#cov-group')?.addEventListener('change', renderCoverage);
 

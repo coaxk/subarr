@@ -193,7 +193,12 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
 def _match_episode_srt_pattern(srt_paths: list[str], episode_number: str | None) -> tuple[bool, list[str]]:
     """Given a list of relative .srt paths under a series dir and an
     episode_number ('1x3'), return (any_match, matching_paths).
-    Match is case-insensitive S<NN>E<NN> substring in the srt filename."""
+    Match is case-insensitive S<NN>E<NN> substring in the srt filename.
+
+    FALLBACK PATTERN ONLY — used when Sonarr's authoritative episodeFile.path
+    isn't available. Misses release-team naming conventions like 'Part.N',
+    'Ep01', 'Episode_3', etc. Prefer `_sidecars_for_file` when the file path
+    is known."""
     if not episode_number or "x" not in episode_number or not srt_paths:
         return False, []
     try:
@@ -203,6 +208,95 @@ def _match_episode_srt_pattern(srt_paths: list[str], episode_number: str | None)
         return False, []
     matches = [p for p in srt_paths if pat in p.lower()]
     return bool(matches), matches
+
+
+def _sidecars_for_file(srt_paths: list[str], file_canonical: str) -> list[str]:
+    """Authoritative sidecar finder: given the actual video file's canonical
+    path (e.g. 'TV/Stanley H/Season 1/Stanley.H.Part.1.SUBBED.720p.WEB.h264-WEBTUBE.mkv')
+    return every .srt that shares the basename stem.
+
+    Catches Part.N / Episode_NN / 1x1 / arbitrary release naming because we
+    match against the actual filename Sonarr says is on disk — no guessing."""
+    if not file_canonical or not srt_paths:
+        return []
+    name = file_canonical.rsplit("/", 1)[-1]
+    stem = name.rsplit(".", 1)[0].lower()  # strip extension
+    return [p for p in srt_paths if p.rsplit("/", 1)[-1].lower().startswith(stem + ".")
+            or p.rsplit("/", 1)[-1].lower() == stem + ".srt"]
+
+
+def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
+    """Parse 2-letter language codes from sidecar filenames.
+
+    Convention: '<basename>.<lang>.srt' (e.g. '...WEBTUBE.en.srt' → 'en').
+    Plain '<basename>.srt' → 'und' (undefined; could be anything).
+    Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') are still
+    parsed correctly because we grab the lang slot, not the last token."""
+    langs: set[str] = set()
+    for p in sidecars:
+        name = p.rsplit("/", 1)[-1].lower()
+        if not name.endswith(".srt"):
+            continue
+        # Strip .srt then split on dots; lang is typically the LAST 2-letter
+        # token before the optional tool suffix. We accept any 2-3 letter
+        # alpha token as a candidate lang code.
+        tokens = name[:-4].split(".")
+        found_lang = None
+        for tok in reversed(tokens):
+            if 2 <= len(tok) <= 3 and tok.isalpha():
+                # Skip known tool suffixes (subsync helpers append after lang)
+                if tok in {"alass", "autosubsync", "ffsubsync", "subsync"}:
+                    continue
+                found_lang = tok
+                break
+        langs.add(found_lang or "und")
+    return langs
+
+
+def _stale_for_episode(
+    *, sonarr_episode_id: int | None,
+    ep_file_paths: dict[int, str],
+    sonarr_eps_by_id: dict[int, dict],
+    series_srt_paths: list[str],
+    episode_number: str | None,
+    missing_subs: list[str],
+) -> tuple[bool, list[str]]:
+    """Authoritative stale-disk check.
+
+    1. Resolve sonarrEpisodeId → episodeFileId → episodeFile.path via the
+       prefetched maps (no per-call network).
+    2. Find every sidecar .srt that shares the file's basename stem.
+    3. Stale ONLY if a sidecar matches a WANTED language — an English
+       sidecar doesn't satisfy a Dutch wanted row.
+
+    Falls back to S<NN>E<NN> substring match if Sonarr didn't give us a
+    file path (episode not yet downloaded, or pre-Sonarr-v3 cluster)."""
+    if sonarr_episode_id is None or not series_srt_paths:
+        return _match_episode_srt_pattern(series_srt_paths, episode_number) if not missing_subs else (False, [])
+    ep = sonarr_eps_by_id.get(sonarr_episode_id) or {}
+    ep_file_id = ep.get("episodeFileId")
+    abs_path = ep_file_paths.get(ep_file_id) if ep_file_id else None
+    if not abs_path:
+        # No file on disk yet → can't be stale; fall back to pattern only
+        # if Bazarr's view might be wrong (rare).
+        return _match_episode_srt_pattern(series_srt_paths, episode_number)
+    file_canonical = _strip_arr_prefix(abs_path) or abs_path
+    sidecars = _sidecars_for_file(series_srt_paths, file_canonical)
+    if not sidecars:
+        return False, []
+    langs_present = _langs_in_sidecars(sidecars)
+    wanted_codes = {(c or "").lower()[:2] for c in (missing_subs or []) if c}
+    # If no missing-subs language list (shouldn't happen for Bazarr wanted
+    # rows but be defensive) → any sidecar counts as stale.
+    if not wanted_codes:
+        return True, sidecars
+    # Stale only if at least one sidecar lang matches what's wanted.
+    # 'und' (no lang tag) is ambiguous → don't count as stale unless it's
+    # the only sidecar; safer to keep showing the gap.
+    satisfying = wanted_codes.intersection(langs_present)
+    if satisfying:
+        return True, sidecars
+    return False, sidecars
 
 
 def _tags_for(arr_record: dict[str, Any], tag_map: dict[int, str]) -> list[str]:
@@ -448,6 +542,36 @@ async def build_coverage(
     # filesystem once.
     series_srt_index: dict[str, list[str]] = {}
 
+    # Authoritative file-path resolution via Sonarr (one episode + episodefile
+    # call per series with wanted eps). Replaces fragile S<NN>E<NN> filename
+    # pattern matching — catches releases that use Part.N / Episode_NN / other
+    # non-canonical naming (Stanley H is the canary).
+    wanted_series_ids = {w.get("sonarrSeriesId") for w in bz_eps if w.get("sonarrSeriesId")}
+    sonarr_eps_by_id: dict[int, dict] = {}
+    ep_file_paths: dict[int, str] = {}
+    if wanted_series_ids and bundle.sonarr.is_configured():
+        async def _fetch_series_files(sid: int):
+            try:
+                eps, files = await asyncio.gather(
+                    bundle.sonarr.episodes(sid),
+                    bundle.sonarr.episode_files_for_series(sid),
+                    return_exceptions=False,
+                )
+                return sid, eps, files
+            except IntegrationError as e:
+                log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
+                return sid, [], []
+        results = await asyncio.gather(*[_fetch_series_files(sid) for sid in wanted_series_ids])
+        for sid, eps, files in results:
+            for ep in eps:
+                if isinstance(ep, dict) and "id" in ep:
+                    sonarr_eps_by_id[ep["id"]] = ep
+            for f in files:
+                if isinstance(f, dict) and "id" in f and f.get("path"):
+                    ep_file_paths[f["id"]] = f["path"]
+        sources["sonarr_files"] = {"ok": True, "series": len(wanted_series_ids),
+                                   "files": len(ep_file_paths)}
+
     # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
     for w in bz_eps:
         sonarr_id = w.get("sonarrSeriesId")
@@ -456,7 +580,16 @@ async def build_coverage(
         if canonical and canonical not in series_srt_index:
             series_srt_index[canonical] = _scan_for_srt_recursive(canonical)
         srt_paths = series_srt_index.get(canonical or "", [])
-        has_srt, srts = _match_episode_srt_pattern(srt_paths, w.get("episode_number"))
+        missing_codes = [ms.get("code2") or ms.get("name") or "?"
+                         for ms in (w.get("missing_subtitles") or [])]
+        has_srt, srts = _stale_for_episode(
+            sonarr_episode_id=w.get("sonarrEpisodeId"),
+            ep_file_paths=ep_file_paths,
+            sonarr_eps_by_id=sonarr_eps_by_id,
+            series_srt_paths=srt_paths,
+            episode_number=w.get("episode_number"),
+            missing_subs=missing_codes,
+        )
         item = CoverageItem(
             media_type="episode",
             title=w.get("seriesTitle") or s.get("title") or "(unknown)",
