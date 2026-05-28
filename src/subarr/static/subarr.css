@@ -220,7 +220,27 @@ main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
 
 .controls { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
 
-button { font-family: inherit; }
+/* Universal button press feedback — every button gets:
+   - subtle hover lightening
+   - immediate :active press (scale + dim) so the click registers visually
+   - a brief `.tapped` flash added by JS so even an async click shows the
+     "yes that worked" beat before any backend response lands.
+   Transition is 90ms — fast enough to feel responsive, slow enough to see.
+*/
+button {
+  font-family: inherit;
+  transition: transform 90ms ease, filter 90ms ease, background 120ms ease, color 120ms ease;
+}
+button:active:not(:disabled) { transform: scale(0.97); filter: brightness(0.9); }
+button.tapped:not(:disabled) {
+  animation: btn-tap-flash 320ms ease-out;
+}
+@keyframes btn-tap-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(93, 163, 255, 0.6); }
+  60%  { box-shadow: 0 0 0 6px rgba(93, 163, 255, 0.0); }
+  100% { box-shadow: 0 0 0 0 rgba(93, 163, 255, 0.0); }
+}
+
 button.primary {
   background: var(--accent);
   color: #06101e;
@@ -230,10 +250,15 @@ button.primary {
   padding: 8px 14px;
   cursor: pointer;
 }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); }
 button.primary:disabled { background: var(--accent-dim); color: #99b8e0; cursor: not-allowed; }
-button.warn { background: var(--warn); color: #1a1306; border: none; border-radius: 4px; padding: 8px 14px; cursor: pointer; font-weight: 600; }
+button.warn {
+  background: var(--warn); color: #1a1306; border: none; border-radius: 4px;
+  padding: 8px 14px; cursor: pointer; font-weight: 600;
+}
+button.warn:hover:not(:disabled) { filter: brightness(1.1); }
 button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
-button.ghost:hover { background: var(--bg-elev2); }
+button.ghost:hover:not(:disabled) { background: var(--bg-elev2); border-color: var(--text); }
 
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .check input { accent-color: var(--accent); }

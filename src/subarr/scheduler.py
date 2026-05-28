@@ -228,7 +228,12 @@ class Scheduler:
             log.exception("coverage_walk: build_coverage failed: %s", e)
             return {"ok": False, "error": str(e), "probe": probe_summary}
 
-        decisions = evaluate(report.items, rules)
+        # Build the in-flight set from the provenance ledger so the
+        # scheduler doesn't recreate identical pending walks every tick.
+        # Bazarr's wanted list doesn't shrink until it sees the .srt on
+        # disk; until then the same rows keep matching.
+        in_flight = {e.canonical_path for e in self._provenance.pending()}
+        decisions = evaluate(report.items, rules, in_flight_paths=in_flight)
         queue_decisions = [d for d in decisions if d.action == "queue"]
 
         # manual_confirm: stash the queue decisions for user review;

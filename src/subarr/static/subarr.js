@@ -13,7 +13,8 @@
     $$('.tabpanel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
     if (tab === 'logs') startLogs(); else stopLogs();
     if (tab === 'monitor') refreshMonitor();
-    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); loadPending(); }
+    if (tab === 'settings') { loadSettings(); loadIntegrations(); loadSchedule(); loadProbeWalks(); startPendingPoll(); }
+    else stopPendingPoll();
     if (tab === 'coverage') loadCoverage();
     if (tab === 'library') loadLibrary();
     if (tab === 'activity') startActivity(); else stopActivity();
@@ -913,6 +914,16 @@ ${result.error ? 'note: ' + escape(result.error) : ''}</pre>
   pollActivityBadge();
 
   // ───── Pending approvals (manual_confirm mode) ─────
+  let pendingTimer = null;
+  function startPendingPoll() {
+    // Pending walk lists need to stay fresh while user is in Settings,
+    // because the scheduler can create new walks mid-session. 8s tick.
+    loadPending();
+    if (!pendingTimer) pendingTimer = setInterval(loadPending, 8000);
+  }
+  function stopPendingPoll() {
+    if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
+  }
   async function loadPending() {
     try {
       const data = await fetch('/api/schedule/pending?status=pending').then((r) => r.json());
@@ -2009,6 +2020,22 @@ ${result.error ? 'note: ' + escape(result.error) : ''}</pre>
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  // ───── global button-tap feedback ─────
+  // Every button click gets a brief `.tapped` class so async actions show
+  // visual feedback even before the network round-trip completes. CSS
+  // animates a 320ms ring-flash. Capture phase so we run before
+  // stopPropagation handlers.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn || btn.disabled) return;
+    btn.classList.remove('tapped');  // restart animation if already in flight
+    // Force reflow so removing+adding takes effect even on repeat clicks
+    // eslint-disable-next-line no-unused-expressions
+    btn.offsetWidth;
+    btn.classList.add('tapped');
+    setTimeout(() => btn.classList.remove('tapped'), 350);
+  }, true);
 
   // ───── boot ─────
   window._currentTab = 'scan';
