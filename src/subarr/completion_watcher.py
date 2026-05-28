@@ -36,14 +36,24 @@ log = logging.getLogger(__name__)
 
 WATCHER_INTERVAL_S = 30
 # Bazarr task IDs vary across versions. Discovered at runtime by matching
-# task labels; we cache the result. Common labels for the per-series scan
-# disk are 'sync_episodes', 'update_series', 'scan_disk_series'.
+# both job_id AND name fields. Hint order = priority: first match wins.
+#
+# Verified against live Bazarr 1.5.6 (2026-05-28):
+#   series_full_scan_subtitles → "Index All Existing Episodes Subtitles"
+#     ↑ THE RIGHT TASK — disk scan, picks up new .srt files we just wrote
+#   update_series → "Sync with Sonarr" (metadata only, NOT disk scan — wrong)
+#   wanted_search_missing_subtitles_series → searches providers, not disk
+#
+# Earlier subarr versions used a hint list that prioritised the wrong tasks
+# (update_series / sync_episodes); the watcher silently never triggered
+# Bazarr because the actual scan-disk task name is `series_full_scan_subtitles`.
 _BAZARR_SCAN_TASK_HINTS = (
-    "sync_episodes",
-    "scan_disk_series",
-    "update_series",
-    "sync episodes",
-    "scan disk",
+    "series_full_scan_subtitles",   # Bazarr 1.5.x — episodes
+    "movies_full_scan_subtitles",   # Bazarr 1.5.x — movies (we mostly do episodes)
+    "scan_disk_series",             # forward-compat
+    "scan_disk_episodes",
+    "scan disk",                    # human-readable fallback
+    "index all existing episodes",  # human-readable name match
 )
 
 
@@ -90,13 +100,23 @@ class CompletionWatcher:
         log.info("completion watcher stopped")
 
     async def _tick(self) -> None:
+        # Two passes per tick:
+        #   1. Pending entries → check subgen queue, mark complete + trigger Bazarr
+        #   2. Completed-but-not-notified entries → retry Bazarr trigger.
+        #      Covers the case where a prior subarr version had the wrong
+        #      task hints (or Bazarr was down) and the trigger silently
+        #      no-op'd. Self-healing.
+        await self._pass_pending()
+        await self._pass_retry_bazarr_notify()
+
+    async def _pass_pending(self) -> None:
         pending = self._provenance.pending()
         if not pending:
             return
         try:
             q = await self._subgen.queue()
         except SubgenUnavailable as e:
-            log.debug("subgen queue unreachable, skipping tick: %s", e)
+            log.debug("subgen queue unreachable, skipping pending pass: %s", e)
             return
 
         in_flight: set[str] = set()
@@ -104,19 +124,57 @@ class CompletionWatcher:
             if isinstance(t, dict) and t.get("path"):
                 in_flight.add(t["path"])
 
-        # Map ledger canonical → subgen container path so we can compare
-        # against the in_flight set. Subgen's /queue reports
-        # /media/<canonical>; ledger holds the canonical only.
         from .paths import canonical_to_subgen_batch
         for entry in pending:
             subgen_path = canonical_to_subgen_batch(entry.canonical_path)
             if subgen_path in in_flight:
                 continue
-            # Not in flight any more → consider it done.
             self._provenance.mark_completed(entry.id)
             log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
             if entry.series_id is not None:
                 await self._trigger_bazarr_scan(entry.id, entry.series_id)
+
+    async def _pass_retry_bazarr_notify(self) -> None:
+        """Find ledger entries that completed but never successfully fired
+        Bazarr's scan-disk task — e.g. because the task hint list was wrong
+        in a previous subarr version, or Bazarr was down at the time. Retry
+        the trigger so Bazarr eventually learns about the .srt and stops
+        listing the episode as wanted.
+
+        Bounded retry: only entries completed within the last 24h to avoid
+        retrying ancient rows after a long downtime. Single Bazarr task
+        trigger per tick is enough — the task scans the whole library."""
+        try:
+            stuck = self._provenance.completed_without_bazarr(max_age_s=86400)
+        except AttributeError:
+            return  # older provenance store without this method
+        if not stuck:
+            return
+        # We only need ONE trigger to flush all of them — Bazarr's
+        # series_full_scan_subtitles is library-wide.
+        fired = False
+        for entry in stuck:
+            if entry.series_id is None:
+                continue
+            if not fired:
+                if not self._bazarr.is_configured():
+                    return
+                if self._bazarr_task_id is None:
+                    await self._discover_bazarr_task()
+                if self._bazarr_task_id is None:
+                    return
+                try:
+                    await self._bazarr.trigger_task(self._bazarr_task_id)
+                    log.info(
+                        "bazarr scan-disk retry fired for %d completed-but-not-notified rows",
+                        len(stuck),
+                    )
+                    fired = True
+                except IntegrationError as e:
+                    log.warning("bazarr scan-disk retry failed: %s", e)
+                    return
+            # Mark each row notified so we don't keep re-firing.
+            self._provenance.mark_bazarr_triggered(entry.id)
 
     async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int) -> None:
         if not self._bazarr.is_configured():
@@ -136,19 +194,32 @@ class CompletionWatcher:
             log.warning("bazarr scan-disk trigger failed: %s", e)
 
     async def _discover_bazarr_task(self) -> None:
-        self._bazarr_task_lookup_attempted = True
+        # Allow re-discovery if previous attempts failed — Bazarr might have
+        # been transiently down. We only flip _bazarr_task_lookup_attempted
+        # to True on SUCCESS so a one-off failure doesn't lock us out.
         try:
             tasks = await self._bazarr.list_tasks()
         except IntegrationError as e:
             log.warning("bazarr list_tasks failed: %s", e)
             return
-        for t in tasks:
-            label = (t.get("name") or t.get("job_id") or "").lower()
-            for hint in _BAZARR_SCAN_TASK_HINTS:
-                if hint in label:
+        # Check both job_id AND name against each hint — hints can match
+        # either canonical IDs (`series_full_scan_subtitles`) or human
+        # labels ("Index All Existing Episodes Subtitles").
+        for hint in _BAZARR_SCAN_TASK_HINTS:
+            h = hint.lower()
+            for t in tasks:
+                job_id = (t.get("job_id") or "").lower()
+                name = (t.get("name") or "").lower()
+                if h in job_id or h in name:
                     self._bazarr_task_id = t.get("job_id") or t.get("id") or t.get("name")
-                    log.info("bazarr scan-disk task discovered: %s (matched hint %r)",
-                             self._bazarr_task_id, hint)
+                    self._bazarr_task_lookup_attempted = True
+                    log.info(
+                        "bazarr scan-disk task discovered: %s (matched hint %r against %s)",
+                        self._bazarr_task_id, hint,
+                        "job_id" if h in job_id else "name",
+                    )
                     return
-        log.info("no bazarr task matched scan-disk hints; available: %s",
-                 [t.get("name") for t in tasks][:10])
+        log.warning(
+            "no bazarr task matched scan-disk hints %s; available job_ids: %s",
+            list(_BAZARR_SCAN_TASK_HINTS), [t.get("job_id") for t in tasks][:20],
+        )

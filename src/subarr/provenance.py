@@ -180,3 +180,26 @@ class ProvenanceStore:
                 (limit,),
             ).fetchall()
         return [LedgerEntry(*r) for r in rows]
+
+    def completed_without_bazarr(self, max_age_s: int = 86400) -> list[LedgerEntry]:
+        """Entries that completed transcribe but never fired Bazarr's
+        scan-disk task. Retry fodder for the completion watcher.
+
+        `max_age_s` bounds how far back we'll look — avoids triggering a
+        forever-old retry storm after a long subarr downtime."""
+        import time
+        cutoff = time.time() - max_age_s
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
+                "       scan_id, source, subgen_version, queued_at, completed_at, "
+                "       bazarr_scan_triggered_at "
+                "FROM subs_generated "
+                "WHERE completed_at IS NOT NULL "
+                "  AND bazarr_scan_triggered_at IS NULL "
+                "  AND series_id IS NOT NULL "
+                "  AND completed_at >= ? "
+                "ORDER BY completed_at DESC",
+                (cutoff,),
+            ).fetchall()
+        return [LedgerEntry(*r) for r in rows]
