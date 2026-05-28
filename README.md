@@ -160,6 +160,14 @@ rolling average, error counts by exception class, docker tier.
 **Never in the payload:** file paths, titles, IPs, hostnames, API keys,
 languages, anything user-fingerprintable. Enforced by a regression test.
 
+**Note for Pi-hole users**: many privacy-conscious Pi-hole regex
+blocklists deny anything matching `*telemetry*` by default. We use
+the literal subdomain `telemetry.subarr.com` because hiding behind a
+misleading name (e.g. `stats.subarr.com`) would be the opposite of
+honest. If you actively want telemetry off, *don't allow it*. If you
+want to send it, allow `subarr.com` in your Pi-hole and the regex
+deny will no longer apply.
+
 ---
 
 ## Authentication

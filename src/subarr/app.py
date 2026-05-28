@@ -20,11 +20,13 @@ from .pending_store import PendingStore
 from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
+from .onboarding import OnboardingStore
 from .routers import (
     admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
     enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
-    probe as r_probe, provenance as r_provenance, queue, scan,
-    schedule as r_schedule, telemetry as r_telemetry, updates as r_updates,
+    onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
+    queue, scan, schedule as r_schedule, telemetry as r_telemetry,
+    updates as r_updates,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -83,6 +85,7 @@ async def lifespan(app_: FastAPI):
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.pending.init_schema()
+    app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         bundle=app_.state.integrations,
@@ -158,6 +161,7 @@ async def lifespan(app_: FastAPI):
         app_.state.enrichment.close()
         app_.state.probe_store.close()
         app_.state.pending.close()
+        app_.state.onboarding.close()
         app_.state.docker.close()
 
 
@@ -188,6 +192,7 @@ app.include_router(r_updates.router)
 app.include_router(r_discovery.router)
 app.include_router(r_telemetry.router)
 app.include_router(r_home.router)
+app.include_router(r_onboarding.router)
 
 
 @app.get("/api/health")
