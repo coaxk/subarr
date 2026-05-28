@@ -24,7 +24,7 @@ from .routers import (
     admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
     enrichment as r_enrichment, gpu, integrations, logs, mode,
     probe as r_probe, provenance as r_provenance, queue, scan,
-    schedule as r_schedule, updates as r_updates,
+    schedule as r_schedule, telemetry as r_telemetry, updates as r_updates,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -104,6 +104,19 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.update_checker.start()
 
+    # Anonymous telemetry — ON by default per v1.0 product decision.
+    # Opt-out one-click in Settings. Stats published publicly at
+    # subarr.dev/stats so users see what we see.
+    from .telemetry import TelemetryCollector, make_default_stats_provider
+    app_.state.telemetry = TelemetryCollector(
+        db_path=settings.db_path,
+        endpoint=settings.telemetry_endpoint,
+        subarr_version=__version__,
+        stats_provider=make_default_stats_provider(app_.state),
+        subgen_caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+    )
+    app_.state.telemetry.start()
+
     # Tier-2 docker discovery for the onboarding wizard. Optional —
     # disabled if neither SUBARR_DOCKER_PROXY_URL nor a socket path
     # is configured. The wizard probes via GET /api/discovery and
@@ -126,6 +139,7 @@ async def lifespan(app_: FastAPI):
     finally:
         if app_.state.docker_discovery is not None:
             await app_.state.docker_discovery.aclose()
+        await app_.state.telemetry.stop()
         await app_.state.update_checker.stop()
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
@@ -145,6 +159,12 @@ async def lifespan(app_: FastAPI):
 
 app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 
+# Basic auth — no-op when SUBARR_USER/SUBARR_PASS unset. Added first
+# so the middleware wraps everything below (including static asset
+# serving and the legacy / route).
+from .auth import BasicAuthMiddleware  # noqa: E402
+app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
+
 app.include_router(browse.router)
 app.include_router(mode.router)
 app.include_router(queue.router)
@@ -162,6 +182,7 @@ app.include_router(r_probe.router)
 app.include_router(bazarr_sync.router)
 app.include_router(r_updates.router)
 app.include_router(r_discovery.router)
+app.include_router(r_telemetry.router)
 
 
 @app.get("/api/health")
