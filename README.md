@@ -89,7 +89,7 @@ does that. State lives in the upstream services (Bazarr/Sonarr/Radarr/Tautulli)
 | Migrations | Hand-rolled SQL runner; one file per change |
 | Discovery | Read-only docker API via [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) |
 | Storage | Single SQLite file at `/data/subarr.db` |
-| Telemetry | Anonymous, opt-out, ~1KB/day; public stats at subarr.dev/stats |
+| Telemetry | Anonymous, opt-out, ~1KB/day; public stats at subarr.com/stats |
 
 ---
 
@@ -145,7 +145,7 @@ confusion about which features are active.
 Subarr ships with **anonymous telemetry ON by default**. Honest and open:
 
 - ~1KB/day payload
-- Public dashboard at subarr.dev/stats (will go live when we publish v1.0)
+- Public dashboard at subarr.com/stats (will go live when we publish v1.0)
 - Settings panel shows you the **exact JSON** we sent on the most recent
   ping
 - One-click opt-out in Settings or during the onboarding wizard

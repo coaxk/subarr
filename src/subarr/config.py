@@ -69,7 +69,7 @@ class Settings:
 
     # Telemetry endpoint. When empty, telemetry is collected locally
     # (visible in Settings) but never transmitted. Set to e.g.
-    # https://telemetry.subarr.dev/v1/ping when we publish that worker.
+    # https://telemetry.subarr.com/v1/ping when we publish that worker.
     telemetry_endpoint: str
 
     # Optional HTTP Basic auth. When BOTH SUBARR_USER and SUBARR_PASS

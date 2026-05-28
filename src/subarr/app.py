@@ -110,7 +110,7 @@ async def lifespan(app_: FastAPI):
 
     # Anonymous telemetry — ON by default per v1.0 product decision.
     # Opt-out one-click in Settings. Stats published publicly at
-    # subarr.dev/stats so users see what we see.
+    # subarr.com/stats so users see what we see.
     from .telemetry import TelemetryCollector, make_default_stats_provider
     app_.state.telemetry = TelemetryCollector(
         db_path=settings.db_path,

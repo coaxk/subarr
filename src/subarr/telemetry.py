@@ -2,7 +2,7 @@
 
 Per the v1.0 product decision (locked in 00-synthesis.md): ON by
 default, opt-out one click. ~1KB/day payload. We publish the
-aggregate stats publicly at subarr.dev/stats so users see exactly
+aggregate stats publicly at subarr.com/stats so users see exactly
 what we see.
 
 What we collect

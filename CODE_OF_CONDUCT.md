@@ -13,7 +13,7 @@ Adopted because it's standard and tested across thousands of projects.
 
 ## Reporting
 
-Issues with conduct: email **conduct@subarr.dev**. The maintainer
+Issues with conduct: email **conduct@subarr.com**. The maintainer
 responds within 7 days. Reports stay confidential to the people
 involved.
 

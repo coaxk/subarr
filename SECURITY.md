@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 **Don't open a public GitHub issue for security bugs.** Email the
-maintainer directly: **security@subarr.dev** (or DM `@coaxk` on
+maintainer directly: **security@subarr.com** (or DM `@coaxk` on
 GitHub if you can't email).
 
 Include:

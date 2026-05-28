@@ -57,7 +57,7 @@ breaking config changes.
 - **Telemetry** — anonymous, ON by default, opt-out one-click.
   `/api/telemetry/{state,preview,opt-in,opt-out,send-now}` endpoints.
   Settings panel shows the exact JSON we sent. Public stats at
-  subarr.dev/stats (when published).
+  subarr.com/stats (when published).
 - **HTTP Basic auth** middleware via `SUBARR_USER` / `SUBARR_PASS`
   env vars. Disabled by default. `/api/health` + `/static/*` bypass
   for monitoring tools.
