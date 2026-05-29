@@ -209,6 +209,33 @@ test.describe('Settings page (wired to /api/integrations/health + telemetry + up
 });
 
 
+test.describe('Activity page (wired to /api/provenance/recent + /api/provenance/{path})', () => {
+  test('renders activity panel with empty state on a fresh install', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/file-modal');
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/provenance/recent') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
+    await expect(page.getByText(/ledger entries$/)).toBeVisible();
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/provenance/recent returns expected shape', async ({ request }) => {
+    const r = await request.get('/api/provenance/recent');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('entries');
+    expect(Array.isArray(body.entries)).toBeTruthy();
+  });
+});
+
+
 test.describe('Compat mode + capability detection', () => {
   test('subgen capabilities surface correctly', async ({ request }) => {
     const r = await request.get('/api/integrations/health');
