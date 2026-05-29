@@ -236,6 +236,47 @@ test.describe('Activity page (wired to /api/provenance/recent + /api/provenance/
 });
 
 
+test.describe('Rules page (wired to /api/schedule + /api/schedule/rules + /api/schedule/preview)', () => {
+  test('renders Build mode with live rules + no console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/rules');
+    await page.waitForResponse(
+      (res) => res.url().endsWith('/api/schedule') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: /Auto-queue rules/i })).toBeVisible();
+    // Mode buttons render
+    await expect(page.getByRole('button', { name: /^dashboard/i })).toBeVisible();
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/schedule returns rules + schedules shape', async ({ request }) => {
+    const r = await request.get('/api/schedule');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('rules');
+    expect(body).toHaveProperty('schedules');
+    expect(body.rules).toHaveProperty('mode');
+    expect(body.rules).toHaveProperty('min_score');
+    expect(Array.isArray(body.schedules)).toBeTruthy();
+  });
+
+  test('POST /api/schedule/preview returns dry-run shape', async ({ request }) => {
+    const r = await request.post('/api/schedule/preview');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('considered');
+    expect(body).toHaveProperty('would_queue');
+    expect(body).toHaveProperty('would_skip');
+    expect(body).toHaveProperty('rules');
+  });
+});
+
+
 test.describe('Compat mode + capability detection', () => {
   test('subgen capabilities surface correctly', async ({ request }) => {
     const r = await request.get('/api/integrations/health');
