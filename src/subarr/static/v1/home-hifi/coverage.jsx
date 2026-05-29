@@ -654,6 +654,31 @@ export function CoveragePage() {
     }
   }, [refetch]);
 
+  // Sync to Bazarr — fires Bazarr's scan-disk task directly. Useful when
+  // user has just added/restored .srt files manually and wants Bazarr's
+  // wanted count to drop NOW without waiting for the next coverage walk
+  // (which auto-pokes Bazarr already, but is rate-limited to once per 5
+  // minutes and only fires when stale-disk items are surfaced).
+  const [bazarrSyncing, setBazarrSyncing] = useState(false);
+  const handleBazarrSync = useCallback(async () => {
+    setBazarrSyncing(true);
+    try {
+      const r = await fetch('/api/bazarr/sync-disk', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Re-fetch coverage shortly after so user sees Bazarr updates land.
+      // Bazarr's scan-disk task is async on their side; give it 10s
+      // before re-reading the wanted count.
+      setTimeout(() => refetch({ fresh: true, silent: true }), 10000);
+    } catch (e) {
+      alert(`Bazarr sync failed: ${e.message}`);
+    } finally {
+      setBazarrSyncing(false);
+    }
+  }, [refetch]);
+
   const handleExportCsv = useCallback(() => {
     if (!rows.length) return;
     const headers = ['score', 'type', 'title', 'episode', 'reason', 'monitored', 'has_sub_on_disk', 'embedded', 'audio', 'canonical_path'];
@@ -691,6 +716,10 @@ export function CoveragePage() {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn" onClick={handleExportCsv} disabled={!rows.length}>Export CSV</button>
+          <button className="btn" onClick={handleBazarrSync} disabled={bazarrSyncing}
+            title="Tell Bazarr to scan disk for .srt files it might have missed. Use after adding subs manually, or to clear stale-disk rows immediately.">
+            {bazarrSyncing ? 'Syncing…' : 'Sync to Bazarr'}
+          </button>
           <button className="btn" onClick={handleRewalk} disabled={walking}>
             {walking ? 'Walking…' : 'Re-walk now'}
           </button>
