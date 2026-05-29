@@ -232,20 +232,32 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     Plain '<basename>.srt' → 'und' (undefined; could be anything).
     Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') are still
     parsed correctly because we grab the lang slot, not the last token."""
+    import re
+    # [2026-05-30] Split on BOTH dots AND hyphens. Release teams pack
+    # the lang code into a hyphen-suffixed cluster ("…x264-iND-en.srt")
+    # because they reuse a release-name template. The dot-only splitter
+    # in v1.0 missed those because it saw the whole "x264-iND-en" as
+    # one token (not alpha → skipped, fell through to "und"). Original
+    # subarr handled both separators.
+    KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
+    # Also skip release-team tokens that look like 2-3 char alpha but
+    # AREN'T language codes. Heuristic list — extend as we hit new ones.
+    KNOWN_NON_LANG = {"web", "hdtv", "dvd", "uhd", "hdr", "sdr", "ddp",
+                       "aac", "dts", "ac3", "flac", "x264", "x265",
+                       "ind", "rep", "tla", "ntb", "syn"}
+
     langs: set[str] = set()
     for p in sidecars:
         name = p.rsplit("/", 1)[-1].lower()
         if not name.endswith(".srt"):
             continue
-        # Strip .srt then split on dots; lang is typically the LAST 2-letter
-        # token before the optional tool suffix. We accept any 2-3 letter
-        # alpha token as a candidate lang code.
-        tokens = name[:-4].split(".")
+        # Strip .srt, then split on dots AND hyphens to extract every
+        # potential lang-shaped token regardless of separator style.
+        tokens = re.split(r"[.\-]", name[:-4])
         found_lang = None
         for tok in reversed(tokens):
             if 2 <= len(tok) <= 3 and tok.isalpha():
-                # Skip known tool suffixes (subsync helpers append after lang)
-                if tok in {"alass", "autosubsync", "ffsubsync", "subsync"}:
+                if tok in KNOWN_TOOLS or tok in KNOWN_NON_LANG:
                     continue
                 found_lang = tok
                 break
@@ -283,7 +295,18 @@ def _stale_for_episode(
     file_canonical = _strip_arr_prefix(abs_path) or abs_path
     sidecars = _sidecars_for_file(series_srt_paths, file_canonical)
     if not sidecars:
-        return False, []
+        # [2026-05-30] Basename-stem match failed (common when the
+        # video and its .srt come from different release groups —
+        # e.g. THESYNDiCATE .mkv with iND-en .srt). Fall back to the
+        # S<NN>E<NN> pattern match before declaring no sidecar — the
+        # pattern is fuzzier but catches release mismatch. Original
+        # subarr behaved this way; the v1.0 rewrite over-tightened.
+        ep_pattern_hit, pattern_matches = _match_episode_srt_pattern(
+            series_srt_paths, episode_number,
+        )
+        if not ep_pattern_hit:
+            return False, []
+        sidecars = pattern_matches
     langs_present = _langs_in_sidecars(sidecars)
     wanted_codes = {(c or "").lower()[:2] for c in (missing_subs or []) if c}
     # If no missing-subs language list (shouldn't happen for Bazarr wanted
