@@ -163,6 +163,52 @@ test.describe('Onboarding wizard', () => {
 });
 
 
+test.describe('Settings page (wired to /api/integrations/health + telemetry + updates)', () => {
+  test('renders integrations rail with live data + no console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/settings');
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/integrations/health') && res.status() === 200,
+      { timeout: 15000 },
+    );
+    await page.waitForLoadState('networkidle');
+    // Page heading
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    // Rail labels (no mock "12s" / "62s" freshness from old hardcoded data)
+    await expect(page.getByText(/^12s$/)).toHaveCount(0);
+    await expect(page.getByText(/^62s$/)).toHaveCount(0);
+    // Console errors (favicon noise filtered)
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('switching to Telemetry view fetches /api/telemetry/state', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+    const telemetryReq = page.waitForResponse(
+      (res) => res.url().includes('/api/telemetry/state') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.getByRole('button', { name: /^Telemetry$/ }).click();
+    await telemetryReq;
+    await expect(page.getByText(/Install ID/i)).toBeVisible({ timeout: 5000 });
+  });
+
+  test('switching to Updates view fetches /api/updates', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+    const updatesReq = page.waitForResponse(
+      (res) => res.url().includes('/api/updates') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.getByRole('button', { name: /^Updates$/ }).click();
+    await updatesReq;
+  });
+});
+
+
 test.describe('Compat mode + capability detection', () => {
   test('subgen capabilities surface correctly', async ({ request }) => {
     const r = await request.get('/api/integrations/health');
