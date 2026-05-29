@@ -21,8 +21,12 @@ const browseCache = new Map();
 async function fetchBrowse(path, { fresh = false } = {}) {
   const key = path || '';
   if (!fresh && browseCache.has(key)) return browseCache.get(key);
-  const url = '/api/browse' + (path ? `?path=${encodeURIComponent(path)}` : '');
-  const r = await fetch(url, { credentials: 'same-origin' });
+  // Skip recursive rollup at the root (TV/Movies have thousands of
+  // files — rollup would take 10s+). User drills into a show to see
+  // per-season rollup, which is fast (each season is small).
+  const isRoot = !path;
+  const qs = isRoot ? '?rollup=false' : `?path=${encodeURIComponent(path)}`;
+  const r = await fetch('/api/browse' + qs, { credentials: 'same-origin' });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const d = await r.json();
   browseCache.set(key, d);
@@ -30,18 +34,61 @@ async function fetchBrowse(path, { fresh = false } = {}) {
 }
 
 // ─── Filter logic ────────────────────────────────────────────────
+// Filters operate on the file_status / coverage_status from /api/browse.
+// Dirs always pass so the tree structure stays navigable; the user
+// filters within the tree by row state.
 const FILTERS = [
-  { id: 'all', label: 'all', test: () => true },
-  {
-    id: 'missing-sub', label: 'no sibling .srt',
-    test: (e) => !e.is_dir && e.video_count === 0 && !e.has_sibling_srt
-              || (e.is_dir),
-  },
-  {
-    id: 'has-embedded', label: 'embedded EN',
-    test: (e) => e.embedded_en === 'EN' || e.embedded_en === 'EN(SDH)' || e.is_dir,
-  },
+  { id: 'all',     label: 'all',                  test: () => true },
+  { id: 'missing', label: 'no English coverage',  test: (e) => e.is_dir || e.file_status === 'missing' },
+  { id: 'covered', label: 'fully covered',        test: (e) => e.is_dir || e.file_status === 'covered' },
+  { id: 'partial', label: 'partial coverage',     test: (e) => e.is_dir || e.file_status === 'srt-only' || e.file_status === 'embedded-only' },
+  { id: 'unknown', label: 'not yet probed',       test: (e) => e.is_dir || e.file_status === 'unknown' },
 ];
+
+// ─── Status indicators ───────────────────────────────────────────
+// Folder rollup states drive the traffic light:
+//   full     → every video has English coverage (disk srt or embedded)
+//   partial  → some covered, some not (the main "needs work" state)
+//   none     → no videos covered (and we've probed enough to be sure)
+//   unknown  → empty dir, or < half probed → run a probe walk
+//
+// File states drive the per-row dot:
+//   covered       → disk srt AND embedded
+//   srt-only      → disk srt present, no English embedded
+//   embedded-only → embedded EN/SDH present, no disk srt
+//   missing       → no English from any source
+//   unknown       → not yet probed
+const STATUS_COLOR = {
+  full: 'var(--success-500, #10b981)',
+  partial: 'var(--warn-500, #f59e0b)',
+  none: 'var(--error-500, #ef4444)',
+  unknown: 'var(--fg-3)',
+  covered: 'var(--success-500, #10b981)',
+  'srt-only': 'var(--cyan-500, #06b6d4)',
+  'embedded-only': 'var(--warn-500, #f59e0b)',
+  missing: 'var(--error-500, #ef4444)',
+};
+
+function StatusDotIndicator({ status, size = 8 }) {
+  const color = STATUS_COLOR[status] || 'var(--fg-3)';
+  return (
+    <span
+      title={status || 'unknown'}
+      style={{
+        display: 'inline-block',
+        width: size, height: size, borderRadius: '50%',
+        background: color,
+        flex: '0 0 auto',
+      }} />
+  );
+}
+
+function fmtDuration(secs) {
+  if (!secs || !isFinite(secs)) return '';
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${m % 60}m`;
+}
 
 // ─── Tree node ───────────────────────────────────────────────────
 function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn }) {
@@ -52,9 +99,27 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
   const isSelected = selected.has(entry.path);
   const indent = depth * 18;
   const isVideo = !entry.is_dir;
-  const subsHint = entry.is_dir
-    ? (entry.video_count > 0 ? `${entry.video_count} videos, ${entry.srt_count} srt` : '—')
-    : (entry.has_sibling_srt ? 'has .srt' : (entry.embedded_en === 'EN' || entry.embedded_en === 'EN(SDH)') ? 'embedded EN' : 'missing');
+
+  // Right-side meta: folders show rollup count, files show audio/sub langs.
+  let metaText;
+  if (entry.is_dir) {
+    const probed = entry.videos_probed || 0;
+    const total = entry.video_count || 0;
+    const withEn = entry.videos_with_en || 0;
+    metaText = total > 0
+      ? `${withEn}/${total} EN${probed < total ? ` · ${probed} probed` : ''}`
+      : '—';
+  } else {
+    const parts = [];
+    if (entry.audio_langs?.length) parts.push(`audio: ${entry.audio_langs.join(',')}`);
+    if (entry.sub_langs?.length) {
+      const subList = entry.sub_langs.join(',');
+      parts.push(`sub: ${subList}`);
+    }
+    if (entry.embedded_en) parts.push(`emb: ${entry.embedded_en}`);
+    if (entry.duration_s) parts.push(fmtDuration(entry.duration_s));
+    metaText = parts.join(' · ') || (entry.has_sibling_srt ? 'has .srt' : '—');
+  }
 
   return (
     <>
@@ -65,7 +130,7 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
         }}
         style={{
           display: 'grid',
-          gridTemplateColumns: `${indent}px 16px 16px 1fr 130px 70px`,
+          gridTemplateColumns: `${indent}px 16px 12px 16px 1fr auto 70px`,
           alignItems: 'center', gap: 8,
           padding: '0 16px',
           height: 30,
@@ -80,6 +145,8 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           style={{ display: 'inline-flex', cursor: 'pointer' }}>
           <CheckBox checked={isSelected} />
         </span>
+        <StatusDotIndicator
+          status={entry.is_dir ? entry.coverage_status : entry.file_status} />
         <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
           {entry.is_dir ? (expanded ? '▾' : '▸') : '·'}
         </span>
@@ -93,7 +160,9 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           fontSize: 'var(--text-2xs)',
           color: 'var(--fg-2)',
           textAlign: 'right',
-        }}>{subsHint}</span>
+          maxWidth: 480,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{metaText}</span>
         <span className="num mono" style={{
           fontSize: 'var(--text-2xs)',
           color: 'var(--fg-3)',
@@ -373,7 +442,7 @@ export function LibraryPage() {
       }}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '16px 16px 1fr 130px 70px',
+          gridTemplateColumns: '16px 12px 16px 1fr auto 70px',
           alignItems: 'center', gap: 8,
           padding: '0 16px', height: 32,
           background: 'var(--bg-1)',
@@ -381,9 +450,10 @@ export function LibraryPage() {
           position: 'sticky', top: 0, zIndex: 2,
         }}>
           <span />
+          <span title="Coverage status">●</span>
           <span />
           <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)' }}>name</span>
-          <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right' }}>subs</span>
+          <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right' }}>audio / sub / runtime</span>
           <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right' }}>size</span>
         </div>
         <div style={{ flex: 1, overflow: 'auto' }}>
