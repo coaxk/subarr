@@ -209,23 +209,8 @@ _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-    # Index template is rendered with a startup-time cache-bust string baked
-    # into static asset query strings (?v=<version>-<startupTs>). Same-
-    # version rebuilds (in-place compose recreates) still bust browser
-    # caches because the container's startup timestamp changes every boot.
-    # Pure version-based busting was insufficient — caught when stuck-walk
-    # badge showed stale data after a rebuild reused the same version
-    # string. (2026-05-28)
-    import time as _time
-    _INDEX_TEMPLATE = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    _CACHE_BUST = f"{__version__}-{int(_time.time())}"
-    _INDEX_RENDERED = _INDEX_TEMPLATE.replace("__SUBARR_VERSION__", _CACHE_BUST)
-
-    from fastapi.responses import HTMLResponse
-
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        return HTMLResponse(_INDEX_RENDERED)
+    from fastapi.responses import RedirectResponse
+    from fastapi import Request
 
     # v1.0 screens — high-fidelity React mockups from Claude Design.
     # All live under /static/v1/ so embedded relative paths
@@ -233,11 +218,8 @@ if _STATIC_DIR.is_dir():
     # existing StaticFiles mount. Each route below is a tidy URL that
     # redirects to the underlying .html so cross-screen <a href="/coverage">
     # navigation in the React chrome resolves naturally.
-    # Coexists with the legacy vanilla-JS UI at / during the migration.
     _V1_DIR = _STATIC_DIR / "v1"
     if _V1_DIR.is_dir():
-        from fastapi.responses import RedirectResponse
-
         # Screen → static-file map. Add a route per screen as design ships.
         # The pretty URL is the source of truth for cross-screen links in
         # chrome.jsx; the underlying .html file is an implementation detail.
@@ -248,6 +230,8 @@ if _STATIC_DIR.is_dir():
             "/rules":      "rules.html",
             "/settings":   "settings.html",
             "/file-modal": "file-modal.html",
+            "/queue":      "queue.html",
+            "/library":    "library.html",
         }
 
         def _make_v1_route(html_file: str):
@@ -258,6 +242,21 @@ if _STATIC_DIR.is_dir():
         for _path, _html in _V1_SCREENS.items():
             if (_V1_DIR / _html).is_file():
                 app.add_api_route(_path, _make_v1_route(_html), methods=["GET"])
+
+    # Root route — smart redirect based on onboarding state. First-time users
+    # hit the wizard, configured installs land on Home. Legacy vanilla-JS UI
+    # was retired in v1.0 (#118).
+    @app.get("/")
+    def index(request: Request):
+        store = getattr(request.app.state, "onboarding", None)
+        if store is not None:
+            try:
+                state = store.get()
+                if not state.is_complete:
+                    return RedirectResponse(url="/onboarding", status_code=302)
+            except Exception as e:
+                log.warning("onboarding state lookup failed at /: %r", e)
+        return RedirectResponse(url="/home", status_code=302)
 else:
     # Packaging regression — static assets weren't installed alongside the
     # package. Log loudly + return a useful 503 at / so the failure mode is

@@ -37,6 +37,8 @@ const PAGES = [
   'rules',
   'settings',
   'file-modal',
+  'queue',
+  'library',
 ];
 
 const watch = process.argv.includes('--watch');

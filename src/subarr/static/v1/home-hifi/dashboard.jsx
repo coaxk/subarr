@@ -6,7 +6,7 @@ import { Sparkline, Delta, StatusDot, Glyph, genSpark } from './atoms.jsx';
 // Babel pipeline this destructure lived in atoms.jsx and leaked across
 // the shared global scope; under the ESM bundle each module needs its
 // own.
-const { useMemo } = React;
+const { useMemo, useState, useCallback } = React;
 
 // ─── Live data hook ──────────────────────────────────────────────
 // Fetches GET /api/home/dashboard every 5s. Returns the live payload
@@ -123,7 +123,31 @@ const KIND_STYLE = {
 };
 
 // ─── Page header ─────────────────────────────────────────────────
+// "Run now" POSTs /api/schedule/coverage_walk/run-now (same endpoint
+// Coverage's Re-walk uses) — the dashboard primary CTA is "trigger a
+// scheduled walk now," not editing the rule from here. Edit rule
+// jumps to the Rules page.
+//
+// 1h/24h/7d time range toggle removed in v1.0: the backend snapshot
+// endpoint only returns current state, not historical buckets. Adding
+// a fake toggle would mislead. Re-add in v1.1 when historical
+// retention ships.
 export function PageHeader({ now }) {
+  const [running, setRunning] = useState(false);
+  const runNow = useCallback(async () => {
+    setRunning(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Run now failed: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+
   return (
     <div style={{
       display: 'flex',
@@ -148,35 +172,37 @@ export function PageHeader({ now }) {
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{
-          display: 'flex',
-          border: 'var(--border)',
-          borderRadius: 'var(--radius-md)',
-          overflow: 'hidden',
-          background: 'var(--bg-1)',
-        }}>
-          {['1h', '24h', '7d'].map((r, i) => (
-            <button key={r} style={{
-              padding: '0 12px', height: 28,
-              fontSize: 'var(--text-sm)',
-              color: i === 1 ? 'var(--fg-0)' : 'var(--fg-2)',
-              fontWeight: i === 1 ? 600 : 500,
-              background: i === 1 ? 'var(--bg-3)' : 'transparent',
-              borderLeft: i > 0 ? '1px solid var(--bg-4)' : 'none',
-            }}>{r}</button>
-          ))}
-        </div>
-        <button className="btn">Edit rule</button>
-        <button className="btn primary">Run now</button>
+        <a href="/rules" className="btn" style={{ textDecoration: 'none' }}>Edit rule</a>
+        <button className="btn primary" onClick={runNow} disabled={running}>
+          {running ? 'Running…' : 'Run now'}
+        </button>
       </div>
     </div>
   );
 }
 
 // ─── Stage tile ──────────────────────────────────────────────────
+// Each stage tile links to the page where users can do something with
+// that stage's contents. Mapping is intentional, not generic:
+//   discovered  → /library      (browse what's been discovered)
+//   probing     → /coverage     (in-flight probes are the candidate list)
+//   wanted      → /coverage     (gaps)
+//   scanning    → /queue        (active jobs)
+//   scanned/written-back → /file-modal (completed ledger)
+const STAGE_HREF = {
+  discovered: '/library',
+  probing: '/coverage',
+  wanted: '/coverage',
+  'bazarr-wanted': '/coverage',
+  scanning: '/queue',
+  scanned: '/file-modal',
+  'written-back': '/file-modal',
+};
+
 function StageTile({ s }) {
+  const href = STAGE_HREF[s.id] || '/coverage';
   return (
-    <a className="stage-tile" style={{
+    <a className="stage-tile" href={href} style={{
       flex: 1, minWidth: 0,
       background: 'var(--bg-1)',
       border: 'var(--border)',
@@ -478,10 +504,35 @@ function NextRunCard({ data }) {
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn primary" style={{ flex: 1 }}>Run now</button>
-        <button className="btn">Edit rule</button>
+        <NextRunActions />
       </div>
     </div>
+  );
+}
+
+// Shared between the dashboard header and the next-run sidebar.
+function NextRunActions() {
+  const [running, setRunning] = useState(false);
+  const runNow = useCallback(async () => {
+    setRunning(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Run now failed: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+  return (
+    <>
+      <button className="btn primary" style={{ flex: 1 }} onClick={runNow} disabled={running}>
+        {running ? 'Running…' : 'Run now'}
+      </button>
+      <a href="/rules" className="btn" style={{ textDecoration: 'none' }}>Edit rule</a>
+    </>
   );
 }
 
@@ -536,10 +587,19 @@ function ActivityRow({ a, last }) {
   );
 }
 
+const ACTIVITY_FILTERS = [
+  { id: 'all', label: 'all', test: () => true },
+  { id: 'failed', label: 'failed', test: (a) => a.kind === 'failed' },
+  { id: 'written-back', label: 'written-back', test: (a) => a.kind === 'written-back' },
+];
+
 function ActivityCard({ data }) {
   // data: live array from /api/home/dashboard.activity, or null → fall
   // back to demo ACTIVITY.
-  const rows = (data && data.length) ? data : ACTIVITY;
+  const allRows = (data && data.length) ? data : ACTIVITY;
+  const [filter, setFilter] = useState('all');
+  const rows = allRows.filter((ACTIVITY_FILTERS.find((f) => f.id === filter) || ACTIVITY_FILTERS[0]).test);
+
   return (
     <div style={{
       flex: 1, minWidth: 0,
@@ -557,23 +617,39 @@ function ActivityCard({ data }) {
         <span className="label">Recent activity</span>
         <span style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 6 }}>
-          <span className="chip">all</span>
-          <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>failed</span>
-          <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>written-back</span>
+          {ACTIVITY_FILTERS.map((f) => (
+            <span
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`chip ${filter === f.id ? '' : ''}`}
+              style={{
+                cursor: 'pointer',
+                background: filter === f.id ? undefined : 'transparent',
+                color: filter === f.id ? undefined : 'var(--fg-2)',
+              }}>
+              {f.label}
+            </span>
+          ))}
         </div>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing last {rows.length}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing {rows.length}</span>
       </div>
       <div>
         {rows.length === 0 ? (
           <div style={{ padding: '24px 16px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
-            no activity yet — submit a scan to get started.
+            {allRows.length === 0
+              ? 'no activity yet — submit a scan to get started.'
+              : `no ${filter} activity in the recent window.`}
           </div>
         ) : (
           rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
         )}
       </div>
       <div style={{ marginTop: 'auto', padding: '8px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>View full activity →</span>
+        <a href="/file-modal" style={{
+          fontSize: 'var(--text-xs)',
+          color: 'var(--fg-2)',
+          textDecoration: 'none',
+        }}>View full activity →</a>
       </div>
     </div>
   );
