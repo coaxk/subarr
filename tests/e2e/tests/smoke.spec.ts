@@ -88,6 +88,51 @@ test.describe('Home dashboard', () => {
 });
 
 
+test.describe('Coverage page (wired to /api/coverage)', () => {
+  test('renders live data without console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+
+    await page.goto('/coverage');
+    // Wait for the live coverage fetch to complete.
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/coverage') && res.status() === 200,
+      { timeout: 15000 },
+    );
+    await page.waitForLoadState('networkidle');
+
+    // Page header
+    await expect(page.getByRole('heading', { name: 'Coverage' })).toBeVisible();
+    // Re-walk + Export CSV buttons exist
+    await expect(page.getByRole('button', { name: /Re-walk now/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Export CSV/i })).toBeVisible();
+    // Coverage strip uses the live "gaps" label — never the mock "612 gaps · last walk 10:32".
+    await expect(page.getByText(/last walk 10:32/)).toHaveCount(0);
+    // No console errors (favicon noise filtered).
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/coverage returns the expected shape', async ({ request }) => {
+    const r = await request.get('/api/coverage');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('items');
+    expect(body).toHaveProperty('totals');
+    expect(body).toHaveProperty('generated_at');
+    expect(Array.isArray(body.items)).toBeTruthy();
+    if (body.items.length > 0) {
+      const it = body.items[0];
+      expect(it).toHaveProperty('media_type');
+      expect(it).toHaveProperty('title');
+      expect(it).toHaveProperty('canonical_path');
+      expect(it).toHaveProperty('score');
+    }
+  });
+});
+
+
 test.describe('Onboarding wizard', () => {
   test('wizard route serves the SPA', async ({ page }) => {
     await page.goto('/onboarding');

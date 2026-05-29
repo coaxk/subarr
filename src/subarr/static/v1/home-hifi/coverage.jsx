@@ -1,10 +1,124 @@
 // Coverage — flat dense gap-list table.
+//
+// Wired to GET /api/coverage (60s server cache) — polled every 10s. The
+// backend already de-dupes via cache, so the polling cost is minimal.
+// Row queue + bulk queue post to /api/coverage/queue. Re-walk now calls
+// /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
 import { Glyph, StatusDot } from './atoms.jsx';
 
-const { useState } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 
-// ─── Demo dataset ───────────────────────────────────────────────
+// ─── Live data hook ──────────────────────────────────────────────
+// Returns { data, loading, error, refetch }. `data` is null on first
+// paint and stays at the last successful payload on transient errors so
+// the table doesn't flash empty between polls.
+export function useLiveCoverage(intervalMs = 10000) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchOnce = useCallback(async (opts = {}) => {
+    const { fresh = false, silent = false } = opts;
+    if (!silent) setLoading(true);
+    try {
+      const url = fresh ? '/api/coverage?fresh=true' : '/api/coverage';
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setData(d);
+      setError(null);
+    } catch (e) {
+      // Only surface error if we have no data yet — once we have a
+      // payload, transient failures stay silent (per #142 principle:
+      // don't flash red when we're not confirmed-failed).
+      setError(prev => (data ? prev : e));
+      // eslint-disable-next-line no-console
+      console.debug('coverage fetch failed:', e);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function tick() {
+      if (cancelled) return;
+      await fetchOnce({ silent: true });
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    }
+    // Initial fetch shows loading; subsequent ticks are silent.
+    (async () => {
+      await fetchOnce();
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    })();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intervalMs]);
+
+  return { data, loading, error, refetch: fetchOnce };
+}
+
+// ─── Normalize backend item → row shape used by the table ────────
+function deriveReason(item) {
+  if (!item.monitored) return 'unmonitored';
+  if (item.embedded_en === 'EN' || item.embedded_en === 'EN(SDH)') return 'embedded-only';
+  if (item.bazarr && item.bazarr.episode_id) return 'bazarr-wanted';
+  return 'no-track';
+}
+
+function formatEpisode(epNum) {
+  if (!epNum) return '';
+  // Backend ships "6x3" — render as S06E03.
+  const m = String(epNum).match(/^(\d+)x(\d+)$/);
+  if (!m) return String(epNum);
+  return `S${m[1].padStart(2, '0')}E${m[2].padStart(2, '0')}`;
+}
+
+function langCodeFromName(name) {
+  // Bazarr ships original_language as a human name. Best-effort 3-char code.
+  if (!name) return '';
+  const known = {
+    english: 'eng', french: 'fre', spanish: 'spa', japanese: 'jpn',
+    chinese: 'zho', italian: 'ita', russian: 'rus', vietnamese: 'vie',
+    german: 'ger', korean: 'kor', portuguese: 'por', dutch: 'nld',
+    polish: 'pol', turkish: 'tur', arabic: 'ara', hindi: 'hin',
+  };
+  return known[String(name).toLowerCase()] || String(name).slice(0, 3).toLowerCase();
+}
+
+function normalizeRow(item, idx) {
+  const ep = item.media_type === 'episode' ? formatEpisode(item.episode_number) : '';
+  // Score: backend uses 0–1000ish; map to /100 for display (cap 9.9).
+  const score = Math.min(9.9, (item.score || 0) / 100);
+  const audio = (item.audio_langs && item.audio_langs.length)
+    ? item.audio_langs.join(',')
+    : '—';
+  const origLang = langCodeFromName(item.original_language);
+  const missing = (item.bazarr && item.bazarr.missing_subtitles) || [];
+  const langs = Array.from(new Set([origLang, ...missing].filter(Boolean)));
+  return {
+    id: item.canonical_path + '|' + (item.episode_number || idx),
+    score,
+    type: item.media_type === 'movie' ? 'mov' : 'tv',
+    title: item.title || 'Untitled',
+    ep,
+    langs,
+    mon: !!item.monitored,
+    disk: !!item.has_sub_on_disk,
+    emb: !!(item.embedded_en && item.embedded_en !== 'NONE'),
+    audio,
+    reason: deriveReason(item),
+    size: '—',
+    // raw fields kept for action handlers
+    _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
+    _canonical_path: item.file_canonical_path || item.canonical_path,
+    _media_type: item.media_type,
+  };
+}
+
+// ─── Demo dataset (fallback for design preview only) ────────────
 const COVERAGE_ROWS = [
   { id: 1,  score: 9.4, type: 'tv',  title: 'Severance',                ep: 'S02E08', langs: ['eng','spa','fre'], mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: true,  size: '4.2 GB' },
   { id: 2,  score: 9.2, type: 'tv',  title: 'Shogun',                   ep: 'S01E09', langs: ['eng','jpn'],       mon: 1, disk: 0, emb: 1, audio: 'jpn',     reason: 'embedded-only', sel: true,  size: '5.1 GB' },
@@ -120,16 +234,53 @@ function CoverageBar({ label, pct }) {
   );
 }
 
-function CoverageStrip() {
+function fmtClock(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch { return '—'; }
+}
+
+function CoverageStrip({ data, loading, error }) {
+  // Derive coverage % from upstream "sources" block when present. The
+  // backend exposes counts (wanted vs total) per provider — we render a
+  // dash if the field isn't populated for that provider rather than
+  // making up a number.
+  const sources = data?.sources || {};
+  const bazarrCount = sources.bazarr?.wanted_episodes ?? sources.bazarr?.count ?? null;
+  const sonarrCount = sources.sonarr?.series_count ?? sources.sonarr?.count ?? null;
+  const radarrCount = sources.radarr?.movie_count ?? sources.radarr?.count ?? null;
+  const totalGaps = data?.totals?.items ?? null;
+
+  let statusLabel;
+  if (error && !data) {
+    statusLabel = <span style={{ color: 'var(--error-500)' }}>backend unreachable</span>;
+  } else if (loading && !data) {
+    statusLabel = <span style={{ color: 'var(--warn-500)' }}>loading…</span>;
+  } else if (totalGaps === 0) {
+    statusLabel = <span style={{ color: 'var(--ok-500, var(--violet-400))' }}>no gaps to address</span>;
+  } else {
+    statusLabel = <>
+      <span style={{ color: 'var(--fg-0)', fontWeight: 600 }}>{totalGaps ?? '—'}</span> gaps
+    </>;
+  }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
       <span className="label">coverage</span>
-      <CoverageBar label="bazarr" pct={74} />
-      <CoverageBar label="sonarr" pct={88} />
-      <CoverageBar label="radarr" pct={62} />
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        bazarr <span style={{ color: 'var(--fg-0)' }}>{bazarrCount ?? '—'}</span>
+      </span>
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        sonarr <span style={{ color: 'var(--fg-0)' }}>{sonarrCount ?? '—'}</span>
+      </span>
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        radarr <span style={{ color: 'var(--fg-0)' }}>{radarrCount ?? '—'}</span>
+      </span>
       <span style={{ width: 1, height: 14, background: 'var(--bg-4)' }} />
       <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-        <span style={{ color: 'var(--fg-0)', fontWeight: 600 }}>612</span> gaps · last walk <span className="mono">10:32</span>
+        {statusLabel} · refreshed <span className="mono">{fmtClock(data?.generated_at)}</span>
+        {data?.cached ? <span style={{ color: 'var(--fg-3)' }}> (cache {data.cache_age_s}s)</span> : null}
       </span>
     </div>
   );
@@ -151,7 +302,9 @@ function FilterChip({ children, active, onClose }) {
   );
 }
 
-function FilterBar({ groupBy, setGroupBy, filtered }) {
+const REASON_FILTERS = ['all', 'no-track', 'bazarr-wanted', 'embedded-only', 'low-score', 'unmonitored'];
+
+function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, monitoredOnly, setMonitoredOnly }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
       {/* Search */}
@@ -169,11 +322,21 @@ function FilterBar({ groupBy, setGroupBy, filtered }) {
 
       {/* Active filter chips */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <FilterChip>monitored</FilterChip>
-        <FilterChip active onClose>reason: no-track</FilterChip>
-        <FilterChip>type: tv</FilterChip>
-        <FilterChip>missing: eng</FilterChip>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginLeft: 2, cursor: 'pointer' }}>+ filter</span>
+        <span
+          onClick={() => setMonitoredOnly && setMonitoredOnly(!monitoredOnly)}
+          style={{ cursor: 'pointer' }}>
+          <FilterChip active={monitoredOnly}>monitored</FilterChip>
+        </span>
+        {REASON_FILTERS.map(r => (
+          <span key={r} onClick={() => setReasonFilter && setReasonFilter(r)} style={{ cursor: 'pointer' }}>
+            <FilterChip active={reasonFilter === r}>{r === 'all' ? 'all reasons' : r}</FilterChip>
+          </span>
+        ))}
+        {['all', 'tv', 'mov'].map(t => (
+          <span key={t} onClick={() => setTypeFilter && setTypeFilter(t)} style={{ cursor: 'pointer' }}>
+            <FilterChip active={typeFilter === t}>{t === 'all' ? 'all types' : `type: ${t}`}</FilterChip>
+          </span>
+        ))}
       </div>
 
       <span style={{ flex: 1 }} />
@@ -281,7 +444,7 @@ function CheckBox({ checked, indeterminate }) {
   );
 }
 
-function CoverageRow({ r, onClick }) {
+function CoverageRow({ r, onClick, onQueue, queuing }) {
   return (
     <div className="cov-row" style={{
       display: 'flex', alignItems: 'center', gap: 10,
@@ -336,14 +499,27 @@ function CoverageRow({ r, onClick }) {
       <div style={{ width: COL.reason, flex: `0 0 ${COL.reason}px` }}>
         <ReasonChip r={r.reason} />
       </div>
-      <div style={{ width: COL.action, flex: `0 0 ${COL.action}px`, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-md)' }}>⋯</div>
+      <div style={{ width: COL.action, flex: `0 0 ${COL.action}px`, textAlign: 'center' }}>
+        <button
+          className="btn ghost"
+          onClick={(e) => { e.stopPropagation(); onQueue && onQueue(r); }}
+          disabled={queuing}
+          title="Queue this row for subtitle generation"
+          style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)' }}>
+          {queuing ? '…' : '↻'}
+        </button>
+      </div>
     </div>
   );
 }
 
 // ─── Selection action bar ────────────────────────────────────────
-function SelectionBar({ n, reasonFilter }) {
+function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   if (!n) return null;
+  const queuing = queueState?.busy;
+  const queueLabel = queuing
+    ? `Queueing ${queueState.done}/${queueState.total}…`
+    : `Queue selected (${n})`;
   return (
     <div style={{
       position: 'sticky', bottom: 0,
@@ -356,20 +532,152 @@ function SelectionBar({ n, reasonFilter }) {
     }}>
       <CheckBox checked />
       <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>{n} selected</span>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>· filtered by <span className="mono">{reasonFilter}</span></span>
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>· filter <span className="mono">{reasonFilter}</span></span>
+      {queueState?.errors > 0 && (
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
+          · {queueState.errors} failed
+        </span>
+      )}
       <span style={{ flex: 1 }} />
-      <button className="btn ghost">Clear</button>
-      <button className="btn">Apply rule…</button>
-      <button className="btn primary">Queue selected ({n})</button>
+      <button className="btn ghost" onClick={onClear} disabled={queuing}>Clear</button>
+      <button className="btn primary" onClick={onQueue} disabled={queuing}>{queueLabel}</button>
     </div>
   );
+}
+
+async function queueRow(row) {
+  const body = row._sonarr_episode_id
+    ? { sonarr_episode_id: row._sonarr_episode_id }
+    : { canonical_path: row._canonical_path };
+  const r = await fetch('/api/coverage/queue', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok && r.status !== 202) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+  }
+  return r.json().catch(() => ({}));
 }
 
 // ─── Page ────────────────────────────────────────────────────────
 export function CoveragePage() {
   const [groupBy, setGroupBy] = useState('flat');
-  const rows = COVERAGE_ROWS;
+  const [reasonFilter, setReasonFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [monitoredOnly, setMonitoredOnly] = useState(true);
+  const [selected, setSelected] = useState(() => new Set());
+  const [rowQueuing, setRowQueuing] = useState(() => new Set()); // ids in flight
+  const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
+  const [walking, setWalking] = useState(false);
+
+  const { data, loading, error, refetch } = useLiveCoverage();
+
+  // Normalize once per payload.
+  const allRows = useMemo(() => {
+    if (!data?.items) return null;
+    return data.items.map((it, idx) => normalizeRow(it, idx));
+  }, [data]);
+
+  // Apply UI filters.
+  const rows = useMemo(() => {
+    if (!allRows) return [];
+    return allRows.filter(r => {
+      if (monitoredOnly && !r.mon) return false;
+      if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
+      if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+      return true;
+    }).map(r => ({ ...r, sel: selected.has(r.id) }));
+  }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected]);
+
+  const toggleRow = useCallback((id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  const handleRowQueue = useCallback(async (row) => {
+    setRowQueuing(prev => { const n = new Set(prev); n.add(row.id); return n; });
+    try {
+      await queueRow(row);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('queue row failed:', e);
+      alert(`Queue failed: ${e.message}`);
+    } finally {
+      setRowQueuing(prev => { const n = new Set(prev); n.delete(row.id); return n; });
+      refetch({ fresh: true, silent: true });
+    }
+  }, [refetch]);
+
+  const handleBulkQueue = useCallback(async () => {
+    const targets = rows.filter(r => selected.has(r.id));
+    if (!targets.length) return;
+    setQueueState({ busy: true, done: 0, total: targets.length, errors: 0 });
+    let done = 0, errors = 0;
+    // Serial — gives the backend room to breathe + Bazarr/Sonarr are
+    // rate-limited upstream. Parallel-3 could come later if needed.
+    for (const row of targets) {
+      try { await queueRow(row); }
+      catch (e) {
+        errors += 1;
+        // eslint-disable-next-line no-console
+        console.error('bulk queue failed for', row.id, e);
+      }
+      done += 1;
+      setQueueState({ busy: true, done, total: targets.length, errors });
+    }
+    setQueueState({ busy: false, done, total: targets.length, errors });
+    setSelected(new Set());
+    refetch({ fresh: true, silent: true });
+  }, [rows, selected, refetch]);
+
+  const handleRewalk = useCallback(async () => {
+    setWalking(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await refetch({ fresh: true });
+    } catch (e) {
+      alert(`Re-walk failed: ${e.message}`);
+    } finally {
+      setWalking(false);
+    }
+  }, [refetch]);
+
+  const handleExportCsv = useCallback(() => {
+    if (!rows.length) return;
+    const headers = ['score', 'type', 'title', 'episode', 'reason', 'monitored', 'has_sub_on_disk', 'embedded', 'audio', 'canonical_path'];
+    const csv = [headers.join(',')];
+    for (const r of rows) {
+      csv.push([
+        r.score.toFixed(2), r.type,
+        JSON.stringify(r.title), JSON.stringify(r.ep),
+        r.reason, r.mon ? 1 : 0, r.disk ? 1 : 0, r.emb ? 1 : 0,
+        JSON.stringify(r.audio), JSON.stringify(r._canonical_path || ''),
+      ].join(','));
+    }
+    const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `coverage-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [rows]);
+
   const selectedCount = rows.filter(r => r.sel).length;
+  const isInitialLoad = loading && !data;
+  const isError = error && !data;
+  const isEmpty = !isInitialLoad && !isError && rows.length === 0;
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 0', gap: 14 }}>
@@ -382,18 +690,26 @@ export function CoveragePage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn">Export CSV</button>
-          <button className="btn">Re-walk now</button>
+          <button className="btn" onClick={handleExportCsv} disabled={!rows.length}>Export CSV</button>
+          <button className="btn" onClick={handleRewalk} disabled={walking}>
+            {walking ? 'Walking…' : 'Re-walk now'}
+          </button>
         </div>
       </div>
 
       {/* Coverage strip */}
       <div className="panel" style={{ padding: '12px 16px' }}>
-        <CoverageStrip />
+        <CoverageStrip data={data} loading={loading} error={error} />
       </div>
 
       {/* Filter bar */}
-      <FilterBar groupBy={groupBy} setGroupBy={setGroupBy} filtered={rows.length} />
+      <FilterBar
+        groupBy={groupBy} setGroupBy={setGroupBy}
+        filtered={rows.length}
+        reasonFilter={reasonFilter} setReasonFilter={setReasonFilter}
+        typeFilter={typeFilter} setTypeFilter={setTypeFilter}
+        monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
+      />
 
       {/* Table */}
       <div className="panel" style={{
@@ -403,14 +719,48 @@ export function CoveragePage() {
         overflow: 'hidden',
       }}>
         <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
-          <CoverageHeader allSelected={false} />
-          {rows.map(r => <CoverageRow key={r.id} r={r} />)}
+          <CoverageHeader allSelected={selectedCount > 0 && selectedCount === rows.length} />
+          {isInitialLoad && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
+              Loading coverage data…
+            </div>
+          )}
+          {isError && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--error-500)' }}>
+              Couldn't load coverage: {String(error.message || error)}
+              <div style={{ marginTop: 12 }}>
+                <button className="btn" onClick={() => refetch()}>Retry</button>
+              </div>
+            </div>
+          )}
+          {isEmpty && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
+              {allRows && allRows.length === 0
+                ? 'No gaps to address — every monitored file has its subs.'
+                : 'No rows match the current filters.'}
+            </div>
+          )}
+          {!isInitialLoad && !isError && rows.map(r => (
+            <CoverageRow
+              key={r.id}
+              r={r}
+              onClick={() => toggleRow(r.id)}
+              onQueue={handleRowQueue}
+              queuing={rowQueuing.has(r.id)}
+            />
+          ))}
         </div>
       </div>
 
       {/* Bottom selection bar — sits in page flow but sticky */}
       <div style={{ position: 'sticky', bottom: 16, marginTop: 0, marginBottom: 16 }}>
-        <SelectionBar n={selectedCount} reasonFilter="no-track" />
+        <SelectionBar
+          n={selectedCount}
+          reasonFilter={reasonFilter}
+          onClear={clearSelection}
+          onQueue={handleBulkQueue}
+          queueState={queueState}
+        />
       </div>
     </main>
   );
