@@ -157,6 +157,74 @@ function exportNdjson(entries) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Live probe walks hook ───────────────────────────────────────
+// Walks are a sibling stream to the provenance ledger — they update the
+// embedded-sub cache, not the queued/scanned/written-back ledger entries
+// Activity normally shows. We surface them at the top of Activity so
+// "things are happening" is visible without users hunting through APIs.
+function useLiveWalks(intervalMs = 3000) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let cancelled = false; let timer = null;
+    async function tick() {
+      try {
+        const r = await fetch('/api/probe/walks', { credentials: 'same-origin' });
+        if (r.ok && !cancelled) setData(await r.json());
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.debug('walks fetch failed:', e);
+      }
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    }
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [intervalMs]);
+  return data;
+}
+
+// ─── Walk progress banner ────────────────────────────────────────
+// Lives at the top of Activity. Renders one row per non-finished walk,
+// with progress bar + counts. Collapses entirely when no walks running.
+function WalkProgressBanner() {
+  const data = useLiveWalks();
+  const walks = (data?.walks || []).filter((w) => w.status === 'running' || w.status === 'queued');
+  if (walks.length === 0) return null;
+
+  return (
+    <div className="panel" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <StatusDot kind="info" pulse />
+        <span className="label">probe walks · in flight</span>
+        <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>{walks.length}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+          ffprobe results populate the embedded-EN cache · Coverage refreshes when done
+        </span>
+      </div>
+      {walks.map((w) => {
+        const pct = w.total_files > 0 ? Math.round((w.processed / w.total_files) * 100) : 0;
+        const errors = (w.errors || []).length;
+        return (
+          <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', width: 96 }}>{w.root}/</span>
+            <div style={{ flex: 1, height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--violet-500)', transition: 'width var(--dur-base)' }} />
+            </div>
+            <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)', width: 110, textAlign: 'right' }}>
+              {w.processed.toLocaleString()} / {w.total_files.toLocaleString()}
+            </span>
+            <span className="num mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', width: 50, textAlign: 'right' }}>{pct}%</span>
+            <span className="num mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', width: 100, textAlign: 'right' }}>
+              <span style={{ color: 'var(--cyan-500)' }}>{w.cached_hits.toLocaleString()}</span> cache
+              {errors > 0 && <span style={{ color: 'var(--error-500)' }}> · {errors} err</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Activity page body ──────────────────────────────────────────
 function ActivityPageBody({ onOpenRow, focusedPath }) {
   const { data, loading, error, refetch } = useRecentProvenance();
@@ -191,6 +259,8 @@ function ActivityPageBody({ onOpenRow, focusedPath }) {
         </div>
       </div>
 
+      <WalkProgressBanner />
+
       <ActivityFilters active={filter} setActive={setFilter} totalCount={entries.length} filteredCount={filtered.length} />
 
       <div className="panel" style={{ flex: 1, minHeight: 0, padding: 0, overflow: 'auto' }}>
@@ -206,7 +276,7 @@ function ActivityPageBody({ onOpenRow, focusedPath }) {
         {isEmpty && (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
             {entries.length === 0
-              ? 'No activity yet — subarr writes a ledger entry when it queues, scans, or writes back a file.'
+              ? 'No transcriptions yet. Activity records when subarr queues, scans, or writes back a subtitle file via subgen. Probe walks (which populate the embedded-EN cache) appear in the banner above when they’re running.'
               : `No entries match the "${filter}" filter.`}
           </div>
         )}
