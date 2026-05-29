@@ -213,6 +213,63 @@ function ChipListEditor({ items, onChange, kind, placeholder }) {
   );
 }
 
+// ProbeRootsEditor — paths the scheduled walk runs ffprobe over.
+//
+// THIS IS THE CRITICAL CONFIG for embedded-EN detection. When empty,
+// the walk skips ffprobe entirely and skip_embedded_en has nothing
+// to consult. When set to e.g. "TV,Movies", the walk re-probes those
+// roots before building coverage — and any file with a confirmed
+// embedded English track gets dropped from the gap list AND surfaces
+// as "has subs" in Library views.
+//
+// Paths are relative to SUBARR_MEDIA_ROOT (i.e. /media/library inside
+// the container). ProbeStore caches by (mtime, size) so re-walks only
+// ffprobe new/changed files.
+function ProbeRootsEditor({ value, onChange }) {
+  // Internal: value is stored as a list[str] in the schedule model, but
+  // we render it as a comma-separated string for editing comfort. On
+  // commit (blur or Enter), we split + trim back into a list.
+  const [draft, setDraft] = useState(value.join(', '));
+  // Re-sync draft if value changes from outside (e.g. Discard).
+  useEffect(() => { setDraft(value.join(', ')); }, [value.join(',')]);
+
+  const commit = () => {
+    const next = draft.split(',').map((p) => p.trim()).filter(Boolean);
+    if (next.join(',') !== value.join(',')) onChange(next);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>probe roots</span>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+          {value.length === 0 ? 'empty → ffprobe SKIPPED on scheduled walks' : `${value.length} root${value.length === 1 ? '' : 's'} — ffprobe runs`}
+        </span>
+      </div>
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+        placeholder="TV, Movies"
+        style={{
+          height: 30, padding: '0 10px',
+          background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-md)', color: 'var(--fg-0)',
+          fontFamily: 'var(--font-mono)',
+        }} />
+      <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+        Comma-separated paths relative to your library root. Walk runs ffprobe
+        on each, populating the embedded-sub cache that "skip embedded EN"
+        relies on. Re-walks are cheap — cached files with unchanged mtime
+        and size skip the probe. Leave empty for Bazarr-only coverage.
+      </span>
+    </div>
+  );
+}
+
 function ToggleRow({ label, hint, on, onToggle }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--bg-3)' }}>
@@ -319,6 +376,9 @@ function ModeBuild({ draft, setDraft, scheduleDraft, setScheduleDraft }) {
             <NumField label="interval minutes" value={scheduleDraft.interval_minutes} onChange={(v) => setSched('interval_minutes', v)} hint="used when kind=interval" min={1} />
             <TextField label="daily HH:MM" value={scheduleDraft.daily_hhmm} onChange={(v) => setSched('daily_hhmm', v)} hint="used when kind=daily" />
           </div>
+          <ProbeRootsEditor
+            value={scheduleDraft.probe_roots || []}
+            onChange={(v) => setSched('probe_roots', v)} />
         </Section>
       )}
     </div>
@@ -528,9 +588,17 @@ export function RulesPage() {
     try {
       if (rulesDiff.length > 0) await putRules(rulesDraft);
       if (scheduleDiff.length > 0) {
-        // PATCH only the changed fields.
+        // PATCH only the changed fields. probe_roots needs to ship as a
+        // comma-string per the backend schema (it splits/joins at the
+        // store layer; PATCH endpoint expects str).
         const patch = {};
-        for (const d of scheduleDiff) patch[d.field] = d.to;
+        for (const d of scheduleDiff) {
+          if (d.field === 'probe_roots' && Array.isArray(d.to)) {
+            patch[d.field] = d.to.join(',');
+          } else {
+            patch[d.field] = d.to;
+          }
+        }
         await patchCoverageSchedule(patch);
       }
       await refetch();
