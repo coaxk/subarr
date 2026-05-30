@@ -14,9 +14,13 @@ const { useState, useEffect, useCallback } = React;
 // path to its rendered static HTML under /static/v1/.
 const TOP_SECTIONS = [
   { id: 'overview',   label: 'Overview',   href: '/home' },
-  { id: 'operations', label: 'Operations', href: '/coverage' },
-  { id: 'library',    label: 'Library',    href: '/library' },
-  { id: 'config',     label: 'Config',     href: '/settings' },
+  // Top-nav language pass: dropped "Operations" / "Config" — too
+  // enterprise-shaped. "Gaps" is the literal domain term (what subarr
+  // exists to close); "Settings" is what every user already calls Config.
+  // Section ids stay stable so any downstream switch/case keeps working.
+  { id: 'operations', label: 'Gaps',     href: '/coverage' },
+  { id: 'library',    label: 'Library',  href: '/library' },
+  { id: 'config',     label: 'Settings', href: '/settings#integrations' },
 ];
 
 // ─── Live counts hook ────────────────────────────────────────────
@@ -28,11 +32,12 @@ export function useLiveChromeCounts(intervalMs = 10000) {
 
   const tick = useCallback(async () => {
     try {
-      const [dash, health, queue, schedule] = await Promise.all([
+      const [dash, health, queue, schedule, review] = await Promise.all([
         fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch('/api/schedule', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
 
       const next = {};
@@ -77,6 +82,9 @@ export function useLiveChromeCounts(intervalMs = 10000) {
       // Config / Integrations — same N/M as health
       if (next.health) next.config_integrations = next.health;
 
+      // Operations / Review — outstanding audio-language verifications
+      if (review?.count != null) next.review = review.count;
+
       setCounts(next);
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -105,14 +113,24 @@ function railItems(section, counts) {
   switch (section) {
     case 'overview': return [
       { id: 'dashboard', label: 'Dashboard', count: null,             href: '/home' },
-      { id: 'health',    label: 'Health',    count: counts.health,    href: '/settings' },
+      // #206 fix — these used to land on default-settings/auto-queue-rules,
+      // which made no semantic sense. Re-pointed:
+      // Health: integrations summary (via #integrations anchor — surfaces all
+      //   integration status dots, the page's actual health view).
+      // Schedule: the schedule page (coverage_walk cadence + next-run).
+      // Audit: provenance activity view.
+      { id: 'health',    label: 'Health',    count: counts.health,    href: '/settings#integrations' },
       { id: 'schedule',  label: 'Schedule',  count: counts.schedule,  href: '/rules' },
       { id: 'audit',     label: 'Audit log', count: null,             href: '/file-modal' },
     ];
     case 'operations': return [
       { id: 'coverage', label: 'Coverage', count: counts.coverage, href: '/coverage' },
       { id: 'queue',    label: 'Queue',    count: counts.queue,    href: '/queue' },
+      // Review: audio-language verification queue. Deep-links to /coverage
+      // with hash#review so the Coverage page auto-opens BatchReviewModal.
+      { id: 'review',   label: 'Review',   count: counts.review,   href: '/coverage#review' },
       { id: 'activity', label: 'Activity', count: null,            href: '/file-modal' },
+      { id: 'logs',     label: 'Logs',     count: null,            href: '/logs' },
       { id: 'rules',    label: 'Rules',    count: counts.rules,    href: '/rules' },
     ];
     case 'library': return [
@@ -122,7 +140,7 @@ function railItems(section, counts) {
       { id: 'browse', label: 'Browse', count: null, href: '/library' },
     ];
     case 'config': return [
-      { id: 'integrations', label: 'Integrations', count: counts.config_integrations, href: '/settings' },
+      { id: 'integrations', label: 'Integrations', count: counts.config_integrations, href: '/settings#integrations' },
       { id: 'scheduler',    label: 'Scheduler',    count: null,                       href: '/rules' },
       { id: 'telemetry',    label: 'Telemetry',    count: null,                       href: '/settings#telemetry' },
       // Paths + Advanced cut — no v1.0 UI exists for either; they are
@@ -234,17 +252,22 @@ export function SubRail({ section = 'overview', activeId, footer }) {
   );
 }
 
-// Footer renders the live walker state pulled from /api/home/dashboard.
+// Footer renders the live walker state + GPU + queue vitals,
+// polled from /api/home/dashboard + /api/queue. Persistent across pages.
 function RailFooter() {
   const [data, setData] = useState(null);
+  const [queue, setQueue] = useState(null);
   useEffect(() => {
     let cancelled = false; let timer;
     async function tick() {
       try {
-        const r = await fetch('/api/home/dashboard', { credentials: 'same-origin' });
-        if (r.ok && !cancelled) setData(await r.json());
+        const [d, q] = await Promise.all([
+          fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null),
+          fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null),
+        ]);
+        if (!cancelled) { setData(d); setQueue(q); }
       } catch {}
-      if (!cancelled) timer = setTimeout(tick, 10000);
+      if (!cancelled) timer = setTimeout(tick, 5000);
     }
     tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
@@ -259,16 +282,65 @@ function RailFooter() {
     : countdown < 3600 ? `${Math.floor(countdown/60)}m`
     : `${Math.floor(countdown/3600)}h${String(Math.floor((countdown%3600)/60)).padStart(2,'0')}m`;
 
+  const gpu = data?.gpu;
+  const vramPct = gpu && gpu.vram_total_mb ? Math.round((gpu.vram_used_mb / gpu.vram_total_mb) * 100) : null;
+  const utilPct = gpu?.util_pct ?? null;
+  const processing = queue?.processing?.length ?? 0;
+  const queued = queue?.queued?.length ?? 0;
+  const queueBusy = processing > 0;
+
+  const Bar = ({ pct, color }) => (
+    <div style={{ flex: 1, height: 4, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+      <div style={{ width: `${Math.max(0, Math.min(100, pct || 0))}%`, height: '100%', background: color, transition: 'width 400ms ease' }} />
+    </div>
+  );
+
   return (
-    <div style={{ padding: '10px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
-      <StatusDot kind={walking ? 'info' : 'ok'} pulse={walking} />
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-        {walking ? 'walking…' : 'walker idle'}
-      </span>
-      <span style={{ flex: 1 }} />
-      <span className="num mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
-        {countdownLabel || lastLabel}
-      </span>
+    <div style={{
+      borderTop: '1px solid var(--bg-3)',
+      display: 'flex', flexDirection: 'column', gap: 0,
+    }}>
+      {/* GPU vitals */}
+      {gpu && (
+        <div style={{ padding: '8px 14px 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            <span>GPU</span>
+            <span style={{ flex: 1 }} />
+            <span className="num mono" style={{ color: 'var(--fg-2)' }}>{utilPct ?? '—'}%</span>
+            <span style={{ color: 'var(--bg-4)' }}>·</span>
+            <span className="num mono" style={{ color: 'var(--fg-2)' }}>{vramPct ?? '—'}% vram</span>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <Bar pct={utilPct} color="linear-gradient(90deg,#22d3a1,#38bdf8)" />
+            <Bar pct={vramPct} color="linear-gradient(90deg,#8b5cf6,#ec4899)" />
+          </div>
+        </div>
+      )}
+      {/* Queue counter */}
+      <a href="/queue" style={{
+        padding: '6px 14px',
+        display: 'flex', alignItems: 'center', gap: 8,
+        textDecoration: 'none',
+        background: queueBusy ? 'rgba(139,92,246,0.06)' : 'transparent',
+      }}>
+        <StatusDot kind={queueBusy ? 'info' : 'ok'} pulse={queueBusy} />
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>queue</span>
+        <span style={{ flex: 1 }} />
+        <span className="num mono" style={{ fontSize: 10, color: queueBusy ? 'var(--fg-0)' : 'var(--fg-3)' }}>
+          {processing}▶ · {queued}⏸
+        </span>
+      </a>
+      {/* Walker status (existing) */}
+      <div style={{ padding: '6px 14px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <StatusDot kind={walking ? 'info' : 'ok'} pulse={walking} />
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+          {walking ? 'walking…' : 'walker'}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span className="num mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+          {countdownLabel || lastLabel}
+        </span>
+      </div>
     </div>
   );
 }

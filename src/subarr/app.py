@@ -1,6 +1,7 @@
 """FastAPI app entry point."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +23,11 @@ from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
 from .onboarding import OnboardingStore
 from .routers import (
-    admin, bazarr_sync, browse, coverage, coverage_actions, discovery as r_discovery,
+    admin, arbiter as r_arbiter, arr_mediainfo as r_arr_mediainfo,
+    audio_lang as r_audio_lang,
+    bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
+    discovery as r_discovery, household as r_household,
+    providers as r_providers, vision as r_vision,
     enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
     onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
     queue, scan, schedule as r_schedule, telemetry as r_telemetry,
@@ -72,12 +77,27 @@ async def lifespan(app_: FastAPI):
         subgen=app_.state.subgen,
         bazarr=app_.state.integrations.bazarr,
         provenance=app_.state.provenance,
+        # v1.1.1: pass Plex client so completion fires partial-scan when
+        # the sidecar lands — closes the Apple TV loop without waiting
+        # for Plex's periodic full library scan.
+        plex=app_.state.integrations.plex,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
     app_.state.schedule.init_schema()
     app_.state.ollama = OllamaClient()
+    # v1.1-O Layer 4: user audio-language verifications (manual review queue).
+    from .audio_lang_store import AudioLangStore
+    app_.state.audio_lang = AudioLangStore(settings.db_path)
+    app_.state.audio_lang.init_schema()
+    # v1.1 ARCH: coverage cache + background refresh (kills 60-90s page loads).
+    from .coverage_cache import CoverageCache, background_refresh_loop
+    app_.state.coverage_cache = CoverageCache(settings.db_path)
+    app_.state.coverage_cache.init_schema()
+    # v1.1 ARCH: dashboard cache (30s refresh, in-memory only).
+    from .dashboard_cache import DashboardCache, background_refresh_loop as dash_refresh_loop
+    app_.state.dashboard_cache = DashboardCache()
     app_.state.enrichment = EnrichmentStore(settings.db_path)
     app_.state.enrichment.init_schema()
     app_.state.probe_store = ProbeStore(settings.db_path)
@@ -96,6 +116,27 @@ async def lifespan(app_: FastAPI):
         pending_store=app_.state.pending,
     )
     app_.state.scheduler.start()
+
+    # v1.1 ARCH: start the coverage-cache background refresh loop.
+    # Independent of the coverage_walk schedule (much heavier); this one
+    # is purely "keep the page snappy". Default 5-min tick.
+    app_.state.coverage_cache_task = asyncio.create_task(
+        background_refresh_loop(
+            cache=app_.state.coverage_cache,
+            bundle=app_.state.integrations,
+            probe_store=app_.state.probe_store,
+            audio_lang_store=app_.state.audio_lang,
+        )
+    )
+    # Dashboard cache background refresh — passes a build closure that
+    # reuses the existing /api/home/dashboard internals.
+    from .routers.home import _build_dashboard as _dash_build
+    app_.state.dashboard_cache_task = asyncio.create_task(
+        dash_refresh_loop(
+            cache=app_.state.dashboard_cache,
+            build_fn=lambda: _dash_build(app_.state),
+        )
+    )
 
     # Update notification poller — once-per-24h GitHub release check
     # cached to update_checks table. Backs /api/updates which the UI
@@ -150,6 +191,16 @@ async def lifespan(app_: FastAPI):
         await app_.state.update_checker.stop()
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
+        try:
+            app_.state.coverage_cache_task.cancel()
+            await app_.state.coverage_cache_task
+        except (asyncio.CancelledError, AttributeError):
+            pass
+        try:
+            app_.state.dashboard_cache_task.cancel()
+            await app_.state.dashboard_cache_task
+        except (asyncio.CancelledError, AttributeError):
+            pass
         await app_.state.watcher.stop()
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
@@ -187,6 +238,13 @@ app.include_router(r_provenance.router)
 app.include_router(r_schedule.router)
 app.include_router(r_enrichment.router)
 app.include_router(r_probe.router)
+app.include_router(r_arr_mediainfo.router)
+app.include_router(r_arbiter.router)
+app.include_router(r_audio_lang.router)
+app.include_router(r_providers.router)
+app.include_router(r_blacklist.router)
+app.include_router(r_household.router)
+app.include_router(r_vision.router)
 app.include_router(bazarr_sync.router)
 app.include_router(r_updates.router)
 app.include_router(r_discovery.router)
@@ -232,6 +290,7 @@ if _STATIC_DIR.is_dir():
             "/file-modal": "file-modal.html",
             "/queue":      "queue.html",
             "/library":    "library.html",
+            "/logs":       "logs.html",
         }
 
         def _make_v1_route(html_file: str):

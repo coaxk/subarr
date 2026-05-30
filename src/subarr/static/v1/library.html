@@ -16,14 +16,14 @@
   html, body, #root { height: 100%; }
 
   .app-shell {
-    min-height: 100vh;
+    height: 100vh;             /* lock to viewport so inner tree scrolls, not page */
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
     min-width: 1280px;
   }
-  body { overflow: auto; }
-  .app-body { flex: 1; display: flex; min-height: 0; }
+  body { overflow: hidden; }   /* page body never scrolls; inner panel does */
+  .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
   .main-canvas {
     flex: 1;
     display: flex;

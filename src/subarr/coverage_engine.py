@@ -58,6 +58,28 @@ class CoverageItem:
     # Resolved file path (file-level, not series-dir; populated when
     # Sonarr's episode_file is fetched during enrichment)
     file_canonical_path: str | None = None
+    # v1.1-B: Sonarr/Radarr's authoritative "we don't have a file yet"
+    # signal. When True, Bazarr is asking for subs on a file that hasn't
+    # been imported — not actionable, suppress from default queue view.
+    pending_download: bool = False
+    # v1.1-E: Tautulli reports a Plex session streaming this title now.
+    now_playing: bool = False
+    # v1.1-I: Sonarr/Radarr imported the file in the last 24h.
+    just_imported: bool = False
+    # v1.1-H: Sonarr calendar says this airs in the next 48h.
+    airing_soon: bool = False
+    # v1.1-O: audio language data-quality flags.
+    # `audio_label_suspect` = ffprobe says English audio but show is foreign
+    #   per Sonarr/Radarr originalLanguage (the encoder probably defaulted
+    #   to "eng" without setting the real language).
+    # `audio_label_unknown` = ffprobe found no language tag at all ("und")
+    #   AND we have no other evidence — needs review or Whisper detection.
+    # `audio_label_notes` = human-readable evidence trail for the UI tooltip
+    #   ("track 0: tag='eng' but title says 'fre'" / "originalLanguage=Spanish
+    #   but audio_langs=['eng']" / etc).
+    audio_label_suspect: bool = False
+    audio_label_unknown: bool = False
+    audio_label_notes: list[str] = field(default_factory=list)
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
@@ -84,6 +106,13 @@ class CoverageItem:
             "audio_langs": self.audio_langs,
             "suggest_bazarr_rescan": self.suggest_bazarr_rescan,
             "file_canonical_path": self.file_canonical_path,
+            "pending_download": self.pending_download,
+            "now_playing": self.now_playing,
+            "just_imported": self.just_imported,
+            "airing_soon": self.airing_soon,
+            "audio_label_suspect": self.audio_label_suspect,
+            "audio_label_unknown": self.audio_label_unknown,
+            "audio_label_notes": self.audio_label_notes,
             "score": self.score,
             "score_reasons": self.score_reasons,
         }
@@ -107,6 +136,9 @@ class CoverageReport:
                 "with_disk_sub": sum(1 for i in self.items if i.has_sub_on_disk),
                 "embedded_full_en": sum(1 for i in self.items if i.embedded_en == "EN"),
                 "suggest_bazarr_rescan": sum(1 for i in self.items if i.suggest_bazarr_rescan),
+                # v1.1-B
+                "pending_download": sum(1 for i in self.items if i.pending_download),
+                "actionable": sum(1 for i in self.items if not i.pending_download),
             },
         }
 
@@ -120,6 +152,17 @@ class IntegrationBundle:
         self.sonarr = SonarrClient()
         self.radarr = RadarrClient()
         self.tautulli = TautulliClient()
+        # v1.1.1: Plex client for partial-scan-on-sidecar-write. Constructed
+        # with env-driven config; .is_configured() reflects whether url+token
+        # are present so callers degrade gracefully if Plex isn't set up.
+        from .integrations.plex import PlexClient
+        self.plex = PlexClient(
+            base_url=settings.plex_url,
+            token=settings.plex_token,
+            default_section=settings.plex_section,
+            path_prefix=settings.plex_path_prefix,
+            media_root=str(settings.media_root),
+        )
 
     async def aclose(self) -> None:
         await asyncio.gather(
@@ -127,6 +170,7 @@ class IntegrationBundle:
             self.sonarr.aclose(),
             self.radarr.aclose(),
             self.tautulli.aclose(),
+            self.plex.aclose(),
             return_exceptions=True,
         )
 
@@ -347,15 +391,19 @@ async def _fetch_bazarr(bz: BazarrClient, sources: dict) -> tuple[list[dict], li
 
 
 async def _fetch_arr(name: str, client, sources: dict, fetch_fn: str) -> list[dict]:
+    # v1.1-B: parallel fetches share `sources` — merge into existing dict
+    # instead of replacing, so a concurrent _fetch_wanted_missing's writes
+    # survive whichever task completes last.
+    entry = sources.setdefault(name, {})
     if not client.is_configured():
-        sources[name] = {"ok": False, "configured": False}
+        entry.update({"ok": False, "configured": False})
         return []
     try:
         rows = await getattr(client, fetch_fn)()
-        sources[name] = {"ok": True, "configured": True, "count": len(rows)}
+        entry.update({"ok": True, "configured": True, "count": len(rows)})
         return rows
     except IntegrationError as e:
-        sources[name] = {"ok": False, "configured": True, "error": str(e)}
+        entry.update({"ok": False, "configured": True, "error": str(e)})
         return []
 
 
@@ -371,16 +419,97 @@ async def _fetch_arr_tags(name: str, client, sources: dict) -> dict[int, str]:
         return {}
 
 
-async def _fetch_tautulli(t: TautulliClient, sources: dict) -> list[dict]:
+async def _fetch_wanted_missing(name: str, client, sources: dict) -> set[int]:
+    """v1.1-B: Sonarr/Radarr wanted/missing IDs. Returns empty set if the
+    integration isn't configured or the call fails — caller treats missing
+    data as "everything is actionable" (degraded but not broken)."""
+    if not client.is_configured():
+        return set()
+    try:
+        ids = await client.wanted_missing_ids()
+        sources.setdefault(name, {})["wanted_missing"] = len(ids)
+        return ids
+    except IntegrationError as e:
+        sources.setdefault(name, {}).setdefault("warnings", []).append(f"wanted/missing: {e}")
+        return set()
+
+
+async def _fetch_recent_imports(name: str, client, sources: dict) -> set[int]:
+    """v1.1-I: arr /history?eventType=3 — files imported in last 24h."""
+    if not client.is_configured():
+        return set()
+    try:
+        ids = await client.recent_imports(hours=24)
+        sources.setdefault(name, {})["recent_imports_24h"] = len(ids)
+        return ids
+    except IntegrationError as e:
+        sources.setdefault(name, {}).setdefault("warnings", []).append(f"history: {e}")
+        return set()
+
+
+async def _fetch_calendar_upcoming(client, sources: dict) -> set[int]:
+    """v1.1-H: Sonarr /calendar — episodes airing within 48h."""
+    if not client.is_configured():
+        return set()
+    try:
+        ids = await client.calendar_upcoming(hours=48)
+        sources.setdefault("sonarr", {})["airing_within_48h"] = len(ids)
+        return ids
+    except IntegrationError as e:
+        sources.setdefault("sonarr", {}).setdefault("warnings", []).append(f"calendar: {e}")
+        return set()
+
+
+async def _fetch_tautulli_activity(t: TautulliClient, sources: dict) -> dict:
+    """v1.1-E + v1.1-O Layer 2.5: Tautulli get_activity → set of
+    grandparent_title (series) currently streaming + subset where Plex is
+    transcoding subtitles + per-title audio-track-language hints.
+
+    The audio-track-language hint is gold: when a user picks "French DTS"
+    in Plex, that's authoritative ground truth that the audio IS French,
+    regardless of what ffprobe's tag says. Stored as
+    {title_lc: lang_code} for later cross-check in _classify_audio_label."""
+    out = {
+        "now_playing_titles": set(),
+        "transcoding_titles": set(),
+        "audio_lang_hints": {},   # title_lc → 3-letter ISO from user track choice
+    }
     if not t.is_configured():
-        sources["tautulli"] = {"ok": False, "configured": False}
+        return out
+    try:
+        d = await t.get_activity()
+        sessions = d.get("sessions") or []
+        for s in sessions:
+            title = (s.get("grandparent_title") or s.get("full_title") or "").strip().lower()
+            if not title:
+                continue
+            out["now_playing_titles"].add(title)
+            if (s.get("subtitle_decision") or "").lower() == "transcode":
+                out["transcoding_titles"].add(title)
+            # Layer 2.5: audio track language the user actually picked.
+            audio_lang = (s.get("stream_audio_language_code")
+                          or s.get("audio_language_code") or "").strip().lower()
+            if audio_lang and audio_lang not in ("und", ""):
+                out["audio_lang_hints"][title] = audio_lang
+        sources.setdefault("tautulli", {})["now_playing"] = len(out["now_playing_titles"])
+        sources.setdefault("tautulli", {})["audio_hints"] = len(out["audio_lang_hints"])
+    except IntegrationError as e:
+        sources.setdefault("tautulli", {}).setdefault("warnings", []).append(f"activity: {e}")
+    return out
+
+
+async def _fetch_tautulli(t: TautulliClient, sources: dict) -> list[dict]:
+    # v1.1-E: parallel safety — merge not replace (same fix pattern as _fetch_arr).
+    entry = sources.setdefault("tautulli", {})
+    if not t.is_configured():
+        entry.update({"ok": False, "configured": False})
         return []
     try:
         rows = await t.history(length=500, days=30)
-        sources["tautulli"] = {"ok": True, "configured": True, "history_rows": len(rows)}
+        entry.update({"ok": True, "configured": True, "history_rows": len(rows)})
         return rows
     except IntegrationError as e:
-        sources["tautulli"] = {"ok": False, "configured": True, "error": str(e)}
+        entry.update({"ok": False, "configured": True, "error": str(e)})
         return []
 
 
@@ -425,11 +554,13 @@ def _episode_filename_pattern(episode_number: str | None) -> str | None:
         return None
 
 
-def _attach_probe_episode(item: CoverageItem, idx: dict[str, list]) -> None:
+def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
+                          tautulli_hints: dict[str, str] | None = None,
+                          user_verifications: dict[str, str] | None = None) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
     audio_langs + file_canonical_path onto the item."""
-    from .media_probe import audio_lang_summary, english_track_summary
+    from .media_probe import audio_lang_summary_with_titles, english_track_summary
     if not item.canonical_path:
         return
     candidates = idx.get(item.canonical_path) or []
@@ -443,14 +574,21 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list]) -> None:
         if pattern in basename:
             item.file_canonical_path = file_canonical
             item.embedded_en = english_track_summary(probe)
-            item.audio_langs = audio_lang_summary(probe)
+            langs, notes = audio_lang_summary_with_titles(probe)
+            item.audio_langs = langs
+            if notes:
+                item.audio_label_notes.extend(notes)
+            _classify_audio_label(item, tautulli_hints=tautulli_hints,
+                                  user_verifications=user_verifications)
             return
 
 
-def _attach_probe_movie(item: CoverageItem, idx: dict[str, list]) -> None:
+def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
+                        tautulli_hints: dict[str, str] | None = None,
+                        user_verifications: dict[str, str] | None = None) -> None:
     """Movies: a single video file lives directly under the movie dir.
     First probe under the movie's canonical wins."""
-    from .media_probe import audio_lang_summary, english_track_summary
+    from .media_probe import audio_lang_summary_with_titles, english_track_summary
     if not item.canonical_path:
         return
     candidates = idx.get(item.canonical_path) or []
@@ -459,13 +597,118 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list]) -> None:
     file_canonical, probe = candidates[0]
     item.file_canonical_path = file_canonical
     item.embedded_en = english_track_summary(probe)
-    item.audio_langs = audio_lang_summary(probe)
+    langs, notes = audio_lang_summary_with_titles(probe)
+    item.audio_langs = langs
+    if notes:
+        item.audio_label_notes.extend(notes)
+    _classify_audio_label(item, tautulli_hints=tautulli_hints,
+                          user_verifications=user_verifications)
 
 
-def _score(item: CoverageItem, signals: dict[str, dict]) -> None:
+def _classify_audio_label(item: CoverageItem,
+                          tautulli_hints: dict[str, str] | None = None,
+                          user_verifications: dict[str, str] | None = None) -> None:
+    """v1.1-O: cross-check audio_langs against Sonarr/Radarr originalLanguage.
+
+    Three outcomes:
+    - `audio_label_unknown` = ffprobe found NO language data at all (only "und",
+      or empty) → no signal to trust; needs Whisper/review.
+    - `audio_label_suspect` = original language is foreign (non-English) but
+      every detected audio track is English → likely encoder defaulted to
+      "eng" instead of tagging the real language. UI should warn before
+      auto-suppressing this row from the queue.
+    - Neither flag → either English-original content (expected), or audio
+      data agrees with originalLanguage (good).
+
+    Layer 2.5: if Tautulli reports the user picked a specific audio track
+    in Plex for this title, that's authoritative — overrides ffprobe entirely
+    for the audio_langs field and clears the suspect flag.
+
+    The notes list (already populated by the title-fallback parser) is
+    appended to so the UI can show the full evidence trail."""
+    # Layer 0 (absolute): user verification beats everything.
+    file_path = item.file_canonical_path
+    if user_verifications and file_path and file_path in user_verifications:
+        confirmed = user_verifications[file_path]
+        item.audio_langs = [confirmed]
+        item.audio_label_notes.append(f"user-confirmed: {confirmed!r}")
+        item.audio_label_suspect = False
+        item.audio_label_unknown = False
+        return
+    title_lc = (item.title or "").strip().lower()
+    if tautulli_hints and title_lc in tautulli_hints:
+        plex_lang = tautulli_hints[title_lc]
+        # User picked this in Plex → that's the actual audio. Authoritative.
+        item.audio_langs = [plex_lang]
+        item.audio_label_notes.append(
+            f"Plex audio-track pick = {plex_lang!r} (overrides ffprobe)"
+        )
+        item.audio_label_suspect = False
+        item.audio_label_unknown = False
+        return
+    langs = [(l or "").lower() for l in (item.audio_langs or [])]
+    only_und = bool(langs) and all(l in ("", "und") for l in langs)
+    no_data = not langs
+    if only_und or no_data:
+        item.audio_label_unknown = True
+        item.audio_label_notes.append(
+            "no audio language metadata — encoder didn't tag the stream"
+        )
+        return
+    orig = (item.original_language or "").strip().lower()
+    # Foreign originals: anything that isn't English.
+    if orig and orig != "english":
+        non_und = [l for l in langs if l not in ("", "und")]
+        # Suspect when EVERY identified track is English on a foreign show.
+        if non_und and all(l in ("en", "eng") for l in non_und):
+            item.audio_label_suspect = True
+            item.audio_label_notes.append(
+                f"originalLanguage={item.original_language!r} but audio tags "
+                f"are all English ({non_und}) — likely encoder default"
+            )
+
+
+def _score(
+    item: CoverageItem,
+    signals: dict[str, dict],
+    *,
+    now_playing_titles: set[str] | None = None,
+    just_imported_eps: set[int] | None = None,
+    just_imported_movies: set[int] | None = None,
+    airing_soon_eps: set[int] | None = None,
+    transcoding_titles: set[str] | None = None,
+) -> None:
     s = 0
     reasons: list[str] = []
-    sig = signals.get(item.title.strip().lower())
+    # v1.1-E: NOW PLAYING boost — strongest signal there is. If Plex is
+    # streaming this title RIGHT NOW, queue it.
+    title_lc = item.title.strip().lower()
+    if now_playing_titles and title_lc in now_playing_titles:
+        s += 2000
+        reasons.append("PLAYING NOW")
+        # v1.1-E++: even stronger if Plex is transcoding subs (CPU burn).
+        if transcoding_titles and title_lc in transcoding_titles:
+            s += 1000
+            reasons.append("Plex transcoding subs — burn signal")
+        # Mark for the UI chip
+        item.now_playing = True
+    # v1.1-I: just imported in last 24h — Sonarr/Radarr say a file just
+    # landed; this is when watch likelihood peaks.
+    if just_imported_eps and item.bazarr_episode_id in just_imported_eps:
+        s += 800
+        reasons.append("just imported (<24h)")
+        item.just_imported = True
+    elif just_imported_movies and item.bazarr_radarr_id in just_imported_movies:
+        s += 800
+        reasons.append("just imported (<24h)")
+        item.just_imported = True
+    # v1.1-H: airs within 48h — pre-warm the queue so subs are ready when
+    # the episode hits disk.
+    if airing_soon_eps and item.bazarr_episode_id in airing_soon_eps:
+        s += 400
+        reasons.append("airs within 48h")
+        item.airing_soon = True
+    sig = signals.get(title_lc)
     if sig:
         age_days = (time.time() - sig["last_played"]) / 86400.0 if sig["last_played"] else 9999
         if age_days <= 7:
@@ -514,6 +757,7 @@ async def build_coverage(
     *,
     use_tautulli: bool = True,
     probe_store: Any = None,  # ProbeStore | None — avoid circular import
+    audio_lang_store: Any = None,  # AudioLangStore | None
 ) -> CoverageReport:
     sources: dict[str, dict] = {}
 
@@ -526,6 +770,19 @@ async def build_coverage(
     )
     sonarr_tags_task = asyncio.create_task(_fetch_arr_tags("sonarr", bundle.sonarr, sources))
     radarr_tags_task = asyncio.create_task(_fetch_arr_tags("radarr", bundle.radarr, sources))
+    # v1.1-B: wanted/missing sets — "no file imported yet" authoritative truth.
+    sonarr_missing_task = asyncio.create_task(_fetch_wanted_missing("sonarr", bundle.sonarr, sources))
+    radarr_missing_task = asyncio.create_task(_fetch_wanted_missing("radarr", bundle.radarr, sources))
+    # v1.1-I: recent imports (<24h) — high-likelihood watch targets.
+    sonarr_recent_task = asyncio.create_task(_fetch_recent_imports("sonarr", bundle.sonarr, sources))
+    radarr_recent_task = asyncio.create_task(_fetch_recent_imports("radarr", bundle.radarr, sources))
+    # v1.1-H: calendar upcoming (<48h) — pre-warm the queue.
+    sonarr_calendar_task = asyncio.create_task(_fetch_calendar_upcoming(bundle.sonarr, sources))
+    # v1.1-E: NOW PLAYING via Tautulli get_activity.
+    tautulli_activity_task = (
+        asyncio.create_task(_fetch_tautulli_activity(bundle.tautulli, sources))
+        if use_tautulli else None
+    )
     tautulli_task = (
         asyncio.create_task(_fetch_tautulli(bundle.tautulli, sources))
         if use_tautulli else None
@@ -535,7 +792,13 @@ async def build_coverage(
     radarr_movies = await radarr_movies_task
     sonarr_tags = await sonarr_tags_task
     radarr_tags = await radarr_tags_task
+    sonarr_missing_ids = await sonarr_missing_task   # set[int]
+    radarr_missing_ids = await radarr_missing_task   # set[int]
+    sonarr_recent_ids = await sonarr_recent_task     # set[int]
+    radarr_recent_ids = await radarr_recent_task     # set[int]
+    airing_soon_ids = await sonarr_calendar_task     # set[int]
     history = await tautulli_task if tautulli_task else []
+    activity = await tautulli_activity_task if tautulli_activity_task else {"now_playing_titles": set(), "transcoding_titles": set()}
 
     sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
     radarr_by_title = {m.get("title", "").strip().lower(): m
@@ -558,6 +821,12 @@ async def build_coverage(
             for i in range(2, len(parts)):  # skip top-level (TV/Movies)
                 prefix = "/".join(parts[:i])
                 probe_by_series_prefix.setdefault(prefix, []).append((path, entry))
+
+    # v1.1-O Layer 4: load user verifications. These OVERRIDE all
+    # auto-detected signals — user has ground truth.
+    user_verifications: dict[str, str] = (
+        audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
+    )
 
     items: list[CoverageItem] = []
 
@@ -629,8 +898,19 @@ async def build_coverage(
             missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
                                for ms in (w.get("missing_subtitles") or [])],
         )
-        _attach_probe_episode(item, probe_by_series_prefix)
-        _score(item, tt_signals)
+        # v1.1-B: Sonarr knows this episode has no file yet.
+        if item.bazarr_episode_id and item.bazarr_episode_id in sonarr_missing_ids:
+            item.pending_download = True
+        _attach_probe_episode(item, probe_by_series_prefix,
+                              tautulli_hints=activity.get("audio_lang_hints") or {},
+                              user_verifications=user_verifications)
+        _score(
+            item, tt_signals,
+            now_playing_titles=activity["now_playing_titles"],
+            transcoding_titles=activity["transcoding_titles"],
+            just_imported_eps=sonarr_recent_ids,
+            airing_soon_eps=airing_soon_ids,
+        )
         items.append(item)
 
     # Movies (Bazarr → Radarr enrichment via title — Bazarr doesn't expose
@@ -653,8 +933,17 @@ async def build_coverage(
             missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
                                for ms in (w.get("missing_subtitles") or [])],
         )
-        _attach_probe_movie(item, probe_by_series_prefix)
-        _score(item, tt_signals)
+        if item.bazarr_radarr_id and item.bazarr_radarr_id in radarr_missing_ids:
+            item.pending_download = True
+        _attach_probe_movie(item, probe_by_series_prefix,
+                            tautulli_hints=activity.get("audio_lang_hints") or {},
+                            user_verifications=user_verifications)
+        _score(
+            item, tt_signals,
+            now_playing_titles=activity["now_playing_titles"],
+            transcoding_titles=activity["transcoding_titles"],
+            just_imported_movies=radarr_recent_ids,
+        )
         items.append(item)
 
     items.sort(key=lambda i: i.score, reverse=True)

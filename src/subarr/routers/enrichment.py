@@ -89,22 +89,62 @@ async def enrich_lang(req: EnrichOneRequest, request: Request,
 
 @router.post("/lang/bulk")
 async def enrich_lang_bulk(req: EnrichBulkRequest, request: Request,
-                            gate: bool = Query(True)) -> dict:
+                            gate: bool = Query(True),
+                            free_vram_after: bool = Query(
+                                True,
+                                description="v1.1-D: unload the Ollama model after "
+                                            "the batch finishes, freeing VRAM for subgen. "
+                                            "Set False if another enrichment batch is "
+                                            "queued back-to-back.",
+                            )) -> dict:
     if gate:
         busy = await _gpu_busy(request)
         if busy:
             raise HTTPException(429, detail=busy)
     results: list[dict] = []
     errors: list[dict] = []
+    ollama = request.app.state.ollama
+    # v1.1-D: keep the model resident for the whole batch (30m TTL is the
+    # Ollama recommended "long-batch" value).
     for it in req.items:
         try:
             r = await enrich_one(
                 canonical_path=it.canonical_path,
                 title=it.title,
-                ollama=request.app.state.ollama,
+                ollama=ollama,
                 store=request.app.state.enrichment,
+                keep_alive="30m",
             )
             results.append(r.to_dict())
         except OllamaError as e:
             errors.append({"canonical_path": it.canonical_path, "error": str(e)})
-    return {"results": results, "errors": errors}
+    if free_vram_after:
+        await ollama.unload()
+    return {"results": results, "errors": errors, "model_unloaded": free_vram_after}
+
+
+@router.post("/unload")
+async def unload_model(request: Request) -> dict:
+    """v1.1-D / polish #170: explicit "Clear VRAM" / "Unload model" button.
+    Tells Ollama to evict the current model. No-op if Ollama isn't
+    configured. Returns the GPU snapshot so the UI can show before/after."""
+    ollama = request.app.state.ollama
+    before = None
+    after = None
+    try:
+        from .gpu import gpu_status
+        before = await gpu_status()
+    except Exception:
+        pass
+    await ollama.unload()
+    try:
+        from .gpu import gpu_status
+        after = await gpu_status()
+    except Exception:
+        pass
+    return {
+        "unloaded": True,
+        "model": ollama.model,
+        "vram_before_mib": (before or {}).get("memory", {}).get("used_mib"),
+        "vram_after_mib": (after or {}).get("memory", {}).get("used_mib"),
+    }

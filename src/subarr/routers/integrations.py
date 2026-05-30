@@ -22,6 +22,21 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
     if not client.is_configured():
         return {"name": name, "online": False, "configured": False}
     try:
+        if summary_kind == "ollama_models":
+            # Ollama uses /api/tags as both liveness probe + model list.
+            # Surface model count + first-5 names for the Settings panel.
+            tags = await client.tags()
+            models = tags.get("models", []) if isinstance(tags, dict) else []
+            return {
+                "name": name,
+                "online": True,
+                "configured": True,
+                "badges": {
+                    "models": len(models),
+                    "model_names": ", ".join(m.get("name", "?") for m in models[:3])
+                                   + (" …" if len(models) > 3 else ""),
+                },
+            }
         if summary_kind == "bazarr_badges":
             status_task = asyncio.create_task(client.status())
             badges_task = asyncio.create_task(client.badges())
@@ -51,12 +66,20 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
 @router.get("/integrations/health")
 async def integrations_health(request: Request) -> dict[str, Any]:
     integrations = request.app.state.integrations
-    probes = await asyncio.gather(
+    # Pull Ollama from app.state — it's not part of the IntegrationBundle
+    # (used only by lang_enrichment, not coverage flow). Treating it like
+    # a first-class integration here so the Settings panel can show its
+    # model list + reachability without us inventing a separate endpoint.
+    ollama = getattr(request.app.state, "ollama", None)
+    probes_coros = [
         _probe("bazarr", integrations.bazarr, "bazarr_badges"),
         _probe("sonarr", integrations.sonarr),
         _probe("radarr", integrations.radarr),
         _probe("tautulli", integrations.tautulli),
-    )
+    ]
+    if ollama is not None:
+        probes_coros.append(_probe("ollama", ollama, "ollama_models"))
+    probes = await asyncio.gather(*probes_coros)
     # Subgen capabilities probed once at boot, cached on app.state.
     # Surfaced here so the UI can show "compat mode" badges + gate
     # scan-submit on has_batch.

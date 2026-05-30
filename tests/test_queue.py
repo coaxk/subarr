@@ -43,7 +43,17 @@ def _down_handler(req: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.subgen(handler=_down_handler)
-def test_queue_503_when_subgen_down(app_with_stub):
+def test_queue_history_only_when_subgen_down(app_with_stub):
+    # v1.1.1 Featured Queue: when subgen is unreachable we no longer 503.
+    # The queue endpoint serves a history-only view so the user can still
+    # inspect/requeue/clean up past submissions while subgen is down.
+    # The subgen failure is surfaced via the `subgen_error` field.
     r = app_with_stub.get("/api/queue")
-    assert r.status_code == 503
-    assert "subgen" in r.json()["detail"].lower()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["processing"] == []
+    assert body["queued"] == []
+    assert "subgen_error" in body
+    assert "subgen" in body["subgen_error"].lower()
+    assert "history" in body
+    assert "history_counts" in body

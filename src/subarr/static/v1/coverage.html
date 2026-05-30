@@ -15,15 +15,17 @@
 <style>
   html, body, #root { height: 100%; }
 
+  /* Coverage page scroll: same fix as Library — lock shell to viewport
+     so the inner table scrolls instead of the whole page. */
   .app-shell {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
     min-width: 1280px;
   }
-  body { overflow: auto; }
-  .app-body { flex: 1; display: flex; min-height: 0; }
+  body { overflow: hidden; }
+  .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
   .main-canvas {
     flex: 1;
     display: flex;

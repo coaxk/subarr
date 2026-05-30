@@ -24,13 +24,16 @@ log = logging.getLogger(__name__)
 
 
 _TASK_HINTS = (
+    # Bazarr 1.5.x canonical job_ids (verified against live API)
+    "series_full_scan_subtitles",
+    "movies_full_scan_subtitles",
+    # Forward-compat
     "scan_disk_series",
-    "update_series",
-    "sync_episodes",
     "scan_disk_episodes",
+    # Human-readable labels (case-insensitive substring match)
+    "index all existing episodes",
+    "index all existing movies",
     "scan disk",
-    "sync episodes",
-    "update series",
 )
 
 
@@ -40,7 +43,9 @@ class SyncDiskRequest(BaseModel):
 
 
 @router.post("/bazarr/sync-disk")
-async def sync_disk(req: SyncDiskRequest, request: Request) -> dict:
+async def sync_disk(request: Request, req: SyncDiskRequest | None = None) -> dict:
+    # Accept empty body (button-click case) — pydantic model is optional now.
+    req = req or SyncDiskRequest()
     bundle = request.app.state.integrations
     if not bundle.bazarr.is_configured():
         raise HTTPException(503, detail="bazarr not configured")

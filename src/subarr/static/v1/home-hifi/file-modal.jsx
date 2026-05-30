@@ -242,7 +242,7 @@ function ActivityPageBody({ onOpenRow, focusedPath }) {
   const isEmpty = !isInitialLoad && !isError && filtered.length === 0;
 
   return (
-    <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 16 }}>
+    <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 16, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.005em' }}>Activity</h1>

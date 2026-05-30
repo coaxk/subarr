@@ -164,7 +164,7 @@ function Stat({ label, value, color }) {
 }
 
 // ─── Integrations rail ───────────────────────────────────────────
-const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'tautulli', 'subgen'];
+const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'tautulli', 'subgen', 'ollama'];
 
 function buildRailItems(health) {
   if (!health) return [];
@@ -185,7 +185,202 @@ function buildRailItems(health) {
   return out;
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates }) {
+// #207: Integrations summary panel. Lands here when user clicks Settings/Health
+// (instead of being dumped into Bazarr automatically). Tile grid showing every
+// integration's status / version / key metric with click-through to detail.
+function IntegrationsSummaryPanel({ rail, onSelect }) {
+  if (!rail || rail.length === 0) {
+    return <div style={{ padding: 20, color: 'var(--fg-2)' }}>
+      No integrations configured. Run the onboarding wizard to set them up.
+    </div>;
+  }
+  return (
+    <div style={{ maxWidth: 920, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+        Click any tile for live details, test connection, or per-integration actions.
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gap: 12,
+      }}>
+        {rail.map((it) => {
+          const raw = it.raw || {};
+          const meta = it.meta;
+          const badge = (() => {
+            // Pull the most-interesting metric per integration name
+            const n = (it.id || '').toLowerCase();
+            if (n === 'bazarr') return raw.badges?.episodes != null ? `${raw.badges.episodes} eps wanted` : null;
+            if (n === 'sonarr') return raw.count != null ? `${raw.count} series` : null;
+            if (n === 'radarr') return raw.count != null ? `${raw.count} movies` : null;
+            if (n === 'tautulli') return raw.history_rows != null ? `${raw.history_rows} plays / 30d` : null;
+            if (n === 'subgen') return raw.version ? `v${raw.version}` : null;
+            if (n === 'ollama') return raw.model || null;
+            return null;
+          })();
+          return (
+            <button key={it.id} onClick={() => onSelect(it.id)} style={{
+              textAlign: 'left',
+              background: 'var(--bg-1)', border: 'var(--border)',
+              borderRadius: 'var(--radius-md)', padding: '14px 16px',
+              display: 'flex', flexDirection: 'column', gap: 8,
+              cursor: 'pointer',
+              transition: 'border-color 120ms ease, background 120ms ease',
+            }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-2)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-1)'}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <StatusDot kind={it.status} />
+                <span style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>
+                  {it.name}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span className="mono num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                  {meta}
+                </span>
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                {it.status === 'ok' && (badge || 'connected')}
+                {it.status === 'error' && (raw.error || 'unreachable')}
+                {it.status === 'muted' && 'not configured'}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>open →</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// v1.1-J UI: provider leaderboard panel
+function ProvidersPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const fetchIt = async (fresh = false) => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/providers/leaderboard' + (fresh ? '?fresh=true' : ''),
+                            { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setData(d);
+      setError(null);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { fetchIt(); }, []);
+  if (loading && !data) {
+    return <div style={{ padding: 20, color: 'var(--fg-2)' }}>Loading provider stats…</div>;
+  }
+  if (error && !data) {
+    return <div style={{ padding: 20, color: 'var(--error-500)' }}>
+      Couldn't load: {error}
+      <div style={{ marginTop: 12 }}><button className="btn" onClick={() => fetchIt(true)}>Retry</button></div>
+    </div>;
+  }
+  if (!data?.available) {
+    return <div style={{ padding: 20, color: 'var(--fg-2)' }}>
+      Bazarr isn't configured — no provider data available.
+    </div>;
+  }
+  const providers = data.providers || [];
+  const fmtTime = (epoch) => epoch ? new Date(epoch * 1000).toLocaleDateString() : '—';
+  return (
+    <div style={{ maxWidth: 920, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{
+        background: 'var(--bg-1)', border: 'var(--border)',
+        borderRadius: 'var(--radius-md)', padding: '10px 14px',
+        display: 'flex', alignItems: 'center', gap: 14,
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+      }}>
+        <span><b style={{ color: 'var(--fg-0)' }}>{data.history_rows}</b> downloads aggregated</span>
+        <span style={{ color: 'var(--bg-5)' }}>·</span>
+        <span>computed in {data.duration_s}s</span>
+        <span style={{ color: 'var(--bg-5)' }}>·</span>
+        <span>{data.cached ? `cache age ${data.cache_age_s}s` : 'live'}</span>
+        <span style={{ flex: 1 }} />
+        <button className="btn ghost" onClick={() => fetchIt(true)} disabled={loading}
+          style={{ fontSize: 'var(--text-2xs)' }}>{loading ? '…' : 'refresh'}</button>
+      </div>
+
+      <div style={{ background: 'var(--bg-1)', border: 'var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '2fr 1fr 1fr 1fr 2fr 1.2fr',
+          padding: '10px 14px',
+          background: 'var(--bg-2)',
+          fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+          textTransform: 'uppercase', letterSpacing: '0.08em',
+          gap: 12,
+        }}>
+          <span>provider</span>
+          <span style={{ textAlign: 'right' }}>downloads</span>
+          <span style={{ textAlign: 'right' }}>avg score</span>
+          <span style={{ textAlign: 'right' }}>success</span>
+          <span>languages</span>
+          <span style={{ textAlign: 'right' }}>last seen</span>
+        </div>
+        {providers.map(p => (
+          <div key={p.name} style={{
+            display: 'grid',
+            gridTemplateColumns: '2fr 1fr 1fr 1fr 2fr 1.2fr',
+            padding: '10px 14px',
+            borderTop: '1px solid var(--bg-3)',
+            fontSize: 'var(--text-sm)',
+            alignItems: 'center', gap: 12,
+            opacity: p.downloads === 0 ? 0.5 : 1,
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <StatusDot kind={p.throttled ? 'error' : (p.downloads > 0 ? 'ok' : 'muted')} />
+              <span style={{ color: 'var(--fg-0)', fontWeight: 500 }}>{p.name}</span>
+            </span>
+            <span className="num mono" style={{ textAlign: 'right', color: 'var(--fg-1)' }}>{p.downloads}</span>
+            <span className="num mono" style={{ textAlign: 'right', color: 'var(--fg-1)' }}>{p.downloads ? p.avg_score.toFixed(1) : '—'}</span>
+            <span className="num mono" style={{
+              textAlign: 'right',
+              color: p.success_rate >= 90 ? '#22d3a1' :
+                     p.success_rate >= 70 ? '#facc15' :
+                     p.downloads ? '#ef4444' : 'var(--fg-3)'
+            }}>{p.downloads ? `${p.success_rate.toFixed(0)}%` : '—'}</span>
+            <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {Object.entries(p.languages || {}).slice(0, 5).map(([code, n]) => (
+                <span key={code} title={`${n} downloads in ${code}`} className="mono" style={{
+                  padding: '1px 6px', borderRadius: 3,
+                  background: 'var(--bg-3)', fontSize: 'var(--text-2xs)', color: 'var(--fg-2)',
+                }}>{code}:{n}</span>
+              ))}
+            </span>
+            <span className="mono" style={{ textAlign: 'right', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              {fmtTime(p.last_seen)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{
+        background: 'var(--bg-1)', border: 'var(--border)',
+        borderRadius: 'var(--radius-md)', padding: '12px 14px',
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)', lineHeight: 1.5,
+      }}>
+        <b style={{ color: 'var(--fg-1)' }}>How this is built:</b> subarr aggregates Bazarr&apos;s subtitle-download
+        history (last ~2000 events) by provider, tracking download count, average match score,
+        success rate (downloads not subsequently blacklisted), and per-language breakdowns. <br/>
+        <b style={{ color: 'var(--fg-1)' }}>Global leaderboard</b> (v1.1.1): anonymized snapshots from
+        all installs aggregate at subarr.com/stats — the only place in the arr ecosystem with cross-user
+        provider quality data.
+      </div>
+    </div>
+  );
+}
+
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders }) {
   return (
     <aside style={{
       width: 220, flex: '0 0 220px',
@@ -206,7 +401,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: '8px 16px', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -229,6 +424,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
       <div style={{ marginBottom: 14 }}>
         <div style={{ padding: '0 16px 6px' }}><span className="label">subarr</span></div>
         {[
+          { id: 'providers', label: 'Providers', active: providersActive, onClick: onSelectProviders },
           { id: 'system', label: 'System actions', active: systemActive, onClick: onSelectSystem },
           { id: 'updates', label: 'Updates', active: updatesActive, onClick: onSelectUpdates },
           { id: 'telemetry', label: 'Telemetry', active: telemetryActive, onClick: onSelectTelemetry },
@@ -283,8 +479,17 @@ function IntegrationPanel({ rail, refetchHealth }) {
   const bazarrSyncDisk = async () => {
     setSyncing(true);
     try {
-      const r = await fetch('/api/bazarr/sync-disk', { method: 'POST', credentials: 'same-origin' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const r = await fetch('/api/bazarr/sync-disk', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (j.detail) detail = j.detail; } catch {}
+        throw new Error(detail);
+      }
       alert('Bazarr sync-disk triggered.');
     } catch (e) {
       alert(`Bazarr sync-disk failed: ${e.message}`);
@@ -409,6 +614,22 @@ function SystemPanel() {
           control={<button className="btn sm" disabled={!!busy}
             onClick={() => run('Bazarr sync-disk', '/api/bazarr/sync-disk')}>
             {busy === 'Bazarr sync-disk' ? 'Syncing…' : 'Sync now'}
+          </button>} />
+        <Row label="Unload Ollama model"
+          hint="Frees VRAM by evicting the currently-loaded Ollama model. Useful before a heavy subgen batch — Whisper needs ~5GB VRAM."
+          control={<button className="btn sm" disabled={!!busy}
+            onClick={async () => {
+              setBusy('Unload');
+              try {
+                const r = await fetch('/api/enrichment/unload', { method: 'POST' });
+                const d = await r.json();
+                const freed = (d.vram_before_mib || 0) - (d.vram_after_mib || 0);
+                alert(freed > 50 ? `Unloaded ${d.model}. Freed ~${freed} MiB VRAM.`
+                                 : `Unloaded ${d.model}. (Model wasn't resident — no VRAM freed.)`);
+              } catch (e) { alert(`Failed: ${e.message}`); }
+              finally { setBusy(null); }
+            }}>
+            {busy === 'Unload' ? 'Unloading…' : 'Unload'}
           </button>} />
       </SectionCard>
 
@@ -540,32 +761,59 @@ export function SettingsPage() {
   const rail = useMemo(() => buildRailItems(health), [health]);
 
   const [selectedId, setSelectedId] = useState(null);
-  const [view, setView] = useState('integration'); // integration|system|telemetry|updates
+  const [view, setView] = useState('integration'); // integration|system|telemetry|updates|providers
 
   // Default-select the first available integration once we have data.
   useEffect(() => {
     if (!selectedId && rail.length > 0) setSelectedId(rail[0].id);
   }, [rail, selectedId]);
 
+  // #205 fix: honor URL hash on first mount so links like /settings#providers,
+  // /settings#telemetry, /settings#system, /settings#updates land directly on
+  // the named view rather than dropping the user on the default integration.
+  useEffect(() => {
+    const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
+    if (['providers', 'telemetry', 'system', 'updates'].includes(hash)) {
+      setView(hash);
+    }
+    // #207: 'integrations' lands on the summary tile grid rather than
+    // dumping the user onto Bazarr (the first rail item). From the
+    // summary they can click into any integration's detail panel.
+    if (hash === 'integrations') {
+      setView('integrations-summary');
+    }
+    // Also support /settings#integration:<name> for direct integration deep-links.
+    if (hash.startsWith('integration:')) {
+      const id = hash.split(':')[1];
+      if (id) { setSelectedId(id); setView('integration'); }
+    }
+  }, []);
+
   const selected = rail.find((r) => r.id === selectedId);
 
   const breadcrumb = view === 'integration' && selected
     ? ['Settings', 'Integrations', selected.name.toLowerCase()]
+    : view === 'integrations-summary' ? ['Settings', 'Integrations']
     : view === 'system' ? ['Settings', 'System actions']
     : view === 'telemetry' ? ['Settings', 'Telemetry']
     : view === 'updates' ? ['Settings', 'Updates']
+    : view === 'providers' ? ['Settings', 'Providers']
     : ['Settings'];
 
   const heading = view === 'integration' && selected ? selected.name
+    : view === 'integrations-summary' ? 'Integrations'
     : view === 'system' ? 'System actions'
     : view === 'telemetry' ? 'Telemetry'
     : view === 'updates' ? 'Updates'
+    : view === 'providers' ? 'Provider leaderboard'
     : 'Settings';
 
   const subhead = view === 'integration' && selected ? 'Live status from the integrations health probe.'
+    : view === 'integrations-summary' ? 'Live status across every connected service. Click a tile to drill in.'
     : view === 'system' ? 'One-shot actions against the running subarr.'
     : view === 'telemetry' ? 'Exactly what subarr sends and how to opt in/out.'
     : view === 'updates' ? 'Per-product version checks against GitHub releases.'
+    : view === 'providers' ? 'Bazarr provider success rates from your download history.'
     : '';
 
   return (
@@ -577,6 +825,7 @@ export function SettingsPage() {
         systemActive={view === 'system'} onSelectSystem={() => setView('system')}
         telemetryActive={view === 'telemetry'} onSelectTelemetry={() => setView('telemetry')}
         updatesActive={view === 'updates'} onSelectUpdates={() => setView('updates')}
+        providersActive={view === 'providers'} onSelectProviders={() => setView('providers')}
       />
       <main className="main-canvas" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingBottom: 0 }}>
         <div style={{ flex: 1, padding: '22px 26px 24px', overflow: 'auto' }}>
@@ -606,10 +855,17 @@ export function SettingsPage() {
             <div style={{ padding: 20, color: 'var(--fg-2)' }}>Loading integrations…</div>
           )}
 
+          {view === 'integrations-summary' && health && (
+            <IntegrationsSummaryPanel
+              rail={rail}
+              onSelect={(id) => { setSelectedId(id); setView('integration'); }}
+            />
+          )}
           {view === 'integration' && health && <IntegrationPanel rail={selected} refetchHealth={refetch} />}
           {view === 'system' && <SystemPanel />}
           {view === 'telemetry' && <TelemetryPanel />}
           {view === 'updates' && <UpdatesPanel />}
+          {view === 'providers' && <ProvidersPanel />}
         </div>
       </main>
     </div>

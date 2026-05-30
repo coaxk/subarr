@@ -42,6 +42,15 @@ class Settings:
     plex_url: str
     plex_token: str
     plex_section: str  # "all" or numeric section ID
+    # v1.1.1: path Plex sees the media tree at, when different from subarr's
+    # media_root. Used by partial-scan to translate sidecar paths to Plex's
+    # view before issuing /library/sections/{id}/refresh?path=. Leave empty
+    # when both containers mount the same path (common case).
+    plex_path_prefix: str
+    # v1.1.1: master toggle for partial-scan-on-sidecar-write. Default on;
+    # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
+    # Plex's own scheduler runs at.
+    plex_partial_scan_enabled: bool
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -104,6 +113,10 @@ def load() -> Settings:
         plex_url=os.environ.get("PLEX_URL", "http://192.168.1.105:32400"),
         plex_token=os.environ.get("PLEX_TOKEN", ""),
         plex_section=os.environ.get("PLEX_SECTION", "all"),
+        plex_path_prefix=os.environ.get("PLEX_PATH_PREFIX", ""),
+        plex_partial_scan_enabled=os.environ.get(
+            "PLEX_PARTIAL_SCAN_ENABLED", "1"
+        ).strip().lower() not in ("0", "false", "no", "off", ""),
         bazarr_url=os.environ.get("BAZARR_URL", "http://bazarr:6767"),
         bazarr_api_key=os.environ.get("BAZARR_API_KEY", ""),
         sonarr_url=os.environ.get("SONARR_URL", "http://sonarr:8989"),

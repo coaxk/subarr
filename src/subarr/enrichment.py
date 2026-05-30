@@ -138,6 +138,7 @@ async def enrich_one(
     ollama: OllamaClient,
     store: EnrichmentStore,
     use_cache: bool = True,
+    keep_alive: str | int | None = None,
 ) -> EnrichmentResult:
     if use_cache:
         cached = store.get(canonical_path)
@@ -153,7 +154,10 @@ async def enrich_one(
 
     prompt = _USER_TEMPLATE.format(title=title, path=canonical_path)
     try:
-        raw = await ollama.generate(prompt, system=_SYSTEM_PROMPT, temperature=0.0, num_predict=8)
+        raw = await ollama.generate(
+            prompt, system=_SYSTEM_PROMPT, temperature=0.0, num_predict=8,
+            keep_alive=keep_alive,
+        )
     except OllamaError as e:
         store.upsert(
             canonical_path=canonical_path, title=title,

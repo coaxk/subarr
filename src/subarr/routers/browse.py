@@ -10,10 +10,18 @@ Per-entry data builds the Library "source of truth" view: status dot,
 audio languages, embedded sub languages, sibling .srt languages — at a
 glance you know which episodes need work. Folder rollups make it easy
 to see coverage state at the show/season level (red/yellow/green).
+
+v1.1 ARCH: response cache keyed by (path, rollup). The rollup walk is
+the expensive bit; on a 1500-series library, the TV/ rollup takes 20-40s.
+With this cache, repeat browses of the same path return in <50ms. TTL
+keeps the cache fresh enough to catch new files; probe walks invalidate.
 """
 from __future__ import annotations
 
 import re
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +32,53 @@ from ..media_probe import audio_lang_summary, english_track_summary
 from ..paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
 
 router = APIRouter(prefix="/api", tags=["browse"])
+
+
+# v1.1 ARCH: browse response cache. LRU + TTL keyed by (path, rollup).
+# Capped at 256 entries (each is a fairly small dict — under 50KB even
+# for big folders). TTL is generous (5 min) — when the user actively
+# verifies / probes / scans, those endpoints can invalidate by path
+# prefix (see clear_cache_for_prefix below).
+_BROWSE_CACHE_CAP = 256
+_BROWSE_CACHE_TTL_S = 300.0
+_browse_cache: OrderedDict[tuple[str, bool], tuple[float, BrowseResponse]] = OrderedDict()
+_browse_cache_lock = threading.Lock()
+
+
+def _cache_get(key: tuple[str, bool]) -> tuple[float, BrowseResponse] | None:
+    with _browse_cache_lock:
+        entry = _browse_cache.get(key)
+        if entry is None:
+            return None
+        ts, payload = entry
+        if time.time() - ts > _BROWSE_CACHE_TTL_S:
+            _browse_cache.pop(key, None)
+            return None
+        # LRU touch
+        _browse_cache.move_to_end(key)
+        return entry
+
+
+def _cache_put(key: tuple[str, bool], payload: BrowseResponse) -> None:
+    with _browse_cache_lock:
+        _browse_cache[key] = (time.time(), payload)
+        _browse_cache.move_to_end(key)
+        while len(_browse_cache) > _BROWSE_CACHE_CAP:
+            _browse_cache.popitem(last=False)
+
+
+def clear_cache_for_prefix(prefix: str | None = None) -> int:
+    """Drop cached browse entries whose path matches the given prefix.
+    Pass None to flush the entire cache. Returns count dropped."""
+    with _browse_cache_lock:
+        if prefix is None:
+            n = len(_browse_cache)
+            _browse_cache.clear()
+            return n
+        victims = [k for k in _browse_cache if k[0].startswith(prefix)]
+        for k in victims:
+            _browse_cache.pop(k, None)
+        return len(victims)
 
 
 # Heuristic non-language tokens we should NOT mistake for ISO codes when
@@ -271,7 +326,16 @@ def browse(
         description="Recurse into subdirs to compute coverage rollups for the "
                     "traffic-light dot. Set false for fastest browse-only mode.",
     ),
+    fresh: bool = Query(False, description="v1.1 ARCH: bypass cache + rebuild now"),
 ) -> BrowseResponse:
+    # v1.1 ARCH: cache fast-path. Returns in <50ms when present, otherwise
+    # computes + stores. The rollup walk is the expensive piece (20-40s on
+    # TV/ root of a 1500-series library); cache makes repeat browses snappy.
+    cache_key = (path, rollup)
+    if not fresh:
+        hit = _cache_get(cache_key)
+        if hit is not None:
+            return hit[1]
     try:
         target = canonical_to_fs(path)
     except PathOutsideRootError:
@@ -397,7 +461,18 @@ def browse(
     if canonical:
         parent = "/".join(canonical.split("/")[:-1])
 
-    return BrowseResponse(path=canonical, parent=parent, entries=entries)
+    response = BrowseResponse(path=canonical, parent=parent, entries=entries)
+    _cache_put(cache_key, response)
+    return response
+
+
+@router.post("/browse/refresh")
+def refresh_browse(prefix: str = Query("", description="Path prefix to invalidate; empty = all")) -> dict[str, Any]:
+    """v1.1 ARCH: manual flush. Frontend can call this after a known
+    invalidating event (probe walk finish, scan submit, manual edit on
+    disk). Returns number of cache entries dropped."""
+    n = clear_cache_for_prefix(prefix if prefix else None)
+    return {"flushed": n, "prefix": prefix or "(all)"}
 
 
 def _count_media(folder: Path) -> tuple[int, int]:

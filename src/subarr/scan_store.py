@@ -170,3 +170,45 @@ class ScanStore:
                     scan.id,
                 ),
             )
+
+    def list_recent(self, since_epoch: float = 0.0, limit: int = 500) -> list[Scan]:
+        """v1.1.1 Featured Queue: return scans created after `since_epoch`,
+        most recent first. Each Scan carries per-path results so the queue
+        view can render skipped/error rows with their reason."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, status, reverse, current_index, paths_json, results_json "
+                "FROM scans WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+                (since_epoch, limit),
+            ).fetchall()
+        return [
+            Scan(
+                id=row[0], created_at=row[1], status=row[2],
+                reverse=bool(row[3]), current_index=row[4],
+                paths=json.loads(row[5]),
+                results=[PathResult.from_dict(d) for d in json.loads(row[6])],
+            )
+            for row in rows
+        ]
+
+    def delete(self, scan_id: str) -> bool:
+        """Drop a single scan from history. Returns True if a row was deleted."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
+            return cur.rowcount > 0
+
+    def delete_where_status_in(self, statuses: list[str],
+                               older_than: float | None = None) -> int:
+        """Bulk-purge scans matching a status list (e.g. ['done', 'error',
+        'skipped']). Optional age cutoff (epoch) restricts to old rows."""
+        if not statuses:
+            return 0
+        placeholders = ",".join(["?"] * len(statuses))
+        params: list[Any] = list(statuses)
+        sql = f"DELETE FROM scans WHERE status IN ({placeholders})"
+        if older_than is not None:
+            sql += " AND created_at < ?"
+            params.append(older_than)
+        with self._lock:
+            cur = self._conn.execute(sql, params)
+            return cur.rowcount

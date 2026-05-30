@@ -262,3 +262,86 @@ def audio_lang_summary(result: ProbeResult) -> list[str]:
         if lang not in seen:
             seen.append(lang)
     return seen
+
+
+# v1.1-O Layer 2: stream title parsing. Encoders default the `language` tag
+# to "eng" but often write the actual language into the stream `title` —
+# release groups put "VF" / "Français" / "Castellano" / "русский" etc there.
+# When title disagrees with language tag, title is the stronger signal.
+_TITLE_LANG_HINTS = {
+    # 2-/3-letter outputs map to our ISO 639-2/B convention
+    "fre": [r"\bfrench\b", r"\bfran[çc]ais\b", r"\bvf\b", r"\bvff\b", r"\bvfq\b", r"\btruefrench\b"],
+    "spa": [r"\bspanish\b", r"\bespa[ñn]ol\b", r"\bcastellano\b", r"\blatino\b", r"\bspa\b"],
+    "ger": [r"\bgerman\b", r"\bdeutsch\b", r"\bger\b", r"\bde\b(?:utsch)?"],
+    "ita": [r"\bitalian\b", r"\bitaliano\b", r"\bita\b"],
+    "rus": [r"\brussian\b", r"\brus\b", r"русск", r"русс"],
+    "jpn": [r"\bjapanese\b", r"\bjap\b", r"\bjpn\b", r"日本"],
+    "kor": [r"\bkorean\b", r"\bkor\b", r"한국"],
+    "chi": [r"\bchinese\b", r"\bmandarin\b", r"\bcantonese\b", r"\bchi\b", r"\bzh\b", r"中文"],
+    "por": [r"\bportuguese\b", r"\bportugu[êe]s\b", r"\bbrazil\b", r"\bbr\b", r"\bpor\b"],
+    "dut": [r"\bdutch\b", r"\bnederlands\b", r"\bned\b", r"\bnl\b"],
+    "swe": [r"\bswedish\b", r"\bsvenska\b", r"\bswe\b"],
+    "nor": [r"\bnorwegian\b", r"\bnorsk\b", r"\bnor\b"],
+    "dan": [r"\bdanish\b", r"\bdansk\b", r"\bdan\b"],
+    "fin": [r"\bfinnish\b", r"\bsuomi\b", r"\bfin\b"],
+    "pol": [r"\bpolish\b", r"\bpolski\b", r"\bpol\b"],
+    "ara": [r"\barabic\b", r"\bar\b", r"عرب"],
+    "hin": [r"\bhindi\b", r"\bhin\b", r"हिंदी"],
+    "tur": [r"\bturkish\b", r"\btürk\b", r"\btur\b"],
+    "eng": [r"\benglish\b", r"\beng\b"],
+}
+
+_TITLE_RES = {
+    code: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for code, patterns in _TITLE_LANG_HINTS.items()
+}
+
+
+def parse_title_lang(title: str | None) -> str | None:
+    """v1.1-O Layer 2: extract language hint from stream title. Returns
+    3-letter ISO 639-2/B code or None. First-match-wins, with English
+    explicitly checked LAST so a title like 'French DTS [English subs]'
+    correctly resolves to French (the audio is French; English mention
+    refers to the sub track in another stream)."""
+    if not title:
+        return None
+    t = title.lower()
+    # Check all non-English first
+    for code, patterns in _TITLE_RES.items():
+        if code == "eng":
+            continue
+        for p in patterns:
+            if p.search(t):
+                return code
+    # Only return eng if nothing else matched
+    for p in _TITLE_RES["eng"]:
+        if p.search(t):
+            return "eng"
+    return None
+
+
+def audio_lang_summary_with_titles(result: ProbeResult) -> tuple[list[str], list[str]]:
+    """v1.1-O Layer 2: enhanced version of audio_lang_summary that uses
+    stream title as a fallback signal when language tag is null/und/eng.
+
+    Returns (langs, evidence_notes). The langs list reflects our best
+    guess per stream — title wins over the tag when they disagree.
+
+    Used by build_coverage to set audio_label_suspect when ffprobe's
+    language tag is "eng" but the title clearly says otherwise."""
+    langs: list[str] = []
+    notes: list[str] = []
+    for i, a in enumerate(result.audio):
+        tag_lang = (a.language or "").lower() or None
+        title_lang = parse_title_lang(a.title)
+        chosen = tag_lang or "und"
+        if title_lang and title_lang != tag_lang:
+            # Title disagrees with tag (or tag is null) — prefer title.
+            chosen = title_lang
+            if tag_lang and tag_lang != "und":
+                notes.append(f"track {i}: tag='{tag_lang}' but title says '{title_lang}'")
+            elif tag_lang is None:
+                notes.append(f"track {i}: no tag, title says '{title_lang}'")
+        if chosen not in langs:
+            langs.append(chosen)
+    return langs, notes

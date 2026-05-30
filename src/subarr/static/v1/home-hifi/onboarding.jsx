@@ -226,6 +226,14 @@ function StepWelcome({ onAutoDetect, detectedCount }) {
 
 
 function StepPaths({ progress, setField, probeResult, onProbe }) {
+  // #136 fix: seed the displayed defaults into the underlying state once
+  // so the Continue button isn't gated on a field that LOOKS filled in but
+  // is actually empty. User sees /media/library, expects Continue to work.
+  React.useEffect(() => {
+    if (!progress.media_root) setField('media_root', '/media/library');
+    if (!progress.arr_path_prefix) setField('arr_path_prefix', '/data/Media/');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
@@ -233,18 +241,27 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           Where's your library?
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
-          Path subarr sees inside this container. Bind-mount your media root here
-          (e.g. <span className="mono">/mnt/nas/Media:/media/library:ro</span>).
+          The path subarr sees <b>inside its container</b> — that&apos;s usually
+          {' '}<span className="mono">/media/library</span>. Set the host path
+          {' '}separately in your compose file, e.g.
+          {' '}<span className="mono">/mnt/nas/Media:/media/library:ro</span>.
+          <br/>
+          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>
+            (Container path = where subarr sees files · Host path = where they
+            physically are on your machine.)
+          </span>
         </p>
       </div>
-      <FormRow label="Library root inside container">
+      <FormRow label="Library root (container view)"
+        hint="What subarr sees. Match the right-hand side of your bind mount.">
         <TextInput
           value={progress.media_root || '/media/library'}
           onChange={(v) => setField('media_root', v)}
           placeholder="/media/library"
         />
       </FormRow>
-      <FormRow label="ARR path prefix" hint="how Sonarr/Radarr see their /data — strip when canonicalising">
+      <FormRow label="ARR path prefix"
+        hint="The prefix Sonarr/Radarr use in their own container view (e.g. /data/Media/) — subarr strips this when canonicalising paths.">
         <TextInput
           value={progress.arr_path_prefix || '/data/Media/'}
           onChange={(v) => setField('arr_path_prefix', v)}
@@ -519,7 +536,10 @@ export function OnboardingPage() {
     const step = STEPS[state.step];
     if (!step.service) return;
     setBusy(true);
-    setTestResult({ ok: false, error: 'testing…' });
+    // #142 fix: clear the test result while testing — busy spinner conveys
+    // the pending state. Previous code set `ok: false` which made the chip
+    // flash red for half a second before the actual result arrived.
+    setTestResult(null);
     const url = state.progress[`${step.service}_url`];
     const key = state.progress[`${step.service}_api_key`];
     const r = await Api.test(step.service, url, key);

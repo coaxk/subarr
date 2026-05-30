@@ -29,6 +29,7 @@ import logging
 
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
+from .integrations.plex import PlexClient
 from .provenance import ProvenanceStore
 from .subgen_client import SubgenClient, SubgenUnavailable
 
@@ -60,9 +61,10 @@ _BAZARR_SCAN_TASK_HINTS = (
 class CompletionWatcher:
     def __init__(self, subgen: SubgenClient, bazarr: BazarrClient,
                  provenance: ProvenanceStore, interval_s: int = WATCHER_INTERVAL_S,
-                 caps_provider=None):
+                 caps_provider=None, plex: PlexClient | None = None):
         self._subgen = subgen
         self._bazarr = bazarr
+        self._plex = plex
         self._provenance = provenance
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
@@ -153,8 +155,18 @@ class CompletionWatcher:
                 continue
             self._provenance.mark_completed(entry.id)
             log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
-            if entry.series_id is not None:
+            # v1.1-G: try direct multipart upload first (closes the loop
+            # tightly + no race vs. Bazarr's filesystem scan). Falls back
+            # to scan-disk task if upload fails or we lack episode_id.
+            uploaded = await self._try_upload_to_bazarr(entry)
+            if not uploaded and entry.series_id is not None:
                 await self._trigger_bazarr_scan(entry.id, entry.series_id)
+            # v1.1.1: fire Plex partial-scan against the file's directory
+            # so the freshly-written sidecar appears in Plex (and on Apple
+            # TV) without waiting for Plex's periodic scan. Best-effort —
+            # failure here doesn't unwind anything; Plex will pick it up
+            # on the next periodic scan anyway.
+            await self._maybe_plex_partial_scan(entry.canonical_path)
 
     async def _pass_retry_bazarr_notify(self) -> None:
         """Find ledger entries that completed but never successfully fired
@@ -197,6 +209,101 @@ class CompletionWatcher:
                     return
             # Mark each row notified so we don't keep re-firing.
             self._provenance.mark_bazarr_triggered(entry.id)
+
+    async def _try_upload_to_bazarr(self, entry) -> bool:
+        """v1.1-G: Multipart-upload the freshly-Whispered .srt directly
+        to Bazarr. Returns True on success (skip scan-disk), False on any
+        miss so the caller falls through to the legacy scan-disk trigger.
+
+        Why both paths? Bazarr's upload endpoint was added in 1.4 and is
+        the cleanest write-back — no race vs filesystem scans. But older
+        Bazarrs or movie rows without a known radarr_id need the disk-scan
+        fallback. Best-effort: any error → fallback path."""
+        if not self._bazarr.is_configured():
+            return False
+        srt_path = self._find_srt_sidecar(entry.canonical_path)
+        if srt_path is None:
+            log.debug("upload: no .srt sidecar found for %s", entry.canonical_path)
+            return False
+        try:
+            if entry.sonarr_episode_id and entry.series_id:
+                await self._bazarr.upload_episode_subtitle(
+                    series_id=entry.series_id,
+                    episode_id=entry.sonarr_episode_id,
+                    language="en",
+                    file_path=srt_path,
+                )
+                self._provenance.mark_bazarr_triggered(entry.id)
+                log.info("bazarr upload OK for episode %d (ledger #%d)",
+                         entry.sonarr_episode_id, entry.id)
+                return True
+            # Movie path (radarr_movie_id) — we'd need radarr id on the
+            # entry. Provenance ledger has radarr_movie_id; not all paths
+            # populate it. Skip for now; fall through to scan-disk.
+            return False
+        except IntegrationError as e:
+            log.warning("bazarr upload failed (%s); falling back to scan-disk", e)
+            return False
+        except OSError as e:
+            log.warning("bazarr upload skipped (.srt read error: %s); fallback", e)
+            return False
+
+    async def _maybe_plex_partial_scan(self, video_canonical: str) -> None:
+        """v1.1.1: best-effort Plex partial-scan trigger. Plex sees the file
+        at its own mount path (translated via PLEX_PATH_PREFIX if set); we
+        pass the resolved subarr-side full path to the client which handles
+        translation + section discovery.
+
+        Disabled cleanly when (a) no plex client wired, (b) PLEX_PARTIAL_SCAN_ENABLED=0,
+        (c) Plex unconfigured. All failures log.warning and return — never
+        raises into the completion loop."""
+        if self._plex is None:
+            return
+        from .config import settings as _settings
+        if not _settings.plex_partial_scan_enabled:
+            return
+        if not self._plex.is_configured():
+            return
+        from pathlib import Path
+        subarr_full = str(_settings.media_root / Path(video_canonical))
+        try:
+            result = await self._plex.partial_scan(subarr_full)
+            log.info(
+                "plex partial-scan fired: section=%s path=%s (ledger entry: %s)",
+                result.get("section"), result.get("plex_path"), video_canonical,
+            )
+        except IntegrationError as e:
+            log.warning(
+                "plex partial-scan failed for %s: %s (will be picked up "
+                "by Plex's next periodic scan)",
+                video_canonical, e,
+            )
+
+    def _find_srt_sidecar(self, video_canonical: str) -> str | None:
+        """Locate the .srt subgen wrote next to the video. Subgen's default
+        naming is <basename>.en.srt; fall back to any .srt sharing the
+        basename if the language tag differs."""
+        from pathlib import Path
+        from .config import settings
+        full = settings.media_root / Path(video_canonical)
+        try:
+            if not full.exists():
+                return None
+        except OSError:
+            return None
+        stem = full.stem
+        parent = full.parent
+        # Preferred: <stem>.en.srt
+        candidate = parent / f"{stem}.en.srt"
+        if candidate.exists():
+            return str(candidate)
+        # Fallback: any sibling .srt sharing the stem
+        try:
+            for p in parent.glob(f"{stem}*.srt"):
+                return str(p)
+        except OSError:
+            pass
+        return None
 
     async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int) -> None:
         if not self._bazarr.is_configured():
