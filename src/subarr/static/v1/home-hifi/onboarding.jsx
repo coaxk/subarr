@@ -327,11 +327,18 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
   // host probably wants the same scheme+host with that service's default
   // port. Watch all *_url keys in progress and on first mount synthesise
   // this service's URL from whichever earlier service already worked.
+  const PORTS = { bazarr: '6767', sonarr: '8989', radarr: '7878', tautulli: '8181', subgen: '9000', ollama: '11434' };
+  const detectedContainer = progress.detected_services?.[svc]?.container_name;
   React.useEffect(() => {
     if (progress[urlKey]) return; // user already typed (or we already prefilled)
-    const PORTS = { bazarr: '6767', sonarr: '8989', radarr: '7878', tautulli: '8181', subgen: '9000', ollama: '11434' };
     const myPort = PORTS[svc];
     if (!myPort) return;
+    // #137: prefer the docker-detected container name when we have one —
+    // it's the truthiest hostname for an *arr stack on a shared network.
+    if (detectedContainer) {
+      setField(urlKey, `http://${detectedContainer}:${myPort}`);
+      return;
+    }
     for (const key of ['sonarr_url', 'radarr_url', 'bazarr_url', 'tautulli_url']) {
       const v = progress[key];
       if (!v || typeof v !== 'string') continue;
@@ -396,6 +403,26 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
               <li><code className="mono">{placeholderUrl}</code> — same docker network as {labels.display}</li>
               <li><code className="mono">http://192.168.x.x:{labels.port}</code> — host LAN IP, when containers are on different networks</li>
               <li><code className="mono">http://host.docker.internal:{labels.port}</code> — Docker Desktop on macOS/Windows</li>
+              {detectedContainer && (
+                <li>
+                  Detected container name: <code className="mono">{detectedContainer}</code>
+                  {' — '}
+                  <button
+                    type="button"
+                    onClick={() => setField(urlKey, `http://${detectedContainer}:${labels.port}`)}
+                    style={{
+                      background: 'rgba(167,139,250,0.12)',
+                      border: '1px solid rgba(167,139,250,0.4)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--violet-400)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontSize: 'var(--text-xs)',
+                      padding: '2px 8px',
+                    }}
+                  >click to use</button>
+                </li>
+              )}
             </ul>
             Avoid <code className="mono">localhost</code>: inside the container it means subarr itself.
           </div>
@@ -645,11 +672,20 @@ export function OnboardingPage() {
     }
     const services = r.services || {};
     const patch = {};
+    // #137: stash the per-service detected metadata (container_name, etc.)
+    // onto progress.detected_services so later integration steps can
+    // surface a one-click "use detected container name" chip even if the
+    // user didn't accept the inferred URL on first scan.
+    const detected = {};
     for (const [svc, info] of Object.entries(services)) {
       if (info.candidate?.inferred_url) patch[`${svc}_url`] = info.candidate.inferred_url;
+      if (info.candidate?.container_name) {
+        detected[svc] = { container_name: info.candidate.container_name };
+      }
       // We never autofill API keys here — wizard surfaces them per-service
       // with a clear "extracted from <source>" badge.
     }
+    patch.detected_services = detected;
     setAutoDetected(Object.keys(services).length);
     setState(prev => ({ ...prev, progress: { ...prev.progress, ...patch } }));
   };
