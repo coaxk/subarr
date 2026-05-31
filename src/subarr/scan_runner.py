@@ -45,6 +45,13 @@ class ScanRunner:
         self._store = store
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        # v1.1.1 #224: per-scan audio_language_override (ISO 639-1 or
+        # LanguageCode-parseable). Set at start() when the caller has a
+        # user-verified ground-truth language for the file. Forwarded to
+        # subgen's POST /batch so it bypasses SKIP_IF_AUDIO_LANGUAGES.
+        # Lives in memory only — if subarr restarts mid-scan the override
+        # is lost, but so is the in-flight scan, so no consistency hole.
+        self._overrides: dict[str, str] = {}
         self._lock = asyncio.Lock()
         # Callable returning the cached SubgenCapabilities snapshot.
         # We don't probe per-scan — caps are stable per app boot.
@@ -84,10 +91,14 @@ class ScanRunner:
             except (asyncio.CancelledError, Exception):
                 pass
 
-    def start(self, scan: Scan) -> None:
+    def start(self, scan: Scan, audio_language_override: str | None = None) -> None:
+        if audio_language_override:
+            self._overrides[scan.id] = audio_language_override
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
-        task.add_done_callback(lambda t, sid=scan.id: self._tasks.pop(sid, None))
+        task.add_done_callback(lambda t, sid=scan.id: (
+            self._tasks.pop(sid, None), self._overrides.pop(sid, None),
+        ))
 
     async def subscribe(self, scan_id: str) -> AsyncIterator[dict]:
         """Yields events for a scan until the scan reaches a terminal state.
@@ -146,7 +157,11 @@ class ScanRunner:
 
             try:
                 directory = canonical_to_subgen_batch(path)
-                status_code, body = await self._subgen.batch(directory, reverse=scan.reverse)
+                override = self._overrides.get(scan_id)
+                status_code, body = await self._subgen.batch(
+                    directory, reverse=scan.reverse,
+                    audio_language_override=override,
+                )
                 result.subgen_status_code = status_code
                 result.subgen_body = body
                 walked = body.get("walked", 0) if isinstance(body, dict) else 0
