@@ -141,10 +141,29 @@ async def lifespan(app_: FastAPI):
     # Update notification poller — once-per-24h GitHub release check
     # cached to update_checks table. Backs /api/updates which the UI
     # consumes for the header pill + Home tile + Settings panel.
+    #
+    # #108: the patch-stack revision (subarr_subgen_patch_rev = 'v4.7')
+    # is the version we compare against coaxk/subarr-subgen release
+    # tags. Previously we sent subgen_caps.version (the UPSTREAM subgen
+    # version, e.g. '2026.05.3') which is meaningful for vanilla subgen
+    # but never matches the patch-stack tags — so users running an old
+    # patch level never saw an update notification. Fall back to the
+    # upstream version when running vanilla subgen (no patch_rev), and
+    # to None when subgen is unreachable.
+    _subgen_caps = getattr(app_.state, "subgen_caps", None)
+    if _subgen_caps and getattr(_subgen_caps, "subarr_subgen_patch_rev", None):
+        _subgen_current = _subgen_caps.subarr_subgen_patch_rev
+    elif _subgen_caps and _subgen_caps.version:
+        # Vanilla subgen — keep the legacy behaviour (compare upstream
+        # version against the McCloudS/subgen tag, though release_notes
+        # link still points to our repo by DEFAULT_PRODUCTS).
+        _subgen_current = _subgen_caps.version
+    else:
+        _subgen_current = None
     from .update_checker import UpdateChecker
     current_versions = {
         "subarr": __version__,
-        "subarr-subgen": app_.state.subgen_caps.version if app_.state.subgen_caps else None,
+        "subarr-subgen": _subgen_current,
     }
     app_.state.update_checker = UpdateChecker(
         db_path=settings.db_path,
