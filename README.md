@@ -1,6 +1,8 @@
 # subarr
 
-The brain that drives subgen.
+**Subgen, but you can pick what gets transcribed — one file, a whole
+season, a whole series — and there's a brain deciding what's worth
+generating in the first place.**
 
 A peer service in the *arr family. Subarr coordinates subtitle generation
 across Bazarr + Sonarr + Radarr + Tautulli + subgen + ollama — figuring out
@@ -10,7 +12,7 @@ writing the result back so Bazarr's wanted list actually shrinks.
 > Bazarr is the librarian. Subgen is the worker. **Subarr is the brain.**
 
 [![status](https://img.shields.io/badge/status-pre%201.0-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-192_passing-22d3ee)](#)
+[![tests](https://img.shields.io/badge/tests-228_passing-22d3ee)](#)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
 ---
