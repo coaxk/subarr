@@ -124,6 +124,34 @@ function Row({ label, value, hint, control }) {
   );
 }
 
+// #169 (partial): disabled pencil icon next to read-only credential fields.
+// When the full backend lands (POST /api/integrations/{name}/credentials +
+// SQLite override table) this becomes the entry point for inline editing.
+// Until then it's deliberately disabled with a tooltip steering users to
+// the wizard — better signal than a vanishing button.
+function EditViaWizardButton({ field }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title={`Use the wizard to change ${field} for now (#169)`}
+      aria-label={`Edit ${field} — disabled, use wizard (#169)`}
+      style={{
+        background: 'transparent',
+        border: '1px solid var(--bg-4)',
+        borderRadius: 'var(--radius-sm)',
+        color: 'var(--fg-3)',
+        cursor: 'not-allowed',
+        fontSize: 'var(--text-xs)',
+        padding: '2px 6px',
+        opacity: 0.6,
+      }}
+    >
+      ✎ Edit
+    </button>
+  );
+}
+
 function Toggle({ on, onToggle, busy }) {
   return (
     <button
@@ -780,16 +808,43 @@ function IntegrationPanel({ rail, refetchHealth }) {
         </SectionCard>
       )}
 
-      {/* Connection details (read-only — env-driven in v1) */}
+      {/* Connection details (read-only — env-driven in v1).
+          #169 TODO: inline-edit URL + API key requires a new
+          POST /api/integrations/{name}/credentials backend route plus a
+          SQLite-backed override table (we can't write the .env — docker
+          compose owns it). Until that lands, the pencil icons below are
+          rendered DISABLED with a tooltip steering users to the wizard.
+          This is intentionally an honest UX improvement, not a half-done
+          edit flow. See task #169. */}
       <SectionCard label="Connection (read-only — env-driven in v1)">
         <Row label="Name" value={rail.name} />
         <Row label="Version" value={i.version || '—'} />
         <Row label="Online" value={i.online ? 'yes' : 'no'} />
         <Row label="Configured" value={i.configured ? 'yes' : 'no'} />
+        <Row
+          label="URL"
+          control={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>set via wizard / env</span>
+              <EditViaWizardButton field="URL" />
+            </span>
+          }
+        />
+        <Row
+          label="API key"
+          control={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>set via wizard / env</span>
+              <EditViaWizardButton field="API key" />
+            </span>
+          }
+        />
       </SectionCard>
 
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', padding: '0 6px' }}>
-        To change connection details, edit your <span className="mono">.env</span> file or re-run the onboarding wizard.
+        To change connection details, edit your <span className="mono">.env</span> file or
+        {' '}<a href="/onboarding" style={{ color: 'var(--violet-400)' }}>re-run the onboarding wizard</a>.
+        {' '}Inline-edit lands with <span className="mono">#169</span>.
       </div>
     </div>
   );
