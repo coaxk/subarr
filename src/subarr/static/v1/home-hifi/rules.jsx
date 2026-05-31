@@ -700,6 +700,64 @@ const PRESETS = [
       require_monitored: true,
     }),
   },
+  // #121: curated rule packs for common workflows. These build on the three
+  // archetypes above with more opinionated defaults targeting specific
+  // user needs.
+  {
+    id: 'anime',
+    label: 'Anime',
+    sub: 'Auto-queue Japanese audio missing English subs. Whisper translates.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      allow_languages: ['jpn', 'ja'],
+      deny_languages: (d.deny_languages || []).filter(l => !['eng', 'en'].includes(l)),
+      skip_embedded_en: false,  // EN sub IS the goal, not a skip signal
+      require_monitored: true,
+      skip_stale_disk: true,
+      min_score: 150,
+    }),
+  },
+  {
+    id: 'hearing-impaired',
+    label: 'Hearing-impaired',
+    sub: 'Prefer SDH/CC subs from Bazarr; Whisper only when none exist.',
+    apply: (d) => ({
+      ...d, mode: 'manual_confirm',  // Bazarr first; Whisper is fallback
+      require_monitored: true,
+      skip_stale_disk: true,
+      skip_embedded_en: true,  // Already has SDH-tagged embedded sub? Skip.
+      min_score: 200,
+    }),
+  },
+  {
+    id: 'foreign-language-learner',
+    label: 'Language learner',
+    sub: 'Original audio + English subs. Allows English only, transcribe task.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      allow_languages: ['eng', 'en'],
+      deny_languages: [],
+      skip_embedded_en: true,  // Don't double-create when already there
+      require_monitored: true,
+      min_score: 150,
+    }),
+  },
+  {
+    id: 'movies-only',
+    label: 'Movies only',
+    sub: 'Scope to your movies tree; boost recently-watched. TV is excluded.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      require_monitored: true,
+      skip_stale_disk: true,
+      skip_embedded_en: true,
+      // No path-allowlist field yet; users wanting strict scoping should
+      // pair this preset with a path-filter rule in v1.2. For now, the
+      // higher min_score + Tautulli scoring delta does most of the work.
+      min_score: 300,
+      max_per_run: 50,
+    }),
+  },
 ];
 
 function RulesWelcomeCard({ rulesDraft, setRulesDraft, mode, setMode }) {
