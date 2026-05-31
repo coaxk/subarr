@@ -124,6 +124,69 @@ export function fmtTime(d) {
   return `${h}:${m}:${s}`;
 }
 
+// ─── AsyncState: shared loading / error / empty render (#214) ────
+//
+// Five pages render the same loading / error / empty pattern with
+// drifting copy and inconsistent padding. This atom consolidates the
+// state machine so every page picks the right state from the same
+// precedence + shows the same visual language:
+//
+//   - loading wins over everything (first-paint spinner).
+//   - error wins over empty (we have data, just can't refresh).
+//   - empty renders when there's no error and no rows.
+//   - otherwise → render children unchanged.
+//
+// Pages that distinguish "first paint" from "background refetch"
+// (see #225) should pass loading=isInitialLoad, not raw `loading` —
+// the atom doesn't know about staleness.
+//
+// All three states render at the same padding + colour so a page
+// flipping between them doesn't jump.
+export function AsyncState({
+  loading,
+  error,
+  empty,
+  loadingMessage = 'Loading…',
+  emptyMessage = 'Nothing here yet.',
+  errorPrefix = "Couldn't load",
+  children,
+}) {
+  if (loading) {
+    return (
+      <div role="status" aria-live="polite" style={{
+        padding: 32, textAlign: 'center',
+        color: 'var(--fg-2)', fontSize: 'var(--text-sm)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+      }}>
+        <span className="spinner-ring" aria-hidden="true" />
+        <span>{loadingMessage}</span>
+      </div>
+    );
+  }
+  if (error) {
+    const msg = error && (error.message || String(error));
+    return (
+      <div role="alert" style={{
+        padding: 32, textAlign: 'center',
+        color: 'var(--error-500)', fontSize: 'var(--text-sm)',
+      }}>
+        {errorPrefix}: {msg || 'unknown error'}
+      </div>
+    );
+  }
+  if (empty) {
+    return (
+      <div style={{
+        padding: 24, textAlign: 'center',
+        color: 'var(--fg-3)', fontSize: 'var(--text-sm)',
+      }}>
+        {emptyMessage}
+      </div>
+    );
+  }
+  return children == null ? null : children;
+}
+
 // Demo data store — generated once, used everywhere.
 export function genSpark(n, base, vol) {
   return Array.from({ length: n }, (_, i) => {

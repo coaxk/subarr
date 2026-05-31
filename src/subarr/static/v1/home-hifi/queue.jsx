@@ -9,7 +9,7 @@
 // require new subgen endpoints (or careful use of /api/scan store
 // state). Out of scope for v1.0 ship.
 
-import { StatusDot } from './atoms.jsx';
+import { AsyncState, StatusDot } from './atoms.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -494,22 +494,17 @@ export function QueuePage() {
           </span>
         </div>
         <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-          {isInitialLoad && (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--fg-2)' }}>Loading queue…</div>
-          )}
-          {isError && (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--error-500)' }}>
-              Couldn't load queue: {String(error.message || error)}
-            </div>
-          )}
-          {!isInitialLoad && !isError && processing.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-              Nothing transcribing right now.
-            </div>
-          )}
-          {processing.map((item, i) => (
-            <QueueRow key={`p-${i}`} item={item} kind="processing" />
-          ))}
+          <AsyncState
+            loading={isInitialLoad}
+            error={isError ? error : null}
+            empty={!isInitialLoad && !isError && processing.length === 0}
+            loadingMessage="Loading queue…"
+            emptyMessage="Nothing transcribing right now."
+            errorPrefix="Couldn't load queue">
+            {processing.map((item, i) => (
+              <QueueRow key={`p-${i}`} item={item} kind="processing" />
+            ))}
+          </AsyncState>
         </div>
       </div>
 
@@ -526,11 +521,9 @@ export function QueuePage() {
           </span>
         </div>
         <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-          {!isInitialLoad && !isError && queued.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-              Nothing waiting in line.
-            </div>
-          )}
+          <AsyncState
+            empty={!isInitialLoad && !isError && queued.length === 0}
+            emptyMessage="Nothing waiting in line.">
           {queued.map((item, i) => {
             const p = item.path || item.canonical_path || item.file || '';
             return (
@@ -540,6 +533,7 @@ export function QueuePage() {
                 busy={busyAction === `cancel:${p}`} />
             );
           })}
+          </AsyncState>
         </div>
       </div>
 
