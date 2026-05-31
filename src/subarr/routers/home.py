@@ -163,7 +163,7 @@ async def _stages_block(state) -> list[dict[str, Any]]:
     except Exception as e:
         log.debug("stages: scanning error: %s", e)
     stages.append({
-        "id": "scanning", "label": "scanning",
+        "id": "scanning", "label": "transcribing",
         "count": scanning_count, "delta": 0, "spark": [],
         "top": top, "topMeta": top_meta, "live": live,
     })

@@ -70,7 +70,7 @@ const STAGES = [
   },
   {
     id: 'scanning',
-    label: 'scanning',
+    label: 'transcribing',
     count: 6,
     delta: 6,
     spark: genSpark(20, 4, 3),
@@ -210,7 +210,7 @@ const STAGE_HREF = {
 
 const STAGE_TIPS = {
   discovered:  'Total files subarr has indexed (probed or pending). Includes both video files and subtitle sidecars subarr has noticed.',
-  probing:     'Files currently being ffprobed by an active walk. Live count drops to 0 when the walk finishes.',
+  probing:     "Files currently being ffprobed by an active probe walk. Probe walks are separate from coverage walks — they only run after coverage discovery completes, or when you trigger one manually from Library. 0 here means no probe walks are active right now, not that something's broken.",
   wanted:      'Bazarr-wanted entries — subtitles missing per Bazarr. Includes both actionable (file exists) and pending-download (file not yet imported).',
   scanning:    'Files currently in subgen\'s transcribe queue or actively being transcribed.',
   written:     'Completed transcribes — subarr generated a subtitle file and (where possible) uploaded it directly to Bazarr.',

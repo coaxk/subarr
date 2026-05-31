@@ -918,6 +918,12 @@ function IntegrationPanel({ rail, refetchHealth }) {
       // exercises each integration. We surface the per-integration
       // online flag from the refreshed payload.
       await refetchHealth({ silent: false });
+      // Also force-refresh the dashboard cache so the dashboard's
+      // integrations tiles reflect the new state immediately, rather
+      // than carrying the stale "offline" for up to 30s (cache TTL).
+      // Fire-and-forget — we don't block the test UI on this.
+      fetch('/api/home/dashboard?fresh=true', { credentials: 'same-origin' })
+        .catch(() => {});
       setTestResult({ state: 'ok', at: Date.now() });
     } catch (e) {
       setTestResult({ state: 'error', error: e.message, at: Date.now() });
