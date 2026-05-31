@@ -126,6 +126,12 @@ class Settings:
     # same files at /media/library/<...>. This prefix is what Sonarr/Radarr
     # store as `path`; we strip it to canonicalise.
     arr_path_prefix: str
+    # #133: per-service path prefixes. Most homelabs have Sonarr at /data/TV/
+    # and Radarr at /data/Movies/ — one shared prefix forced users into a
+    # useless common parent. Both fall back to arr_path_prefix when their
+    # own env var is unset so existing deployments keep working unchanged.
+    sonarr_path_prefix: str
+    radarr_path_prefix: str
 
 
 def load() -> Settings:
@@ -165,6 +171,17 @@ def load() -> Settings:
         tautulli_url=_env_or("TAUTULLI_URL", "http://tautulli:8181"),
         tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", ""),
         arr_path_prefix=_env_or("ARR_PATH_PREFIX", "/data/Media/"),
+        # #133: each falls back to ARR_PATH_PREFIX if its own var is unset,
+        # so users with the legacy single-prefix .env keep working until
+        # they explicitly opt in to split prefixes.
+        sonarr_path_prefix=_env_or(
+            "SONARR_PATH_PREFIX",
+            _env_or("ARR_PATH_PREFIX", "/data/TV/"),
+        ),
+        radarr_path_prefix=_env_or(
+            "RADARR_PATH_PREFIX",
+            _env_or("ARR_PATH_PREFIX", "/data/Movies/"),
+        ),
         ollama_url=_env_or("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=_env_or("OLLAMA_MODEL", "qwen2.5:7b"),
         docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),

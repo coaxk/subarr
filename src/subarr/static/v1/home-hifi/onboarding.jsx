@@ -254,6 +254,16 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
   React.useEffect(() => {
     if (!progress.media_root) setField('media_root', '/media/library');
     if (!progress.arr_path_prefix) setField('arr_path_prefix', '/data/Media/');
+    // #133: per-service path prefixes. Default to the legacy
+    // arr_path_prefix if the user already had it set; otherwise the
+    // most common *arr layouts (Sonarr at /data/TV/, Radarr at
+    // /data/Movies/).
+    if (!progress.sonarr_path_prefix) {
+      setField('sonarr_path_prefix', progress.arr_path_prefix || '/data/TV/');
+    }
+    if (!progress.radarr_path_prefix) {
+      setField('radarr_path_prefix', progress.arr_path_prefix || '/data/Movies/');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -282,12 +292,24 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           placeholder="/media/library"
         />
       </FormRow>
-      <FormRow label="ARR path prefix"
-        hint="The prefix Sonarr/Radarr use in their own container view (e.g. /data/Media/) — subarr strips this when canonicalising paths.">
+      {/* #133: split per-service. Most homelabs have Sonarr at /data/TV/
+          and Radarr at /data/Movies/ — one shared prefix forced users to
+          pick a useless common parent. arr_path_prefix stays in progress
+          as a fallback so older onboarding states still load. */}
+      <FormRow label="Sonarr path prefix"
+        hint="What Sonarr stores as `path` — subarr strips this when canonicalising.">
         <TextInput
-          value={progress.arr_path_prefix || '/data/Media/'}
-          onChange={(v) => setField('arr_path_prefix', v)}
-          placeholder="/data/Media/"
+          value={progress.sonarr_path_prefix || progress.arr_path_prefix || '/data/TV/'}
+          onChange={(v) => setField('sonarr_path_prefix', v)}
+          placeholder="/data/TV/"
+        />
+      </FormRow>
+      <FormRow label="Radarr path prefix"
+        hint="What Radarr stores as `path` — subarr strips this when canonicalising.">
+        <TextInput
+          value={progress.radarr_path_prefix || progress.arr_path_prefix || '/data/Movies/'}
+          onChange={(v) => setField('radarr_path_prefix', v)}
+          placeholder="/data/Movies/"
         />
       </FormRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
