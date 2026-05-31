@@ -7,6 +7,80 @@ breaking config changes.
 
 ## [Unreleased]
 
+Active development on `feat/wire-chrome-dashboard-queue-library` — will fold
+into the next minor release.
+
+### Added
+- Brand assets: 4-size favicon (16/32/192/512 PNG) + 1200×630 OpenGraph
+  share card (#116, #117). Regenerable via
+  `python scripts/generate-brand-assets.py`.
+- Onboarding auto-detects bind-mounted media paths from
+  `/proc/self/mountinfo` (#130). One-click chips on the Paths step.
+- Ollama enrichment switched to structured JSON output — schema-constrained
+  `iso_code` + `confidence` + `reasoning` instead of free-text parsing (#156).
+  SQLite cache migrates idempotently.
+- Sidecar basename mismatch detector + auto-rename. Walks the library,
+  flags `.srt` files whose name diverged from their video sibling
+  (case-mismatch, trailing-tag, stem-typo). New `/api/sidecar/scan` +
+  `/api/sidecar/rename` endpoints (#203).
+- `release.yml`: tests + frontend drift check run BEFORE GHCR publish so a
+  red CI bar halts the image push (#119).
+
+### Fixed
+- `release.yml` `type-semver` typo: was producing a literal `:type-semver`
+  Docker tag AND blocking `:1.1.0` from being created (#119). v1.1.0 image
+  in production until next tag.
+- Review page Refresh button felt broken — sub-100ms fetch made the
+  spinner flash imperceptibly. Now padded to 350ms + visible "updated Xs ago"
+  stamp that resets on click.
+
+### Changed
+- Onboarding Step 2 labels — "Container's view of media" framing with
+  hints pointing at the right compose.yaml volumes line (#134).
+
+## [1.1.0] — 2026-05-31
+
+Coverage dashboard + the v1.1.1 polish sprint as one release. 26 commits
+from the `feat/wire-chrome-dashboard-queue-library` branch.
+
+### Added
+- Friendly 4-tile + welcome-card header pattern across Home / Rules /
+  Coverage / Settings.
+- End-to-end audio-language ground-truth chain: detect → suspect →
+  review queue → propagate to Sonarr → bypass subgen skip-list →
+  override Library display.
+- subarr-subgen v4.3 capability: `audio_language_override` query
+  param on POST /batch + capability advertisement on GET /queue.
+  subarr feature-detects + degrades on vanilla / v4.2.
+- Per-language `SUBGEN_KWARGS_LANG_*` blocks visible in Settings →
+  Subgen with hover-tipped explanations for the 13 most-tuned Whisper
+  kwargs (#171).
+- Per-service ARR path prefix: `sonarr_path_prefix` +
+  `radarr_path_prefix` instead of one shared value (#133).
+- Library: cascade-select with inherited-checked indicator (#211).
+  Search auto-expands category roots (#194). Probe-state indicators
+  on the AUDIO / SUBS / LENGTH column (#212).
+- 9 onboarding fixes: silent auto-detect failure (#129), container
+  hostname suggestion (#137), large-library connection timeout (#138),
+  URL field guidance (#139), "wanted" → "missing-subs" copy (#140),
+  anticipatory URL prefill (#141), Ollama port disambiguation (#144),
+  GPU failure guidance (#145), first-walk fix (#146).
+
+### Fixed
+- Empty-string env vars no longer fall through to wrong defaults (#127).
+  New `_env_or` helper.
+- Library: respect `audio_lang_store` user verifications instead of
+  showing stale probe data (#222).
+- Coverage caching + background refresh (kills 60-90s loads) (#196).
+- Many UX bugs from the live-drive cycle (#197 / #198 / #199 / #200 /
+  #201 / #210).
+
+### Changed
+- Test suite up to 228 passing (was 192). Test debt from v1.1-O/K/L/M
+  cleared (#221).
+
+## [1.0.0] — 2026-05-30 (legacy section preserved below)
+
 ### Added — v1.0 release prep
 
 - **All 6 UI screens** delivered from Claude Design and routed at
