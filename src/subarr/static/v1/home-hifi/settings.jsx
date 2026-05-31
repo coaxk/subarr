@@ -188,6 +188,222 @@ function buildRailItems(health) {
 // #207: Integrations summary panel. Lands here when user clicks Settings/Health
 // (instead of being dumped into Bazarr automatically). Tile grid showing every
 // integration's status / version / key metric with click-through to detail.
+// ─── Friendly header (4 panels) for the landing/summary view ─────
+//
+// Settings is sprawling: integrations rail + 5 top-level views + the
+// existing IntegrationsSummaryPanel grid. First-time visitors land
+// here without context. Same panel pattern as Home/Rules/Coverage:
+// a welcome card explaining what each view is for + 4 status tiles
+// summarising the system's posture.
+
+function SettingsHeaderTile({ label, value, sub, tint, tip, href, accent }) {
+  const inner = (
+    <div title={tip} style={{
+      flex: 1, minWidth: 0,
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '12px 14px',
+      display: 'flex', flexDirection: 'column', gap: 8,
+      cursor: href ? 'pointer' : 'default',
+      textDecoration: 'none', color: 'inherit',
+      transition: 'background 120ms ease, border-color 120ms ease',
+    }}
+      onMouseEnter={href ? (e) => e.currentTarget.style.background = 'var(--bg-2)' : undefined}
+      onMouseLeave={href ? (e) => e.currentTarget.style.background = 'var(--bg-1)' : undefined}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {tint && <StatusDot kind={tint} />}
+        <span className="label">{label}</span>
+      </div>
+      <div style={{
+        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        minHeight: 16, lineHeight: 1.35,
+      }}>{sub}</div>
+    </div>
+  );
+  return href ? <a href={href} style={{ flex: 1, minWidth: 0 }}>{inner}</a> : inner;
+}
+
+function SettingsStatusRow({ rail, onView }) {
+  // rail is the buildRailItems(health) output — every configured
+  // integration with its current ok/warn/error meta.
+  const healthy = rail.filter(r => r.meta?.kind === 'ok').length;
+  const degraded = rail.filter(r => r.meta?.kind && r.meta.kind !== 'ok').length;
+  const total = rail.length;
+
+  // Telemetry + updates + provider state are cheap one-shot fetches —
+  // the dedicated panels poll them, but we want a top-level summary
+  // visible before the user clicks in.
+  const [tel, setTel] = useState(null);
+  const [upd, setUpd] = useState(null);
+  const [prov, setProv] = useState(null);
+  useEffect(() => {
+    fetch('/api/telemetry/state', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(setTel).catch(() => {});
+    fetch('/api/updates/state', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(setUpd).catch(() => {});
+    fetch('/api/providers/leaderboard', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(setProv).catch(() => {});
+  }, []);
+  const updatesAvailable = upd && upd.products
+    ? upd.products.filter(p => p.update_available).length
+    : 0;
+  const providerCount = prov?.providers?.length || 0;
+  const telemetryOn = tel?.opted_in === true;
+
+  return (
+    <div style={{ display: 'flex', gap: 12, marginBottom: 14, maxWidth: 920 }}>
+      <SettingsHeaderTile
+        label="integrations"
+        value={total === 0 ? '—' : `${healthy}/${total}`}
+        sub={total === 0
+          ? 'none configured — run onboarding'
+          : (degraded > 0 ? `${degraded} need attention` : 'all healthy')}
+        tint={total === 0 ? 'muted' : (degraded > 0 ? 'warn' : 'ok')}
+        tip="Live health from /api/integrations/health. Click an integration in the rail to test or inspect."
+      />
+      <SettingsHeaderTile
+        label="telemetry"
+        value={tel == null ? '—' : (telemetryOn ? 'opted in' : 'off')}
+        sub={tel == null
+          ? 'loading…'
+          : (telemetryOn ? 'anonymous aggregates sent' : 'nothing leaves your network')}
+        tint={tel == null ? undefined : (telemetryOn ? 'info' : 'muted')}
+        href="/settings#telemetry"
+        tip="What subarr sends and how to opt in/out."
+      />
+      <SettingsHeaderTile
+        label="updates"
+        value={upd == null ? '—' : (updatesAvailable > 0 ? updatesAvailable : 'up to date')}
+        sub={upd == null
+          ? 'checking GitHub…'
+          : (updatesAvailable > 0
+              ? `new release${updatesAvailable === 1 ? '' : 's'} on GHCR`
+              : 'latest version installed')}
+        tint={upd == null ? undefined : (updatesAvailable > 0 ? 'violet' : 'ok')}
+        accent={updatesAvailable > 0 ? 'var(--violet-400)' : undefined}
+        href="/settings#updates"
+        tip="Per-product version checks against GitHub releases for subarr + subarr-subgen."
+      />
+      <SettingsHeaderTile
+        label="provider stats"
+        value={providerCount === 0 ? '—' : providerCount}
+        sub={providerCount === 0
+          ? 'connect Bazarr + run a walk'
+          : 'tracked from Bazarr history'}
+        tint={providerCount > 0 ? 'info' : 'muted'}
+        href="/settings#providers"
+        tip="Bazarr provider success rates from your download history. Surfaces which providers actually work for your library."
+      />
+    </div>
+  );
+}
+
+const SETTINGS_WELCOME_KEY = 'subarr.settings.welcome.dismissed';
+
+function SettingsWelcomeCard() {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(SETTINGS_WELCOME_KEY) === '1'; }
+    catch { return false; }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try { localStorage.setItem(SETTINGS_WELCOME_KEY, '1'); } catch {}
+    setDismissed(true);
+  };
+  const steps = [
+    {
+      icon: '🔌',
+      title: 'Check integration health',
+      copy: 'Click any tile below to see live status from /api/integrations/health and test the connection.',
+      cta: { label: 'See integrations', onClick: (e) => {
+        e.preventDefault();
+        // Scroll to the existing IntegrationsSummaryPanel — it's right below this card.
+        const el = document.querySelector('[data-integrations-grid]');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }},
+    },
+    {
+      icon: '🔁',
+      title: 'Run an update check',
+      copy: 'subarr polls GitHub every 24h. Force a check now if you just pushed an image.',
+      cta: { label: 'Open Updates', href: '/settings#updates' },
+    },
+    {
+      icon: '📊',
+      title: 'Provider leaderboard',
+      copy: "See which Bazarr providers actually work for YOUR library — sortable by success rate, language, and throughput.",
+      cta: { label: 'See providers', href: '/settings#providers' },
+    },
+  ];
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.10), rgba(34,211,161,0.05))',
+      border: '1px solid rgba(139,92,246,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+      marginBottom: 14, maxWidth: 920,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 22, lineHeight: 1 }}>⚙️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            Settings is where you peek under the hood.
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 4, lineHeight: 1.5 }}>
+            Every integration's live status, telemetry knob, update checks, and provider stats. Nothing
+            here is destructive — the actions are <i>tell-subarr-something</i>, not <i>edit-config</i>.
+            For credentials and URLs, re-run onboarding from <b>System actions</b>.
+          </div>
+        </div>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card on this device."
+          style={{ fontSize: 'var(--text-2xs)' }}>got it</button>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+      }}>
+        {steps.map((s, i) => (
+          <div key={i} style={{
+            background: 'var(--bg-1)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 12,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>{s.icon}</span>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>
+                {s.title}
+              </span>
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', flex: 1 }}>
+              {s.copy}
+            </div>
+            <div>
+              <a href={s.cta.href || '#'} onClick={s.cta.onClick}
+                className="btn" style={{
+                  textDecoration: 'none', display: 'inline-block',
+                  fontSize: 'var(--text-2xs)', padding: '4px 10px',
+                  background: 'var(--violet-500)', color: '#fff',
+                }}>
+                {s.cta.label}
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function IntegrationsSummaryPanel({ rail, onSelect }) {
   if (!rail || rail.length === 0) {
     return <div style={{ padding: 20, color: 'var(--fg-2)' }}>
@@ -199,7 +415,7 @@ function IntegrationsSummaryPanel({ rail, onSelect }) {
       <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
         Click any tile for live details, test connection, or per-integration actions.
       </div>
-      <div style={{
+      <div data-integrations-grid style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
         gap: 12,
@@ -856,10 +1072,14 @@ export function SettingsPage() {
           )}
 
           {view === 'integrations-summary' && health && (
-            <IntegrationsSummaryPanel
-              rail={rail}
-              onSelect={(id) => { setSelectedId(id); setView('integration'); }}
-            />
+            <>
+              <SettingsWelcomeCard />
+              <SettingsStatusRow rail={rail} onView={setView} />
+              <IntegrationsSummaryPanel
+                rail={rail}
+                onSelect={(id) => { setSelectedId(id); setView('integration'); }}
+              />
+            </>
           )}
           {view === 'integration' && health && <IntegrationPanel rail={selected} refetchHealth={refetch} />}
           {view === 'system' && <SystemPanel />}

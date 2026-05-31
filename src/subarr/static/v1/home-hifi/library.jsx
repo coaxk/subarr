@@ -233,24 +233,50 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
   const isVideo = !entry.is_dir;
 
   // Right-side meta: folders show rollup count, files show audio/sub langs.
+  // #212: be explicit about "not yet probed" vs. "probed and empty" so the
+  // user can distinguish missing data from missing tracks.
   let metaText;
+  let metaTooltip;
   if (entry.is_dir) {
     const probed = entry.videos_probed || 0;
     const total = entry.video_count || 0;
     const withEn = entry.videos_with_en || 0;
-    metaText = total > 0
-      ? `${withEn}/${total} EN${probed < total ? ` · ${probed} probed` : ''}`
-      : '—';
+    if (total === 0) {
+      metaText = '—';
+      metaTooltip = 'no video files inside this folder';
+    } else {
+      metaText = `${withEn}/${total} EN${probed < total ? ` · ${probed} probed` : ''}`;
+      metaTooltip = `${withEn} of ${total} files have an English audio or subtitle track. ${probed} files have been ffprobed; ${total - probed} still need a walk to know.`;
+    }
   } else {
+    const probedEver = entry.audio_langs != null
+      || entry.sub_langs != null
+      || entry.duration_s != null;
     const parts = [];
-    if (entry.audio_langs?.length) parts.push(`audio: ${entry.audio_langs.join(',')}`);
+    if (entry.audio_langs?.length) {
+      parts.push(`audio: ${entry.audio_langs.join(',')}`);
+    } else if (probedEver) {
+      parts.push('audio: ?');
+    }
     if (entry.sub_langs?.length) {
-      const subList = entry.sub_langs.join(',');
-      parts.push(`sub: ${subList}`);
+      parts.push(`subs: ${entry.sub_langs.join(',')}`);
+    } else if (probedEver) {
+      parts.push('subs: —');
     }
     if (entry.embedded_en) parts.push(`emb: ${entry.embedded_en}`);
     if (entry.duration_s) parts.push(fmtDuration(entry.duration_s));
-    metaText = parts.join(' · ') || (entry.has_sibling_srt ? 'has .srt' : '—');
+    if (!probedEver) {
+      metaText = entry.has_sibling_srt ? 'has .srt (not probed yet)' : 'not yet probed';
+      metaTooltip = 'subarr hasn\'t ffprobed this file yet. Run a coverage walk or open the file modal to probe on demand.';
+    } else {
+      metaText = parts.join(' · ');
+      metaTooltip = [
+        entry.audio_langs?.length ? `Audio tracks: ${entry.audio_langs.join(', ')}` : 'No audio language declared in the file metadata',
+        entry.sub_langs?.length ? `Embedded subtitle tracks: ${entry.sub_langs.join(', ')}` : 'No embedded subtitle tracks',
+        entry.embedded_en ? `Confirmed English embedded sub: ${entry.embedded_en}` : null,
+        entry.duration_s ? `Runtime: ${fmtDuration(entry.duration_s)}` : null,
+      ].filter(Boolean).join(' · ');
+    }
   }
 
   // Alphabet jump: every directory entry, at any depth, is a jump target.
@@ -309,12 +335,13 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           fontFamily: isVideo ? 'var(--font-mono)' : 'inherit',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{entry.name}{entry.is_dir ? '/' : ''}</span>
-        <span className="mono" style={{
+        <span className="mono" title={metaTooltip} style={{
           fontSize: 'var(--text-2xs)',
           color: 'var(--fg-2)',
           textAlign: 'right',
           maxWidth: 480,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          cursor: 'help',
         }}>{metaText}</span>
         <span className="num mono" style={{
           fontSize: 'var(--text-2xs)',
@@ -676,7 +703,12 @@ export function LibraryPage() {
             <span title="Coverage status">●</span>
             <span />
             <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)' }}>name</span>
-            <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right' }}>audio / sub / runtime</span>
+            <span title="Per-file: audio language(s) · embedded subtitle language(s) · runtime. Per-folder: count of files with English coverage / total files. '?' means subarr hasn't ffprobed that file yet — run a coverage walk or open the file modal to probe on demand."
+              style={{
+                fontSize: 'var(--text-2xs)', textTransform: 'uppercase',
+                letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right',
+                cursor: 'help',
+              }}>audio · subs · length</span>
             <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-2)', textAlign: 'right' }}>size</span>
           </div>
           <div ref={treeScrollRef} style={{ flex: 1, overflow: 'auto' }}>

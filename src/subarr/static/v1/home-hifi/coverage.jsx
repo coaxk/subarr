@@ -675,6 +675,216 @@ function ScoringBadges({ r }) {
 // v1.1-O Layer 4: banner showing how many rows need audio-lang review
 // across the whole library. Polls /api/audio-lang/pending-review on mount
 // and after a verification fires.
+// ─── Friendly header — 4 panels above the dense filter+table UI ───
+//
+// Coverage is the most-trafficked page after Home. Drop the user into
+// the same panel pattern the dashboard + rules pages use: 1 welcome
+// card explaining what this page IS, plus a 4-tile status row that
+// tells them at-a-glance what the situation looks like RIGHT NOW —
+// before they touch the dense filter bar below.
+
+function CoverageHeaderTile({ label, value, sub, tint, tip, accent }) {
+  return (
+    <div title={tip} style={{
+      flex: 1, minWidth: 0,
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '12px 14px',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {tint && <StatusDot kind={tint} />}
+        <span className="label">{label}</span>
+      </div>
+      <div style={{
+        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        minHeight: 16, lineHeight: 1.35,
+      }}>{sub}</div>
+    </div>
+  );
+}
+
+function fmtRel(ts) {
+  if (!ts) return null;
+  const diff = Date.now() / 1000 - (typeof ts === 'string' ? Date.parse(ts) / 1000 : ts);
+  if (diff < 60) return 'just now';
+  const m = Math.floor(diff / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function CoverageStatusRow({ data, rows, pendingReview }) {
+  // Read from the loaded coverage payload so the tiles auto-refresh on
+  // every poll without an extra round-trip.
+  const total = data?.totals?.items ?? null;
+  const suspectAudio = rows.filter(r => r.reason === 'audio-mislabel').length;
+  // "Worth a look right now" = high-score rows the user would most likely
+  // actually want subtitles for. Threshold matches the auto-queue default.
+  const worth = rows.filter(r => (r.score ?? 0) >= 200).length;
+  const lastWalkTs = data?.generated_at;
+  const lastWalkRel = fmtRel(lastWalkTs);
+  const cached = data?.cached;
+  const cacheAge = data?.cache_age_s;
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <CoverageHeaderTile
+        label="open gaps"
+        value={total == null ? '—' : total.toLocaleString('en-US')}
+        sub={total === 0 ? 'nothing missing right now' : 'rows in the table below'}
+        tint={total > 0 ? 'warn' : 'ok'}
+        tip="Every file Bazarr says is missing a sub, after subarr's reconciliation passes."
+      />
+      <CoverageHeaderTile
+        label="worth queueing"
+        value={worth.toLocaleString('en-US')}
+        sub={worth === 0
+          ? 'no high-score candidates right now'
+          : `score ≥ 200 — the auto-queue threshold`}
+        tint={worth > 0 ? 'violet' : 'muted'}
+        accent={worth > 0 ? 'var(--violet-400)' : undefined}
+        tip="Rows scoring high enough that the default auto-queue rule would dispatch them. Visit Rules to change the threshold."
+      />
+      <CoverageHeaderTile
+        label="needs your call"
+        value={(suspectAudio + pendingReview).toLocaleString('en-US')}
+        sub={[
+          suspectAudio > 0 && `${suspectAudio} audio-suspect`,
+          pendingReview > 0 && `${pendingReview} pending review`,
+        ].filter(Boolean).join(' · ') || 'nothing waiting on you'}
+        tint={(suspectAudio + pendingReview) > 0 ? 'warn' : 'muted'}
+        tip="Rows where subarr can't decide on its own — usually because the audio language is mislabeled. Quick listen + confirm clears them."
+      />
+      <CoverageHeaderTile
+        label="last walk"
+        value={lastWalkRel || '—'}
+        sub={cached
+          ? `served from cache (${cacheAge}s old)`
+          : (lastWalkTs ? 'fresh data' : 'use Re-walk to populate')}
+        tint={lastWalkTs ? 'info' : 'muted'}
+        tip="When subarr last reconciled gaps against the live arr stack. Re-walk now to refresh on demand."
+      />
+    </div>
+  );
+}
+
+const COVERAGE_WELCOME_KEY = 'subarr.coverage.welcome.dismissed';
+
+function CoverageWelcomeCard({ rows, pendingReview }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(COVERAGE_WELCOME_KEY) === '1'; }
+    catch { return false; }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try { localStorage.setItem(COVERAGE_WELCOME_KEY, '1'); } catch {}
+    setDismissed(true);
+  };
+  // The 3 quick-action cards pivot off what's actually in the data.
+  const worth = rows.filter(r => (r.score ?? 0) >= 200).length;
+  const steps = [
+    {
+      icon: '🎯',
+      title: 'See the highest-priority gaps',
+      copy: 'Filter the table to score ≥ 200 — the rows your auto-queue rule would dispatch first.',
+      cta: { label: 'Filter by score', onClick: (e) => {
+        e.preventDefault();
+        // Open the score-floor filter — same hash anchor the FilterBar listens to.
+        window.dispatchEvent(new CustomEvent('coverage-filter', { detail: { kind: 'score-floor', value: 200 } }));
+      }},
+    },
+    pendingReview > 0 ? {
+      icon: '🎧',
+      title: `Review ${pendingReview} audio-language flags`,
+      copy: 'A 20-second listen each unblocks subarr to either skip (English) or transcribe (foreign).',
+      cta: { label: 'Open batch review', onClick: (e) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('open-batch-review'));
+      }},
+    } : {
+      icon: '🧠',
+      title: 'How the score works',
+      copy: 'Each row scores against monitored status, watch recency (Tautulli), and provider success rate. Higher = more likely you actually want the sub.',
+      cta: { label: 'Read scoring docs', href: '/settings#scoring' },
+    },
+    {
+      icon: '⚙',
+      title: 'Edit auto-queue rules',
+      copy: 'Decide what subarr does on every scheduled walk: off, dashboard-only, manual-confirm, or full auto-queue.',
+      cta: { label: 'Open Rules', href: '/rules' },
+    },
+  ];
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.10), rgba(34,211,161,0.05))',
+      border: '1px solid rgba(139,92,246,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 22, lineHeight: 1 }}>🗂️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            Coverage is the live gap list.
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 4, lineHeight: 1.5 }}>
+            Bazarr seeds it, then subarr reconciles against Sonarr, Radarr, the on-disk probe,
+            and (where present) Tautulli watch history. Each row scores from <b>0</b> to <b>1000</b>;
+            higher = more likely you actually want the sub. Pick rows + Queue, or
+            tune the <a href="/rules" style={{ color: 'var(--violet-400)' }}>auto-queue rule</a>{' '}
+            and let subarr do it.
+          </div>
+        </div>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card on this device."
+          style={{ fontSize: 'var(--text-2xs)' }}>got it</button>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+      }}>
+        {steps.map((s, i) => (
+          <div key={i} style={{
+            background: 'var(--bg-1)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 12,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>{s.icon}</span>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>
+                {s.title}
+              </span>
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', flex: 1 }}>
+              {s.copy}
+            </div>
+            <div>
+              <a href={s.cta.href || '#'} onClick={s.cta.onClick}
+                className="btn" style={{
+                  textDecoration: 'none', display: 'inline-block',
+                  fontSize: 'var(--text-2xs)', padding: '4px 10px',
+                  background: 'var(--violet-500)', color: '#fff',
+                }}>
+                {s.cta.label}
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PendingReviewBanner() {
   const [count, setCount] = useState(0);
   const [hidden, setHidden] = useState(false);
@@ -1748,6 +1958,23 @@ export function CoveragePage() {
   const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
   const [walking, setWalking] = useState(false);
 
+  // Pending audio-language review count surfaced in the header tile + welcome
+  // card. PendingReviewBanner already polls /api/audio-lang/pending-review,
+  // but it does so inside its own component scope — duplicate the small
+  // fetch here so the header tiles update without prop-drilling.
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCount = () => fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled) setPendingReviewCount(d?.count || 0); })
+      .catch(() => {});
+    fetchCount();
+    const handler = () => fetchCount();
+    window.addEventListener('audio-lang-verified', handler);
+    return () => { cancelled = true; window.removeEventListener('audio-lang-verified', handler); };
+  }, []);
+
   const { data, loading, error, refetch } = useLiveCoverage();
 
   // Deep-link from chrome rail: /coverage#review auto-opens BatchReviewModal.
@@ -1908,7 +2135,15 @@ export function CoveragePage() {
         </div>
       </div>
 
-      {/* Coverage strip */}
+      {/* Friendly header — 4 status tiles + welcome card with quick actions.
+          Mirrors the Home dashboard + Rules pages so the user lands on the
+          same explanatory pattern wherever they go. */}
+      <CoverageStatusRow data={data} rows={rows} pendingReview={pendingReviewCount} />
+      <CoverageWelcomeCard rows={rows} pendingReview={pendingReviewCount} />
+
+      {/* Coverage strip — kept below the panels as a one-line technical
+          summary; the panels above are for "what's the situation?" and this
+          is for "where does the data come from?" */}
       <div className="panel" style={{ padding: '12px 16px' }}>
         <CoverageStrip data={data} loading={loading} error={error} />
       </div>
