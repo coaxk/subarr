@@ -125,6 +125,13 @@ class Scheduler:
         self._tick_s = tick_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # Coverage walks are expensive (full Sonarr/Radarr/Bazarr API
+        # iteration over the entire library). Stacking concurrent walks
+        # multiplies upstream-API load and produces no useful work — they
+        # all see the same Bazarr-wanted snapshot. Lock so only one runs
+        # at a time; clicks while a walk is in flight return immediately
+        # with already_running=True.
+        self._walk_lock = asyncio.Lock()
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -278,12 +285,24 @@ class Scheduler:
     async def run_coverage_walk(self) -> dict[str, Any]:
         """Public entry point — also called by POST /api/schedule/run-now.
 
+        Gated on self._walk_lock: if another walk is in progress this
+        returns {already_running: True} immediately without queueing.
+        Prevents click-stacking the dashboard Run-now button into N
+        concurrent walks that all hit Bazarr/Sonarr/Radarr in parallel.
+
         Order: incremental probe walks (cheap on re-runs — cached files
         skip ffprobe via mtime+size check) → build_coverage with the
         freshly-refreshed probe cache → evaluate rules → enqueue. Probe
         roots are configured per-schedule (schedule_config.probe_roots,
         comma-separated). Empty means no probe step.
         """
+        if self._walk_lock.locked():
+            log.info("coverage_walk: skip — another walk already in progress")
+            return {"already_running": True}
+        async with self._walk_lock:
+            return await self._run_coverage_walk_locked()
+
+    async def _run_coverage_walk_locked(self) -> dict[str, Any]:
         rules = self._schedule.get_rules()
         sched = self._schedule.get_schedule("coverage_walk")
         roots_csv = (sched.probe_roots if sched else "") or ""
