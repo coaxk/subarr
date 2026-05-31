@@ -300,13 +300,18 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
   const svc = step.service;
   const urlKey = `${svc}_url`;
   const apiKeyKey = `${svc}_api_key`;
+  // #140: dropped "wanted" — Bazarr-jargon for users who haven't lived
+  // inside Bazarr; "missing-subs list" reads cleaner cold.
+  // #144: Ollama help disambiguates the typical 11434 port vs. the
+  // common reverse-proxy / OpenWebUI port confusion + names recommended
+  // models so first-time users don't have to spelunk into model catalogs.
   const labels = {
-    bazarr:   { display: 'Bazarr',   port: '6767', help: "Subarr reads Bazarr's wanted list and writes back when subs are generated." },
+    bazarr:   { display: 'Bazarr',   port: '6767', help: "Subarr reads Bazarr's missing-subs list and writes generated subs back so the list shrinks." },
     sonarr:   { display: 'Sonarr',   port: '8989', help: "Subarr resolves episode → file paths via Sonarr to skip stale-disk gaps." },
     radarr:   { display: 'Radarr',   port: '7878', help: "Same as Sonarr but for movies." },
     tautulli: { display: 'Tautulli', port: '8181', help: "Watch history boosts the gap-list scoring — recently-watched shows get priority." },
     subgen:   { display: 'subgen',   port: '9000', help: "The Whisper worker. Use ghcr.io/coaxk/subarr-subgen for full features, or vanilla mccloud/subgen for compat mode. Model size + precision (tiny → large-v3, float16/int8) are set on subgen's own env vars (WHISPER_MODEL, WHISPER_COMPUTE_TYPE) — subarr just dispatches." },
-    ollama:   { display: 'Ollama',   port: '11434', help: "Optional. Used for originalLanguage inference on shows where Sonarr returned null/und." },
+    ollama:   { display: 'Ollama',   port: '11434', help: "Optional. Used for originalLanguage inference on shows where Sonarr returned null/und. Point at Ollama directly (port 11434), NOT OpenWebUI (3000) — subarr calls /api/generate. Recommended models: qwen2.5:7b (default, fast, low VRAM) or llama3.1:8b. Pull with `ollama pull <model>` before this step." },
   }[svc];
   const placeholderUrl = `http://${svc}:${labels.port}`;
 
@@ -337,6 +342,22 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
             onChange={(v) => setField(urlKey, v)}
             placeholder={placeholderUrl}
           />
+          {/* #139: spell out the three URL forms so users on different
+              topologies don't guess wrong on the first try. Rendered
+              below the input as a small dim block — verbose enough to
+              be useful, faded enough to skip if you know the answer. */}
+          <div style={{
+            marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
+            lineHeight: 1.5,
+          }}>
+            Try whichever one your subarr container can reach:
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li><code className="mono">{placeholderUrl}</code> — same docker network as {labels.display}</li>
+              <li><code className="mono">http://192.168.x.x:{labels.port}</code> — host LAN IP, when containers are on different networks</li>
+              <li><code className="mono">http://host.docker.internal:{labels.port}</code> — Docker Desktop on macOS/Windows</li>
+            </ul>
+            Avoid <code className="mono">localhost</code>: inside the container it means subarr itself.
+          </div>
         </FormRow>
         {svc !== 'subgen' && svc !== 'ollama' && (
           <FormRow label="API key" hint={`from ${labels.display} → Settings`}>
