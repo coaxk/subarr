@@ -698,7 +698,7 @@ function CoverageHeaderTile({ label, value, sub, tint, tip, accent }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -2322,7 +2322,7 @@ export function CoveragePage() {
       {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.005em' }}>Coverage</h1>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, letterSpacing: '-0.005em' }}>Coverage</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
             Files where subarr thinks a subtitle is missing or below threshold.
           </div>

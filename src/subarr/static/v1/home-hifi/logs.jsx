@@ -109,7 +109,7 @@ export function LogsPage() {
     <main className="main-canvas" style={{ padding: '22px 24px 0', gap: 12, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600 }}>Logs</h1>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Logs</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
             Live SSE stream from subarr + downstream services.
           </div>

@@ -186,7 +186,7 @@ function Stat({ label, value, color }) {
       <span className="label">{label}</span>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 26, lineHeight: 1, fontWeight: 500,
+          fontSize: 'var(--text-display-lg)', lineHeight: 1, fontWeight: 500,
           color: color || 'var(--fg-0)', letterSpacing: '-0.01em',
         }}>{value}</span>
       </div>
@@ -248,7 +248,7 @@ function SettingsHeaderTile({ label, value, sub, tint, tip, href, accent }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -1339,7 +1339,7 @@ export function SettingsPage() {
                   </React.Fragment>
                 ))}
               </div>
-              <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.005em' }}>{heading}</h1>
+              <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, letterSpacing: '-0.005em' }}>{heading}</h1>
               <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>{subhead}</div>
             </div>
           </div>

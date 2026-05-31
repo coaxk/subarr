@@ -158,7 +158,7 @@ export function PageHeader({ now }) {
       <div>
         <h1 style={{
           margin: 0,
-          fontSize: 22, lineHeight: 1.15,
+          fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)',
           fontWeight: 600,
           letterSpacing: '-0.005em',
         }}>Dashboard</h1>
@@ -243,7 +243,7 @@ function StageTile({ s }) {
 
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 28, lineHeight: 1,
+          fontSize: 'var(--text-display-xl)', lineHeight: 1,
           fontWeight: 500,
           color: 'var(--fg-0)',
           letterSpacing: '-0.01em',
@@ -373,7 +373,7 @@ function GpuStat({ label, value, sub, bar, tip }) {
     <div title={tip} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, cursor: tip ? 'help' : 'default' }}>
       <span className="label">{label}</span>
       <span className="display num" style={{
-        fontSize: 20, lineHeight: 1,
+        fontSize: 'var(--text-xl)', lineHeight: 1,
         fontWeight: 500,
         color: 'var(--fg-0)',
         whiteSpace: 'nowrap',
@@ -546,7 +546,7 @@ function NextRunCard({ data }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 32, lineHeight: 1,
+          fontSize: 'var(--text-display-2xl)', lineHeight: 1,
           fontWeight: 500,
           letterSpacing: '-0.01em',
           color: enabled ? 'var(--fg-0)' : 'var(--fg-3)',

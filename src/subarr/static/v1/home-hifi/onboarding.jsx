@@ -194,7 +194,7 @@ function TestResult({ result }) {
 function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <h1 className="display" style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.01em' }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-xl)', fontWeight: 600, letterSpacing: '-0.01em' }}>
         Welcome to subarr
       </h1>
       <p style={{ margin: 0, fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -282,7 +282,7 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           Where's your library?
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -449,7 +449,7 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
             </>
           )}
         </div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           Connect {labels.display}
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -528,7 +528,7 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
 function StepGpu({ gpuInfo }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
         GPU check
       </h1>
       {gpuInfo ? (
@@ -607,7 +607,7 @@ function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           First walk
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>

@@ -579,7 +579,7 @@ function HeaderTile({ label, value, sub, tint, tip }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -926,7 +926,7 @@ export function RulesPage() {
             <span>/</span>
             <span className="mono" style={{ color: 'var(--fg-1)' }}>auto-queue</span>
           </div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, display: 'flex', alignItems: 'baseline', gap: 10 }}>
             Auto-queue rules
             {dirtyCount > 0 && (
               <span style={{ fontSize: 'var(--text-xs)', color: 'var(--warn-500)', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}>dirty</span>
