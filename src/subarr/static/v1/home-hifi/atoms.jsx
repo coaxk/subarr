@@ -124,6 +124,41 @@ export function fmtTime(d) {
   return `${h}:${m}:${s}`;
 }
 
+// ─── Icon kit: semantic → emoji map (#172) ─────────────────────
+//
+// One source of truth for the emoji glyphs we use as inline icons.
+// Pages were drifting (settings ⚙ vs gear, leaderboard 📊 vs chart,
+// etc.) and the same semantic ended up with different glyphs on
+// different pages. Importing ICONS.X by intent rather than typing
+// the literal keeps everything in sync and makes a swap a one-line
+// change here.
+//
+// Rules:
+//   - One semantic = one glyph. Don't add a second key for the same
+//     concept ("gear" + "settings" — pick one).
+//   - Use the semantic key in JSX, not the emoji literal: {ICONS.settings}.
+//   - Decorative emoji inside copy strings can stay inline (a one-off
+//     🎉 in a celebratory message is not a UI icon, it's content).
+export const ICONS = Object.freeze({
+  settings:    '⚙',
+  leaderboard: '📊',
+  warning:     '⚠',
+  verified:    '✓',
+  listen:      '🎧',
+  whisper:     '🤖',
+  celebrate:   '🎉',
+  close:       '✕',
+  edit:        '✎',
+  save:        '💾',
+  refresh:     '🔁',
+  plug:        '🔌',
+  folder:      '🗂',
+  target:      '🎯',
+  brain:       '🧠',
+  llama:       '🦙',
+  build:       '🛠',
+});
+
 // ─── SectionCard: panel + label header + optional action slot (#213) ──
 //
 // The canonical "labelled panel" shape used across settings, queue,
