@@ -132,6 +132,12 @@ class BrowseEntry(BaseModel):
     duration_s: float | None = None
     size_mb: float | None = None
     file_status: str | None = None   # 'covered' | 'embedded-only' | 'srt-only' | 'missing' | 'unknown'
+    # v1.1.1 #222: user-verified ground-truth audio language from the review
+    # queue (audio_lang_store). When set, this OVERRIDES audio_langs for UI
+    # purposes — the probe data is what the file CLAIMS, the verification is
+    # what the user heard. Library/Coverage display the verified value with
+    # an indicator so the user knows the file metadata still lies.
+    audio_lang_verified: str | None = None
 
 
 class BrowseResponse(BaseModel):
@@ -365,6 +371,11 @@ def browse(
     files.sort(key=lambda p: p.name.lower())
 
     probe_store = getattr(request.app.state, "probe_store", None)
+    # #222: pull user-verified audio language overrides up-front. One lookup,
+    # used across every file in this dir's response. Lookup keys are
+    # canonical paths so the join is O(1) per file.
+    audio_lang_store = getattr(request.app.state, "audio_lang", None)
+    verified_lookup = audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
 
     # Map every video file in this dir to its sibling .srt list (cheap one
     # iterdir per dir — we just did the listdir above so this reuses it).
@@ -454,6 +465,9 @@ def browse(
             duration_s=duration_s,
             size_mb=size_mb,
             file_status=_classify_file_status(has_en_srt, embedded, probed),
+            # #222: ground-truth lang from the review queue, if the user has
+            # confirmed one. The display layer treats this as authoritative.
+            audio_lang_verified=verified_lookup.get(canonical),
         ))
 
     canonical = path.strip().strip("/")

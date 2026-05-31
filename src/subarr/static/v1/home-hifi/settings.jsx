@@ -695,6 +695,219 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
 }
 
 // ─── Integration detail panel ────────────────────────────────────
+// #171: surface the per-language SUBGEN_KWARGS_LANG_* blocks from the
+// patched subgen's compose. /api/mode parses the YAML and returns
+// top_level_kwargs + per_language_kwargs as already-parsed dicts. The
+// whole point of subarr-subgen is THIS feature; making it visible in
+// the UI is the only way users discover what's tuned vs. default.
+//
+// Known languages — used to render a human-friendly name beside the
+// ISO 639-1 code. Not exhaustive; unknown codes still render as the
+// raw code so we don't error on new additions.
+const LANG_NAMES = {
+  EN: 'English', JA: 'Japanese', KO: 'Korean', ZH: 'Chinese',
+  ES: 'Spanish', FR: 'French', DE: 'German', IT: 'Italian',
+  PT: 'Portuguese', RU: 'Russian', HI: 'Hindi', AR: 'Arabic',
+  TR: 'Turkish', NL: 'Dutch', PL: 'Polish', SV: 'Swedish',
+};
+
+// The handful of Whisper kwargs users actually care about. Renders any
+// other key without a tooltip — the table stays accurate even when the
+// patched subgen adds new knobs we haven't documented yet.
+const KWARG_HINTS = {
+  beam_size: 'Search width during decoding. 5 = balanced; higher = slower + slightly better accuracy.',
+  patience: 'How long beam search waits for a better hypothesis. 1.0 = neutral; >1 = more thorough.',
+  length_penalty: 'Penalty against very long hypotheses. >1 favours longer; <1 favours shorter.',
+  repetition_penalty: 'Penalty against repeating tokens. >1 reduces repetition. JA often benefits.',
+  no_repeat_ngram_size: 'Block this-length token n-grams from repeating. 3 is common.',
+  compression_ratio_threshold: 'Reject segments whose compression ratio exceeds this — catches looping output.',
+  log_prob_threshold: 'Reject segments whose avg log prob falls below this. -1.0 typical.',
+  no_speech_threshold: 'Treat segment as silence when no-speech prob exceeds this.',
+  temperature: 'Sampling temperature schedule. List of values = fallback chain on rejection.',
+  vad_filter: 'Run Silero VAD before Whisper to drop silence regions.',
+  vad_parameters: 'Tunables for the VAD pre-filter.',
+  condition_on_previous_text: 'Feed prior segment as context. False reduces drift on long files.',
+  initial_prompt: 'Seed text passed to Whisper. Useful for proper-noun / domain biasing.',
+};
+
+function SubgenKwargsCard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/mode', { credentials: 'same-origin' })
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(e => { if (!cancelled) { setError(e); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return (
+      <SectionCard label="Per-language tuning (subarr-subgen)">
+        <div style={{ padding: 14, color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>
+          Reading subgen's compose…
+        </div>
+      </SectionCard>
+    );
+  }
+  if (error) {
+    return (
+      <SectionCard label="Per-language tuning (subarr-subgen)">
+        <div style={{ padding: 14, color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>
+          Couldn't read subgen's compose: <span className="mono">{String(error.message || error)}</span>.
+          {' '}This panel needs <span className="mono">SUBGEN_COMPOSE_PATH</span> mounted into subarr.
+        </div>
+      </SectionCard>
+    );
+  }
+
+  const topLevel = data.top_level_kwargs;
+  const perLang = data.per_language_kwargs || [];
+
+  return (
+    <SectionCard label="Per-language tuning (subarr-subgen)">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+          subarr-subgen lets you override Whisper kwargs per source language. The patched
+          worker picks the right block automatically based on the detected (or forced) audio
+          language. This is the single biggest reason to run subarr-subgen over vanilla — JA
+          drift and KO timing both need different kwargs from the defaults that work for EN.
+          <br/>
+          <span style={{ color: 'var(--fg-3)' }}>
+            Read-only here. Edit <span className="mono">SUBGEN_KWARGS_LANG_&lt;CODE&gt;</span> in your
+            subgen compose file, then restart the subgen container.
+          </span>
+        </div>
+
+        {/* Global defaults */}
+        {topLevel && (
+          <div>
+            <div style={{
+              fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.10em',
+              color: 'var(--fg-3)', marginBottom: 8,
+            }}>
+              Global defaults · <span className="mono">SUBGEN_KWARGS</span>
+            </div>
+            <KwargsTable kwargs={topLevel} />
+          </div>
+        )}
+
+        {/* Per-language overrides */}
+        {perLang.length === 0 ? (
+          <div style={{
+            padding: '14px 16px', background: 'var(--bg-2)',
+            border: 'var(--border)', borderRadius: 'var(--radius-md)',
+            fontSize: 'var(--text-sm)', color: 'var(--fg-2)',
+          }}>
+            No per-language overrides set yet. Add a{' '}
+            <span className="mono">SUBGEN_KWARGS_LANG_JA</span> block in your subgen compose
+            file (or follow the recipes at{' '}
+            <a href="https://github.com/coaxk/subarr-subgen#per-language-kwargs"
+               target="_blank" rel="noopener noreferrer"
+               style={{ color: 'var(--violet-400)' }}>subarr-subgen docs</a>) to start
+            tuning per source language.
+          </div>
+        ) : (
+          <div>
+            <div style={{
+              fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.10em',
+              color: 'var(--fg-3)', marginBottom: 8,
+            }}>
+              Per-language overrides
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {perLang.map(lk => (
+                <div key={lk.code} style={{
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--bg-4)',
+                  borderRadius: 'var(--radius-md)',
+                  overflow: 'hidden',
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 14px',
+                    background: 'rgba(139,92,246,0.06)',
+                    borderBottom: '1px solid var(--bg-4)',
+                  }}>
+                    <span className="mono" style={{
+                      fontSize: 'var(--text-xs)', fontWeight: 600,
+                      letterSpacing: '0.06em', color: 'var(--violet-400)',
+                    }}>{lk.code}</span>
+                    <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-0)' }}>
+                      {LANG_NAMES[lk.code] || lk.code}
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {lk.parse_error && (
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
+                        parse error: {lk.parse_error}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ padding: '8px 14px 12px' }}>
+                    {lk.parsed
+                      ? <KwargsTable kwargs={lk.parsed} compact />
+                      : <pre className="mono" style={{
+                          margin: 0, fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                        }}>{lk.raw}</pre>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{
+          fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+          paddingTop: 4, borderTop: '1px solid var(--bg-3)',
+        }}>
+          source: <span className="mono">{data.compose_path}</span>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function KwargsTable({ kwargs, compact }) {
+  const entries = Object.entries(kwargs);
+  if (entries.length === 0) {
+    return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>empty</div>;
+  }
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'minmax(180px, max-content) 1fr',
+      gap: compact ? '4px 14px' : '6px 16px',
+      fontSize: 'var(--text-xs)',
+    }}>
+      {entries.map(([k, v]) => (
+        <React.Fragment key={k}>
+          <span className="mono"
+            title={KWARG_HINTS[k] || undefined}
+            style={{
+              color: KWARG_HINTS[k] ? 'var(--fg-1)' : 'var(--fg-2)',
+              cursor: KWARG_HINTS[k] ? 'help' : 'default',
+              whiteSpace: 'nowrap',
+            }}>
+            {k}
+          </span>
+          <span className="mono" style={{
+            color: 'var(--fg-0)',
+            wordBreak: 'break-all',
+          }}>
+            {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 function IntegrationPanel({ rail, refetchHealth }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -822,6 +1035,12 @@ function IntegrationPanel({ rail, refetchHealth }) {
           rendered DISABLED with a tooltip steering users to the wizard.
           This is intentionally an honest UX improvement, not a half-done
           edit flow. See task #169. */}
+      {/* #171: subgen-only — surface the per-language SUBGEN_KWARGS_LANG_*
+          tuning. This is subarr-subgen's anchor differentiator vs vanilla
+          subgen and was completely invisible in the UI. Pulls from GET
+          /api/mode which already parses the compose file. */}
+      {rail.id === 'subgen' && <SubgenKwargsCard />}
+
       <SectionCard label="Connection (read-only — env-driven in v1)">
         <Row label="Name" value={rail.name} />
         <Row label="Version" value={i.version || '—'} />

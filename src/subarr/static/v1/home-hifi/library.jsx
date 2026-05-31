@@ -253,7 +253,13 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
       || entry.sub_langs != null
       || entry.duration_s != null;
     const parts = [];
-    if (entry.audio_langs?.length) {
+    // #222: user-verified audio language (from the review queue) overrides
+    // the probe-derived value. The probe says what the FILE claims; the
+    // verification says what the user heard. Show the verified value with
+    // a ✓ so users know subarr trusts this over the metadata.
+    if (entry.audio_lang_verified) {
+      parts.push(`audio: ${entry.audio_lang_verified} ✓`);
+    } else if (entry.audio_langs?.length) {
       parts.push(`audio: ${entry.audio_langs.join(',')}`);
     } else if (probedEver) {
       parts.push('audio: ?');
@@ -271,7 +277,11 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
     } else {
       metaText = parts.join(' · ');
       metaTooltip = [
-        entry.audio_langs?.length ? `Audio tracks: ${entry.audio_langs.join(', ')}` : 'No audio language declared in the file metadata',
+        entry.audio_lang_verified
+          ? `Audio language verified by user as ${entry.audio_lang_verified} (overrides file metadata, which claimed ${entry.audio_langs?.join(', ') || 'nothing'})`
+          : (entry.audio_langs?.length
+              ? `Audio tracks: ${entry.audio_langs.join(', ')}`
+              : 'No audio language declared in the file metadata'),
         entry.sub_langs?.length ? `Embedded subtitle tracks: ${entry.sub_langs.join(', ')}` : 'No embedded subtitle tracks',
         entry.embedded_en ? `Confirmed English embedded sub: ${entry.embedded_en}` : null,
         entry.duration_s ? `Runtime: ${fmtDuration(entry.duration_s)}` : null,
