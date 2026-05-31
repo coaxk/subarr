@@ -66,6 +66,12 @@ class SubgenCapabilities:
     # requests. subarr's Monitor cancel buttons gate on this; without
     # it the buttons render disabled with an explainer.
     queue_cancel: bool = False
+    # v4.5 capability: POST /detect_language_robust runs N-chunk Whisper
+    # detection and returns per-chunk + aggregate (majority vote, min
+    # probability across agreeing chunks). Layer 3 of subarr's audio-
+    # ground-truth funnel gates on this — without it the funnel falls
+    # back to single-chunk detect_language (less reliable).
+    robust_language_detection: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -81,6 +87,7 @@ class SubgenCapabilities:
             "compat_mode": not self.is_subarr_subgen,
             "audio_language_override": self.audio_language_override,
             "queue_cancel": self.queue_cancel,
+            "robust_language_detection": self.robust_language_detection,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -89,7 +96,8 @@ class SubgenCapabilities:
         return cls(
             reachable=False, version=None,
             has_queue=False, has_batch=False, is_subarr_subgen=False,
-            audio_language_override=False, queue_cancel=False, subarr_subgen_patch_rev=None,
+            audio_language_override=False, queue_cancel=False,
+            robust_language_detection=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -127,6 +135,35 @@ class SubgenClient:
             return r.json()
         except ValueError:
             return {"cancelled": False, "_raw": r.text[:200], "status_code": r.status_code}
+
+    async def detect_language_robust(self, path: str, chunks: int = 3,
+                                     chunk_length_s: int = 30) -> dict[str, Any]:
+        """v4.5+: multi-chunk Whisper language detection. Returns the
+        full per-chunk breakdown + aggregate vote so subarr's review UI
+        can render evidence. Synchronous (~6-12s per call on a typical
+        GPU); callers should background this — never block a user-facing
+        request on it. Gate on capabilities.robust_language_detection
+        before calling — vanilla subgen will 404."""
+        # Wide read timeout: 3 chunks × ~10s + model load can hit 60s
+        # on cold cache. The default 120s read timeout already covers it.
+        try:
+            r = await self._client.post(
+                "/detect_language_robust",
+                params={"path": path, "chunks": chunks,
+                        "chunk_length_s": chunk_length_s},
+            )
+        except httpx.HTTPError as e:
+            raise SubgenUnavailable(f"subgen /detect_language_robust failed: {e}") from e
+        if r.status_code >= 500:
+            raise SubgenUnavailable(
+                f"subgen /detect_language_robust returned {r.status_code}: {r.text[:200]}"
+            )
+        try:
+            return r.json()
+        except ValueError as e:
+            raise SubgenUnavailable(
+                f"subgen /detect_language_robust returned non-json: {e}"
+            ) from e
 
     async def status(self) -> dict[str, Any]:
         try:
@@ -181,6 +218,7 @@ class SubgenClient:
         has_queue = False
         audio_language_override = False
         queue_cancel = False
+        robust_language_detection = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -201,6 +239,9 @@ class SubgenClient:
                                 caps_block.get("audio_language_override")
                             )
                             queue_cancel = bool(caps_block.get("queue_cancel"))
+                            robust_language_detection = bool(
+                                caps_block.get("robust_language_detection")
+                            )
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -219,6 +260,7 @@ class SubgenClient:
             is_subarr_subgen=is_subarr_subgen,
             audio_language_override=audio_language_override,
             queue_cancel=queue_cancel,
+            robust_language_detection=robust_language_detection,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(

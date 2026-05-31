@@ -21,6 +21,7 @@ from ..audio_sampler import (
 )
 from ..config import settings
 from ..paths import PathOutsideRootError, canonical_to_fs
+from ..subgen_client import SubgenUnavailable
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audio-lang", tags=["audio-lang"])
@@ -437,3 +438,60 @@ async def pending_review(request: Request) -> dict[str, Any]:
             "notes": it.get("audio_label_notes"),
         })
     return {"count": len(pending), "items": pending[:200]}
+
+
+# ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───
+
+class WhisperDetectRequest(BaseModel):
+    canonical_path: str
+    chunks: int = 3
+    chunk_length_s: int = 30
+
+
+@router.post("/whisper-detect")
+async def whisper_detect(req: WhisperDetectRequest, request: Request) -> dict[str, Any]:
+    """v1.2-A Layer 3: ask subgen to run robust multi-chunk language
+    detection on a file. Synchronous on the subgen side (~6-12s) — the
+    caller should not chain this in tight loops.
+
+    Returns the structured per-chunk breakdown + aggregate vote from
+    subgen's POST /detect_language_robust. The review UI surfaces this
+    as evidence next to the suspect/unknown flag so the user can confirm
+    the audio-lang with calibrated confidence instead of guessing.
+
+    Gates on subgen capabilities.robust_language_detection (subarr-subgen
+    v4.5+). Older subgen returns 503 with an upgrade hint.
+    """
+    canonical = (req.canonical_path or "").strip().strip("/")
+    if not canonical:
+        raise HTTPException(400, detail="canonical_path required")
+    caps = getattr(request.app.state, "subgen_caps", None)
+    if caps is None or not getattr(caps, "robust_language_detection", False):
+        raise HTTPException(
+            503,
+            detail=(
+                "robust_language_detection capability missing — upgrade "
+                "subarr-subgen to v4.5+. Current subgen rev: "
+                + (getattr(caps, "subarr_subgen_patch_rev", None) or "vanilla")
+            ),
+        )
+    try:
+        fs_path = canonical_to_fs(canonical)
+    except PathOutsideRootError:
+        raise HTTPException(400, detail=f"path escapes media root: {canonical!r}")
+    if not fs_path.exists():
+        raise HTTPException(404, detail=f"not found on disk: {canonical!r}")
+    subgen = request.app.state.subgen
+    # subgen wants the path as IT sees it (same media_root mount). The
+    # canonical form is mount-relative; both sides share the same root
+    # by design (see compose.yaml + onboarding wizard mounting docs).
+    subgen_path = str(fs_path)
+    try:
+        result = await subgen.detect_language_robust(
+            subgen_path,
+            chunks=max(1, min(10, int(req.chunks))),
+            chunk_length_s=max(5, min(120, int(req.chunk_length_s))),
+        )
+    except SubgenUnavailable as e:
+        raise HTTPException(502, detail=f"subgen unavailable: {e}")
+    return result
