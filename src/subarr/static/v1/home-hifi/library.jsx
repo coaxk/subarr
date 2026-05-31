@@ -190,6 +190,24 @@ function fmtDuration(secs) {
 }
 
 // ─── Tree node ───────────────────────────────────────────────────
+// #211: when an ancestor directory is selected, every descendant counts as
+// implicitly selected too (the scan runner walks recursively from the
+// ancestor path). Compute "inherited" so child checkboxes render checked
+// instead of looking unchecked underneath a ticked parent.
+//
+// Selection set holds canonical paths (POSIX-style "TV/Cheers/Season 1");
+// a path P inherits selection if some entry S in `selected` is a strict
+// prefix of P at a path-segment boundary. Cheap O(|selected|) check per
+// node; selected sets are tiny relative to the tree.
+function isUnderSelectedAncestor(path, selected) {
+  if (!selected || selected.size === 0) return false;
+  for (const s of selected) {
+    if (s === path) continue;
+    if (path.startsWith(s + '/')) return true;
+  }
+  return false;
+}
+
 function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn }) {
   // #194: search visibility. The tree is lazily loaded, so we can't
   // "find" matches inside un-expanded subtrees synchronously. Strategy:
@@ -207,6 +225,10 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
   if (!isVisible || !passesFilter) return null;
 
   const isSelected = selected.has(entry.path);
+  // #211: visually mark descendants of a selected directory as checked
+  // (they ARE in the implicit scan set; the parent path covers them).
+  const isInherited = !isSelected && isUnderSelectedAncestor(entry.path, selected);
+  const isVisuallyChecked = isSelected || isInherited;
   const indent = depth * 18;
   const isVideo = !entry.is_dir;
 
@@ -254,14 +276,27 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           height: 30,
           borderBottom: '1px solid var(--bg-3)',
           cursor: entry.is_dir ? 'pointer' : 'default',
-          background: isSelected ? 'rgba(139,92,246,0.06)' : 'transparent',
+          background: isVisuallyChecked ? 'rgba(139,92,246,0.06)' : 'transparent',
           transition: 'background var(--dur-fast)',
         }}>
         <span />
         <span
-          onClick={(e) => { e.stopPropagation(); onToggleSelect(entry.path, entry); }}
-          style={{ display: 'inline-flex', cursor: 'pointer' }}>
-          <CheckBox checked={isSelected} />
+          onClick={(e) => {
+            e.stopPropagation();
+            // #211: clicks on an inherited-checked node are no-ops —
+            // unticking it wouldn't actually exclude this node from the
+            // scan (the ancestor's path still covers it). Untick the
+            // ancestor first if you want finer-grain selection.
+            if (isInherited) return;
+            onToggleSelect(entry.path, entry);
+          }}
+          title={isInherited ? 'Covered by an ancestor selection — untick the parent to deselect' : undefined}
+          style={{
+            display: 'inline-flex',
+            cursor: isInherited ? 'not-allowed' : 'pointer',
+            opacity: isInherited ? 0.6 : 1,
+          }}>
+          <CheckBox checked={isVisuallyChecked} />
         </span>
         <StatusDotIndicator
           status={entry.is_dir ? entry.coverage_status : entry.file_status} />
