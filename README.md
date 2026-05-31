@@ -206,6 +206,55 @@ No auto-update. You always run `docker compose pull && up -d` yourself.
 
 ---
 
+## Networking: how subarr finds your *arr stack
+
+Subarr's integrations (Sonarr, Radarr, Bazarr, Tautulli, subgen, Plex,
+Ollama) reach those services via the URLs you provide in the wizard or in
+your `.env`. There are two common topologies:
+
+**1. Shared docker network (recommended).** Add subarr to the same docker
+network as your *arr stack. Then you can address each service by its
+container name on the default arr ports:
+
+```yaml
+networks:
+  - safe-bridge       # or whatever your *arr stack already uses
+
+# .env
+SONARR_URL=http://sonarr:8989
+RADARR_URL=http://radarr:7878
+BAZARR_URL=http://bazarr:6767
+SUBGEN_URL=http://subgen:9000
+TAUTULLI_URL=http://tautulli:8181
+PLEX_URL=http://plex:32400
+```
+
+This is what `docker-compose.yaml` in `deploy/templates/` ships with.
+DNS resolves container names within the network, so no IP addresses
+get baked in.
+
+**2. Bypass: subarr on host network or different stack.** If subarr is
+deployed standalone (no shared network with the *arr stack), reach each
+service by host IP + published port:
+
+```env
+SONARR_URL=http://192.168.1.10:8989
+RADARR_URL=http://192.168.1.10:7878
+BAZARR_URL=http://192.168.1.10:6767
+SUBGEN_URL=http://192.168.1.10:9000
+```
+
+Common gotcha — **`localhost` from inside a container points at the
+container, not the host.** Use the host's LAN IP (or
+`host.docker.internal` on Docker Desktop) instead of `localhost`.
+
+The onboarding wizard's "Test connection" button validates each URL
+against the live service before you commit it to settings; if it fails
+the chip stays red with the actual httpx error so you can fix the URL
+without restarting subarr.
+
+---
+
 ## Development
 
 ```bash
