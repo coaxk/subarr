@@ -194,7 +194,11 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
 
 export function ReviewPage() {
   const [data, setData] = useState(null);
+  // loading = first paint only (data === null). After we've ever rendered
+  // a list, refetches go through isRefetching so the stale list stays on
+  // screen and the user just sees a small inline spinner — #225.
   const [loading, setLoading] = useState(true);
+  const [isRefetching, setIsRefetching] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -208,7 +212,10 @@ export function ReviewPage() {
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, errors: 0 });
 
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
+    // First-paint only sets `loading`; every subsequent fetch (silent or
+    // user-initiated Refresh click) sets `isRefetching` so the existing
+    // list stays visible with a small spinner — no blank-and-redraw.
+    setIsRefetching(true);
     try {
       const r = await fetch('/api/audio-lang/pending-review', {
         credentials: 'same-origin',
@@ -217,9 +224,12 @@ export function ReviewPage() {
       setData(await r.json());
       setError(null);
     } catch (e) {
+      // On refetch error, KEEP the stale data visible. The error banner
+      // surfaces below the list. Only blank on first-paint failure.
       setError(e);
     } finally {
-      if (!silent) setLoading(false);
+      setIsRefetching(false);
+      setLoading(false);
     }
   }, []);
 
@@ -381,9 +391,26 @@ export function ReviewPage() {
             for bulk assignment, or click 🎧 to listen first.
           </div>
         </div>
-        <button className="btn" onClick={() => fetchPending()} disabled={loading}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {isRefetching && data && (
+            <span aria-live="polite" style={{
+              fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+              <span className="spinner-inline" aria-hidden="true" style={{
+                width: 10, height: 10, borderRadius: '50%',
+                border: '2px solid var(--fg-3)',
+                borderTopColor: 'transparent',
+                animation: 'spin 0.8s linear infinite',
+                display: 'inline-block',
+              }} />
+              Refreshing…
+            </span>
+          )}
+          <button className="btn" onClick={() => fetchPending()} disabled={isRefetching}>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* Filters + search */}
