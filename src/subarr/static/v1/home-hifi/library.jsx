@@ -453,14 +453,12 @@ function SelectionBar({ selectedPaths, onClear, onQueue, queueState }) {
       zIndex: 10,
     }}>
       <CheckBox checked />
-      {/* #211 follow-up: the count is the number of EXPLICIT picks the user
-          ticked. Each pick that's a directory expands recursively at scan
-          time (the runner walks every file under it). "1 pick" reads
-          honest when a single folder covers many files; "1 selected"
-          implied the user had ticked only one row visible. */}
-      <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>
-        {n} {n === 1 ? 'pick' : 'picks'}
-      </span>
+      {/* #211 follow-up: match Coverage's "N selected" label so the two
+          pages stay consistent. n is the number of EXPLICIT directory/file
+          ticks; each directory pick expands recursively at scan time, so
+          the per-folder footnote clarifies the contract without inventing
+          a new word ("pick" was a one-off coinage — dropped). */}
+      <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>{n} selected</span>
       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
         · folders include everything inside
       </span>
@@ -600,9 +598,7 @@ export function LibraryPage() {
         </div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
-          {selected.size > 0
-            ? `${selected.size} ${selected.size === 1 ? 'pick' : 'picks'}`
-            : 'click a row to select'}
+          {selected.size > 0 ? `${selected.size} selected` : 'click a row to select'}
         </span>
       </div>
 
