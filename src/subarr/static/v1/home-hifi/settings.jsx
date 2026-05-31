@@ -635,7 +635,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <span className="label">integrations</span>
         </div>
         {items.length === 0 && (
-          <div style={{ padding: '8px 16px', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
+          <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
           const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive;

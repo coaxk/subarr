@@ -191,7 +191,7 @@ function WalkProgressBanner() {
   if (walks.length === 0) return null;
 
   return (
-    <div className="panel" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="panel" style={{ padding: 'var(--row-cozy)', display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <StatusDot kind="info" pulse />
         <span className="label">probe walks · in flight</span>

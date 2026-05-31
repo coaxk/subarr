@@ -151,7 +151,7 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
           display: 'grid',
           gridTemplateColumns: '14px 14px 1fr 80px 90px',
           alignItems: 'center', gap: 10,
-          padding: '10px 16px',
+          padding: 'var(--row-cozy)',
           borderBottom: '1px solid var(--bg-3)',
           background: 'var(--bg-1)',
           cursor: 'pointer',
@@ -548,7 +548,7 @@ export function ReviewPage() {
       {selectedCount > 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12,
-          padding: '12px 16px',
+          padding: 'var(--row-cozy)',
           background: 'var(--bg-2)',
           border: 'var(--border)',
           borderRadius: 'var(--radius-lg)',

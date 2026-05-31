@@ -362,12 +362,12 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
       {expanded && (
         <>
           {childrenLoading && (
-            <div style={{ paddingLeft: indent + 32, color: 'var(--fg-3)', fontSize: 'var(--text-xs)', padding: '8px 16px' }}>
+            <div style={{ paddingLeft: indent + 32, color: 'var(--fg-3)', fontSize: 'var(--text-xs)', padding: 'var(--row-dense)' }}>
               Loading…
             </div>
           )}
           {childrenError && (
-            <div style={{ paddingLeft: indent + 32, color: 'var(--error-500)', fontSize: 'var(--text-xs)', padding: '8px 16px' }}>
+            <div style={{ paddingLeft: indent + 32, color: 'var(--error-500)', fontSize: 'var(--text-xs)', padding: 'var(--row-dense)' }}>
               Couldn't load: {String(childrenError.message || childrenError)}
             </div>
           )}

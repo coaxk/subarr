@@ -107,7 +107,7 @@ function QueueRow({ item, kind, canCancel, onCancel, busy }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: '10px 16px',
+      padding: 'var(--row-cozy)',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
@@ -230,7 +230,7 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: '10px 16px',
+      padding: 'var(--row-cozy)',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
@@ -484,7 +484,7 @@ export function QueuePage() {
       {/* Processing — header sticky, body scrolls internally */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: 'var(--row-cozy)',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -511,7 +511,7 @@ export function QueuePage() {
       {/* Queued — header sticky, body scrolls internally */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: 'var(--row-cozy)',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -540,7 +540,7 @@ export function QueuePage() {
       {/* v1.1.1 Featured Queue — Issues (skipped + failed) */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: 'var(--row-cozy)',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -576,7 +576,7 @@ export function QueuePage() {
       {/* v1.1.1 Featured Queue — Recently done */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: 'var(--row-cozy)',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>

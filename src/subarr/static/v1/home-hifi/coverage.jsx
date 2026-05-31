@@ -1946,7 +1946,7 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
     <div style={{
       position: 'sticky', bottom: 0,
       display: 'flex', alignItems: 'center', gap: 12,
-      padding: '10px 16px',
+      padding: 'var(--row-cozy)',
       background: 'var(--bg-2)',
       border: 'var(--border)',
       borderRadius: 'var(--radius-lg)',
@@ -2348,7 +2348,7 @@ export function CoveragePage() {
       {/* Coverage strip — kept below the panels as a one-line technical
           summary; the panels above are for "what's the situation?" and this
           is for "where does the data come from?" */}
-      <div className="panel" style={{ padding: '12px 16px' }}>
+      <div className="panel" style={{ padding: 'var(--row-cozy)' }}>
         <CoverageStrip data={data} loading={loading} error={error} />
       </div>
 

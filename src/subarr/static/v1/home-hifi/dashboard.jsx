@@ -668,7 +668,7 @@ function ActivityCard({ data }) {
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10,
-        padding: '12px 16px',
+        padding: 'var(--row-cozy)',
         borderBottom: 'var(--border)',
       }}>
         <span className="label">Recent activity</span>
@@ -701,7 +701,7 @@ function ActivityCard({ data }) {
           rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
         )}
       </div>
-      <div style={{ marginTop: 'auto', padding: '8px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
+      <div style={{ marginTop: 'auto', padding: 'var(--row-dense)', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
         <a href="/file-modal" style={{
           fontSize: 'var(--text-xs)',
           color: 'var(--fg-2)',
