@@ -1,6 +1,8 @@
 # subarr
 
-The brain that drives subgen.
+**Subgen, but you can pick what gets transcribed — one file, a whole
+season, a whole series — and there's a brain deciding what's worth
+generating in the first place.**
 
 A peer service in the *arr family. Subarr coordinates subtitle generation
 across Bazarr + Sonarr + Radarr + Tautulli + subgen + ollama — figuring out
@@ -10,7 +12,7 @@ writing the result back so Bazarr's wanted list actually shrinks.
 > Bazarr is the librarian. Subgen is the worker. **Subarr is the brain.**
 
 [![status](https://img.shields.io/badge/status-pre%201.0-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-192_passing-22d3ee)](#)
+[![tests](https://img.shields.io/badge/tests-228_passing-22d3ee)](#)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
 ---
@@ -61,6 +63,43 @@ Open `http://localhost:9922` and walk through the onboarding wizard.
 
 Three deployment tiers are available — see [`deploy/templates/README.md`](deploy/templates/README.md)
 for the trade-offs. **Tier 2 is the recommended default**.
+
+### Minimum compose stub (if you'd rather hand-roll)
+
+If you don't want the socket-proxy and prefer to point subarr at your
+*arr stack manually, this is the smallest possible compose that runs:
+
+```yaml
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:latest
+    container_name: subarr
+    restart: unless-stopped
+    networks: [media-stack]      # same network as Bazarr/Sonarr/Radarr
+    ports: ["9922:9922"]
+    environment:
+      TZ: Australia/Sydney
+      SUBARR_MEDIA_ROOT: /media/library
+      SUBGEN_URL: http://subgen:9000
+      # URLs filled by the wizard, or set them here to skip the wizard step
+      BAZARR_URL:   http://bazarr:6767
+      SONARR_URL:   http://sonarr:8989
+      RADARR_URL:   http://radarr:7878
+      TAUTULLI_URL: http://tautulli:8181
+    volumes:
+      # Host path (LEFT) is where your media lives on the host machine.
+      # Container path (RIGHT) MUST match SUBARR_MEDIA_ROOT above —
+      # /media/library is the wizard's default. Mount read-only when
+      # subarr is the only writer of sidecars (it is, by default).
+      - /mnt/nas/Media:/media/library:ro
+      - ./data:/data            # subarr's SQLite + provenance ledger
+networks:
+  media-stack:
+    external: true              # change to false if you want a new network
+```
+
+This skips auto-detect; the wizard still walks you through the rest.
+For socket-proxy-backed auto-detect, use the Tier 2 template above.
 
 ---
 
@@ -203,6 +242,55 @@ Subarr polls GitHub releases once per 24h for both `coaxk/subarr` and
 - Breaking-change banner if the GitHub release flags it
 
 No auto-update. You always run `docker compose pull && up -d` yourself.
+
+---
+
+## Networking: how subarr finds your *arr stack
+
+Subarr's integrations (Sonarr, Radarr, Bazarr, Tautulli, subgen, Plex,
+Ollama) reach those services via the URLs you provide in the wizard or in
+your `.env`. There are two common topologies:
+
+**1. Shared docker network (recommended).** Add subarr to the same docker
+network as your *arr stack. Then you can address each service by its
+container name on the default arr ports:
+
+```yaml
+networks:
+  - safe-bridge       # or whatever your *arr stack already uses
+
+# .env
+SONARR_URL=http://sonarr:8989
+RADARR_URL=http://radarr:7878
+BAZARR_URL=http://bazarr:6767
+SUBGEN_URL=http://subgen:9000
+TAUTULLI_URL=http://tautulli:8181
+PLEX_URL=http://plex:32400
+```
+
+This is what `docker-compose.yaml` in `deploy/templates/` ships with.
+DNS resolves container names within the network, so no IP addresses
+get baked in.
+
+**2. Bypass: subarr on host network or different stack.** If subarr is
+deployed standalone (no shared network with the *arr stack), reach each
+service by host IP + published port:
+
+```env
+SONARR_URL=http://192.168.1.10:8989
+RADARR_URL=http://192.168.1.10:7878
+BAZARR_URL=http://192.168.1.10:6767
+SUBGEN_URL=http://192.168.1.10:9000
+```
+
+Common gotcha — **`localhost` from inside a container points at the
+container, not the host.** Use the host's LAN IP (or
+`host.docker.internal` on Docker Desktop) instead of `localhost`.
+
+The onboarding wizard's "Test connection" button validates each URL
+against the live service before you commit it to settings; if it fails
+the chip stays red with the actual httpx error so you can fix the URL
+without restarting subarr.
 
 ---
 

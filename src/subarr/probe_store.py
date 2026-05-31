@@ -29,8 +29,18 @@ CREATE TABLE IF NOT EXISTS media_probe (
     duration_s      REAL,
     audio_json      TEXT NOT NULL,
     sub_json        TEXT NOT NULL,
-    probed_at       REAL NOT NULL
+    probed_at       REAL NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'ffprobe'
 );
+"""
+
+# v1.1-A migration: add `source` column to track whether the row came from
+# our own ffprobe or from Sonarr/Radarr's pre-computed mediaInfo. Cheap to
+# add with DEFAULT; older rows get 'ffprobe' which is what they actually
+# were. New 'arr_mediainfo' rows are upgradable to 'ffprobe' on next walk
+# (richer data wins).
+_MIGRATE_SOURCE_COL = """
+ALTER TABLE media_probe ADD COLUMN source TEXT NOT NULL DEFAULT 'ffprobe'
 """
 
 
@@ -44,6 +54,12 @@ class ProbeStore:
     def init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Best-effort migration for pre-v1.1-A DBs. ALTER fails harmlessly
+            # if the column already exists (SQLite raises OperationalError).
+            try:
+                self._conn.execute(_MIGRATE_SOURCE_COL)
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         with self._lock:
@@ -84,23 +100,47 @@ class ProbeStore:
         return result
 
     def upsert(self, *, canonical_path: str, mtime: float, size: int,
-               result: ProbeResult) -> None:
+               result: ProbeResult, source: str = "ffprobe") -> None:
+        """Upsert a probe row. `source` defaults to 'ffprobe' to preserve
+        v1.0 behavior.
+
+        v1.1-A: when source='arr_mediainfo' we DO NOT clobber an existing
+        ffprobe row — ffprobe is richer (per-track default/forced/hi flags,
+        codec details) so it always wins. Arr data is a backstop for files
+        ffprobe hasn't touched yet."""
         with self._lock:
+            if source == "arr_mediainfo":
+                existing = self._conn.execute(
+                    "SELECT source FROM media_probe WHERE canonical_path = ?",
+                    (canonical_path,),
+                ).fetchone()
+                if existing and existing[0] == "ffprobe":
+                    return
             self._conn.execute(
                 "INSERT INTO media_probe "
-                "(canonical_path, mtime, size, duration_s, audio_json, sub_json, probed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "(canonical_path, mtime, size, duration_s, audio_json, sub_json, probed_at, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(canonical_path) DO UPDATE SET "
                 "  mtime=excluded.mtime, size=excluded.size, "
                 "  duration_s=excluded.duration_s, audio_json=excluded.audio_json, "
-                "  sub_json=excluded.sub_json, probed_at=excluded.probed_at",
+                "  sub_json=excluded.sub_json, probed_at=excluded.probed_at, "
+                "  source=excluded.source",
                 (
                     canonical_path, mtime, size, result.duration_s,
                     json.dumps([a.to_dict() for a in result.audio]),
                     json.dumps([s.to_dict() for s in result.subtitles]),
-                    time.time(),
+                    time.time(), source,
                 ),
             )
+
+    def count_by_source(self) -> dict[str, int]:
+        """v1.1-A: telemetry for the arr_mediainfo win. Counts
+        {'ffprobe': N, 'arr_mediainfo': M}."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT source, COUNT(*) FROM media_probe GROUP BY source"
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def all_paths(self) -> list[str]:
         with self._lock:

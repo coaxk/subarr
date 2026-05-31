@@ -168,7 +168,7 @@ def test_coverage_hides_embedded_by_default(app_with_stub):
 def test_coverage_shows_suppressed_when_flag_off(app_with_stub):
     _seed_probe(app_with_stub, "TV/Covered/Season 1/Covered.S01E01.mkv", "full")
 
-    r = app_with_stub.get("/api/coverage?fresh=true&tautulli=false&hide_embedded_en=false")
+    r = app_with_stub.get("/api/coverage?fresh=true&tautulli=false&hide_embedded_en=false&hide_english_audio=false")
     body = r.json()
     titles = [i["title"] for i in body["items"]]
     assert "Covered" in titles

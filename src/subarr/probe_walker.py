@@ -72,6 +72,19 @@ class ProbeWalker:
         return list(self._walks.values())
 
     async def start_walk(self, root_canonical: str) -> WalkState:
+        # Dedupe: if a walk for this exact root is already running, hand
+        # back its WalkState instead of starting a parallel one. Without
+        # this, /run-now while the scheduler is mid-walk (or two scheduler
+        # ticks close together) burns GPU/IO re-probing the same files.
+        # Caller gets the existing walk_id so subscribers don't fragment.
+        for existing in self._walks.values():
+            if existing.root == root_canonical and existing.status == "running":
+                log.info(
+                    "start_walk: walk %s for root=%r already running (%d/%d processed) — reusing",
+                    existing.id, root_canonical, existing.processed, existing.total_files,
+                )
+                return existing
+
         walk_id = uuid.uuid4().hex[:16]
         state = WalkState(walk_id, root_canonical)
         self._walks[walk_id] = state

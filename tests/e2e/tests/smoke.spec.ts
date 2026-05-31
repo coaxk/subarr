@@ -88,6 +88,51 @@ test.describe('Home dashboard', () => {
 });
 
 
+test.describe('Coverage page (wired to /api/coverage)', () => {
+  test('renders live data without console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+
+    await page.goto('/coverage');
+    // Wait for the live coverage fetch to complete.
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/coverage') && res.status() === 200,
+      { timeout: 15000 },
+    );
+    await page.waitForLoadState('networkidle');
+
+    // Page header
+    await expect(page.getByRole('heading', { name: 'Coverage' })).toBeVisible();
+    // Re-walk + Export CSV buttons exist
+    await expect(page.getByRole('button', { name: /Re-walk now/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Export CSV/i })).toBeVisible();
+    // Coverage strip uses the live "gaps" label — never the mock "612 gaps · last walk 10:32".
+    await expect(page.getByText(/last walk 10:32/)).toHaveCount(0);
+    // No console errors (favicon noise filtered).
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/coverage returns the expected shape', async ({ request }) => {
+    const r = await request.get('/api/coverage');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('items');
+    expect(body).toHaveProperty('totals');
+    expect(body).toHaveProperty('generated_at');
+    expect(Array.isArray(body.items)).toBeTruthy();
+    if (body.items.length > 0) {
+      const it = body.items[0];
+      expect(it).toHaveProperty('media_type');
+      expect(it).toHaveProperty('title');
+      expect(it).toHaveProperty('canonical_path');
+      expect(it).toHaveProperty('score');
+    }
+  });
+});
+
+
 test.describe('Onboarding wizard', () => {
   test('wizard route serves the SPA', async ({ page }) => {
     await page.goto('/onboarding');
@@ -114,6 +159,120 @@ test.describe('Onboarding wizard', () => {
     const body = await r.json();
     expect(body.step).toBe(2);
     expect(body.progress.media_root).toBe('/media/library');
+  });
+});
+
+
+test.describe('Settings page (wired to /api/integrations/health + telemetry + updates)', () => {
+  test('renders integrations rail with live data + no console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/settings');
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/integrations/health') && res.status() === 200,
+      { timeout: 15000 },
+    );
+    await page.waitForLoadState('networkidle');
+    // Page heading
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    // Rail labels (no mock "12s" / "62s" freshness from old hardcoded data)
+    await expect(page.getByText(/^12s$/)).toHaveCount(0);
+    await expect(page.getByText(/^62s$/)).toHaveCount(0);
+    // Console errors (favicon noise filtered)
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('switching to Telemetry view fetches /api/telemetry/state', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+    const telemetryReq = page.waitForResponse(
+      (res) => res.url().includes('/api/telemetry/state') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.getByRole('button', { name: /^Telemetry$/ }).click();
+    await telemetryReq;
+    await expect(page.getByText(/Install ID/i)).toBeVisible({ timeout: 5000 });
+  });
+
+  test('switching to Updates view fetches /api/updates', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+    const updatesReq = page.waitForResponse(
+      (res) => res.url().includes('/api/updates') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.getByRole('button', { name: /^Updates$/ }).click();
+    await updatesReq;
+  });
+});
+
+
+test.describe('Activity page (wired to /api/provenance/recent + /api/provenance/{path})', () => {
+  test('renders activity panel with empty state on a fresh install', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/file-modal');
+    await page.waitForResponse(
+      (res) => res.url().includes('/api/provenance/recent') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
+    await expect(page.getByText(/ledger entries$/)).toBeVisible();
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/provenance/recent returns expected shape', async ({ request }) => {
+    const r = await request.get('/api/provenance/recent');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('entries');
+    expect(Array.isArray(body.entries)).toBeTruthy();
+  });
+});
+
+
+test.describe('Rules page (wired to /api/schedule + /api/schedule/rules + /api/schedule/preview)', () => {
+  test('renders Build mode with live rules + no console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.goto('/rules');
+    await page.waitForResponse(
+      (res) => res.url().endsWith('/api/schedule') && res.status() === 200,
+      { timeout: 10000 },
+    );
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: /Auto-queue rules/i })).toBeVisible();
+    // Mode buttons render
+    await expect(page.getByRole('button', { name: /^dashboard/i })).toBeVisible();
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+
+  test('GET /api/schedule returns rules + schedules shape', async ({ request }) => {
+    const r = await request.get('/api/schedule');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('rules');
+    expect(body).toHaveProperty('schedules');
+    expect(body.rules).toHaveProperty('mode');
+    expect(body.rules).toHaveProperty('min_score');
+    expect(Array.isArray(body.schedules)).toBeTruthy();
+  });
+
+  test('POST /api/schedule/preview returns dry-run shape', async ({ request }) => {
+    const r = await request.post('/api/schedule/preview');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(body).toHaveProperty('considered');
+    expect(body).toHaveProperty('would_queue');
+    expect(body).toHaveProperty('would_skip');
+    expect(body).toHaveProperty('rules');
   });
 });
 

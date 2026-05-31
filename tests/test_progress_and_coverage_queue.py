@@ -152,3 +152,111 @@ def test_coverage_queue_falls_back_to_canonical_path(app_with_stub, coverage_que
 def test_coverage_queue_400_when_nothing_supplied(app_with_stub):
     r = app_with_stub.post("/api/coverage/queue", json={})
     assert r.status_code == 400
+
+
+# ─── v1.1.1 #224: audio_language_override pre-flight skip-language check ────
+
+
+_BATCH_PARAMS_CAPTURE: list[dict[str, str]] = []
+
+
+def _capturing_subgen_handler(req: httpx.Request) -> httpx.Response:
+    """Subgen stub that records every /batch call's query params so the test
+    can assert audio_language_override was (or wasn't) forwarded."""
+    if req.url.path == "/status":
+        return httpx.Response(200, json={
+            "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
+        })
+    if req.url.path == "/queue":
+        # Advertise the v4.3 capability so subgen_client surfaces it.
+        return httpx.Response(200, json={
+            "queued": [], "processing": [], "queued_count": 0,
+            "processing_count": 0, "idle": True, "version": "test",
+            "subarr_subgen_patch_rev": "v4.3",
+            "capabilities": {"audio_language_override": True},
+        })
+    if req.url.path == "/batch":
+        _BATCH_PARAMS_CAPTURE.append(dict(req.url.params))
+        return httpx.Response(200, json={
+            "walked": 1, "queued": 1, "skipped": 0, "already_in_queue": 0,
+            "no_audio": 0, "pending_language_detect": 0,
+            "path": req.url.params.get("directory"), "reverse": False,
+        })
+    return httpx.Response(404, json={"detail": "stub: unhandled"})
+
+
+@pytest.mark.subgen(handler=_capturing_subgen_handler)
+def test_coverage_queue_forwards_audio_language_override_when_verified(
+    app_with_stub, coverage_queue_media_root,
+):
+    """When the user has verified the file's audio is non-English via the
+    review queue, coverage/queue must forward audio_language_override=<lang>
+    to subgen so SKIP_IF_AUDIO_LANGUAGES=eng doesn't silently drop it."""
+    _BATCH_PARAMS_CAPTURE.clear()
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+    # Plant the verification — non-English, so the override should fire.
+    app_with_stub.app.state.audio_lang.upsert(
+        canonical_path=canonical, lang_code="fre",
+        source="manual_review", confidence=1.0, verified_by="test",
+    )
+
+    r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
+    assert r.status_code == 202, r.json()
+
+    # Let the scan runner dispatch the /batch call (async task spawned in start()).
+    import time
+    for _ in range(40):
+        if _BATCH_PARAMS_CAPTURE:
+            break
+        time.sleep(0.05)
+
+    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
+    assert _BATCH_PARAMS_CAPTURE[0].get("audio_language_override") == "fre"
+
+
+@pytest.mark.subgen(handler=_capturing_subgen_handler)
+def test_coverage_queue_omits_override_for_english_verifications(
+    app_with_stub, coverage_queue_media_root,
+):
+    """English-verified files don't need the bypass — SKIP_IF_AUDIO_LANGUAGES=eng
+    would correctly skip them anyway. Override stays absent."""
+    _BATCH_PARAMS_CAPTURE.clear()
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+    app_with_stub.app.state.audio_lang.upsert(
+        canonical_path=canonical, lang_code="eng",
+        source="manual_review", confidence=1.0, verified_by="test",
+    )
+
+    r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
+    assert r.status_code == 202
+
+    import time
+    for _ in range(40):
+        if _BATCH_PARAMS_CAPTURE:
+            break
+        time.sleep(0.05)
+
+    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
+    assert "audio_language_override" not in _BATCH_PARAMS_CAPTURE[0]
+
+
+@pytest.mark.subgen(handler=_capturing_subgen_handler)
+def test_coverage_queue_omits_override_when_no_verification(
+    app_with_stub, coverage_queue_media_root,
+):
+    """No audio_lang_store entry → no override forwarded. Pre-flight is opt-in
+    only for confirmed user verifications, not heuristic guesses."""
+    _BATCH_PARAMS_CAPTURE.clear()
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+
+    r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
+    assert r.status_code == 202
+
+    import time
+    for _ in range(40):
+        if _BATCH_PARAMS_CAPTURE:
+            break
+        time.sleep(0.05)
+
+    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
+    assert "audio_language_override" not in _BATCH_PARAMS_CAPTURE[0]

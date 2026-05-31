@@ -31,25 +31,35 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/home/dashboard")
-async def home_dashboard(request: Request) -> dict[str, Any]:
-    """One-shot dashboard payload.
-
-    Section blocks gracefully degrade — if a section's data source is
-    unreachable, that section returns a stub with `available: false`
-    + a reason, so the UI can show a "loading" / "disconnected" state
-    per-tile instead of failing the whole page.
-    """
+async def home_dashboard(request: Request,
+                          fresh: bool = False) -> dict[str, Any]:
+    """v1.1 ARCH: serves the cached dashboard snapshot instantly.
+    Background task rebuilds every 30s. ?fresh=true forces a synchronous
+    rebuild for callers that need it now."""
     state = request.app.state
-    # Kick off the integration-health probes in parallel so they don't
-    # serialise behind cheap local reads.
-    integrations_task = asyncio.create_task(_integrations_block(state))
+    cache = getattr(state, "dashboard_cache", None)
+    if cache is not None and not fresh:
+        snap = cache.get_cached()
+        if snap is not None:
+            out = snap.to_response()
+            out["refreshing"] = cache.is_refreshing()
+            return out
+    if cache is not None and fresh:
+        snap = await cache.refresh(lambda: _build_dashboard(state))
+        return snap.to_response()
+    # Cold-path fallback (no cache yet) — synchronous build.
+    return await _build_dashboard(state)
 
+
+async def _build_dashboard(state) -> dict[str, Any]:
+    """The slow path — kept as a separate function so the cache can call
+    it on its own schedule."""
+    integrations_task = asyncio.create_task(_integrations_block(state))
     stages = await _stages_block(state)
     gpu = await _gpu_block(state)
     next_run = _next_run_block(state)
     activity = _activity_block(state)
     integrations = await integrations_task
-
     return {
         "generated_at": time.time(),
         "stages": stages,

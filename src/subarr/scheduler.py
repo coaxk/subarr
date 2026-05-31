@@ -200,6 +200,81 @@ class Scheduler:
                 results.append({"root": root, "status": "error", "error": str(e)})
         return {"ran": True, "walks": results}
 
+    # Rate-limit Bazarr scan-disk pokes — Bazarr's task is library-wide,
+    # firing it every 30s would be pointless and noisy. 5 min keeps things
+    # snappy enough for interactive testing while avoiding spam.
+    _BAZARR_POKE_COOLDOWN_S = 300
+
+    async def _maybe_poke_bazarr_for_stale_disk(self, items: list) -> dict[str, Any]:
+        """Fire Bazarr scan-disk if the walk found stale-disk items.
+
+        Stale-disk means subarr discovered an existing .srt on disk that
+        Bazarr's wanted-list-of-record doesn't know about. Telling Bazarr
+        to re-scan is the only way to get those items off the wanted list
+        (Bazarr only re-checks disk on its scheduled cadence otherwise).
+
+        Returns: dict with {fired, reason, stale_count, ...}. Logged for
+        the run-now JSON response so users can see what happened.
+        """
+        stale = [it for it in items if getattr(it, "suggest_bazarr_rescan", False)]
+        if not stale:
+            return {"fired": False, "reason": "no stale-disk items"}
+
+        bazarr = self._bundle.bazarr
+        if not bazarr.is_configured():
+            return {"fired": False, "reason": "bazarr not configured", "stale_count": len(stale)}
+
+        # Cooldown check — initialised on first call.
+        now = time.time()
+        last = getattr(self, "_last_bazarr_poke_ts", 0.0)
+        if now - last < self._BAZARR_POKE_COOLDOWN_S:
+            return {
+                "fired": False,
+                "reason": f"cooldown ({int(self._BAZARR_POKE_COOLDOWN_S - (now - last))}s left)",
+                "stale_count": len(stale),
+            }
+
+        # Reuse the completion watcher's task-id cache if it's already
+        # discovered the scan-disk task id, otherwise discover it here.
+        # Watcher discovers on first ledger completion; coverage_walk may
+        # run before that on a fresh install.
+        watcher = getattr(self, "_watcher", None)
+        task_id = getattr(watcher, "_bazarr_task_id", None) if watcher else None
+        if task_id is None:
+            # Discover inline — same hints the watcher uses.
+            try:
+                tasks = await bazarr.list_tasks()
+                hints = (
+                    "series_full_scan_subtitles", "movies_full_scan_subtitles",
+                    "scan_disk_series", "scan_disk_episodes",
+                    "scan disk", "index all existing episodes",
+                )
+                for hint in hints:
+                    for t in tasks:
+                        if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
+                            task_id = t.get("job_id")
+                            break
+                    if task_id:
+                        break
+            except Exception as e:
+                log.warning("coverage_walk: bazarr task discovery failed: %s", e)
+                return {"fired": False, "reason": f"task discovery failed: {e}", "stale_count": len(stale)}
+
+        if not task_id:
+            return {"fired": False, "reason": "no scan-disk task id found", "stale_count": len(stale)}
+
+        try:
+            await bazarr.trigger_task(task_id)
+            self._last_bazarr_poke_ts = now
+            log.info(
+                "coverage_walk: poked Bazarr scan-disk (%s) — %d stale-disk items detected",
+                task_id, len(stale),
+            )
+            return {"fired": True, "task_id": task_id, "stale_count": len(stale)}
+        except Exception as e:
+            log.warning("coverage_walk: bazarr trigger_task failed: %s", e)
+            return {"fired": False, "reason": str(e), "stale_count": len(stale)}
+
     async def run_coverage_walk(self) -> dict[str, Any]:
         """Public entry point — also called by POST /api/schedule/run-now.
 
@@ -227,6 +302,16 @@ class Scheduler:
         except Exception as e:
             log.exception("coverage_walk: build_coverage failed: %s", e)
             return {"ok": False, "error": str(e), "probe": probe_summary}
+
+        # [2026-05-30] Auto-poke Bazarr when the walk discovers stale-disk
+        # items (subs already on disk that Bazarr doesn't know about,
+        # because of release-name mismatch or external sub source). The
+        # completion watcher only fires Bazarr scan-disk after subarr's OWN
+        # transcriptions; this covers the "existing sub Bazarr never
+        # noticed" case. Single library-wide trigger — Bazarr's scan-disk
+        # is global, no need to fan out per-file. Rate-limited via the
+        # _last_bazarr_poke_ts attribute so back-to-back walks don't spam.
+        bazarr_poked = await self._maybe_poke_bazarr_for_stale_disk(report.items)
 
         # Build the in-flight set from the provenance ledger so the
         # scheduler doesn't recreate identical pending walks every tick.
@@ -286,6 +371,7 @@ class Scheduler:
             "scan_ids": scan_ids[:20],
             "mode": rules.mode,
             "probe": probe_summary,
+            "bazarr_poke": bazarr_poked,
         }
 
     async def approve_pending(self, walk_id: str, decision_ids: list[int] | None = None) -> dict[str, Any]:

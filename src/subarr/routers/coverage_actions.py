@@ -105,11 +105,34 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
     if not (target.is_file() or target.is_dir()):
         raise HTTPException(400, detail=f"resolved path is neither file nor dir: {canonical!r}")
 
+    # v1.1.1 #224: pre-flight audio_language_override lookup.
+    # If the user has verified this file's audio language (review queue) AND
+    # the verified language is non-English (would otherwise trip subgen's
+    # SKIP_IF_AUDIO_LANGUAGES=eng default), forward the override. The
+    # capability advertisement on /queue tells us whether subgen will honour
+    # it; on vanilla / v4.2 we still send the param (it's silently ignored)
+    # so behaviour stays consistent if subgen upgrades mid-flight.
+    audio_language_override: str | None = None
+    audio_lang_store = getattr(request.app.state, "audio_lang", None)
+    if audio_lang_store is not None:
+        verification = audio_lang_store.get(canonical)
+        if verification is not None:
+            lang = (verification.lang_code or "").strip().lower()
+            # Only override when the verification disagrees with the default
+            # English skip-list — for English-verified files there's nothing
+            # to bypass.
+            if lang and lang not in ("en", "eng"):
+                audio_language_override = lang
+                log.info(
+                    "coverage_queue: forwarding audio_language_override=%s for %s "
+                    "(verified by review queue)", lang, canonical,
+                )
+
     # Enqueue via the existing scan store + runner.
     store = request.app.state.scans
     runner = request.app.state.runner
     scan = store.create([canonical], reverse=req.reverse)
-    runner.start(scan)
+    runner.start(scan, audio_language_override=audio_language_override)
 
     # Provenance: record the submission so the completion watcher can
     # detect when subgen finishes + trigger Bazarr's scan-disk task.

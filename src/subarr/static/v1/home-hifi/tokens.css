@@ -1,5 +1,35 @@
 /* Subarr v1.0 — design tokens, from the brief. */
 
+/* v1.1-E pulse animation for NOW PLAYING badge */
+@keyframes pulse-badge-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(234,179,8,0.0); }
+  50%      { box-shadow: 0 0 0 3px rgba(234,179,8,0.35); }
+}
+.pulse-badge {
+  animation: pulse-badge-glow 1.8s ease-in-out infinite;
+}
+
+/* v1.1-O Layer 4++ spinner — used in arbiter and audio review modals
+   when a backend call is in flight. */
+@keyframes spin-360 {
+  to { transform: rotate(360deg); }
+}
+.spinner-ring {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--bg-4);
+  border-top-color: var(--violet-500);
+  border-radius: 50%;
+  animation: spin-360 0.9s linear infinite;
+  vertical-align: middle;
+}
+.spinner-ring.lg {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+}
+
 :root {
   /* ─── Neutral scale (warm dark) ─── */
   --bg-0: #1a1a1c;
@@ -69,6 +99,14 @@
   --text-lg:  16px;  --lh-lg:  24px;
   --text-xl:  20px;  --lh-xl:  28px;
   --text-2xl: 28px;  --lh-2xl: 34px;
+
+  /* P0 design pass: display-tier tokens for page titles + hero numerals.
+     Previously every h1 hardcoded fontSize:22 and onboarding hardcoded 26-28.
+     Centralised so the heading scale shifts in one place. */
+  --text-h1: 22px;        --lh-h1: 26px;
+  --text-display-lg: 26px;
+  --text-display-xl: 28px;
+  --text-display-2xl: 32px;
 
   --border:        1px solid var(--bg-4);
   --border-strong: 1px solid var(--bg-5);
@@ -173,6 +211,21 @@ button {
   user-select: none;
 }
 .btn:hover { background: var(--bg-4); border-color: var(--bg-5); }
+/* P0 a11y: keyboard focus ring on every button / chip / checkbox /
+   anchor system-wide. :focus-visible only — mouse clicks don't get the
+   ring, only Tab navigation does. Violet matches brand accent. */
+.btn:focus-visible,
+.chip:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--violet-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+}
 .btn.primary {
   background: var(--violet-500);
   border-color: var(--violet-500);

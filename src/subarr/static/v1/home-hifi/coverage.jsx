@@ -1,10 +1,198 @@
 // Coverage — flat dense gap-list table.
+//
+// Wired to GET /api/coverage (60s server cache) — polled every 10s. The
+// backend already de-dupes via cache, so the polling cost is minimal.
+// Row queue + bulk queue post to /api/coverage/queue. Re-walk now calls
+// /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
 import { Glyph, StatusDot } from './atoms.jsx';
 
-const { useState } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 
-// ─── Demo dataset ───────────────────────────────────────────────
+// ─── Live data hook ──────────────────────────────────────────────
+// Returns { data, loading, error, refetch }. `data` is null on first
+// paint and stays at the last successful payload on transient errors so
+// the table doesn't flash empty between polls.
+export function useLiveCoverage(intervalMs = 10000) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchOnce = useCallback(async (opts = {}) => {
+    const { fresh = false, silent = false } = opts;
+    if (!silent) setLoading(true);
+    try {
+      // Read user preference for wanted-langs filter — stored in localStorage
+      // by the Coverage filter bar. Empty means "show everything Bazarr wants".
+      const onlyLangs = (() => {
+        try { return localStorage.getItem('subarr.only_wanted_langs') || ''; }
+        catch { return ''; }
+      })();
+      const params = new URLSearchParams();
+      if (fresh) params.set('fresh', 'true');
+      if (onlyLangs) params.set('only_wanted_langs', onlyLangs);
+      const url = '/api/coverage' + (params.toString() ? '?' + params.toString() : '');
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setData(d);
+      setError(null);
+    } catch (e) {
+      // Only surface error if we have no data yet — once we have a
+      // payload, transient failures stay silent (per #142 principle:
+      // don't flash red when we're not confirmed-failed).
+      setError(prev => (data ? prev : e));
+      // eslint-disable-next-line no-console
+      console.debug('coverage fetch failed:', e);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function tick() {
+      if (cancelled) return;
+      await fetchOnce({ silent: true });
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    }
+    // Initial fetch shows loading; subsequent ticks are silent.
+    (async () => {
+      await fetchOnce();
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    })();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intervalMs]);
+
+  // v1.1-O fix #197: optimistic chip update — patch local state immediately
+  // on verification, then refetch in background. Chip turns green within
+  // ~1 frame instead of waiting for the next 10s poll.
+  useEffect(() => {
+    const handler = (e) => {
+      const detail = e.detail || {};
+      const filePath = detail.file_canonical_path;
+      const langCode = detail.lang_code;
+      if (filePath && langCode) {
+        setData(prev => {
+          if (!prev) return prev;
+          const items = prev.items.map(it => {
+            if (it.file_canonical_path === filePath || it.canonical_path === filePath) {
+              return {
+                ...it,
+                audio_langs: [langCode],
+                audio_label_suspect: false,
+                audio_label_unknown: false,
+                audio_label_notes: [...(it.audio_label_notes || []), `user-confirmed: '${langCode}'`],
+              };
+            }
+            return it;
+          });
+          return { ...prev, items };
+        });
+      }
+      // Trigger a silent refetch a few seconds out so server state
+      // catches up to the optimistic update.
+      setTimeout(() => fetchOnce({ silent: true }), 2500);
+    };
+    window.addEventListener('audio-lang-verified', handler);
+    return () => window.removeEventListener('audio-lang-verified', handler);
+  }, [fetchOnce]);
+
+  // Pref change (wanted-langs filter etc) → immediate silent refetch.
+  useEffect(() => {
+    const handler = () => fetchOnce({ silent: false });
+    window.addEventListener('coverage-prefs-changed', handler);
+    return () => window.removeEventListener('coverage-prefs-changed', handler);
+  }, [fetchOnce]);
+
+  return { data, loading, error, refetch: fetchOnce };
+}
+
+// ─── Normalize backend item → row shape used by the table ────────
+function deriveReason(item) {
+  if (!item.monitored) return 'unmonitored';
+  // v1.1.1 #219: synthetic Bazarr-blind rows. Wins over bazarr-wanted
+  // because the row exists *despite* Bazarr — that's the whole story.
+  // After user verification, the metadata is no longer "mislabeled" in
+  // our view — we know the truth. But Bazarr still doesn't (until its
+  // next sync). Render that state as "awaiting-sync" so the chip
+  // accurately tells the user "you fixed it; waiting on Bazarr now".
+  if (item.bazarr_blind && item.audio_verified) return 'awaiting-bazarr-sync';
+  if (item.bazarr_blind) return 'audio-mislabel';
+  if (item.embedded_en === 'EN' || item.embedded_en === 'EN(SDH)') return 'embedded-only';
+  if (item.bazarr && item.bazarr.episode_id) return 'bazarr-wanted';
+  return 'no-track';
+}
+
+function formatEpisode(epNum) {
+  if (!epNum) return '';
+  // Backend ships "6x3" — render as S06E03.
+  const m = String(epNum).match(/^(\d+)x(\d+)$/);
+  if (!m) return String(epNum);
+  return `S${m[1].padStart(2, '0')}E${m[2].padStart(2, '0')}`;
+}
+
+function langCodeFromName(name) {
+  // Bazarr ships original_language as a human name. Best-effort 3-char code.
+  if (!name) return '';
+  const known = {
+    english: 'eng', french: 'fre', spanish: 'spa', japanese: 'jpn',
+    chinese: 'zho', italian: 'ita', russian: 'rus', vietnamese: 'vie',
+    german: 'ger', korean: 'kor', portuguese: 'por', dutch: 'nld',
+    polish: 'pol', turkish: 'tur', arabic: 'ara', hindi: 'hin',
+  };
+  return known[String(name).toLowerCase()] || String(name).slice(0, 3).toLowerCase();
+}
+
+function normalizeRow(item, idx) {
+  const ep = item.media_type === 'episode' ? formatEpisode(item.episode_number) : '';
+  // Score: backend uses 0–1000ish; map to /100 for display (cap 9.9).
+  const score = Math.min(9.9, (item.score || 0) / 100);
+  const audio = (item.audio_langs && item.audio_langs.length)
+    ? item.audio_langs.join(',')
+    : '—';
+  const origLang = langCodeFromName(item.original_language);
+  const missing = (item.bazarr && item.bazarr.missing_subtitles) || [];
+  // FIX: WANTED column should ONLY show what Bazarr is missing — not
+  // union with Sonarr's original_language. Including origLang made
+  // every foreign show look like Bazarr was asking for double when in
+  // fact Bazarr is only missing English. origLang is kept on the item
+  // for score/classification but excluded from the user-facing chip.
+  const langs = Array.from(new Set(missing.filter(Boolean)));
+  return {
+    id: item.canonical_path + '|' + (item.episode_number || idx),
+    score,
+    type: item.media_type === 'movie' ? 'mov' : 'tv',
+    title: item.title || 'Untitled',
+    ep,
+    langs,
+    mon: !!item.monitored,
+    disk: !!item.has_sub_on_disk,
+    emb: !!(item.embedded_en && item.embedded_en !== 'NONE'),
+    audio,
+    reason: deriveReason(item),
+    orig_lang: origLang,                  // ISO 639-1, e.g. 'es', 'fr'
+    orig_lang_name: item.original_language,  // for tooltip e.g. 'Spanish'
+    size: '—',
+    // v1.1-O / E / H / I — surface flags for UI chips & badges
+    audio_label_suspect: !!item.audio_label_suspect,
+    audio_label_unknown: !!item.audio_label_unknown,
+    audio_label_notes: item.audio_label_notes || [],
+    audio_verified: (item.audio_label_notes || []).some(n =>
+      typeof n === 'string' && n.toLowerCase().startsWith('user-confirmed')),
+    now_playing: !!item.now_playing,
+    just_imported: !!item.just_imported,
+    airing_soon: !!item.airing_soon,
+    // raw fields kept for action handlers
+    _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
+    _canonical_path: item.file_canonical_path || item.canonical_path,
+    _media_type: item.media_type,
+  };
+}
+
+// ─── Demo dataset (fallback for design preview only) ────────────
 const COVERAGE_ROWS = [
   { id: 1,  score: 9.4, type: 'tv',  title: 'Severance',                ep: 'S02E08', langs: ['eng','spa','fre'], mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: true,  size: '4.2 GB' },
   { id: 2,  score: 9.2, type: 'tv',  title: 'Shogun',                   ep: 'S01E09', langs: ['eng','jpn'],       mon: 1, disk: 0, emb: 1, audio: 'jpn',     reason: 'embedded-only', sel: true,  size: '5.1 GB' },
@@ -53,20 +241,42 @@ const REASON_STYLE = {
   'no-track':       { fg: 'var(--error-500)',  bg: 'rgba(239,68,68,0.08)',  br: 'rgba(239,68,68,0.30)', label: 'no-track' },
   'embedded-only':  { fg: 'var(--warn-500)',   bg: 'rgba(245,158,11,0.08)', br: 'rgba(245,158,11,0.30)', label: 'embedded' },
   'bazarr-wanted':  { fg: 'var(--violet-400)', bg: 'rgba(139,92,246,0.10)', br: 'rgba(139,92,246,0.35)', label: 'wanted' },
+  // v1.1.1 #219: rows Bazarr can't see — file metadata lies, Bazarr's
+  // "audio matches subs" heuristic excludes them silently. Distinct
+  // cyan tone so they stand out from regular wanted rows in the table.
+  'audio-mislabel': { fg: 'var(--cyan-400)',   bg: 'rgba(34,211,238,0.10)', br: 'rgba(34,211,238,0.35)', label: 'mislabeled' },
+  // v1.1.1 #219 closer: user verified, subarr propagated to Sonarr +
+  // triggered Bazarr sync. Waiting for Bazarr to catch up. Calm violet
+  // to signal "you've done your part; system is reconciling".
+  'awaiting-bazarr-sync': { fg: 'var(--violet-400)', bg: 'rgba(139,92,246,0.08)', br: 'rgba(139,92,246,0.30)', label: 'syncing' },
   'low-score':      { fg: 'var(--fg-1)',       bg: 'var(--bg-2)',           br: 'var(--bg-4)',           label: 'low-score' },
   'unmonitored':    { fg: 'var(--fg-2)',       bg: 'transparent',           br: 'var(--bg-4)',           label: 'unmon' },
 };
 
+const REASON_TIPS = {
+  'no-track':       'No subtitle track present and no audio metadata to even guess. Run probe or queue Whisper.',
+  'embedded-only':  'File has an embedded English subtitle stream but no SRT sidecar. Plex/Apple TV need the sidecar.',
+  'bazarr-wanted':  "Bazarr's wanted list put this in front of us — standard pipeline.",
+  // v1.1.1 #219: distinct surface — explains *why* this row exists at all.
+  'audio-mislabel': "Bazarr can't see this episode because the file's audio metadata claims English, but Sonarr says the series is in another language. Subarr surfaced it independently. Permanent fix: edit the series in Sonarr → Language Profile = the right language.",
+  // v1.1.1 #219 closer: post-verification "we're done; waiting on Bazarr".
+  'awaiting-bazarr-sync': "You verified the audio language. Subarr pushed the correction to Sonarr and triggered Bazarr's sync — this row will reappear under 'wanted' once Bazarr re-evaluates (typically a few seconds; longer if you have many series).",
+  'low-score':      'Coverage signal exists but the score is below the queue threshold.',
+  'unmonitored':    "Series is unmonitored in Sonarr — subarr won't queue these unless you force.",
+};
+
 function ReasonChip({ r }) {
   const v = REASON_STYLE[r] || REASON_STYLE['no-track'];
+  const tip = REASON_TIPS[r];
   return (
-    <span className="mono" style={{
+    <span className="mono" title={tip || undefined} style={{
       display: 'inline-block', padding: '1px 7px',
       borderRadius: 2,
       border: `1px solid ${v.br}`, color: v.fg, background: v.bg,
       fontSize: 'var(--text-2xs)', lineHeight: '15px',
       letterSpacing: '0.01em',
       whiteSpace: 'nowrap',
+      cursor: tip ? 'help' : 'default',
     }}>{v.label}</span>
   );
 }
@@ -120,16 +330,53 @@ function CoverageBar({ label, pct }) {
   );
 }
 
-function CoverageStrip() {
+function fmtClock(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch { return '—'; }
+}
+
+function CoverageStrip({ data, loading, error }) {
+  // Derive coverage % from upstream "sources" block when present. The
+  // backend exposes counts (wanted vs total) per provider — we render a
+  // dash if the field isn't populated for that provider rather than
+  // making up a number.
+  const sources = data?.sources || {};
+  const bazarrCount = sources.bazarr?.wanted_episodes ?? sources.bazarr?.count ?? null;
+  const sonarrCount = sources.sonarr?.series_count ?? sources.sonarr?.count ?? null;
+  const radarrCount = sources.radarr?.movie_count ?? sources.radarr?.count ?? null;
+  const totalGaps = data?.totals?.items ?? null;
+
+  let statusLabel;
+  if (error && !data) {
+    statusLabel = <span style={{ color: 'var(--error-500)' }}>backend unreachable</span>;
+  } else if (loading && !data) {
+    statusLabel = <span style={{ color: 'var(--warn-500)' }}>loading…</span>;
+  } else if (totalGaps === 0) {
+    statusLabel = <span style={{ color: 'var(--ok-500, var(--violet-400))' }}>no gaps to address</span>;
+  } else {
+    statusLabel = <>
+      <span style={{ color: 'var(--fg-0)', fontWeight: 600 }}>{totalGaps ?? '—'}</span> gaps
+    </>;
+  }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
       <span className="label">coverage</span>
-      <CoverageBar label="bazarr" pct={74} />
-      <CoverageBar label="sonarr" pct={88} />
-      <CoverageBar label="radarr" pct={62} />
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        bazarr <span style={{ color: 'var(--fg-0)' }}>{bazarrCount ?? '—'}</span>
+      </span>
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        sonarr <span style={{ color: 'var(--fg-0)' }}>{sonarrCount ?? '—'}</span>
+      </span>
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+        radarr <span style={{ color: 'var(--fg-0)' }}>{radarrCount ?? '—'}</span>
+      </span>
       <span style={{ width: 1, height: 14, background: 'var(--bg-4)' }} />
       <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-        <span style={{ color: 'var(--fg-0)', fontWeight: 600 }}>612</span> gaps · last walk <span className="mono">10:32</span>
+        {statusLabel} · refreshed <span className="mono">{fmtClock(data?.generated_at)}</span>
+        {data?.cached ? <span style={{ color: 'var(--fg-3)' }}> (cache {data.cache_age_s}s)</span> : null}
       </span>
     </div>
   );
@@ -151,7 +398,92 @@ function FilterChip({ children, active, onClose }) {
   );
 }
 
-function FilterBar({ groupBy, setGroupBy, filtered }) {
+const REASON_FILTERS = ['all', 'no-track', 'bazarr-wanted', 'audio-mislabel', 'awaiting-bazarr-sync', 'embedded-only', 'low-score', 'unmonitored'];
+
+// Languages I care about — persisted in localStorage so it survives reloads.
+// Reads on every fetch in useLiveCoverage. Empty string = show everything
+// Bazarr wants. UI shows a chip+popover for picking. Defaults to empty,
+// user opts in when they want subarr to filter Bazarr's wanted list down.
+function WantedLangsChip() {
+  const [pref, setPref] = React.useState('');
+  const [open, setOpen] = React.useState(false);
+  const popRef = React.useRef(null);
+  React.useEffect(() => {
+    try { setPref(localStorage.getItem('subarr.only_wanted_langs') || ''); } catch {}
+  }, []);
+  React.useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (popRef.current && !popRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  const set = (v) => {
+    try {
+      if (v) localStorage.setItem('subarr.only_wanted_langs', v);
+      else localStorage.removeItem('subarr.only_wanted_langs');
+    } catch {}
+    setPref(v);
+    // Trigger a refetch — coverage page polls every 10s, but this
+    // gives instant feedback.
+    window.dispatchEvent(new CustomEvent('coverage-prefs-changed'));
+  };
+  const active = !!pref;
+  const label = active ? `wanted: ${pref}` : 'all wanted langs';
+  const COMMON = ['en', 'en,es', 'en,fr', 'en,de', 'en,ja', 'en,zh'];
+  return (
+    <span ref={popRef} style={{ position: 'relative', cursor: 'pointer' }}>
+      <span onClick={() => setOpen(o => !o)}
+        title={active
+          ? `Only showing rows where Bazarr is asking for: ${pref}. Click to change.`
+          : 'Click to filter the coverage list to only the subtitle languages you care about.'}>
+        <FilterChip active={active}>{label}</FilterChip>
+      </span>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 28, left: 0, zIndex: 10,
+          background: 'var(--bg-1)', border: 'var(--border)',
+          borderRadius: 'var(--radius-md)', padding: 10,
+          minWidth: 220,
+          boxShadow: '0 6px 16px rgba(0,0,0,0.4)',
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Show only rows wanting…
+          </div>
+          {COMMON.map(opt => (
+            <button key={opt} onClick={() => { set(opt); setOpen(false); }}
+              className={`chip ${pref === opt ? 'violet' : ''}`}
+              style={{ cursor: 'pointer', height: 24, padding: '0 10px', textAlign: 'left' }}>
+              {opt}
+            </button>
+          ))}
+          <input type="text" placeholder="custom (e.g. en,pt)"
+            defaultValue={pref}
+            onKeyDown={(e) => { if (e.key === 'Enter') { set(e.target.value.trim()); setOpen(false); } }}
+            style={{
+              marginTop: 4, padding: '4px 8px',
+              background: 'var(--bg-0)', border: 'var(--border)',
+              borderRadius: 4, color: 'var(--fg-0)', fontSize: 'var(--text-xs)',
+            }} />
+          {active && (
+            <button onClick={() => { set(''); setOpen(false); }}
+              style={{
+                marginTop: 4, padding: '4px 8px',
+                background: 'transparent', border: '1px solid var(--bg-4)',
+                borderRadius: 4, color: 'var(--fg-2)', fontSize: 'var(--text-2xs)',
+                cursor: 'pointer',
+              }}>clear · show all</button>
+          )}
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', marginTop: 4 }}>
+            Persists locally. Bazarr is still asked for everything — subarr just hides what you don&apos;t care about.
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
+function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, monitoredOnly, setMonitoredOnly }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
       {/* Search */}
@@ -169,11 +501,22 @@ function FilterBar({ groupBy, setGroupBy, filtered }) {
 
       {/* Active filter chips */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <FilterChip>monitored</FilterChip>
-        <FilterChip active onClose>reason: no-track</FilterChip>
-        <FilterChip>type: tv</FilterChip>
-        <FilterChip>missing: eng</FilterChip>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginLeft: 2, cursor: 'pointer' }}>+ filter</span>
+        <span
+          onClick={() => setMonitoredOnly && setMonitoredOnly(!monitoredOnly)}
+          style={{ cursor: 'pointer' }}>
+          <FilterChip active={monitoredOnly}>monitored</FilterChip>
+        </span>
+        {REASON_FILTERS.map(r => (
+          <span key={r} onClick={() => setReasonFilter && setReasonFilter(r)} style={{ cursor: 'pointer' }}>
+            <FilterChip active={reasonFilter === r}>{r === 'all' ? 'all reasons' : r}</FilterChip>
+          </span>
+        ))}
+        {['all', 'tv', 'mov'].map(t => (
+          <span key={t} onClick={() => setTypeFilter && setTypeFilter(t)} style={{ cursor: 'pointer' }}>
+            <FilterChip active={typeFilter === t}>{t === 'all' ? 'all types' : `type: ${t}`}</FilterChip>
+          </span>
+        ))}
+        <WantedLangsChip />
       </div>
 
       <span style={{ flex: 1 }} />
@@ -214,18 +557,19 @@ const COL = {
   score:  44,
   type:   18,
   ep:     74,
-  langs:  72,
+  langs:  56,
+  orig:   46,
   mon:    34,
   disk:   34,
   emb:    34,
-  audio:  78,
+  audio:  98,
   reason: 96,
-  action: 30,
+  action: 60,
 };
 
-function HeaderCell({ children, w, right, center }) {
+function HeaderCell({ children, w, right, center, tip }) {
   return (
-    <div style={{
+    <div title={tip || undefined} style={{
       width: w, flex: w ? '0 0 auto' : 1, minWidth: 0,
       textAlign: right ? 'right' : center ? 'center' : 'left',
       fontSize: 'var(--text-2xs)',
@@ -233,7 +577,1062 @@ function HeaderCell({ children, w, right, center }) {
       textTransform: 'uppercase',
       color: 'var(--fg-2)',
       fontWeight: 600,
+      cursor: tip ? 'help' : 'default',
+      borderBottom: tip ? '1px dotted var(--fg-3)' : 'none',
     }}>{children}</div>
+  );
+}
+
+// v1.1-O Layer 4 — small badge on the AUDIO cell showing the row's
+// audio-language confidence state. Click handler hoisted by parent to
+// open the review modal.
+function AudioLabelChip({ r, onClick }) {
+  let kind = null;       // 'verified' | 'suspect' | 'unknown'
+  if (r.audio_verified) kind = 'verified';
+  else if (r.audio_label_suspect) kind = 'suspect';
+  else if (r.audio_label_unknown) kind = 'unknown';
+  if (!kind) return null;
+  const cfg = {
+    verified: { ch: '✓', bg: 'rgba(34,211,161,0.18)', fg: '#22d3a1', label: 'User-verified' },
+    suspect:  { ch: '⚠', bg: 'rgba(245,158,11,0.18)', fg: '#f59e0b', label: 'Audio label suspect' },
+    unknown:  { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata' },
+  }[kind];
+  const evidence = (r.audio_label_notes || []).join('\n• ');
+  const tip = `${cfg.label}${evidence ? '\n\n• ' + evidence : ''}\n\nClick to verify/correct.`;
+  return (
+    <span
+      title={tip}
+      onClick={(e) => { e.stopPropagation(); onClick && onClick(r); }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 16, height: 16,
+        borderRadius: 4,
+        background: cfg.bg,
+        color: cfg.fg,
+        fontSize: 10,
+        fontWeight: 700,
+        marginLeft: 6,
+        cursor: 'pointer',
+        flex: '0 0 auto',
+      }}>{cfg.ch}</span>
+  );
+}
+
+// Three contextual badges that show next to the title: NOW PLAYING,
+// JUST ADDED (imported <24h), AIRS SOON (<48h). High-signal nudges.
+function ScoringBadges({ r }) {
+  const badges = [];
+  if (r.now_playing) {
+    badges.push({
+      key: 'np',
+      label: 'NOW PLAYING',
+      bg: 'rgba(234,179,8,0.18)',
+      fg: '#facc15',
+      tip: 'Currently streaming on Plex. +2000 score boost. Highest priority — get this sub done now.',
+      pulse: true,
+    });
+  }
+  if (r.just_imported) {
+    badges.push({
+      key: 'ji',
+      label: 'JUST ADDED',
+      bg: 'rgba(34,211,161,0.18)',
+      fg: '#22d3a1',
+      tip: 'Sonarr/Radarr imported this file in the last 24 hours. +800 score boost — watch likelihood peaks now.',
+    });
+  }
+  if (r.airing_soon) {
+    badges.push({
+      key: 'as',
+      label: 'AIRS SOON',
+      bg: 'rgba(56,189,248,0.18)',
+      fg: '#38bdf8',
+      tip: 'Sonarr says this episode airs within 48 hours. +400 score boost — pre-warm the queue.',
+    });
+  }
+  if (!badges.length) return null;
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, flex: '0 0 auto' }}>
+      {badges.map(b => (
+        <span key={b.key} title={b.tip} className={b.pulse ? 'pulse-badge' : undefined}
+          style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '0 6px', height: 16,
+            borderRadius: 3,
+            background: b.bg,
+            color: b.fg,
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            cursor: 'help',
+          }}>{b.label}</span>
+      ))}
+    </span>
+  );
+}
+
+// v1.1-O Layer 4: banner showing how many rows need audio-lang review
+// across the whole library. Polls /api/audio-lang/pending-review on mount
+// and after a verification fires.
+// ─── Friendly header — 4 panels above the dense filter+table UI ───
+//
+// Coverage is the most-trafficked page after Home. Drop the user into
+// the same panel pattern the dashboard + rules pages use: 1 welcome
+// card explaining what this page IS, plus a 4-tile status row that
+// tells them at-a-glance what the situation looks like RIGHT NOW —
+// before they touch the dense filter bar below.
+
+function CoverageHeaderTile({ label, value, sub, tint, tip, accent }) {
+  return (
+    <div title={tip} style={{
+      flex: 1, minWidth: 0,
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '12px 14px',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {tint && <StatusDot kind={tint} />}
+        <span className="label">{label}</span>
+      </div>
+      <div style={{
+        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        minHeight: 16, lineHeight: 1.35,
+      }}>{sub}</div>
+    </div>
+  );
+}
+
+function fmtRel(ts) {
+  if (!ts) return null;
+  const diff = Date.now() / 1000 - (typeof ts === 'string' ? Date.parse(ts) / 1000 : ts);
+  if (diff < 60) return 'just now';
+  const m = Math.floor(diff / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function CoverageStatusRow({ data, rows, pendingReview }) {
+  // Read from the loaded coverage payload so the tiles auto-refresh on
+  // every poll without an extra round-trip.
+  const total = data?.totals?.items ?? null;
+  const suspectAudio = rows.filter(r => r.reason === 'audio-mislabel').length;
+  // "Worth a look right now" = high-score rows the user would most likely
+  // actually want subtitles for. Threshold matches the auto-queue default.
+  const worth = rows.filter(r => (r.score ?? 0) >= 200).length;
+  const lastWalkTs = data?.generated_at;
+  const lastWalkRel = fmtRel(lastWalkTs);
+  const cached = data?.cached;
+  const cacheAge = data?.cache_age_s;
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <CoverageHeaderTile
+        label="open gaps"
+        value={total == null ? '—' : total.toLocaleString('en-US')}
+        sub={total === 0 ? 'nothing missing right now' : 'rows in the table below'}
+        tint={total > 0 ? 'warn' : 'ok'}
+        tip="Every file Bazarr says is missing a sub, after subarr's reconciliation passes."
+      />
+      <CoverageHeaderTile
+        label="worth queueing"
+        value={worth.toLocaleString('en-US')}
+        sub={worth === 0
+          ? 'no high-score candidates right now'
+          : `score ≥ 200 — the auto-queue threshold`}
+        tint={worth > 0 ? 'violet' : 'muted'}
+        accent={worth > 0 ? 'var(--violet-400)' : undefined}
+        tip="Rows scoring high enough that the default auto-queue rule would dispatch them. Visit Rules to change the threshold."
+      />
+      <CoverageHeaderTile
+        label="needs your call"
+        value={(suspectAudio + pendingReview).toLocaleString('en-US')}
+        sub={[
+          suspectAudio > 0 && `${suspectAudio} audio-suspect`,
+          pendingReview > 0 && `${pendingReview} pending review`,
+        ].filter(Boolean).join(' · ') || 'nothing waiting on you'}
+        tint={(suspectAudio + pendingReview) > 0 ? 'warn' : 'muted'}
+        tip="Rows where subarr can't decide on its own — usually because the audio language is mislabeled. Quick listen + confirm clears them."
+      />
+      <CoverageHeaderTile
+        label="last walk"
+        value={lastWalkRel || '—'}
+        sub={cached
+          ? `served from cache (${cacheAge}s old)`
+          : (lastWalkTs ? 'fresh data' : 'use Re-walk to populate')}
+        tint={lastWalkTs ? 'info' : 'muted'}
+        tip="When subarr last reconciled gaps against the live arr stack. Re-walk now to refresh on demand."
+      />
+    </div>
+  );
+}
+
+const COVERAGE_WELCOME_KEY = 'subarr.coverage.welcome.dismissed';
+const COVERAGE_WELCOME_COLLAPSED_KEY = 'subarr.coverage.welcome.collapsed';
+
+function CoverageWelcomeCard({ rows, pendingReview }) {
+  // User feedback (2026-05-31): the original always-expanded card squashed
+  // the gap-list table on Coverage. Two-tier dismiss now:
+  //   - "got it" → dismissed entirely, no header bar (localStorage forever).
+  //   - chevron → collapsed to a single 32px row showing the one-line
+  //     intro + an "expand" affordance. Status tiles above always render;
+  //     the welcome card is only visible on demand.
+  // First-time visitors land on expanded so they get the orientation
+  // message; the moment they expand/collapse via the chevron OR click any
+  // quick-action, we flip collapsed=1 so the page stops eating space.
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(COVERAGE_WELCOME_KEY) === '1'; }
+    catch { return false; }
+  });
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(COVERAGE_WELCOME_COLLAPSED_KEY) === '1'; }
+    catch { return false; }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try { localStorage.setItem(COVERAGE_WELCOME_KEY, '1'); } catch {}
+    setDismissed(true);
+  };
+  const persistCollapsed = (v) => {
+    try { localStorage.setItem(COVERAGE_WELCOME_COLLAPSED_KEY, v ? '1' : '0'); } catch {}
+    setCollapsed(v);
+  };
+
+  if (collapsed) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '8px 14px',
+        background: 'rgba(139,92,246,0.06)',
+        border: '1px solid rgba(139,92,246,0.20)',
+        borderRadius: 'var(--radius-md)',
+        fontSize: 'var(--text-sm)', color: 'var(--fg-1)',
+      }}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>🗂️</span>
+        <span style={{ flex: 1 }}>
+          Coverage is the live gap list — score 0-1000, higher = more likely you want the sub.
+        </span>
+        <button className="btn ghost" onClick={() => persistCollapsed(false)}
+          title="Expand the explainer + quick actions"
+          style={{ fontSize: 'var(--text-2xs)' }}>
+          ▾ expand
+        </button>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card entirely on this device"
+          style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
+      </div>
+    );
+  }
+  // The 3 quick-action cards pivot off what's actually in the data.
+  const worth = rows.filter(r => (r.score ?? 0) >= 200).length;
+  const steps = [
+    {
+      icon: '🎯',
+      title: 'See the highest-priority gaps',
+      copy: 'Filter the table to score ≥ 200 — the rows your auto-queue rule would dispatch first.',
+      cta: { label: 'Filter by score', onClick: (e) => {
+        e.preventDefault();
+        // Open the score-floor filter — same hash anchor the FilterBar listens to.
+        window.dispatchEvent(new CustomEvent('coverage-filter', { detail: { kind: 'score-floor', value: 200 } }));
+      }},
+    },
+    pendingReview > 0 ? {
+      icon: '🎧',
+      title: `Review ${pendingReview} audio-language flags`,
+      copy: 'A 20-second listen each unblocks subarr to either skip (English) or transcribe (foreign).',
+      cta: { label: 'Open batch review', onClick: (e) => {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('open-batch-review'));
+      }},
+    } : {
+      icon: '🧠',
+      title: 'How the score works',
+      copy: 'Each row scores against monitored status, watch recency (Tautulli), and provider success rate. Higher = more likely you actually want the sub.',
+      cta: { label: 'Read scoring docs', href: '/settings#scoring' },
+    },
+    {
+      icon: '⚙',
+      title: 'Edit auto-queue rules',
+      copy: 'Decide what subarr does on every scheduled walk: off, dashboard-only, manual-confirm, or full auto-queue.',
+      cta: { label: 'Open Rules', href: '/rules' },
+    },
+  ];
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.10), rgba(34,211,161,0.05))',
+      border: '1px solid rgba(139,92,246,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 22, lineHeight: 1 }}>🗂️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            Coverage is the live gap list.
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 4, lineHeight: 1.5 }}>
+            Bazarr seeds it, then subarr reconciles against Sonarr, Radarr, the on-disk probe,
+            and (where present) Tautulli watch history. Each row scores from <b>0</b> to <b>1000</b>;
+            higher = more likely you actually want the sub. Pick rows + Queue, or
+            tune the <a href="/rules" style={{ color: 'var(--violet-400)' }}>auto-queue rule</a>{' '}
+            and let subarr do it.
+          </div>
+        </div>
+        <button className="btn ghost" onClick={() => persistCollapsed(true)}
+          title="Collapse to a single hint bar — quick actions still accessible."
+          style={{ fontSize: 'var(--text-2xs)' }}>▴ collapse</button>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card entirely on this device."
+          style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+      }}>
+        {steps.map((s, i) => (
+          <div key={i} style={{
+            background: 'var(--bg-1)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 12,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>{s.icon}</span>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>
+                {s.title}
+              </span>
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', flex: 1 }}>
+              {s.copy}
+            </div>
+            <div>
+              <a href={s.cta.href || '#'} onClick={(e) => {
+                // Auto-collapse so the page returns to the data-first
+                // layout after the user takes their first action.
+                persistCollapsed(true);
+                if (s.cta.onClick) s.cta.onClick(e);
+              }}
+                className="btn" style={{
+                  textDecoration: 'none', display: 'inline-block',
+                  fontSize: 'var(--text-2xs)', padding: '4px 10px',
+                  background: 'var(--violet-500)', color: '#fff',
+                }}>
+                {s.cta.label}
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PendingReviewBanner() {
+  const [count, setCount] = useState(0);
+  const [hidden, setHidden] = useState(false);
+  const refetch = async () => {
+    try {
+      const r = await fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const d = await r.json();
+      setCount(d.count || 0);
+    } catch {}
+  };
+  useEffect(() => {
+    refetch();
+    const handler = () => refetch();
+    window.addEventListener('audio-lang-verified', handler);
+    return () => window.removeEventListener('audio-lang-verified', handler);
+  }, []);
+  if (hidden || count === 0) return null;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '10px 14px',
+      background: 'rgba(245,158,11,0.10)',
+      border: '1px solid rgba(245,158,11,0.30)',
+      borderRadius: 'var(--radius-md)',
+      fontSize: 'var(--text-sm)',
+      color: 'var(--fg-1)',
+    }}>
+      <span style={{ fontSize: 16 }}>⚠</span>
+      <span style={{ flex: 1 }}>
+        <b>{count}</b> file{count === 1 ? '' : 's'} need audio-language review.
+        Click the ⚠ or ? badge on any row, or batch-review with the audio player.
+      </span>
+      <button className="btn" onClick={() => window.dispatchEvent(new CustomEvent('open-batch-review'))}
+        style={{ background: 'var(--violet-500)', color: '#fff' }}>
+        🎧 Review all ({count})
+      </button>
+      <button className="btn ghost" onClick={() => setHidden(true)}
+        title="Hide for this session" style={{ fontSize: 'var(--text-2xs)' }}>dismiss</button>
+    </div>
+  );
+}
+
+// v1.1-O Layer 4++: batch review. Loads the pending-review list once,
+// then walks the user through each item with audio player + Confirm /
+// Correct / Skip. Burns through 50+ verifications in 10 min.
+function BatchReviewModal() {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState('eng');
+  const [posData, setPosData] = useState(null);
+  const [posLoading, setPosLoading] = useState(false);
+  const [activeSampleIdx, setActiveSampleIdx] = useState(0);
+  const [track, setTrack] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [stats, setStats] = useState({ confirmed: 0, skipped: 0 });
+
+  // Load pending list when opened.
+  useEffect(() => {
+    const handler = async () => {
+      setOpen(true);
+      setIdx(0);
+      setStats({ confirmed: 0, skipped: 0 });
+      try {
+        const r = await fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' });
+        const d = await r.json();
+        setItems(d.items || []);
+      } catch {
+        setItems([]);
+      }
+    };
+    window.addEventListener('open-batch-review', handler);
+    return () => window.removeEventListener('open-batch-review', handler);
+  }, []);
+
+  const cur = items[idx];
+
+  // Fetch sample positions when item or track changes. NB the dep array
+  // includes the resolved file path string (not `cur` itself) so the
+  // effect fires when `items` loads async and cur becomes defined.
+  const curPath = cur && (cur.file_canonical_path || cur.canonical_path);
+  useEffect(() => {
+    if (!open || !curPath) return;
+    setPosData(null);
+    setActiveSampleIdx(0);
+    setPosLoading(true);
+    setPicked('eng');
+    let cancelled = false;
+    fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(curPath)}&track=${track}&n=3`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { if (!cancelled) setPosData(d); })
+      .catch(() => { if (!cancelled) setPosData(null); })
+      .finally(() => { if (!cancelled) setPosLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, curPath, track]);
+
+  const close = () => {
+    setOpen(false);
+    setItems([]);
+    setPosData(null);
+    window.dispatchEvent(new CustomEvent('audio-lang-verified'));
+  };
+  const skip = () => {
+    setStats(s => ({ ...s, skipped: s.skipped + 1 }));
+    advance();
+  };
+  const advance = () => {
+    if (idx + 1 >= items.length) {
+      close();
+    } else {
+      setIdx(i => i + 1);
+      setTrack(0);
+    }
+  };
+  const confirmAndNext = async () => {
+    if (!cur) return;
+    setSaving(true);
+    try {
+      await fetch('/api/audio-lang/verifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          canonical_path: cur.file_canonical_path || cur.canonical_path,
+          lang_code: picked,
+          source: 'user',
+          confidence: 1.0,
+          evidence: { notes: cur.notes || [], track, batch: true },
+        }),
+      });
+      setStats(s => ({ ...s, confirmed: s.confirmed + 1 }));
+      advance();
+    } catch (e) {
+      alert('Save failed: ' + (e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) return null;
+  const fmtT = (s) => {
+    if (s == null) return '—';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  const sampleUrl = posData && cur && posData.positions && posData.positions[activeSampleIdx] != null
+    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(cur.file_canonical_path || cur.canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=5&track=${track}`
+    : null;
+
+  return (
+    <div onClick={close} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 110,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} className="panel" style={{
+        width: 640, maxWidth: '94vw', maxHeight: '92vh',
+        padding: 20, display: 'flex', flexDirection: 'column', gap: 14,
+        overflowY: 'auto',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              Batch audio review
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--fg-1)', marginTop: 4 }}>
+              {idx + 1} of {items.length} ·
+              <span style={{ color: 'var(--success-500, #22d3a1)', marginLeft: 6 }}>✓ {stats.confirmed}</span> ·
+              <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>skipped {stats.skipped}</span>
+            </div>
+          </div>
+          <button className="btn ghost" onClick={close} style={{ fontSize: 'var(--text-2xs)' }}>
+            close batch
+          </button>
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ height: 4, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+          <div style={{
+            width: `${((idx) / Math.max(1, items.length)) * 100}%`,
+            height: '100%',
+            background: 'linear-gradient(90deg,#22d3a1,#38bdf8,#8b5cf6)',
+            transition: 'width 200ms ease',
+          }} />
+        </div>
+
+        {!cur && <div style={{ padding: 30, textAlign: 'center', color: 'var(--fg-2)' }}>
+          Loading review queue…
+        </div>}
+
+        {cur && (
+          <>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--fg-0)' }}>
+                {cur.title}{cur.episode_number ? ` · ${cur.episode_number}` : ''}
+              </div>
+              <div className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', marginTop: 4, wordBreak: 'break-all' }}>
+                {cur.file_canonical_path || cur.canonical_path}
+              </div>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', marginTop: 4 }}>
+                Flag: <b style={{ color: cur.flag === 'suspect' ? '#f59e0b' : '#94a3b8' }}>{cur.flag}</b> ·
+                ffprobe says: {(cur.audio_langs || []).join(',') || '—'} ·
+                Sonarr says original: {cur.original_language || '—'}
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', fontWeight: 600 }}>🎧 Listen</span>
+                {posData && posData.audio_tracks > 1 && (
+                  <>
+                    <span style={{ color: 'var(--bg-5)' }}>·</span>
+                    <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>track</span>
+                    {Array.from({ length: posData.audio_tracks }).map((_, i) => (
+                      <button key={i} onClick={() => setTrack(i)}
+                        className={`chip ${track === i ? 'violet' : ''}`}
+                        style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)', cursor: 'pointer' }}>
+                        {i}
+                      </button>
+                    ))}
+                  </>
+                )}
+                <span style={{ flex: 1 }} />
+                {posData && <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                  {fmtT(posData.duration_s)}
+                </span>}
+              </div>
+              {posLoading && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                Scanning…
+              </div>}
+              {posData && posData.positions && posData.positions.length > 0 && (
+                <>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {posData.positions.map((p, i) => (
+                      <button key={i} onClick={() => setActiveSampleIdx(i)}
+                        className={`chip ${activeSampleIdx === i ? 'violet' : ''}`}
+                        style={{ flex: 1, justifyContent: 'center', cursor: 'pointer', padding: '4px 8px' }}>
+                        {i + 1} · {fmtT(p)}
+                      </button>
+                    ))}
+                  </div>
+                  {sampleUrl && (
+                    <audio key={sampleUrl} controls autoPlay src={sampleUrl} style={{ width: '100%', height: 36 }} />
+                  )}
+                </>
+              )}
+            </div>
+
+            <div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginBottom: 6 }}>
+                Language for track {track}:
+              </div>
+              <select value={picked} onChange={(e) => setPicked(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
+                         color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
+                {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn ghost" onClick={skip} disabled={saving} style={{ flex: 1 }}>
+                Skip →
+              </button>
+              <button className="btn" onClick={confirmAndNext} disabled={saving}
+                style={{ flex: 2, background: 'var(--violet-500)', color: '#fff' }}>
+                {saving ? 'Saving…' : `Confirm ${picked} → Next`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// v1.1-F Arbiter dialog: before queueing Whisper, ask Bazarr's providers
+// what human subs are available. Triggered by row "Bazarr?" button →
+// CustomEvent('open-arbiter') from CoverageRow.
+function ArbiterModal() {
+  const [row, setRow] = useState(null);
+  const [candidates, setCandidates] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [acting, setActing] = useState(false);
+  useEffect(() => {
+    const handler = (e) => {
+      setRow(e.detail);
+      setCandidates(null);
+      setError(null);
+      setLoading(true);
+      const id = e.detail?._sonarr_episode_id;
+      if (!id) {
+        setLoading(false);
+        setError('Row has no sonarr_episode_id — arbiter requires episode rows.');
+        return;
+      }
+      fetch(`/api/arbiter/candidates?episode_id=${id}&language=en`,
+            { credentials: 'same-origin' })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+        .then(d => setCandidates(d))
+        .catch(err => setError(String(err.message || err)))
+        .finally(() => setLoading(false));
+    };
+    window.addEventListener('open-arbiter', handler);
+    return () => window.removeEventListener('open-arbiter', handler);
+  }, []);
+  if (!row) return null;
+  const close = () => { setRow(null); setCandidates(null); };
+  const accept = async (c) => {
+    setActing(true);
+    try {
+      const r = await fetch('/api/arbiter/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          episode_id: row._sonarr_episode_id,
+          language: 'en',
+          provider: c.provider,
+          subtitles_id: c.subtitle || c.subs_id || '',
+          score: c.score || 0,
+          forced: c.forced === 'True' || c.forced === true,
+          hi: c.hearing_impaired === 'True' || c.hi === true,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      alert(`Bazarr is downloading: ${c.provider} (score ${c.score})`);
+      close();
+    } catch (e) { alert(`Accept failed: ${e.message}`); }
+    finally { setActing(false); }
+  };
+  const tierColor = { excellent: '#22d3a1', decent: '#facc15', weak: '#ef4444' };
+  return (
+    <div onClick={close} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} className="panel" style={{
+        width: 680, maxWidth: '94vw', maxHeight: '90vh',
+        padding: 20, display: 'flex', flexDirection: 'column', gap: 14,
+        overflowY: 'auto',
+      }}>
+        <div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            Whisper-or-Bazarr arbiter
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--fg-0)', marginTop: 4 }}>
+            {row.title}{row.ep ? ` · ${row.ep}` : ''}
+          </div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginTop: 6 }}>
+            Asking Bazarr&apos;s enabled providers if a human-translated sub already exists for this episode.
+            If a strong candidate appears, prefer it over Whisper — saves GPU and (usually) gives better quality.
+          </div>
+        </div>
+
+        {loading && (
+          <div style={{ padding: 30, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+            <span className="spinner-ring lg" />
+            <div style={{ color: 'var(--fg-1)', fontSize: 'var(--text-sm)' }}>
+              Searching providers…
+            </div>
+            <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
+              First call hits external providers — can take 30s. Subsequent searches for this episode are cached.
+            </div>
+          </div>
+        )}
+        {error && <div style={{ color: 'var(--error-500)', fontSize: 'var(--text-xs)' }}>{error}</div>}
+
+        {candidates && candidates.candidates && candidates.candidates.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {candidates.candidates.slice(0, 5).map((c, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: 10, background: 'var(--bg-1)',
+                border: '1px solid var(--bg-3)', borderRadius: 'var(--radius-md)',
+              }}>
+                <span style={{
+                  padding: '2px 8px', borderRadius: 3,
+                  background: 'var(--bg-3)',
+                  color: tierColor[c.tier] || 'var(--fg-2)',
+                  fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+                  flex: '0 0 auto', letterSpacing: '0.04em',
+                }}>{c.tier}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-0)', fontWeight: 500 }}>
+                    {c.provider}
+                  </div>
+                  <div className="mono" style={{
+                    fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{Array.isArray(c.release_info) ? c.release_info.join(', ') : (c.release_info || '')}</div>
+                </div>
+                <span className="num mono" style={{ color: 'var(--fg-1)', minWidth: 36, textAlign: 'right' }}>
+                  {c.score}
+                </span>
+                <button className="btn sm" disabled={acting} onClick={() => accept(c)}
+                  style={{ background: 'var(--violet-500)', color: '#fff' }}>
+                  Take this
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {candidates && (!candidates.candidates || candidates.candidates.length === 0) && (
+          <div style={{ padding: 16, textAlign: 'center', color: 'var(--fg-2)', fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div>No human-translated subtitle available from any provider.</div>
+            <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
+              {candidates.filtered_self_whisper
+                ? `(${candidates.filtered_self_whisper} whisperai result${candidates.filtered_self_whisper === 1 ? '' : 's'} filtered — that's your own subgen.) Your best option is Whisper anyway.`
+                : 'Your best option is Whisper anyway.'}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 'auto' }}>
+          <button className="btn ghost" onClick={close} disabled={acting}>cancel</button>
+          <button className="btn" onClick={close}
+            title="Skip arbiter, queue Whisper via the regular queue button">
+            Whisper anyway →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// v1.1-O Layer 4: per-row audio-lang verification modal. Triggered by
+// CustomEvent('open-audio-review') from AudioLabelChip clicks.
+// Alphabetical by English name. ISO 639-2 (3-letter) codes — they're
+// what Bazarr / Sonarr / Plex all settle on internally, even when the
+// UI shows ISO 639-1 (2-letter) codes elsewhere. Expanded 2026-05-31
+// to cover the Balkan + Baltic + remaining EU slavic languages
+// (missing Serbian / Bulgarian / Croatian was a hole flagged by Judd).
+const LANG_PICKS = [
+  ['ara','Arabic'],
+  ['bul','Bulgarian'],
+  ['cat','Catalan'],
+  ['chi','Chinese'],
+  ['hrv','Croatian'],
+  ['cze','Czech'],
+  ['dan','Danish'],
+  ['dut','Dutch'],
+  ['eng','English'],
+  ['est','Estonian'],
+  ['fin','Finnish'],
+  ['fre','French'],
+  ['ger','German'],
+  ['gre','Greek'],
+  ['heb','Hebrew'],
+  ['hin','Hindi'],
+  ['hun','Hungarian'],
+  ['ind','Indonesian'],
+  ['ita','Italian'],
+  ['jpn','Japanese'],
+  ['kor','Korean'],
+  ['lav','Latvian'],
+  ['lit','Lithuanian'],
+  ['may','Malay'],
+  ['nor','Norwegian'],
+  ['pol','Polish'],
+  ['por','Portuguese'],
+  ['rum','Romanian'],
+  ['rus','Russian'],
+  ['srp','Serbian'],
+  ['slo','Slovak'],
+  ['slv','Slovenian'],
+  ['spa','Spanish'],
+  ['swe','Swedish'],
+  ['tha','Thai'],
+  ['tur','Turkish'],
+  ['ukr','Ukrainian'],
+  ['vie','Vietnamese'],
+];
+export function AudioReviewModal() {
+  const [row, setRow] = useState(null);
+  const [selected, setSelected] = useState('eng');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  // v1.1-O Layer 4++ audio player state
+  const [posData, setPosData] = useState(null);
+  const [posLoading, setPosLoading] = useState(false);
+  const [track, setTrack] = useState(0);
+  const [activeSampleIdx, setActiveSampleIdx] = useState(0);
+
+  useEffect(() => {
+    const handler = (e) => {
+      setRow(e.detail);
+      setSelected((e.detail?.audio || 'eng').split(',')[0] || 'eng');
+      setError(null);
+      setPosData(null);
+      setTrack(0);
+      setActiveSampleIdx(0);
+      // Fetch sample positions immediately so the player is ready.
+      if (e.detail?._canonical_path) {
+        setPosLoading(true);
+        fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(e.detail._canonical_path)}&track=0&n=3`,
+              { credentials: 'same-origin' })
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(setPosData)
+          .catch(err => setError('Sample-position scan failed: ' + (err.message || err)))
+          .finally(() => setPosLoading(false));
+      }
+    };
+    window.addEventListener('open-audio-review', handler);
+    return () => window.removeEventListener('open-audio-review', handler);
+  }, []);
+
+  // When user switches track, refetch positions for that track.
+  useEffect(() => {
+    if (!row || !posData) return;
+    if (posData.track === track) return;
+    setPosLoading(true);
+    fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(row._canonical_path)}&track=${track}&n=3`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { setPosData(d); setActiveSampleIdx(0); })
+      .catch(err => setError('Sample-position scan failed: ' + (err.message || err)))
+      .finally(() => setPosLoading(false));
+  }, [track]);
+
+  if (!row) return null;
+  const close = () => { setRow(null); setPosData(null); };
+  const save = async (langCode) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch('/api/audio-lang/verifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          canonical_path: row._canonical_path,
+          lang_code: langCode,
+          source: 'user',
+          confidence: 1.0,
+          evidence: { notes: row.audio_label_notes || [], track },
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // v1.1-O fix #193/#197: dispatch detail with file path so listeners
+      // can do OPTIMISTIC local row updates (chip turns green immediately)
+      // rather than waiting for the next coverage poll.
+      window.dispatchEvent(new CustomEvent('audio-lang-verified', {
+        detail: { file_canonical_path: row._canonical_path, lang_code: langCode },
+      }));
+      close();
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fmtT = (s) => {
+    if (s == null) return '—';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  const sampleUrl = posData && posData.positions && posData.positions[activeSampleIdx] != null
+    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(row._canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=5&track=${track}`
+    : null;
+  return (
+    <div onClick={close} style={{
+      position: 'fixed', inset: 0,
+      background: 'rgba(0,0,0,0.55)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} className="panel" style={{
+        width: 560, maxWidth: '92vw',
+        padding: 20,
+        display: 'flex', flexDirection: 'column', gap: 14,
+      }}>
+        <div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            Audio language review
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--fg-0)', marginTop: 4 }}>
+            {row.title}{row.ep ? ` · ${row.ep}` : ''}
+          </div>
+          <div className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', marginTop: 4, wordBreak: 'break-all' }}>
+            {row._canonical_path}
+          </div>
+        </div>
+
+        <div style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 10, fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+          <div style={{ marginBottom: 4 }}><b>Evidence trail:</b></div>
+          {(row.audio_label_notes && row.audio_label_notes.length)
+            ? <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {row.audio_label_notes.map((n, i) => <li key={i}>{n}</li>)}
+              </ul>
+            : <span style={{ color: 'var(--fg-3)' }}>No evidence captured.</span>}
+          <div style={{ marginTop: 6, fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+            ffprobe: {row.audio} · originalLanguage: {row.original_language || '—'}
+          </div>
+        </div>
+
+        {/* v1.1-O Layer 4++: audio player. Three sample positions picked
+            from non-silent regions; click button to swap. Audio element
+            re-creates when src changes so the new sample auto-loads. */}
+        <div style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', fontWeight: 600 }}>🎧 Listen to the audio</span>
+            {posData && posData.audio_tracks > 1 && (
+              <>
+                <span style={{ color: 'var(--bg-5)' }}>·</span>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>track</span>
+                {Array.from({ length: posData.audio_tracks }).map((_, i) => (
+                  <button key={i} onClick={() => setTrack(i)}
+                    className={`chip ${track === i ? 'violet' : ''}`}
+                    title={`Switch to audio track ${i}`}
+                    style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)', cursor: 'pointer' }}>
+                    {i}
+                  </button>
+                ))}
+              </>
+            )}
+            <span style={{ flex: 1 }} />
+            {posData && (
+              <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                runtime {fmtT(posData.duration_s)}
+              </span>
+            )}
+          </div>
+
+          {posLoading && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+              <span className="spinner-ring" />
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                Scanning audio for non-silent regions… (one-time per file)
+              </span>
+            </div>
+          )}
+
+          {posData && posData.positions && posData.positions.length > 0 && (
+            <>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {posData.positions.map((p, i) => (
+                  <button key={i} onClick={() => setActiveSampleIdx(i)}
+                    className={`chip ${activeSampleIdx === i ? 'violet' : ''}`}
+                    title={`Sample ${i + 1}: 5 seconds starting at ${fmtT(p)}`}
+                    style={{ flex: 1, justifyContent: 'center', cursor: 'pointer', padding: '4px 8px' }}>
+                    Sample {i + 1} · {fmtT(p)}
+                  </button>
+                ))}
+              </div>
+              {sampleUrl && (
+                <audio key={sampleUrl} controls autoPlay
+                  src={sampleUrl}
+                  style={{ width: '100%', height: 36 }}>
+                  Your browser doesn&apos;t support HTML5 audio.
+                </audio>
+              )}
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                Samples picked from dialog-dense regions (silence avoided). Switch sample or track to
+                hear different sections, then assign the language below.
+              </div>
+            </>
+          )}
+
+          {posData && (!posData.positions || posData.positions.length === 0) && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              Couldn&apos;t find a non-silent region in this file. (Very short / all-music / corrupted?)
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginBottom: 6 }}>
+            Set the actual audio language{posData && posData.audio_tracks > 1 ? ` for track ${track}` : ''}:
+          </div>
+          <select value={selected} onChange={(e) => setSelected(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
+                     color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
+            {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
+          </select>
+        </div>
+
+        {error && <div style={{ color: 'var(--error-500)', fontSize: 'var(--text-xs)' }}>{error}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
+          {saving && (
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginRight: 'auto' }}>
+              💾 Saving verification…
+            </span>
+          )}
+          <button className="btn ghost" onClick={close} disabled={saving}>cancel</button>
+          <button className="btn" onClick={() => save(selected)} disabled={saving}
+            style={{ background: 'var(--violet-500)', color: '#fff' }}>
+            {saving ? 'Saving…' : `Confirm ${selected}`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -250,16 +1649,24 @@ function CoverageHeader({ allSelected }) {
       <div style={{ width: COL.check, flex: `0 0 ${COL.check}px` }}>
         <CheckBox checked={allSelected} indeterminate />
       </div>
-      <HeaderCell w={COL.score} right>score</HeaderCell>
-      <HeaderCell w={COL.type} />
-      <HeaderCell>title</HeaderCell>
-      <HeaderCell w={COL.ep}>episode</HeaderCell>
-      <HeaderCell w={COL.langs}>langs</HeaderCell>
-      <HeaderCell w={COL.mon} center>mon</HeaderCell>
-      <HeaderCell w={COL.disk} center>disk</HeaderCell>
-      <HeaderCell w={COL.emb} center>emb</HeaderCell>
-      <HeaderCell w={COL.audio}>audio</HeaderCell>
-      <HeaderCell w={COL.reason}>reason</HeaderCell>
+      <HeaderCell w={COL.score} right
+        tip="Priority score (0-10). Higher = subarr thinks this should be queued first. Factors: NOW PLAYING in Plex, just imported, watched recently, monitored, foreign-language original. Click reasons in row to expand.">score</HeaderCell>
+      <HeaderCell w={COL.type}
+        tip="Media type — episode (tv) or movie (mov)." />
+      <HeaderCell
+        tip="Series or movie title.">title</HeaderCell>
+      <HeaderCell w={COL.ep}
+        tip="Episode reference (S01E03) — blank for movies.">episode</HeaderCell>
+      <HeaderCell w={COL.langs}
+        tip="Subtitle languages BAZARR IS MISSING for this file — not languages already present. ISO 639-1 codes (en, es, fr, de…).">wanted</HeaderCell>
+      <HeaderCell w={COL.orig}
+        tip="Original language of the show/movie per Sonarr/Radarr (TVDB/TMDB metadata). Helps you spot foreign-original content at a glance.">orig</HeaderCell>
+      <HeaderCell w={COL.mon} center
+        tip="Monitored by Sonarr/Radarr. Filled = monitored, empty = not monitored.">mon</HeaderCell>
+      <HeaderCell w={COL.audio}
+        tip="Audio track languages in the file. From ffprobe stream tags, stream titles, or user verification. 'und' = no language metadata at all (encoder didn't tag the stream).">audio</HeaderCell>
+      <HeaderCell w={COL.reason}
+        tip="Why this row is in coverage: bazarr-wanted (Bazarr's gap list), no-track (no audio/sub data), embedded-only (only embedded sub), low-score (low priority), unmonitored.">reason</HeaderCell>
       <HeaderCell w={COL.action} />
     </div>
   );
@@ -281,7 +1688,7 @@ function CheckBox({ checked, indeterminate }) {
   );
 }
 
-function CoverageRow({ r, onClick }) {
+function CoverageRow({ r, onClick, onQueue, queuing }) {
   return (
     <div className="cov-row" style={{
       display: 'flex', alignItems: 'center', gap: 10,
@@ -296,54 +1703,93 @@ function CoverageRow({ r, onClick }) {
       <div style={{ width: COL.check, flex: `0 0 ${COL.check}px` }}>
         <CheckBox checked={r.sel} />
       </div>
-      <div className="num mono" style={{
+      <div className="num mono" title={`Priority score: ${r.score.toFixed(1)} / 10. Higher = subarr thinks this should be queued sooner.`} style={{
         width: COL.score, flex: `0 0 ${COL.score}px`,
         textAlign: 'right',
         fontSize: 'var(--text-base)',
         fontWeight: 600,
         color: scoreColor(r.score),
+        cursor: 'help',
       }}>{r.score.toFixed(1)}</div>
       <div style={{ width: COL.type, flex: `0 0 ${COL.type}px`, textAlign: 'center' }}>
         <TypeGlyph t={r.type} />
       </div>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{
           fontSize: 'var(--text-base)',
           color: 'var(--fg-0)',
           fontWeight: 500,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          minWidth: 0,
         }}>{r.title}</span>
+        <ScoringBadges r={r} />
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: '0 0 auto' }}>· {r.size}</span>
       </div>
       <div className="mono num" style={{ width: COL.ep, flex: `0 0 ${COL.ep}px`, fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>
         {r.ep || '—'}
       </div>
-      <div style={{ width: COL.langs, flex: `0 0 ${COL.langs}px` }}>
+      <div title={`Bazarr is missing these subtitle languages: ${(r.langs || []).join(', ') || '—'}`}
+           style={{ width: COL.langs, flex: `0 0 ${COL.langs}px`, cursor: 'help' }}>
         <LangChips langs={r.langs} />
       </div>
-      <div style={{ width: COL.mon, flex: `0 0 ${COL.mon}px`, textAlign: 'center' }}>
+      <div title={r.orig_lang_name ? `Original language per Sonarr/Radarr: ${r.orig_lang_name}` : 'No original-language metadata'}
+           style={{ width: COL.orig, flex: `0 0 ${COL.orig}px`, cursor: 'help', display: 'flex', alignItems: 'center' }}>
+        {r.orig_lang ? (
+          <span className="mono" style={{
+            padding: '1px 6px', borderRadius: 3,
+            background: 'var(--bg-3)',
+            color: r.orig_lang === 'en' ? 'var(--fg-3)' : 'var(--fg-1)',
+            fontSize: 'var(--text-2xs)',
+            letterSpacing: '0.04em',
+          }}>{r.orig_lang}</span>
+        ) : <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>—</span>}
+      </div>
+      <div title={r.mon ? 'Monitored by Sonarr/Radarr' : 'NOT monitored'}
+           style={{ width: COL.mon, flex: `0 0 ${COL.mon}px`, textAlign: 'center', cursor: 'help' }}>
         <YesNo on={r.mon} />
       </div>
-      <div style={{ width: COL.disk, flex: `0 0 ${COL.disk}px`, textAlign: 'center' }}>
-        <YesNo on={r.disk} kind="ok" />
-      </div>
-      <div style={{ width: COL.emb, flex: `0 0 ${COL.emb}px`, textAlign: 'center' }}>
-        <YesNo on={r.emb} kind="warn" />
-      </div>
-      <div className="mono" style={{ width: COL.audio, flex: `0 0 ${COL.audio}px`, fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>
-        {r.audio}
+      <div className="mono"
+           title={r.audio === 'und'
+             ? "'und' = no language metadata in the file (encoder skipped the tag). Mark for review via Audio Lang verification."
+             : `Audio track languages detected: ${r.audio}`}
+           style={{ width: COL.audio, flex: `0 0 ${COL.audio}px`, fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'help',
+                    display: 'flex', alignItems: 'center', minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.audio}</span>
+        <AudioLabelChip r={r} onClick={(row) => { window.dispatchEvent(new CustomEvent('open-audio-review', { detail: row })); }} />
       </div>
       <div style={{ width: COL.reason, flex: `0 0 ${COL.reason}px` }}>
         <ReasonChip r={r.reason} />
       </div>
-      <div style={{ width: COL.action, flex: `0 0 ${COL.action}px`, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-md)' }}>⋯</div>
+      <div style={{ width: COL.action, flex: `0 0 ${COL.action}px`, textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center' }}>
+        {r._sonarr_episode_id && (
+          <button
+            className="btn ghost"
+            onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('open-arbiter', { detail: r })); }}
+            title="Check Bazarr first — see if a human-translated sub is available before queueing Whisper. Saves GPU on backlog."
+            style={{ height: 22, padding: '0 6px', fontSize: 'var(--text-2xs)' }}>
+            ⌕
+          </button>
+        )}
+        <button
+          className="btn ghost"
+          onClick={(e) => { e.stopPropagation(); onQueue && onQueue(r); }}
+          disabled={queuing}
+          title="Queue this row for subgen / Whisper transcription"
+          style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)' }}>
+          {queuing ? '…' : '↻'}
+        </button>
+      </div>
     </div>
   );
 }
 
 // ─── Selection action bar ────────────────────────────────────────
-function SelectionBar({ n, reasonFilter }) {
+function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   if (!n) return null;
+  const queuing = queueState?.busy;
+  const queueLabel = queuing
+    ? `Queueing ${queueState.done}/${queueState.total}…`
+    : `Queue selected (${n})`;
   return (
     <div style={{
       position: 'sticky', bottom: 0,
@@ -356,20 +1802,368 @@ function SelectionBar({ n, reasonFilter }) {
     }}>
       <CheckBox checked />
       <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>{n} selected</span>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>· filtered by <span className="mono">{reasonFilter}</span></span>
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>· filter <span className="mono">{reasonFilter}</span></span>
+      {queueState?.errors > 0 && (
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
+          · {queueState.errors} failed
+        </span>
+      )}
       <span style={{ flex: 1 }} />
-      <button className="btn ghost">Clear</button>
-      <button className="btn">Apply rule…</button>
-      <button className="btn primary">Queue selected ({n})</button>
+      <button className="btn ghost" onClick={onClear} disabled={queuing}>Clear</button>
+      <button className="btn primary" onClick={onQueue} disabled={queuing}>{queueLabel}</button>
     </div>
   );
 }
 
+async function queueRow(row) {
+  const body = row._sonarr_episode_id
+    ? { sonarr_episode_id: row._sonarr_episode_id }
+    : { canonical_path: row._canonical_path };
+  const r = await fetch('/api/coverage/queue', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok && r.status !== 202) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+  }
+  return r.json().catch(() => ({}));
+}
+
+// ─── Tree-by-show grouping ───────────────────────────────────────
+// Groups rows into Show > Season > Episode. Each level shows a rollup
+// count on the right (matches original subarr's "9 eps wanted · 3 seasons"
+// style). Show + Season toggle expanded state locally per group.
+function buildShowTree(rows) {
+  const shows = new Map();
+  for (const r of rows) {
+    if (r.type !== 'tv') continue;  // movies handled separately below
+    if (!shows.has(r.title)) {
+      shows.set(r.title, { title: r.title, seasons: new Map(), all: [] });
+    }
+    const show = shows.get(r.title);
+    show.all.push(r);
+    const seasonNum = (r.ep || '').match(/^S(\d{2})/)?.[1] || '?';
+    if (!show.seasons.has(seasonNum)) {
+      show.seasons.set(seasonNum, { num: seasonNum, eps: [] });
+    }
+    show.seasons.get(seasonNum).eps.push(r);
+  }
+  return shows;
+}
+
+function GroupHeader({ depth, label, onClick, expanded, allSelected, indeterminate, onToggleSelect, rightMeta }) {
+  return (
+    <div onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: `0 16px 0 ${16 + depth * 22}px`,
+      height: 34,
+      borderBottom: '1px solid var(--bg-3)',
+      background: 'var(--bg-1)',
+      cursor: 'pointer',
+    }}>
+      <span onClick={(e) => { e.stopPropagation(); onToggleSelect && onToggleSelect(); }}
+        style={{ cursor: onToggleSelect ? 'pointer' : 'default' }}>
+        <CheckBox checked={allSelected} indeterminate={indeterminate && !allSelected} />
+      </span>
+      <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)', width: 12 }}>
+        {expanded ? '▾' : '▸'}
+      </span>
+      <span style={{
+        fontSize: 'var(--text-sm)',
+        fontWeight: depth === 0 ? 600 : 500,
+        color: depth === 0 ? 'var(--fg-0)' : 'var(--fg-1)',
+        flex: 1,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{label}</span>
+      <span className="num mono" style={{
+        fontSize: 'var(--text-xs)',
+        color: 'var(--fg-3)',
+      }}>{rightMeta}</span>
+    </div>
+  );
+}
+
+function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
+  const tree = useMemo(() => buildShowTree(rows), [rows]);
+  const movies = useMemo(() => rows.filter((r) => r.type === 'mov'), [rows]);
+  const [expandedShows, setExpandedShows] = useState(() => new Set());
+  const [expandedSeasons, setExpandedSeasons] = useState(() => new Set());
+
+  const toggleShow = (title) => setExpandedShows((prev) => {
+    const next = new Set(prev);
+    if (next.has(title)) next.delete(title); else next.add(title);
+    return next;
+  });
+  const toggleSeason = (key) => setExpandedSeasons((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  const out = [];
+  for (const show of tree.values()) {
+    const showExpanded = expandedShows.has(show.title);
+    const epCount = show.all.length;
+    const seasonCount = show.seasons.size;
+    const allShowSelected = show.all.every((r) => selected.has(r.id));
+    const anyShowSelected = show.all.some((r) => selected.has(r.id));
+    out.push(
+      <GroupHeader
+        key={`show-${show.title}`}
+        depth={0}
+        label={show.title}
+        onClick={() => toggleShow(show.title)}
+        expanded={showExpanded}
+        allSelected={allShowSelected}
+        indeterminate={anyShowSelected}
+        onToggleSelect={() => {
+          if (allShowSelected) {
+            for (const r of show.all) if (selected.has(r.id)) toggleRow(r.id);
+          } else {
+            for (const r of show.all) if (!selected.has(r.id)) toggleRow(r.id);
+          }
+        }}
+        rightMeta={`${epCount} eps wanted · ${seasonCount} season${seasonCount === 1 ? '' : 's'}`}
+      />
+    );
+    if (!showExpanded) continue;
+    const seasonKeys = Array.from(show.seasons.keys()).sort();
+    for (const sk of seasonKeys) {
+      const season = show.seasons.get(sk);
+      const seasonId = `${show.title}|S${sk}`;
+      const seasonExpanded = expandedSeasons.has(seasonId);
+      const allSeasonSelected = season.eps.every((r) => selected.has(r.id));
+      const anySeasonSelected = season.eps.some((r) => selected.has(r.id));
+      out.push(
+        <GroupHeader
+          key={`season-${seasonId}`}
+          depth={1}
+          label={sk === '?' ? 'Season (unknown)' : `Season ${parseInt(sk, 10)}`}
+          onClick={() => toggleSeason(seasonId)}
+          expanded={seasonExpanded}
+          allSelected={allSeasonSelected}
+          indeterminate={anySeasonSelected}
+          onToggleSelect={() => {
+            if (allSeasonSelected) {
+              for (const r of season.eps) if (selected.has(r.id)) toggleRow(r.id);
+            } else {
+              for (const r of season.eps) if (!selected.has(r.id)) toggleRow(r.id);
+            }
+          }}
+          rightMeta={`${season.eps.length} ep${season.eps.length === 1 ? '' : 's'} wanted`}
+        />
+      );
+      if (!seasonExpanded) continue;
+      for (const r of season.eps) {
+        out.push(
+          <div key={`ep-${r.id}`} style={{ paddingLeft: 44 }}>
+            <CoverageRow
+              r={r}
+              onClick={() => toggleRow(r.id)}
+              onQueue={onQueue}
+              queuing={rowQueuing.has(r.id)}
+            />
+          </div>
+        );
+      }
+    }
+  }
+  // Movies at the bottom, ungrouped (no concept of season).
+  if (movies.length) {
+    out.push(
+      <GroupHeader
+        key="movies-header"
+        depth={0}
+        label="Movies"
+        onClick={() => {}}
+        expanded={true}
+        allSelected={movies.every((r) => selected.has(r.id))}
+        indeterminate={movies.some((r) => selected.has(r.id))}
+        rightMeta={`${movies.length} movie${movies.length === 1 ? '' : 's'} wanted`}
+      />,
+      ...movies.map((r) => (
+        <div key={`mov-${r.id}`} style={{ paddingLeft: 22 }}>
+          <CoverageRow
+            r={r}
+            onClick={() => toggleRow(r.id)}
+            onQueue={onQueue}
+            queuing={rowQueuing.has(r.id)}
+          />
+        </div>
+      ))
+    );
+  }
+  return <>{out}</>;
+}
+
 // ─── Page ────────────────────────────────────────────────────────
 export function CoveragePage() {
-  const [groupBy, setGroupBy] = useState('flat');
-  const rows = COVERAGE_ROWS;
+  const [groupBy, setGroupBy] = useState('tree');  // tree-by-show default — matches original subarr
+  const [reasonFilter, setReasonFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [monitoredOnly, setMonitoredOnly] = useState(true);
+  const [selected, setSelected] = useState(() => new Set());
+  const [rowQueuing, setRowQueuing] = useState(() => new Set()); // ids in flight
+  const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
+  const [walking, setWalking] = useState(false);
+
+  // Pending audio-language review count surfaced in the header tile + welcome
+  // card. PendingReviewBanner already polls /api/audio-lang/pending-review,
+  // but it does so inside its own component scope — duplicate the small
+  // fetch here so the header tiles update without prop-drilling.
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCount = () => fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled) setPendingReviewCount(d?.count || 0); })
+      .catch(() => {});
+    fetchCount();
+    const handler = () => fetchCount();
+    window.addEventListener('audio-lang-verified', handler);
+    return () => { cancelled = true; window.removeEventListener('audio-lang-verified', handler); };
+  }, []);
+
+  const { data, loading, error, refetch } = useLiveCoverage();
+
+  // Deep-link from chrome rail: /coverage#review auto-opens BatchReviewModal.
+  useEffect(() => {
+    if ((window.location.hash || '').toLowerCase() === '#review') {
+      window.dispatchEvent(new CustomEvent('open-batch-review'));
+    }
+  }, []);
+
+  // Normalize once per payload.
+  const allRows = useMemo(() => {
+    if (!data?.items) return null;
+    return data.items.map((it, idx) => normalizeRow(it, idx));
+  }, [data]);
+
+  // Apply UI filters.
+  const rows = useMemo(() => {
+    if (!allRows) return [];
+    return allRows.filter(r => {
+      if (monitoredOnly && !r.mon) return false;
+      if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
+      if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+      return true;
+    }).map(r => ({ ...r, sel: selected.has(r.id) }));
+  }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected]);
+
+  const toggleRow = useCallback((id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  const handleRowQueue = useCallback(async (row) => {
+    setRowQueuing(prev => { const n = new Set(prev); n.add(row.id); return n; });
+    try {
+      await queueRow(row);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('queue row failed:', e);
+      alert(`Queue failed: ${e.message}`);
+    } finally {
+      setRowQueuing(prev => { const n = new Set(prev); n.delete(row.id); return n; });
+      refetch({ fresh: true, silent: true });
+    }
+  }, [refetch]);
+
+  const handleBulkQueue = useCallback(async () => {
+    const targets = rows.filter(r => selected.has(r.id));
+    if (!targets.length) return;
+    setQueueState({ busy: true, done: 0, total: targets.length, errors: 0 });
+    let done = 0, errors = 0;
+    // Serial — gives the backend room to breathe + Bazarr/Sonarr are
+    // rate-limited upstream. Parallel-3 could come later if needed.
+    for (const row of targets) {
+      try { await queueRow(row); }
+      catch (e) {
+        errors += 1;
+        // eslint-disable-next-line no-console
+        console.error('bulk queue failed for', row.id, e);
+      }
+      done += 1;
+      setQueueState({ busy: true, done, total: targets.length, errors });
+    }
+    setQueueState({ busy: false, done, total: targets.length, errors });
+    setSelected(new Set());
+    refetch({ fresh: true, silent: true });
+  }, [rows, selected, refetch]);
+
+  const handleRewalk = useCallback(async () => {
+    setWalking(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await refetch({ fresh: true });
+    } catch (e) {
+      alert(`Re-walk failed: ${e.message}`);
+    } finally {
+      setWalking(false);
+    }
+  }, [refetch]);
+
+  // Sync to Bazarr — fires Bazarr's scan-disk task directly. Useful when
+  // user has just added/restored .srt files manually and wants Bazarr's
+  // wanted count to drop NOW without waiting for the next coverage walk
+  // (which auto-pokes Bazarr already, but is rate-limited to once per 5
+  // minutes and only fires when stale-disk items are surfaced).
+  const [bazarrSyncing, setBazarrSyncing] = useState(false);
+  const handleBazarrSync = useCallback(async () => {
+    setBazarrSyncing(true);
+    try {
+      const r = await fetch('/api/bazarr/sync-disk', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Re-fetch coverage shortly after so user sees Bazarr updates land.
+      // Bazarr's scan-disk task is async on their side; give it 10s
+      // before re-reading the wanted count.
+      setTimeout(() => refetch({ fresh: true, silent: true }), 10000);
+    } catch (e) {
+      alert(`Bazarr sync failed: ${e.message}`);
+    } finally {
+      setBazarrSyncing(false);
+    }
+  }, [refetch]);
+
+  const handleExportCsv = useCallback(() => {
+    if (!rows.length) return;
+    const headers = ['score', 'type', 'title', 'episode', 'reason', 'monitored', 'has_sub_on_disk', 'embedded', 'audio', 'canonical_path'];
+    const csv = [headers.join(',')];
+    for (const r of rows) {
+      csv.push([
+        r.score.toFixed(2), r.type,
+        JSON.stringify(r.title), JSON.stringify(r.ep),
+        r.reason, r.mon ? 1 : 0, r.disk ? 1 : 0, r.emb ? 1 : 0,
+        JSON.stringify(r.audio), JSON.stringify(r._canonical_path || ''),
+      ].join(','));
+    }
+    const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `coverage-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [rows]);
+
   const selectedCount = rows.filter(r => r.sel).length;
+  const isInitialLoad = loading && !data;
+  const isError = error && !data;
+  const isEmpty = !isInitialLoad && !isError && rows.length === 0;
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 0', gap: 14 }}>
@@ -382,18 +2176,74 @@ export function CoveragePage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn">Export CSV</button>
-          <button className="btn">Re-walk now</button>
+          <button className="btn" onClick={handleExportCsv} disabled={!rows.length}>Export CSV</button>
+          <button className="btn" onClick={handleBazarrSync} disabled={bazarrSyncing}
+            title="Tell Bazarr to scan disk for .srt files it might have missed. Use after adding subs manually, or to clear stale-disk rows immediately.">
+            {bazarrSyncing ? 'Syncing…' : 'Sync to Bazarr'}
+          </button>
+          <button className="btn" onClick={handleRewalk} disabled={walking}>
+            {walking ? 'Walking…' : 'Re-walk now'}
+          </button>
         </div>
       </div>
 
-      {/* Coverage strip */}
+      {/* Friendly header — 4 status tiles + welcome card with quick actions.
+          Mirrors the Home dashboard + Rules pages so the user lands on the
+          same explanatory pattern wherever they go. */}
+      <CoverageStatusRow data={data} rows={rows} pendingReview={pendingReviewCount} />
+      <CoverageWelcomeCard rows={rows} pendingReview={pendingReviewCount} />
+
+      {/* Coverage strip — kept below the panels as a one-line technical
+          summary; the panels above are for "what's the situation?" and this
+          is for "where does the data come from?" */}
       <div className="panel" style={{ padding: '12px 16px' }}>
-        <CoverageStrip />
+        <CoverageStrip data={data} loading={loading} error={error} />
       </div>
 
+      {/* v1.1-O Layer 4: pending-review banner */}
+      <PendingReviewBanner />
+
+      {/* v1.1-O Layer 4: per-row audio review modal */}
+      <AudioReviewModal />
+
+      {/* v1.1-F Whisper-or-Bazarr arbiter modal */}
+      <ArbiterModal />
+
+      {/* v1.1-O Layer 4++: batch review modal */}
+      <BatchReviewModal />
+
+      {/* How-this-list-is-built explainer */}
+      <details style={{
+        background: 'var(--bg-1)', border: 'var(--border)',
+        borderRadius: 'var(--radius-md)', padding: '8px 12px',
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+      }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--fg-1)', userSelect: 'none' }}>
+          How is this list built?
+        </summary>
+        <div style={{ marginTop: 8, lineHeight: 1.5 }}>
+          <b>Bazarr</b> seeds the gap list (anything in <i>Wanted</i>).
+          We reconcile each row against:
+          <ul style={{ margin: '6px 0 6px 18px', padding: 0 }}>
+            <li><b>Sonarr / Radarr</b> — episode/movie metadata + original-language hints.</li>
+            <li><b>subarr ffprobe</b> — detects embedded English subs and audio tracks Bazarr can't see.</li>
+            <li><b>Disk walk</b> — finds sidecar <code>.srt</code> files Bazarr hasn't picked up yet (we auto-poke its scan-disk task).</li>
+            <li><b>Tautulli</b> — bumps the priority score for items watched in the last 7&nbsp;days.</li>
+            <li><b>Ollama</b> — enriches release-name parsing (HI / SDH / forced flags) so we don't queue dupes.</li>
+          </ul>
+          Rows are suppressed when an embedded English track exists, a sibling <code>.srt</code>
+          is already on disk, or the file's audio is already English. Toggle the filters above to see them.
+        </div>
+      </details>
+
       {/* Filter bar */}
-      <FilterBar groupBy={groupBy} setGroupBy={setGroupBy} filtered={rows.length} />
+      <FilterBar
+        groupBy={groupBy} setGroupBy={setGroupBy}
+        filtered={rows.length}
+        reasonFilter={reasonFilter} setReasonFilter={setReasonFilter}
+        typeFilter={typeFilter} setTypeFilter={setTypeFilter}
+        monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
+      />
 
       {/* Table */}
       <div className="panel" style={{
@@ -403,14 +2253,57 @@ export function CoveragePage() {
         overflow: 'hidden',
       }}>
         <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
-          <CoverageHeader allSelected={false} />
-          {rows.map(r => <CoverageRow key={r.id} r={r} />)}
+          <CoverageHeader allSelected={selectedCount > 0 && selectedCount === rows.length} />
+          {isInitialLoad && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
+              Loading coverage data…
+            </div>
+          )}
+          {isError && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--error-500)' }}>
+              Couldn't load coverage: {String(error.message || error)}
+              <div style={{ marginTop: 12 }}>
+                <button className="btn" onClick={() => refetch()}>Retry</button>
+              </div>
+            </div>
+          )}
+          {isEmpty && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
+              {allRows && allRows.length === 0
+                ? 'No gaps to address — every monitored file has its subs.'
+                : 'No rows match the current filters.'}
+            </div>
+          )}
+          {!isInitialLoad && !isError && groupBy === 'flat' && rows.map(r => (
+            <CoverageRow
+              key={r.id}
+              r={r}
+              onClick={() => toggleRow(r.id)}
+              onQueue={handleRowQueue}
+              queuing={rowQueuing.has(r.id)}
+            />
+          ))}
+          {!isInitialLoad && !isError && groupBy === 'tree' && (
+            <CoverageTree
+              rows={rows}
+              selected={selected}
+              toggleRow={toggleRow}
+              onQueue={handleRowQueue}
+              rowQueuing={rowQueuing}
+            />
+          )}
         </div>
       </div>
 
       {/* Bottom selection bar — sits in page flow but sticky */}
       <div style={{ position: 'sticky', bottom: 16, marginTop: 0, marginBottom: 16 }}>
-        <SelectionBar n={selectedCount} reasonFilter="no-track" />
+        <SelectionBar
+          n={selectedCount}
+          reasonFilter={reasonFilter}
+          onClear={clearSelection}
+          onQueue={handleBulkQueue}
+          queueState={queueState}
+        />
       </div>
     </main>
   );

@@ -6,7 +6,7 @@ import { Sparkline, Delta, StatusDot, Glyph, genSpark } from './atoms.jsx';
 // Babel pipeline this destructure lived in atoms.jsx and leaked across
 // the shared global scope; under the ESM bundle each module needs its
 // own.
-const { useMemo } = React;
+const { useMemo, useState, useCallback } = React;
 
 // ─── Live data hook ──────────────────────────────────────────────
 // Fetches GET /api/home/dashboard every 5s. Returns the live payload
@@ -123,7 +123,31 @@ const KIND_STYLE = {
 };
 
 // ─── Page header ─────────────────────────────────────────────────
+// "Run now" POSTs /api/schedule/coverage_walk/run-now (same endpoint
+// Coverage's Re-walk uses) — the dashboard primary CTA is "trigger a
+// scheduled walk now," not editing the rule from here. Edit rule
+// jumps to the Rules page.
+//
+// 1h/24h/7d time range toggle removed in v1.0: the backend snapshot
+// endpoint only returns current state, not historical buckets. Adding
+// a fake toggle would mislead. Re-add in v1.1 when historical
+// retention ships.
 export function PageHeader({ now }) {
+  const [running, setRunning] = useState(false);
+  const runNow = useCallback(async () => {
+    setRunning(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Run now failed: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+
   return (
     <div style={{
       display: 'flex',
@@ -147,36 +171,54 @@ export function PageHeader({ now }) {
           <span className="mono num" style={{ color: 'var(--fg-1)' }}>{now}</span>
         </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{
-          display: 'flex',
-          border: 'var(--border)',
-          borderRadius: 'var(--radius-md)',
-          overflow: 'hidden',
-          background: 'var(--bg-1)',
-        }}>
-          {['1h', '24h', '7d'].map((r, i) => (
-            <button key={r} style={{
-              padding: '0 12px', height: 28,
-              fontSize: 'var(--text-sm)',
-              color: i === 1 ? 'var(--fg-0)' : 'var(--fg-2)',
-              fontWeight: i === 1 ? 600 : 500,
-              background: i === 1 ? 'var(--bg-3)' : 'transparent',
-              borderLeft: i > 0 ? '1px solid var(--bg-4)' : 'none',
-            }}>{r}</button>
-          ))}
-        </div>
-        <button className="btn">Edit rule</button>
-        <button className="btn primary">Run now</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <a href="/rules"
+          title="Open the Rules page to change schedule cadence or filters"
+          style={{
+            fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
+            textDecoration: 'underline', textUnderlineOffset: 3,
+            textDecorationStyle: 'dotted', textDecorationColor: 'var(--bg-5)',
+          }}>
+          edit rule
+        </a>
+        <button className="btn primary" onClick={runNow} disabled={running}
+          title="Trigger an immediate coverage walk now — Sonarr/Radarr/Bazarr/ffprobe pass. Doesn't change the scheduled cadence.">
+          {running ? 'Running…' : 'Run now'}
+        </button>
       </div>
     </div>
   );
 }
 
 // ─── Stage tile ──────────────────────────────────────────────────
+// Each stage tile links to the page where users can do something with
+// that stage's contents. Mapping is intentional, not generic:
+//   discovered  → /library      (browse what's been discovered)
+//   probing     → /coverage     (in-flight probes are the candidate list)
+//   wanted      → /coverage     (gaps)
+//   scanning    → /queue        (active jobs)
+//   scanned/written-back → /file-modal (completed ledger)
+const STAGE_HREF = {
+  discovered: '/library',
+  probing: '/coverage',
+  wanted: '/coverage',
+  'bazarr-wanted': '/coverage',
+  scanning: '/queue',
+  scanned: '/file-modal',
+  'written-back': '/file-modal',
+};
+
+const STAGE_TIPS = {
+  discovered:  'Total files subarr has indexed (probed or pending). Includes both video files and subtitle sidecars subarr has noticed.',
+  probing:     'Files currently being ffprobed by an active walk. Live count drops to 0 when the walk finishes.',
+  wanted:      'Bazarr-wanted entries — subtitles missing per Bazarr. Includes both actionable (file exists) and pending-download (file not yet imported).',
+  scanning:    'Files currently in subgen\'s transcribe queue or actively being transcribed.',
+  written:     'Completed transcribes — subarr generated a subtitle file and (where possible) uploaded it directly to Bazarr.',
+};
 function StageTile({ s }) {
+  const href = STAGE_HREF[s.id] || '/coverage';
   return (
-    <a className="stage-tile" style={{
+    <a className="stage-tile" href={href} title={STAGE_TIPS[s.id] || s.label} style={{
       flex: 1, minWidth: 0,
       background: 'var(--bg-1)',
       border: 'var(--border)',
@@ -239,9 +281,22 @@ function StageTile({ s }) {
 }
 
 export function StagesRow({ data }) {
-  // data is the array from /api/home/dashboard's `stages` block. When
-  // null (first paint / backend down), fall back to the demo STAGES.
-  const stages = (data && data.length) ? data : STAGES;
+  // data is the array from /api/home/dashboard's `stages` block.
+  // Render nothing (skeleton) until live data arrives — no more demo fallback.
+  const stages = (data && data.length) ? data : [];
+  if (!stages.length) {
+    return (
+      <div style={{ display: 'flex', gap: 12 }}>
+        {[0,1,2,3,4].map(i => (
+          <div key={i} style={{
+            flex: 1, height: 92, background: 'var(--bg-1)',
+            border: 'var(--border)', borderRadius: 'var(--radius-lg)',
+            opacity: 0.4,
+          }} />
+        ))}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', gap: 12 }}>
       {stages.map(s => <StageTile key={s.id} s={s} />)}
@@ -288,13 +343,17 @@ function GpuWidget({ data }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(60px, 0.85fr) minmax(112px, 1.4fr) minmax(56px, 0.85fr) minmax(72px, 1fr)', gap: 14, alignItems: 'end' }}>
-        <GpuStat label="util" value={`${util}%`} bar={util / 100} />
+        <GpuStat label="util" value={`${util}%`} bar={util / 100}
+                 tip="GPU compute utilization. 100% = fully loaded. Whisper transcription typically runs at 80-100%." />
         <GpuStat label="vram"
                  value={`${vramUsedGB.toFixed(1)} / ${vramTotalGB.toFixed(0)} GB`}
-                 sub={`${Math.round((vramUsedGB / vramTotalGB) * 100)}%`} />
+                 sub={`${Math.round((vramUsedGB / vramTotalGB) * 100)}%`}
+                 tip="VRAM (GPU memory) in use vs total. Whisper large-v3 needs ~5GB, Ollama models 2-8GB depending on size. If both are loaded simultaneously you can OOM — subarr can unload Ollama before transcribe." />
         <GpuStat label="temp" value={`${tempC}°C`}
-                 sub={tempC < 75 ? 'safe' : (tempC < 85 ? 'warm' : 'hot')} />
-        <GpuStat label="power" value={`${powerW} W`} sub={`of ${powerCapW} W`} />
+                 sub={tempC < 75 ? 'safe' : (tempC < 85 ? 'warm' : 'hot')}
+                 tip="GPU core temperature. <75°C safe, 75-85°C warm, >85°C may throttle." />
+        <GpuStat label="power" value={`${powerW} W`} sub={`of ${powerCapW} W`}
+                 tip="Current power draw vs configured limit. Sustained near-limit = card is working hard." />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -309,9 +368,9 @@ function GpuWidget({ data }) {
   );
 }
 
-function GpuStat({ label, value, sub, bar }) {
+function GpuStat({ label, value, sub, bar, tip }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+    <div title={tip} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, cursor: tip ? 'help' : 'default' }}>
       <span className="label">{label}</span>
       <span className="display num" style={{
         fontSize: 20, lineHeight: 1,
@@ -385,19 +444,36 @@ function IntegrationTile({ i }) {
       display: 'flex', flexDirection: 'column',
       gap: 4,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <ServiceBadge name={i.name} size={16} />
-        <span style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>{titleCase(i.name)}</span>
-        <StatusDot kind={i.status} />
-        <span style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>{i.version || i.ver || ''}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{
+          fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          minWidth: 0, flex: '0 1 auto',
+        }}>{titleCase(i.name)}</span>
+        <span title={
+          i.status === 'ok' ? 'Online and responding' :
+          i.status === 'error' ? 'Configured but unreachable / returning errors' :
+          i.status === 'muted' ? 'Not configured — set URL + API key in .env' :
+          `Status: ${i.status}`
+        }>
+          <StatusDot kind={i.status} />
+        </span>
+        <span style={{ flex: 1, minWidth: 4 }} />
+        <span className="mono"
+          title={`${titleCase(i.name)} version reported by /system/status`}
+          style={{
+            fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            minWidth: 0, flex: '0 1 auto', maxWidth: '50%',
+          }}>{i.version || i.ver || ''}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0, gap: 8 }}>
+        <span title={i.extra} style={{
           fontSize: 'var(--text-2xs)',
           color: isError ? 'var(--error-500)' : 'var(--fg-2)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          minWidth: 0,
+          minWidth: 0, flex: '1 1 auto',
         }}>{i.extra}</span>
         <span className="mono num" style={{
           fontSize: 'var(--text-2xs)',
@@ -411,15 +487,22 @@ function IntegrationTile({ i }) {
 }
 
 export function HostStrip({ integrations, gpu }) {
-  // integrations: live array or null → fall back to demo INTEGRATIONS
+  // integrations: live array — no more demo fallback.
   // gpu: live GPU snapshot or null → GpuWidget uses demo if null
-  const tiles = (integrations && integrations.length) ? integrations : INTEGRATIONS;
+  const tiles = (integrations && integrations.length) ? integrations : [];
   return (
     <div style={{ display: 'flex', gap: 12 }}>
       <div style={{ flex: '1.5 1 0', minWidth: 360 }}>
         <GpuWidget data={gpu} />
       </div>
-      <div style={{ flex: '3 1 0', display: 'flex', gap: 12, minWidth: 0 }}>
+      {/* 3×2 grid — wider tiles, breathes better than 6-wide strip. */}
+      <div style={{
+        flex: '3 1 0', minWidth: 0,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gridAutoRows: '1fr',
+        gap: 8,
+      }}>
         {tiles.map(i => <IntegrationTile key={i.name} i={i} />)}
       </div>
     </div>
@@ -478,10 +561,35 @@ function NextRunCard({ data }) {
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn primary" style={{ flex: 1 }}>Run now</button>
-        <button className="btn">Edit rule</button>
+        <NextRunActions />
       </div>
     </div>
+  );
+}
+
+// Shared between the dashboard header and the next-run sidebar.
+function NextRunActions() {
+  const [running, setRunning] = useState(false);
+  const runNow = useCallback(async () => {
+    setRunning(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Run now failed: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+  return (
+    <>
+      <button className="btn primary" style={{ flex: 1 }} onClick={runNow} disabled={running}>
+        {running ? 'Running…' : 'Run now'}
+      </button>
+      <a href="/rules" className="btn" style={{ textDecoration: 'none' }}>Edit rule</a>
+    </>
   );
 }
 
@@ -536,10 +644,19 @@ function ActivityRow({ a, last }) {
   );
 }
 
+const ACTIVITY_FILTERS = [
+  { id: 'all', label: 'all', test: () => true },
+  { id: 'failed', label: 'failed', test: (a) => a.kind === 'failed' },
+  { id: 'written-back', label: 'written-back', test: (a) => a.kind === 'written-back' },
+];
+
 function ActivityCard({ data }) {
   // data: live array from /api/home/dashboard.activity, or null → fall
   // back to demo ACTIVITY.
-  const rows = (data && data.length) ? data : ACTIVITY;
+  const allRows = (data && data.length) ? data : ACTIVITY;
+  const [filter, setFilter] = useState('all');
+  const rows = allRows.filter((ACTIVITY_FILTERS.find((f) => f.id === filter) || ACTIVITY_FILTERS[0]).test);
+
   return (
     <div style={{
       flex: 1, minWidth: 0,
@@ -557,23 +674,167 @@ function ActivityCard({ data }) {
         <span className="label">Recent activity</span>
         <span style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 6 }}>
-          <span className="chip">all</span>
-          <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>failed</span>
-          <span className="chip" style={{ background: 'transparent', color: 'var(--fg-2)' }}>written-back</span>
+          {ACTIVITY_FILTERS.map((f) => (
+            <span
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`chip ${filter === f.id ? '' : ''}`}
+              style={{
+                cursor: 'pointer',
+                background: filter === f.id ? undefined : 'transparent',
+                color: filter === f.id ? undefined : 'var(--fg-2)',
+              }}>
+              {f.label}
+            </span>
+          ))}
         </div>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing last {rows.length}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing {rows.length}</span>
       </div>
       <div>
         {rows.length === 0 ? (
           <div style={{ padding: '24px 16px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
-            no activity yet — submit a scan to get started.
+            {allRows.length === 0
+              ? 'no activity yet — submit a scan to get started.'
+              : `no ${filter} activity in the recent window.`}
           </div>
         ) : (
           rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
         )}
       </div>
       <div style={{ marginTop: 'auto', padding: '8px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>View full activity →</span>
+        <a href="/file-modal" style={{
+          fontSize: 'var(--text-xs)',
+          color: 'var(--fg-2)',
+          textDecoration: 'none',
+        }}>View full activity →</a>
+      </div>
+    </div>
+  );
+}
+
+// v1.0 #147: post-onboarding "what next" guidance. Shown for 7 days after
+// completion, dismissible (localStorage). Walks the user through the
+// first 4 things to do once setup finishes. Prevents the "now what?"
+// abandonment cliff at first-run.
+export function WelcomeCard() {
+  const [onboard, setOnboard] = React.useState(null);
+  const [pendingCount, setPendingCount] = React.useState(0);
+  const [dismissed, setDismissed] = React.useState(false);
+
+  React.useEffect(() => {
+    try {
+      const ls = localStorage.getItem('subarr.welcome.dismissed');
+      if (ls === '1') setDismissed(true);
+    } catch {}
+    fetch('/api/onboarding/state', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(setOnboard).catch(() => {});
+    fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setPendingCount(d?.count || 0)).catch(() => {});
+  }, []);
+
+  if (dismissed || !onboard?.completed_at) return null;
+  const daysSince = (Date.now() / 1000 - onboard.completed_at) / 86400;
+  if (daysSince > 7) return null;
+
+  const dismiss = () => {
+    try { localStorage.setItem('subarr.welcome.dismissed', '1'); } catch {}
+    setDismissed(true);
+  };
+
+  const steps = [
+    {
+      icon: '▶',
+      title: 'Run your first coverage walk',
+      copy: 'subarr will check Bazarr, Sonarr and Radarr to find files missing subs.',
+      cta: { label: 'Run now', href: '#run-now', onClick: async (e) => {
+        e.preventDefault();
+        await fetch('/api/schedule/coverage_walk/run-now', { method: 'POST' });
+        alert('Coverage walk started. Watch the Coverage page.');
+      }},
+    },
+    pendingCount > 0 ? {
+      icon: '⚠',
+      title: `Review ${pendingCount} files needing language verification`,
+      copy: "subarr can't tell the audio language for these files. A 30-second listen each gets them right.",
+      cta: { label: 'Open Coverage', href: '/coverage' },
+    } : {
+      icon: '🎯',
+      title: 'Open the Coverage page',
+      copy: "See the prioritised list of files that need subtitle work.",
+      cta: { label: 'Open Coverage', href: '/coverage' },
+    },
+    {
+      icon: '📊',
+      title: 'Check your provider leaderboard',
+      copy: 'See which Bazarr providers actually work for your library.',
+      cta: { label: 'Open leaderboard', href: '/settings#providers' },
+    },
+    {
+      icon: '🛠️',
+      title: 'Set up auto-queue rules',
+      copy: 'Let subarr automatically queue files matching criteria you choose.',
+      cta: { label: 'Open Rules', href: '/rules' },
+    },
+  ];
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.10), rgba(34,211,161,0.05))',
+      border: '1px solid rgba(139,92,246,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 22 }}>🎉</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            Welcome to subarr.
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+            Setup is complete. Here are the first few things to do to get the most out of it.
+          </div>
+        </div>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card. You can re-trigger it by re-running onboarding."
+          style={{ fontSize: 'var(--text-2xs)' }}>
+          got it
+        </button>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+      }}>
+        {steps.map((s, i) => (
+          <div key={i} style={{
+            background: 'var(--bg-1)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 12,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>{s.icon}</span>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>
+                {s.title}
+              </span>
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', flex: 1 }}>
+              {s.copy}
+            </div>
+            <div>
+              <a href={s.cta.href} onClick={s.cta.onClick}
+                className="btn" style={{
+                  textDecoration: 'none', display: 'inline-block',
+                  fontSize: 'var(--text-2xs)', padding: '4px 10px',
+                  background: 'var(--violet-500)', color: '#fff',
+                }}>
+                {s.cta.label}
+              </a>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

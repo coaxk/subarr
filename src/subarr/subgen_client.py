@@ -57,6 +57,15 @@ class SubgenCapabilities:
     has_queue: bool
     has_batch: bool
     is_subarr_subgen: bool
+    # v4.3 capability: POST /batch accepts audio_language_override query
+    # param that bypasses SKIP_IF_AUDIO_LANGUAGES + seeds Whisper source.
+    # Detected via the /queue response's capabilities.audio_language_override
+    # flag (only the v4.3+ patch ships it). Vanilla and v4.2 → False.
+    audio_language_override: bool = False
+    # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
+    # subgen. Lets subarr feature-gate behaviour without sniffing each
+    # capability individually.
+    subarr_subgen_patch_rev: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +75,8 @@ class SubgenCapabilities:
             "has_batch": self.has_batch,
             "is_subarr_subgen": self.is_subarr_subgen,
             "compat_mode": not self.is_subarr_subgen,
+            "audio_language_override": self.audio_language_override,
+            "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
     @classmethod
@@ -73,6 +84,7 @@ class SubgenCapabilities:
         return cls(
             reachable=False, version=None,
             has_queue=False, has_batch=False, is_subarr_subgen=False,
+            audio_language_override=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -145,8 +157,10 @@ class SubgenClient:
         except Exception:
             pass  # version extraction is best-effort
 
-        # 2. /queue
+        # 2. /queue — also surfaces v4.3+ patch_rev + capabilities block.
         has_queue = False
+        audio_language_override = False
+        patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
             if 200 <= qr.status_code < 300:
@@ -155,6 +169,16 @@ class SubgenClient:
                     body = qr.json()
                     if isinstance(body, dict) and ("queued" in body or "processing" in body):
                         has_queue = True
+                        # v4.3+ ships these alongside the standard queue body.
+                        # Absent on v4.2 — degrade silently.
+                        rev = body.get("subarr_subgen_patch_rev")
+                        if isinstance(rev, str):
+                            patch_rev = rev
+                        caps_block = body.get("capabilities") or {}
+                        if isinstance(caps_block, dict):
+                            audio_language_override = bool(
+                                caps_block.get("audio_language_override")
+                            )
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -171,26 +195,42 @@ class SubgenClient:
             has_queue=has_queue,
             has_batch=has_batch,
             is_subarr_subgen=is_subarr_subgen,
+            audio_language_override=audio_language_override,
+            subarr_subgen_patch_rev=patch_rev,
         )
         log.info(
-            "subgen capabilities: version=%s has_queue=%s has_batch=%s "
-            "is_subarr_subgen=%s (compat_mode=%s)",
-            caps.version, caps.has_queue, caps.has_batch,
-            caps.is_subarr_subgen, not caps.is_subarr_subgen,
+            "subgen capabilities: version=%s patch_rev=%s has_queue=%s has_batch=%s "
+            "is_subarr_subgen=%s audio_lang_override=%s (compat_mode=%s)",
+            caps.version, caps.subarr_subgen_patch_rev,
+            caps.has_queue, caps.has_batch,
+            caps.is_subarr_subgen, caps.audio_language_override,
+            not caps.is_subarr_subgen,
         )
         return caps
 
-    async def batch(self, directory: str, reverse: bool = False, force_language: str | None = None) -> tuple[int, dict[str, Any]]:
+    async def batch(self, directory: str, reverse: bool = False,
+                    force_language: str | None = None,
+                    audio_language_override: str | None = None) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
         Returns (status_code, body). Caller distinguishes:
           - 200 + walked > 0 => scan dispatched (counts in body)
           - 404 + walked == 0 => path resolved to no files
           - other => caller decides; we don't raise on 404
+
+        audio_language_override (v4.3+): user-verified ground-truth audio
+        language (ISO 639-1 or LanguageCode-parseable). Bypasses the
+        SKIP_IF_AUDIO_LANGUAGES skip-check and seeds Whisper's source-
+        language hint. Caller should only set this when:
+          * subgen advertised audio_language_override=True via /queue, AND
+          * subarr has a user verification for this file in audio_lang_store
+        Vanilla / v4.2 subgens will silently ignore the unknown query param.
         """
         params: dict[str, Any] = {"directory": directory, "reverse": str(reverse).lower()}
         if force_language:
             params["forceLanguage"] = force_language
+        if audio_language_override:
+            params["audio_language_override"] = audio_language_override
         try:
             r = await self._client.post("/batch", params=params)
         except httpx.HTTPError as e:

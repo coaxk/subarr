@@ -142,6 +142,13 @@ async def _test_bazarr(body: TestRequest) -> dict[str, Any]:
 
 
 async def _test_sonarr(body: TestRequest) -> dict[str, Any]:
+    # #138: dropped the GET /api/v3/series count from the connection test.
+    # On a 1700-show library that endpoint returns multiple MB of JSON and
+    # can exceed the 15s timeout, making the onboarding step fail for
+    # *exactly* the users who need it most. system/status alone proves
+    # reachability + API-key validity (it's gated by auth), which is the
+    # only thing the wizard actually needs to gate "Continue" on.
+    # The series count surfaces later via the Coverage page anyway.
     import httpx
     headers = {"X-Api-Key": body.api_key or ""}
     async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
@@ -149,17 +156,17 @@ async def _test_sonarr(body: TestRequest) -> dict[str, Any]:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
-        r = await c.get("/api/v3/series")
-        r.raise_for_status()
-        series = r.json() or []
+    version = status.get("version")
     return {
-        "ok": True, "version": status.get("version"),
-        "detail": f"{len(series)} series tracked",
+        "ok": True, "version": version,
+        "detail": f"Sonarr {version or 'connected'}",
         "error": None,
     }
 
 
 async def _test_radarr(body: TestRequest) -> dict[str, Any]:
+    # #138: same as _test_sonarr — dropped GET /api/v3/movie. Equivalent
+    # large-library timeout for Radarr installs with 10k+ movies.
     import httpx
     headers = {"X-Api-Key": body.api_key or ""}
     async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
@@ -167,12 +174,10 @@ async def _test_radarr(body: TestRequest) -> dict[str, Any]:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
-        r = await c.get("/api/v3/movie")
-        r.raise_for_status()
-        movies = r.json() or []
+    version = status.get("version")
     return {
-        "ok": True, "version": status.get("version"),
-        "detail": f"{len(movies)} movies tracked",
+        "ok": True, "version": version,
+        "detail": f"Radarr {version or 'connected'}",
         "error": None,
     }
 
@@ -319,20 +324,48 @@ def probe_paths(body: ProbePathsRequest, request: Request) -> dict[str, Any]:
 async def first_walk(request: Request) -> dict[str, Any]:
     """Kick off the post-wizard probe walk against the configured media
     roots. Foreground (Overseerr pattern) so the dashboard shows real
-    data on first paint instead of an empty state."""
+    data on first paint instead of an empty state.
+
+    Also PERSISTS the chosen probe_roots onto the coverage_walk schedule
+    so that every future scheduled walk includes the ffprobe step. Without
+    this hand-off the cache built during onboarding would slowly go stale
+    as new episodes arrive — and the "skip embedded EN" filter would have
+    no fresh data to consult. (See: this was the original-subarr behavior
+    that got lost in translation in the v1.0 rebuild.)
+    """
     walker = request.app.state.probe_walker
     state = request.app.state.onboarding.get()
-    roots = state.progress.get("probe_roots") or ["TV", "Movies"]
+    roots_raw = state.progress.get("probe_roots") or ["TV", "Movies"]
+    roots = [r.strip().strip("/") for r in roots_raw if r and r.strip()]
 
+    # 1. Persist roots onto the schedule so ongoing walks ffprobe too.
+    persist_error: str | None = None
+    try:
+        store = request.app.state.schedule
+        # Store as comma-separated string per schedule_store schema.
+        store.update_schedule("coverage_walk", probe_roots=",".join(roots))
+        log.info("first-walk: persisted probe_roots=%s onto coverage_walk schedule", roots)
+    except Exception as e:
+        # Don't fail the walk if persistence fails — log it, surface it
+        # in the response so the wizard can flag.
+        persist_error = str(e)
+        log.warning("first-walk: schedule probe_roots persist failed: %s", e)
+
+    # 2. Fire the foreground walk for first-paint coverage data.
     walks: list[dict[str, Any]] = []
     for root in roots:
         try:
-            w = await walker.start_walk(root.strip().strip("/"))
+            w = await walker.start_walk(root)
             walks.append({"walk_id": w.id, "root": w.root})
         except Exception as e:
             log.warning("first-walk start failed for %s: %s", root, e)
             walks.append({"root": root, "error": str(e)})
-    return {"walks": walks}
+    return {
+        "walks": walks,
+        "schedule_probe_roots": roots,
+        "schedule_persisted": persist_error is None,
+        **({"schedule_persist_error": persist_error} if persist_error else {}),
+    }
 
 
 # ─── Internal: flush wizard progress to settings ────────────────────

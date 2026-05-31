@@ -6,6 +6,7 @@ import {
   StagesRow,
   HostStrip,
   NextRunActivitySplit,
+  WelcomeCard,
   useLiveDashboard,
 } from '../dashboard.jsx';
 import { fmtTime } from '../atoms.jsx';
@@ -30,6 +31,7 @@ function App() {
         <SubRail section="overview" activeId="dashboard" />
         <main className="main-canvas">
           <PageHeader now={now} />
+          <WelcomeCard />
           <StagesRow data={live && live.stages} />
           <HostStrip
             integrations={live && live.integrations}

@@ -87,47 +87,52 @@ def _plex_handler(req: httpx.Request) -> httpx.Response:
 
 @pytest.mark.subgen(handler=_plex_handler)
 def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
-    # The plex endpoint uses a fresh httpx.AsyncClient, not the stubbed subgen
-    # client. Monkeypatch AsyncClient to intercept that single call.
-    import subarr.routers.admin as admin_mod
+    """v1.1.1 refactor: /api/plex/scan now delegates to PlexClient.full_scan().
+    We swap in a configured client for the duration of the test and intercept
+    the httpx.AsyncClient that PlexClient instantiates per call."""
+    from subarr.integrations.plex import PlexClient
+
+    # Inject a configured Plex client into app state (conftest stub leaves
+    # it unconfigured by default so other tests get 503 properly).
+    plex = PlexClient(base_url="http://plex.test:32400", token="test-token",
+                      default_section="all")
+    app_with_stub.app.state.integrations.plex = plex
 
     calls = []
+    _RealAsyncClient = httpx.AsyncClient
 
     class _FakeAsyncClient:
         def __init__(self, *a, **kw):
             self._kw = kw
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *a):
-            return None
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
         async def get(self, url, params=None):
             calls.append((url, dict(params or {})))
             return httpx.Response(200, content=b"")
 
-    monkeypatch.setattr(admin_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    try:
+        r = app_with_stub.post("/api/plex/scan")
+    finally:
+        monkeypatch.setattr("httpx.AsyncClient", _RealAsyncClient)
 
-    r = app_with_stub.post("/api/plex/scan")
     assert r.status_code == 200
     body = r.json()
     assert body["triggered"] is True
     assert body["section"] == "all"
+    assert body["scope"] == "full"
     assert len(calls) == 1
     url, params = calls[0]
     assert url.endswith("/library/sections/all/refresh")
     assert params == {"X-Plex-Token": "test-token"}
 
 
-def test_plex_scan_503_when_token_missing(app_with_stub, monkeypatch):
-    # Reload settings with empty PLEX_TOKEN
-    monkeypatch.setenv("PLEX_TOKEN", "")
-    from subarr import config
-    import importlib
-    importlib.reload(config)
-    from subarr.routers import admin
-    importlib.reload(admin)
-
+def test_plex_scan_503_when_token_missing(app_with_stub):
+    """v1.1.1 refactor: PlexClient.is_configured() returns False when token is
+    empty (default in tests via conftest stub). Endpoint returns 503."""
     r = app_with_stub.post("/api/plex/scan")
     assert r.status_code == 503
+    assert "not configured" in r.json()["detail"].lower()
 
 
 # ───── Logs SSE ─────────────────────────────────────────────────────────────

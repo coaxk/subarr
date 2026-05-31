@@ -236,6 +236,10 @@ def _make_integration_bundle(
                                 {"X-Api-Key": "rd-test-key"} if radarr_handler else None)
             self.tautulli = _wrap(TautulliClient, tautulli_handler,
                                   "http://tautulli.test:8181")
+            # v1.1.1: tests don't exercise Plex; stub with an unconfigured
+            # client so .is_configured() returns False and code paths skip.
+            from subarr.integrations.plex import PlexClient
+            self.plex = PlexClient(base_url="", token="", default_section="all")
 
     return _StubBundle
 

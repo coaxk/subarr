@@ -187,7 +187,7 @@ function TestResult({ result }) {
 // ─── Step components ────────────────────────────────────────────
 
 
-function StepWelcome({ onAutoDetect, detectedCount }) {
+function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <h1 className="display" style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.01em' }}>
@@ -219,6 +219,28 @@ function StepWelcome({ onAutoDetect, detectedCount }) {
             <span style={{ color: 'var(--violet-400)', fontWeight: 600 }}> Detected {detectedCount} service(s) on this host.</span>
           )}
         </span>
+        {/* #129: previously the button click was completely silent when
+            discovery wasn't configured (no socket proxy mounted). Users
+            assumed it was broken and abandoned. Now we surface the actual
+            reason inline AND tell them how to enable it. */}
+        {autoDetectError && (
+          <div style={{
+            marginTop: 4, padding: '10px 12px',
+            background: 'rgba(239,158,76,0.08)',
+            border: '1px solid rgba(239,158,76,0.32)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 'var(--text-xs)', color: 'var(--fg-1)', lineHeight: 1.5,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Auto-detect unavailable</div>
+            <div style={{ color: 'var(--fg-2)' }}>{autoDetectError}</div>
+            <div style={{ marginTop: 6, color: 'var(--fg-3)' }}>
+              To enable: mount the docker socket (or a tecnativa/docker-socket-proxy)
+              into subarr at <code className="mono">/var/run/docker.sock</code> and
+              restart. See <code className="mono">deploy/templates/tier2-socket-proxy.compose.yaml</code>.
+              Otherwise, fill the URLs by hand on each step.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -226,6 +248,24 @@ function StepWelcome({ onAutoDetect, detectedCount }) {
 
 
 function StepPaths({ progress, setField, probeResult, onProbe }) {
+  // #136 fix: seed the displayed defaults into the underlying state once
+  // so the Continue button isn't gated on a field that LOOKS filled in but
+  // is actually empty. User sees /media/library, expects Continue to work.
+  React.useEffect(() => {
+    if (!progress.media_root) setField('media_root', '/media/library');
+    if (!progress.arr_path_prefix) setField('arr_path_prefix', '/data/Media/');
+    // #133: per-service path prefixes. Default to the legacy
+    // arr_path_prefix if the user already had it set; otherwise the
+    // most common *arr layouts (Sonarr at /data/TV/, Radarr at
+    // /data/Movies/).
+    if (!progress.sonarr_path_prefix) {
+      setField('sonarr_path_prefix', progress.arr_path_prefix || '/data/TV/');
+    }
+    if (!progress.radarr_path_prefix) {
+      setField('radarr_path_prefix', progress.arr_path_prefix || '/data/Movies/');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
@@ -233,22 +273,43 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           Where's your library?
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
-          Path subarr sees inside this container. Bind-mount your media root here
-          (e.g. <span className="mono">/mnt/nas/Media:/media/library:ro</span>).
+          The path subarr sees <b>inside its container</b> — that&apos;s usually
+          {' '}<span className="mono">/media/library</span>. Set the host path
+          {' '}separately in your compose file, e.g.
+          {' '}<span className="mono">/mnt/nas/Media:/media/library:ro</span>.
+          <br/>
+          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>
+            (Container path = where subarr sees files · Host path = where they
+            physically are on your machine.)
+          </span>
         </p>
       </div>
-      <FormRow label="Library root inside container">
+      <FormRow label="Library root (container view)"
+        hint="What subarr sees. Match the right-hand side of your bind mount.">
         <TextInput
           value={progress.media_root || '/media/library'}
           onChange={(v) => setField('media_root', v)}
           placeholder="/media/library"
         />
       </FormRow>
-      <FormRow label="ARR path prefix" hint="how Sonarr/Radarr see their /data — strip when canonicalising">
+      {/* #133: split per-service. Most homelabs have Sonarr at /data/TV/
+          and Radarr at /data/Movies/ — one shared prefix forced users to
+          pick a useless common parent. arr_path_prefix stays in progress
+          as a fallback so older onboarding states still load. */}
+      <FormRow label="Sonarr path prefix"
+        hint="What Sonarr stores as `path` — subarr strips this when canonicalising.">
         <TextInput
-          value={progress.arr_path_prefix || '/data/Media/'}
-          onChange={(v) => setField('arr_path_prefix', v)}
-          placeholder="/data/Media/"
+          value={progress.sonarr_path_prefix || progress.arr_path_prefix || '/data/TV/'}
+          onChange={(v) => setField('sonarr_path_prefix', v)}
+          placeholder="/data/TV/"
+        />
+      </FormRow>
+      <FormRow label="Radarr path prefix"
+        hint="What Radarr stores as `path` — subarr strips this when canonicalising.">
+        <TextInput
+          value={progress.radarr_path_prefix || progress.arr_path_prefix || '/data/Movies/'}
+          onChange={(v) => setField('radarr_path_prefix', v)}
+          placeholder="/data/Movies/"
         />
       </FormRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -283,13 +344,44 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
   const svc = step.service;
   const urlKey = `${svc}_url`;
   const apiKeyKey = `${svc}_api_key`;
+  // #141: anticipatory prefill. Once the user has entered ONE working URL
+  // (most commonly Sonarr first), every later integration step on the same
+  // host probably wants the same scheme+host with that service's default
+  // port. Watch all *_url keys in progress and on first mount synthesise
+  // this service's URL from whichever earlier service already worked.
+  const PORTS = { bazarr: '6767', sonarr: '8989', radarr: '7878', tautulli: '8181', subgen: '9000', ollama: '11434' };
+  const detectedContainer = progress.detected_services?.[svc]?.container_name;
+  React.useEffect(() => {
+    if (progress[urlKey]) return; // user already typed (or we already prefilled)
+    const myPort = PORTS[svc];
+    if (!myPort) return;
+    // #137: prefer the docker-detected container name when we have one —
+    // it's the truthiest hostname for an *arr stack on a shared network.
+    if (detectedContainer) {
+      setField(urlKey, `http://${detectedContainer}:${myPort}`);
+      return;
+    }
+    for (const key of ['sonarr_url', 'radarr_url', 'bazarr_url', 'tautulli_url']) {
+      const v = progress[key];
+      if (!v || typeof v !== 'string') continue;
+      // Match scheme://host:port (port is optional in the source URL).
+      const m = v.match(/^(https?:\/\/[^/:]+)(?::\d+)?(\/.*)?$/);
+      if (m) { setField(urlKey, `${m[1]}:${myPort}`); return; }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svc]);
+  // #140: dropped "wanted" — Bazarr-jargon for users who haven't lived
+  // inside Bazarr; "missing-subs list" reads cleaner cold.
+  // #144: Ollama help disambiguates the typical 11434 port vs. the
+  // common reverse-proxy / OpenWebUI port confusion + names recommended
+  // models so first-time users don't have to spelunk into model catalogs.
   const labels = {
-    bazarr:   { display: 'Bazarr',   port: '6767', help: "Subarr reads Bazarr's wanted list and writes back when subs are generated." },
+    bazarr:   { display: 'Bazarr',   port: '6767', help: "Subarr reads Bazarr's missing-subs list and writes generated subs back so the list shrinks." },
     sonarr:   { display: 'Sonarr',   port: '8989', help: "Subarr resolves episode → file paths via Sonarr to skip stale-disk gaps." },
     radarr:   { display: 'Radarr',   port: '7878', help: "Same as Sonarr but for movies." },
     tautulli: { display: 'Tautulli', port: '8181', help: "Watch history boosts the gap-list scoring — recently-watched shows get priority." },
     subgen:   { display: 'subgen',   port: '9000', help: "The Whisper worker. Use ghcr.io/coaxk/subarr-subgen for full features, or vanilla mccloud/subgen for compat mode. Model size + precision (tiny → large-v3, float16/int8) are set on subgen's own env vars (WHISPER_MODEL, WHISPER_COMPUTE_TYPE) — subarr just dispatches." },
-    ollama:   { display: 'Ollama',   port: '11434', help: "Optional. Used for originalLanguage inference on shows where Sonarr returned null/und." },
+    ollama:   { display: 'Ollama',   port: '11434', help: "Optional. Used for originalLanguage inference on shows where Sonarr returned null/und. Point at Ollama directly (port 11434), NOT OpenWebUI (3000) — subarr calls /api/generate. Recommended models: qwen2.5:7b (default, fast, low VRAM) or llama3.1:8b. Pull with `ollama pull <model>` before this step." },
   }[svc];
   const placeholderUrl = `http://${svc}:${labels.port}`;
 
@@ -320,6 +412,42 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
             onChange={(v) => setField(urlKey, v)}
             placeholder={placeholderUrl}
           />
+          {/* #139: spell out the three URL forms so users on different
+              topologies don't guess wrong on the first try. Rendered
+              below the input as a small dim block — verbose enough to
+              be useful, faded enough to skip if you know the answer. */}
+          <div style={{
+            marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
+            lineHeight: 1.5,
+          }}>
+            Try whichever one your subarr container can reach:
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li><code className="mono">{placeholderUrl}</code> — same docker network as {labels.display}</li>
+              <li><code className="mono">http://192.168.x.x:{labels.port}</code> — host LAN IP, when containers are on different networks</li>
+              <li><code className="mono">http://host.docker.internal:{labels.port}</code> — Docker Desktop on macOS/Windows</li>
+              {detectedContainer && (
+                <li>
+                  Detected container name: <code className="mono">{detectedContainer}</code>
+                  {' — '}
+                  <button
+                    type="button"
+                    onClick={() => setField(urlKey, `http://${detectedContainer}:${labels.port}`)}
+                    style={{
+                      background: 'rgba(167,139,250,0.12)',
+                      border: '1px solid rgba(167,139,250,0.4)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--violet-400)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontSize: 'var(--text-xs)',
+                      padding: '2px 8px',
+                    }}
+                  >click to use</button>
+                </li>
+              )}
+            </ul>
+            Avoid <code className="mono">localhost</code>: inside the container it means subarr itself.
+          </div>
         </FormRow>
         {svc !== 'subgen' && svc !== 'ollama' && (
           <FormRow label="API key" hint={`from ${labels.display} → Settings`}>
@@ -369,9 +497,39 @@ function StepGpu({ gpuInfo }) {
           </div>
           <p style={{ margin: '8px 0 0 18px', fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
             Subarr works fine without a GPU — but subgen transcription will use CPU,
-            which is dramatically slower. If you have an NVIDIA GPU, ensure the
-            container has it passed through (nvidia-container-toolkit).
+            which is dramatically slower (think 30-60 min/episode instead of 1-2 min).
           </p>
+          {/* #145: failure-mode guidance. Most "no GPU" reports in homelabs are
+              actually misconfigured passthrough, not missing hardware. Give the
+              user a checklist they can paste into their compose file. */}
+          <div style={{ marginLeft: 18, marginTop: 14, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>If you DO have an NVIDIA GPU, check:</div>
+            <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6, color: 'var(--fg-2)' }}>
+              <li>
+                Host has the NVIDIA driver installed — run <code className="mono">nvidia-smi</code> on
+                the host (not in a container) and confirm it returns a card.
+              </li>
+              <li>
+                <code className="mono">nvidia-container-toolkit</code> is installed and registered with
+                Docker (run <code className="mono">sudo nvidia-ctk runtime configure --runtime=docker</code>
+                {' '}then restart the Docker daemon).
+              </li>
+              <li>
+                Your subgen <code className="mono">compose.yaml</code> declares the GPU under
+                {' '}<code className="mono">deploy.resources.reservations.devices</code> with
+                {' '}<code className="mono">driver: nvidia</code>, <code className="mono">count: 1</code>, and
+                {' '}<code className="mono">capabilities: [gpu]</code>.
+              </li>
+              <li>
+                The subgen container is using a CUDA-enabled image (mccloud/subgen:latest ships with
+                CUDA pre-baked).
+              </li>
+            </ol>
+            <p style={{ margin: '10px 0 0', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+              You can continue without resolving this — subgen will fall back to CPU automatically.
+              Revisit GPU setup later via the Subgen panel in Settings.
+            </p>
+          </div>
         </div>
       )}
     </div>
@@ -379,7 +537,21 @@ function StepGpu({ gpuInfo }) {
 }
 
 
-function StepWalk({ progress, walkResult, onStart, isStarting }) {
+function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
+  // #146: keep probe_roots in component state because the parent stores it
+  // as an array; we render it as a comma-separated string for editing and
+  // parse on every keystroke. Previously the onChange was a TODO no-op
+  // so the user literally couldn't edit this field.
+  const initial = (progress.probe_roots && progress.probe_roots.length)
+    ? progress.probe_roots.join(', ')
+    : 'TV, Movies';
+  const [rootsText, setRootsText] = React.useState(initial);
+  const handleRootsChange = (v) => {
+    setRootsText(v);
+    const parsed = v.split(',').map((s) => s.trim()).filter(Boolean);
+    setField('probe_roots', parsed);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
@@ -392,10 +564,11 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
           shows real coverage on first paint instead of an empty state.
         </p>
       </div>
-      <FormRow label="Probe roots" hint="comma-separated, relative to library root">
+      <FormRow label="Probe roots"
+        hint={`subfolders of ${progress.media_root || '/media/library'}, comma-separated`}>
         <TextInput
-          value={(progress.probe_roots || ['TV', 'Movies']).join(', ')}
-          onChange={(v) => {/* parsed on submit */}}
+          value={rootsText}
+          onChange={handleRootsChange}
           placeholder="TV, Movies"
         />
       </FormRow>
@@ -408,7 +581,7 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
         <div style={{ padding: '14px 16px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.32)', borderRadius: 'var(--radius-md)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <StatusDot kind="ok" size="lg" />
-            <span style={{ fontWeight: 600 }}>{walkResult.walks.length} walk(s) started · running in background</span>
+            <span style={{ fontWeight: 600 }}>{walkResult.walks.length} walk(s) started</span>
           </div>
           <div style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {walkResult.walks.map((w, i) => (
@@ -417,6 +590,16 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
               </span>
             ))}
           </div>
+          {/* #146: be concrete about what "background" means. The
+              walks run inside subarr's process, NOT the wizard. The
+              user can finish onboarding and go straight to using the
+              app; progress shows up on Library + Coverage tabs as
+              walks complete. */}
+          <p style={{ margin: '12px 0 0 18px', fontSize: 'var(--text-xs)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+            Running in the background — you can hit <b>Finish</b> now and watch progress
+            land on the Library + Coverage pages as each walk completes. Big libraries
+            can take 10-30 minutes; nothing breaks if you close the tab.
+          </p>
         </div>
       )}
     </div>
@@ -454,6 +637,7 @@ export function OnboardingPage() {
   const [walkResult, setWalkResult] = useState(null);
   const [gpuInfo, setGpuInfo] = useState(null);
   const [autoDetected, setAutoDetected] = useState(0);
+  const [autoDetectError, setAutoDetectError] = useState(null);
   const [busy, setBusy] = useState(false);
 
   // Initial load — fetch state from backend; if already complete,
@@ -498,19 +682,32 @@ export function OnboardingPage() {
 
   const onAutoDetect = async () => {
     setBusy(true);
+    setAutoDetectError(null);
     const r = await Api.autoDetect();
     setBusy(false);
     if (!r.available) {
-      setTestResult({ ok: false, error: r.reason || 'auto-detect unavailable' });
+      // #129: surface the actual reason in the welcome step instead of
+      // failing silently. testResult only renders on integration steps,
+      // so for the welcome-step button we need a dedicated slot.
+      setAutoDetectError(r.reason || 'auto-detect unavailable (no docker socket / socket-proxy mounted)');
       return;
     }
     const services = r.services || {};
     const patch = {};
+    // #137: stash the per-service detected metadata (container_name, etc.)
+    // onto progress.detected_services so later integration steps can
+    // surface a one-click "use detected container name" chip even if the
+    // user didn't accept the inferred URL on first scan.
+    const detected = {};
     for (const [svc, info] of Object.entries(services)) {
       if (info.candidate?.inferred_url) patch[`${svc}_url`] = info.candidate.inferred_url;
+      if (info.candidate?.container_name) {
+        detected[svc] = { container_name: info.candidate.container_name };
+      }
       // We never autofill API keys here — wizard surfaces them per-service
       // with a clear "extracted from <source>" badge.
     }
+    patch.detected_services = detected;
     setAutoDetected(Object.keys(services).length);
     setState(prev => ({ ...prev, progress: { ...prev.progress, ...patch } }));
   };
@@ -519,7 +716,10 @@ export function OnboardingPage() {
     const step = STEPS[state.step];
     if (!step.service) return;
     setBusy(true);
-    setTestResult({ ok: false, error: 'testing…' });
+    // #142 fix: clear the test result while testing — busy spinner conveys
+    // the pending state. Previous code set `ok: false` which made the chip
+    // flash red for half a second before the actual result arrived.
+    setTestResult(null);
     const url = state.progress[`${step.service}_url`];
     const key = state.progress[`${step.service}_api_key`];
     const r = await Api.test(step.service, url, key);
@@ -568,11 +768,11 @@ export function OnboardingPage() {
   if (step.id === 'paths' && !state.progress.media_root) canContinue = false;
 
   const renderStep = () => {
-    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} />;
+    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} autoDetectError={autoDetectError} />;
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
-    if (step.id === 'walk')    return <StepWalk progress={state.progress} walkResult={walkResult} onStart={onStartWalk} isStarting={busy} />;
+    if (step.id === 'walk')    return <StepWalk progress={state.progress} setField={setField} walkResult={walkResult} onStart={onStartWalk} isStarting={busy} />;
     return null;
   };
 

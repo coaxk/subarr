@@ -58,3 +58,38 @@ class TautulliClient(IntegrationClient):
         if isinstance(d, dict):
             return d.get("data", []) or []
         return []
+
+    async def get_users(self) -> list[dict[str, Any]]:
+        """v1.1-L: list of Plex users known to Tautulli. Used to build
+        per-user language profiles."""
+        d = await self._cmd("get_users")
+        if isinstance(d, list):
+            return d
+        if isinstance(d, dict):
+            return d.get("data", []) or []
+        return []
+
+    async def get_user_watch_time_stats(
+        self, user_id: int, query_days: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Per-user watch stats — total plays/duration over a window."""
+        d = await self._cmd("get_user_watch_time_stats",
+                            user_id=user_id, query_days=query_days)
+        if isinstance(d, list):
+            return d
+        return d.get("data", []) if isinstance(d, dict) else []
+
+    async def get_activity(self) -> dict[str, Any]:
+        """v1.1-E: Tautulli's currently-streaming sessions.
+
+        Returns the raw payload — typically `{stream_count, sessions: [...]}`.
+        Each session row carries `grandparent_title` (series), `parent_title`
+        (season), `title` (episode), `rating_key` (Plex), `user`,
+        `subtitle_decision` ('transcode'/'direct play'/'copy'),
+        `subtitle_codec`, `subtitle_language_code`, and `progress_percent`.
+
+        Most actionable signal: `subtitle_decision='transcode'` means Plex
+        is burning CPU because no proper sidecar exists — perfect target
+        for an instant subgen queue."""
+        d = await self._cmd("get_activity")
+        return d if isinstance(d, dict) else {}

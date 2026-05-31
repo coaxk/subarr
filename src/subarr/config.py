@@ -10,6 +10,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _env_or(name: str, default: str) -> str:
+    """Read an env var, treating empty / whitespace-only as missing.
+
+    Standard `os.environ.get(name, default)` only returns the default when
+    the key is ABSENT; if the user has the var declared but empty (e.g.
+    `BAZARR_URL=` in a .env file, a common docker-compose pattern when a
+    user wants to comment-out without deleting the line), .get() returns
+    "" and the configured default silently never applies.
+
+    #127: This used to land empty strings in fields where empty is
+    semantically meaningless (subgen_url="" → every /batch call 502s with
+    no diagnosable reason). Use this helper for any field whose default
+    is the only valid resting value.
+
+    Do NOT use this for fields where empty IS the off-signal (API keys,
+    telemetry_endpoint, auth_user, auth_pass, optional discovery URLs).
+    Those keep bare .get() so the user can disable by clearing the value.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     # Root of the media library the folder tree browses. Inside container: /media/library.
@@ -42,6 +66,20 @@ class Settings:
     plex_url: str
     plex_token: str
     plex_section: str  # "all" or numeric section ID
+    # v1.1.1: path Plex sees the media tree at, when different from subarr's
+    # media_root. Used by partial-scan to translate sidecar paths to Plex's
+    # view before issuing /library/sections/{id}/refresh?path=. Leave empty
+    # when both containers mount the same path (common case).
+    plex_path_prefix: str
+    # v1.1.1: master toggle for partial-scan-on-sidecar-write. Default on;
+    # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
+    # Plex's own scheduler runs at.
+    plex_partial_scan_enabled: bool
+    # v1.1.1 #219 closer: PUT user-verified audio language back to Sonarr's
+    # episodeFile so Bazarr's next sync sees the correct foreign-language
+    # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
+    # off; set SONARR_PROPAGATE_AUDIO_LANG=1 to enable.
+    sonarr_propagate_audio_lang: bool
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -88,35 +126,68 @@ class Settings:
     # same files at /media/library/<...>. This prefix is what Sonarr/Radarr
     # store as `path`; we strip it to canonicalise.
     arr_path_prefix: str
+    # #133: per-service path prefixes. Most homelabs have Sonarr at /data/TV/
+    # and Radarr at /data/Movies/ — one shared prefix forced users into a
+    # useless common parent. Both fall back to arr_path_prefix when their
+    # own env var is unset so existing deployments keep working unchanged.
+    sonarr_path_prefix: str
+    radarr_path_prefix: str
 
 
 def load() -> Settings:
+    # See _env_or docstring for the empty-string fall-through rule (#127).
+    # Helper applied where empty is semantically meaningless. Bare .get() kept
+    # for fields where empty IS the intended off-signal (API keys, telemetry,
+    # auth, optional docker discovery).
     return Settings(
-        media_root=Path(os.environ.get("SUBARR_MEDIA_ROOT", "/media/library")),
+        media_root=Path(_env_or("SUBARR_MEDIA_ROOT", "/media/library")),
         subgen_compose_path=Path(
-            os.environ.get("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")
+            _env_or("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")
         ),
-        subgen_url=os.environ.get("SUBGEN_URL", "http://subgen:9000"),
-        subgen_container=os.environ.get("SUBGEN_CONTAINER", "subgen"),
-        subgen_media_prefix=os.environ.get("SUBGEN_MEDIA_PREFIX", "/media"),
-        db_path=Path(os.environ.get("SUBARR_DB_PATH", "/data/subarr.db")),
-        port=int(os.environ.get("SUBARR_PORT", "9922")),
-        plex_url=os.environ.get("PLEX_URL", "http://192.168.1.105:32400"),
+        subgen_url=_env_or("SUBGEN_URL", "http://subgen:9000"),
+        subgen_container=_env_or("SUBGEN_CONTAINER", "subgen"),
+        subgen_media_prefix=_env_or("SUBGEN_MEDIA_PREFIX", "/media"),
+        db_path=Path(_env_or("SUBARR_DB_PATH", "/data/subarr.db")),
+        port=int(_env_or("SUBARR_PORT", "9922")),
+        plex_url=_env_or("PLEX_URL", "http://192.168.1.105:32400"),
         plex_token=os.environ.get("PLEX_TOKEN", ""),
-        plex_section=os.environ.get("PLEX_SECTION", "all"),
-        bazarr_url=os.environ.get("BAZARR_URL", "http://bazarr:6767"),
+        plex_section=_env_or("PLEX_SECTION", "all"),
+        plex_path_prefix=os.environ.get("PLEX_PATH_PREFIX", ""),
+        plex_partial_scan_enabled=_env_or(
+            "PLEX_PARTIAL_SCAN_ENABLED", "1"
+        ).strip().lower() not in ("0", "false", "no", "off"),
+        sonarr_propagate_audio_lang=os.environ.get(
+            "SONARR_PROPAGATE_AUDIO_LANG", "0"
+        ).strip().lower() in ("1", "true", "yes", "on"),
+        # Integration URLs use _env_or so a blank line in .env still gets the
+        # sane in-cluster default. Disabling an integration is signalled by
+        # the empty api_key, not by clearing the URL.
+        bazarr_url=_env_or("BAZARR_URL", "http://bazarr:6767"),
         bazarr_api_key=os.environ.get("BAZARR_API_KEY", ""),
-        sonarr_url=os.environ.get("SONARR_URL", "http://sonarr:8989"),
+        sonarr_url=_env_or("SONARR_URL", "http://sonarr:8989"),
         sonarr_api_key=os.environ.get("SONARR_API_KEY", ""),
-        radarr_url=os.environ.get("RADARR_URL", "http://radarr:7878"),
+        radarr_url=_env_or("RADARR_URL", "http://radarr:7878"),
         radarr_api_key=os.environ.get("RADARR_API_KEY", ""),
-        tautulli_url=os.environ.get("TAUTULLI_URL", "http://tautulli:8181"),
+        tautulli_url=_env_or("TAUTULLI_URL", "http://tautulli:8181"),
         tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", ""),
-        arr_path_prefix=os.environ.get("ARR_PATH_PREFIX", "/data/Media/"),
-        ollama_url=os.environ.get("OLLAMA_URL", "http://ollama:11434"),
-        ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
+        arr_path_prefix=_env_or("ARR_PATH_PREFIX", "/data/Media/"),
+        # #133: each falls back to ARR_PATH_PREFIX if its own var is unset,
+        # so users with the legacy single-prefix .env keep working until
+        # they explicitly opt in to split prefixes.
+        sonarr_path_prefix=_env_or(
+            "SONARR_PATH_PREFIX",
+            _env_or("ARR_PATH_PREFIX", "/data/TV/"),
+        ),
+        radarr_path_prefix=_env_or(
+            "RADARR_PATH_PREFIX",
+            _env_or("ARR_PATH_PREFIX", "/data/Movies/"),
+        ),
+        ollama_url=_env_or("OLLAMA_URL", "http://ollama:11434"),
+        ollama_model=_env_or("OLLAMA_MODEL", "qwen2.5:7b"),
         docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),
         docker_socket_path=os.environ.get("SUBARR_DOCKER_SOCKET_PATH", ""),
+        # telemetry_endpoint keeps bare .get(): empty = "don't transmit",
+        # the user's explicit off-switch. Don't fall through to the default.
         telemetry_endpoint=os.environ.get(
             "SUBARR_TELEMETRY_ENDPOINT",
             "https://telemetry.subarr.com/v1/ping",
