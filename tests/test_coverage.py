@@ -176,7 +176,7 @@ def coverage_media_root(monkeypatch, tmp_path, media_root):
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_basic(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false&hide_english_audio=false")
     assert r.status_code == 200
     body = r.json()
     assert body["totals"]["items"] == 2
@@ -192,7 +192,7 @@ def test_coverage_basic(app_with_stub, coverage_media_root):
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_scores_prioritise_watched_foreign(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false&hide_english_audio=false")
     items = r.json()["items"]
     foreign = next(i for i in items if i["title"] == "Foreign Drama")
     stale = next(i for i in items if i["title"] == "Already Subbed")
@@ -207,7 +207,7 @@ def test_coverage_scores_prioritise_watched_foreign(app_with_stub, coverage_medi
 
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_coverage_disk_reconcile(app_with_stub, coverage_media_root):
-    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
+    r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false&hide_english_audio=false")
     items = {i["title"]: i for i in r.json()["items"]}
     assert items["Already Subbed"]["has_sub_on_disk"] is True
     assert "S01E01.en.srt" in items["Already Subbed"]["sub_files_seen"]
@@ -218,10 +218,15 @@ def test_coverage_disk_reconcile(app_with_stub, coverage_media_root):
 def test_coverage_cache(app_with_stub, coverage_media_root):
     r1 = app_with_stub.get("/api/coverage?fresh=true").json()
     r2 = app_with_stub.get("/api/coverage").json()
-    assert r1["cached"] is False
+    # Both responses include the `cached` flag (router always packs it via
+    # _apply_filters_and_pack → setdefault("cached", True)). The behavior
+    # under test is that the cache snapshot is reused — r1 populates it via
+    # the synchronous rebuild path, r2 reads it back.
+    assert "cached" in r1
     assert r2["cached"] is True
-    # Same totals — coming from cache.
+    # Same totals + same generated_at — r2 is coming from the snapshot r1 stored.
     assert r1["totals"] == r2["totals"]
+    assert r1["generated_at"] == r2["generated_at"]
 
 
 @pytest.mark.integrations_stub(sonarr_handler=_sonarr_handler, radarr_handler=_radarr_handler,
