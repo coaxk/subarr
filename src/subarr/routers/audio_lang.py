@@ -289,6 +289,46 @@ async def bulk_for_series(req: BulkSeriesRequest, request: Request) -> dict[str,
     return {"upserted": n, "lang_code": req.lang_code.lower()}
 
 
+# ─── #226: series-level intent CRUD ─────────────────────────────────
+
+
+class SeriesIntentRequest(BaseModel):
+    series_prefix: str   # e.g. "TV/Cheers/" — trailing slash auto-added
+    lang_code: str
+    note: str | None = None
+
+
+@router.put("/audio-lang/series-intent")
+async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> dict[str, Any]:
+    """Declare 'every file under this series prefix is language X'.
+    Every subsequent get() for a path under the prefix returns the
+    declared lang as a virtual verification — including future episodes
+    that don't exist on disk yet. Per-file verifications override this
+    so the user can still correct individual mixed-track episodes."""
+    store = request.app.state.audio_lang
+    store.set_series_intent(
+        series_prefix=req.series_prefix,
+        lang_code=req.lang_code,
+        note=req.note,
+    )
+    return {"ok": True, "series_prefix": req.series_prefix, "lang_code": req.lang_code.lower()}
+
+
+@router.get("/audio-lang/series-intent")
+async def list_series_intents(request: Request) -> dict[str, Any]:
+    store = request.app.state.audio_lang
+    return {"items": store.list_series_intents()}
+
+
+@router.delete("/audio-lang/series-intent")
+async def delete_series_intent(series_prefix: str, request: Request) -> dict[str, Any]:
+    store = request.app.state.audio_lang
+    removed = store.delete_series_intent(series_prefix)
+    if not removed:
+        raise HTTPException(404, detail=f"no intent declared for {series_prefix}")
+    return {"deleted": True, "series_prefix": series_prefix}
+
+
 def _resolve_canonical_to_fs(canonical: str) -> str:
     """Translate a canonical path (TV/Show/...) into an absolute fs path
     on subarr's container view, with traversal guard."""
