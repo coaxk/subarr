@@ -1,68 +1,109 @@
 # subarr
 
-**Subgen, but you can pick what gets transcribed — one file, a whole
-season, a whole series — and there's a brain deciding what's worth
-generating in the first place.**
+**The queue + control layer subgen never had.**
 
-A peer service in the *arr family. Subarr coordinates subtitle generation
-across Bazarr + Sonarr + Radarr + Tautulli + subgen + ollama — figuring out
-what's actually missing, what's worth generating, when to run it, and
-writing the result back so Bazarr's wanted list actually shrinks.
-
-> Bazarr is the librarian. Subgen is the worker. **Subarr is the brain.**
-
-[![status](https://img.shields.io/badge/status-pre%201.0-violet)](https://github.com/coaxk/subarr)
+[![release](https://img.shields.io/badge/release-v1.1.0-violet)](https://github.com/coaxk/subarr/releases/tag/v1.1.0)
 [![tests](https://img.shields.io/badge/tests-228_passing-22d3ee)](#)
+[![image](https://img.shields.io/badge/image-ghcr.io%2Fcoaxk%2Fsubarr-2596be)](https://github.com/coaxk/subarr/pkgs/container/subarr)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
----
-
-## What it solves
-
-The most-felt pains in the Bazarr + subgen + subtitle-automation space
-(documented across r/bazarr, GitHub issues, and TRaSH guide forums):
-
-1. **"Bazarr keeps re-searching subs you already have."**
-   Subarr probes your media with ffprobe and knows what's already embedded
-   or sidecar'd. Coverage walks suppress the false-positive gap rows that
-   make Bazarr re-search forever.
-
-2. **"See your whole library's subtitle coverage at a glance."**
-   Gap list across every series + movie, prioritised by Tautulli watch
-   history. No native tool does this.
-
-3. **"Don't burn GPU on content I'll never watch."**
-   Scheduled coverage walks instead of reactive event storms. You tell
-   subarr the rule once; it runs nightly and only queues what matches.
-
-4. **"Know exactly which provider gave me this sub."**
-   Provenance ledger records every transcribe job — who submitted, what
-   subgen version, completion time, Bazarr scan-disk trigger. Unique to
-   subarr in this space.
-
-5. **"Treat embedded subs as first-class."**
-   SDH vs forced vs commentary vs full are distinct states, not a binary
-   "has subs" flag. Per-track audio language detection too.
+> Subgen has no queue. No reorder. No pause. No "transcribe these three episodes from two shows" — just blind, manual triggers and a worker that runs until you kill it.
+>
+> **Subarr fixes that.**
 
 ---
 
-## Quickstart
+## Why subarr exists
 
-The fastest path: pull two images, fill in a `.env`, `docker compose up -d`.
+Three pains that drove this product into existence. Each one is a thing subgen straight-up cannot do today.
 
-```bash
-mkdir -p ~/subarr && cd ~/subarr
-curl -O https://raw.githubusercontent.com/coaxk/subarr/main/deploy/templates/tier2-socket-proxy.compose.yaml
-curl -O https://raw.githubusercontent.com/coaxk/subarr/main/deploy/templates/.env.example
-mv .env.example .env
-$EDITOR .env  # fill in TZ, MEDIA_ROOT, your *arr network name
-docker compose -f tier2-socket-proxy.compose.yaml up -d
+### 1. Subgen has zero queue control — subarr has supreme queue flexibility
+
+Pick **single files**. Pick **batches across shows**. Pick **a full season**. Pick **multiple seasons at once**. Then **promote**, **demote**, **pause**, **remove**, or **reorder** anything in the queue — without killing the worker, without restarting the container, without losing what's already in flight.
+
+Subgen has none of this. You point it at a directory, you hope. Subarr gives you a build-the-queue-you-want UI with a live activity panel watching each job.
+
+> 📸 *(screenshot: Library tree → checkbox three episodes across two shows → queue → drag-reorder)*
+
+### 2. Subgen has no brain — subarr ranks what's worth your GPU
+
+Subgen transcribes whatever you point it at, whenever you point it at it. That's a lot of GPU on shows you stopped watching three months ago.
+
+Subarr ranks your queue with **Tautulli watch history × Sonarr/Radarr metadata × language gap coverage**. Schedule it (**interval / daily / weekly**) and the right files keep getting transcribed automatically — with **preview-before-commit** and **manual-confirm** modes if you'd rather review the next batch before it fires.
+
+> 📸 *(screenshot: Settings → Schedule + Home "Next run" panel showing ranked queue building itself)*
+
+### 3. You find subtitle gaps when Bazarr fails — subarr shows you before
+
+Bazarr's wanted list is a *consequence list*: it tells you what's broken, not what's missing. Subarr's **Coverage** view is the gap list itself — dense table, per-show per-language, with **stale-disk overlay** so you know what's on disk vs. what Bazarr thinks is on disk.
+
+When you see a gap, you queue the fix in one click. The provenance ledger keeps the receipt.
+
+> 📸 *(screenshot: Coverage tree with dense gap list + stale-disk overlay)*
+
+---
+
+## Install
+
+Two paths. Pick the one that matches how you run your homelab.
+
+### Docker Compose (recommended for homelabs)
+
+Drop this `compose.yaml` next to a `.env`:
+
+```yaml
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:v1.0.0-rc.1
+    container_name: subarr
+    restart: unless-stopped
+    ports:
+      - "9922:9922"
+    environment:
+      TZ: ${TZ}
+      # Optional basic auth — leave both unset to skip
+      # SUBARR_USER: admin
+      # SUBARR_PASS: change-me-long-random
+    volumes:
+      - ./config:/config
+      - ${MEDIA_ROOT}:/media:ro
+    networks:
+      - arr-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  arr-net:
+    external: true
+    name: ${ARR_NETWORK:-arr-net}
 ```
 
-Open `http://localhost:9922` and walk through the onboarding wizard.
+Minimal `.env`:
 
-Three deployment tiers are available — see [`deploy/templates/README.md`](deploy/templates/README.md)
-for the trade-offs. **Tier 2 is the recommended default**.
+```bash
+TZ=Australia/Sydney
+MEDIA_ROOT=/mnt/nas/Media
+ARR_NETWORK=arr-net          # match whatever network your Bazarr/Sonarr already use
+```
+
+Then:
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:9922`. The 10-step onboarding wizard auto-detects your existing *arr stack if you bind the docker socket via the [Tier-2 socket-proxy template](deploy/templates/tier2-socket-proxy.compose.yaml) — recommended; full deployment matrix in [`deploy/templates/README.md`](deploy/templates/README.md).
+
+### One-line bootstrap (for trying it fast)
+
+```bash
+curl -fsSL https://github.com/coaxk/subarr/raw/main/install.sh | bash
+```
+
+Pulls the same image, creates a sensible default config dir, prints the dashboard URL.
 
 ### Minimum compose stub (if you'd rather hand-roll)
 
