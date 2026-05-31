@@ -64,6 +64,43 @@ Open `http://localhost:9922` and walk through the onboarding wizard.
 Three deployment tiers are available — see [`deploy/templates/README.md`](deploy/templates/README.md)
 for the trade-offs. **Tier 2 is the recommended default**.
 
+### Minimum compose stub (if you'd rather hand-roll)
+
+If you don't want the socket-proxy and prefer to point subarr at your
+*arr stack manually, this is the smallest possible compose that runs:
+
+```yaml
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:latest
+    container_name: subarr
+    restart: unless-stopped
+    networks: [media-stack]      # same network as Bazarr/Sonarr/Radarr
+    ports: ["9922:9922"]
+    environment:
+      TZ: Australia/Sydney
+      SUBARR_MEDIA_ROOT: /media/library
+      SUBGEN_URL: http://subgen:9000
+      # URLs filled by the wizard, or set them here to skip the wizard step
+      BAZARR_URL:   http://bazarr:6767
+      SONARR_URL:   http://sonarr:8989
+      RADARR_URL:   http://radarr:7878
+      TAUTULLI_URL: http://tautulli:8181
+    volumes:
+      # Host path (LEFT) is where your media lives on the host machine.
+      # Container path (RIGHT) MUST match SUBARR_MEDIA_ROOT above —
+      # /media/library is the wizard's default. Mount read-only when
+      # subarr is the only writer of sidecars (it is, by default).
+      - /mnt/nas/Media:/media/library:ro
+      - ./data:/data            # subarr's SQLite + provenance ledger
+networks:
+  media-stack:
+    external: true              # change to false if you want a new network
+```
+
+This skips auto-detect; the wizard still walks you through the rest.
+For socket-proxy-backed auto-detect, use the Tier 2 template above.
+
 ---
 
 ## Architecture
