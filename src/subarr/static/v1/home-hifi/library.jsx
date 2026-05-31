@@ -191,7 +191,18 @@ function fmtDuration(secs) {
 
 // ─── Tree node ───────────────────────────────────────────────────
 function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn }) {
-  const isVisible = !search || entry.name.toLowerCase().includes(search.toLowerCase());
+  // #194: search visibility. The tree is lazily loaded, so we can't
+  // "find" matches inside un-expanded subtrees synchronously. Strategy:
+  //   - depth 0 (TV/Movies category roots): always visible during search
+  //     so users see the path to their match.
+  //   - depth >= 1 directories + leaf files: name-substring match only.
+  // Result: typing "cheers" shows TV/ → Cheers/ → episodes, instead of
+  // hiding the root TV/ folder because its name doesn't contain "cheers".
+  const searchActive = !!(search && search.trim());
+  const nameMatches = !search || entry.name.toLowerCase().includes(search.toLowerCase());
+  const isVisible = searchActive && entry.is_dir && depth === 0
+    ? true                  // category roots stay visible while searching
+    : nameMatches;          // everything else: must match
   const passesFilter = filterFn ? filterFn(entry) : true;
   if (!isVisible || !passesFilter) return null;
 
@@ -322,28 +333,51 @@ function CheckBox({ checked }) {
 // Hoisting this to a top-level component (rather than a recursive
 // inline) keeps each node's local hooks isolated.
 function ConnectedTreeNode({ entry, depth, selected, onToggleSelect, search, filterFn }) {
-  const [expanded, setExpanded] = useState(false);
+  const [userExpanded, setUserExpanded] = useState(false);
   const [childrenData, setChildrenData] = useState(null);
   const [childrenLoading, setChildrenLoading] = useState(false);
   const [childrenError, setChildrenError] = useState(null);
 
-  const toggleExpand = useCallback(async (path) => {
-    if (!entry.is_dir) return;
-    const next = !expanded;
-    setExpanded(next);
-    if (next && !childrenData && !childrenLoading) {
-      setChildrenLoading(true);
-      setChildrenError(null);
-      try {
-        const d = await fetchBrowse(path);
-        setChildrenData(d);
-      } catch (e) {
-        setChildrenError(e);
-      } finally {
-        setChildrenLoading(false);
-      }
+  // #194: when search is active, force-expand the category-root directories
+  // (depth 0: TV, Movies) so users can SEE their search matches at depth 1.
+  // Without this, the root TV/ folder stays collapsed and the user thinks
+  // search is broken because their series doesn't appear.
+  //
+  // Past depth 0 we only expand explicit user choices — auto-expanding all
+  // matching series would otherwise fetch every season+episode for every
+  // series whose name contains the search term, which on a 1700-show
+  // library can be hundreds of HTTP calls per keystroke.
+  const searchActive = !!(search && search.trim());
+  const expanded = (searchActive && entry.is_dir && depth === 0) || userExpanded;
+
+  const fetchChildren = useCallback(async (path) => {
+    if (!entry.is_dir || childrenData || childrenLoading) return;
+    setChildrenLoading(true);
+    setChildrenError(null);
+    try {
+      const d = await fetchBrowse(path);
+      setChildrenData(d);
+    } catch (e) {
+      setChildrenError(e);
+    } finally {
+      setChildrenLoading(false);
     }
-  }, [entry.is_dir, expanded, childrenData, childrenLoading]);
+  }, [entry.is_dir, childrenData, childrenLoading]);
+
+  // Auto-fetch children when search forces us open. Debounced via the
+  // browseCache inside fetchBrowse, so re-typing reuses cached payloads.
+  useEffect(() => {
+    if (expanded) fetchChildren(entry.path);
+  }, [expanded, entry.path, fetchChildren]);
+
+  const toggleExpand = useCallback((path) => {
+    if (!entry.is_dir) return;
+    // While search is active, user clicks just toggle the user's own
+    // expansion preference for after-the-search-clears. The effective
+    // expanded state stays forced-open until search empties.
+    setUserExpanded((prev) => !prev);
+    if (!userExpanded) fetchChildren(path);
+  }, [entry.is_dir, userExpanded, fetchChildren]);
 
   return (
     <TreeNode
