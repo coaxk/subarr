@@ -124,6 +124,39 @@ export function fmtTime(d) {
   return `${h}:${m}:${s}`;
 }
 
+// ─── SectionCard: panel + label header + optional action slot (#213) ──
+//
+// The canonical "labelled panel" shape used across settings, queue,
+// coverage, review. Local copies drifted on padding (16/18 vs 12/16)
+// and gap (10/12/14) — promoting to a single atom locks the rhythm
+// so a designer change is one edit, not a grep across 5 files.
+//
+// Caller passes label (string or node), optional action (rendered
+// right-aligned in the header — refresh button, status chip, etc.),
+// and children (the actual content). Use the className escape hatch
+// if a page needs extra layout flags (e.g. flex:1 to grow).
+export function SectionCard({ label, children, action, className, style }) {
+  return (
+    <section className={className} style={{
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '16px 18px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+      ...style,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {typeof label === 'string'
+          ? <span className="label">{label}</span>
+          : label}
+        <span style={{ flex: 1 }} />
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 // ─── AsyncState: shared loading / error / empty render (#214) ────
 //
 // Five pages render the same loading / error / empty pattern with

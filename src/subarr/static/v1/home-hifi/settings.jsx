@@ -11,7 +11,7 @@
 // initial config write and subsequent edits happen via env vars. When a
 // PUT /api/integrations/config exists we'll re-introduce the dirty bar.
 
-import { StatusDot } from './atoms.jsx';
+import { SectionCard, StatusDot } from './atoms.jsx';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -93,24 +93,8 @@ function useUpdatesState() {
 }
 
 // ─── Primitives ──────────────────────────────────────────────────
-function SectionCard({ label, children, action }) {
-  return (
-    <section style={{
-      background: 'var(--bg-1)',
-      border: 'var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '16px 18px',
-      display: 'flex', flexDirection: 'column', gap: 14,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <span className="label">{label}</span>
-        <span style={{ flex: 1 }} />
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
+// SectionCard now lives in atoms.jsx (#213) — same shape, single
+// source of truth across pages.
 
 function Row({ label, value, hint, control }) {
   return (
