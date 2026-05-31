@@ -300,6 +300,25 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
   const svc = step.service;
   const urlKey = `${svc}_url`;
   const apiKeyKey = `${svc}_api_key`;
+  // #141: anticipatory prefill. Once the user has entered ONE working URL
+  // (most commonly Sonarr first), every later integration step on the same
+  // host probably wants the same scheme+host with that service's default
+  // port. Watch all *_url keys in progress and on first mount synthesise
+  // this service's URL from whichever earlier service already worked.
+  React.useEffect(() => {
+    if (progress[urlKey]) return; // user already typed (or we already prefilled)
+    const PORTS = { bazarr: '6767', sonarr: '8989', radarr: '7878', tautulli: '8181', subgen: '9000', ollama: '11434' };
+    const myPort = PORTS[svc];
+    if (!myPort) return;
+    for (const key of ['sonarr_url', 'radarr_url', 'bazarr_url', 'tautulli_url']) {
+      const v = progress[key];
+      if (!v || typeof v !== 'string') continue;
+      // Match scheme://host:port (port is optional in the source URL).
+      const m = v.match(/^(https?:\/\/[^/:]+)(?::\d+)?(\/.*)?$/);
+      if (m) { setField(urlKey, `${m[1]}:${myPort}`); return; }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svc]);
   // #140: dropped "wanted" — Bazarr-jargon for users who haven't lived
   // inside Bazarr; "missing-subs list" reads cleaner cold.
   // #144: Ollama help disambiguates the typical 11434 port vs. the
@@ -447,7 +466,21 @@ function StepGpu({ gpuInfo }) {
 }
 
 
-function StepWalk({ progress, walkResult, onStart, isStarting }) {
+function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
+  // #146: keep probe_roots in component state because the parent stores it
+  // as an array; we render it as a comma-separated string for editing and
+  // parse on every keystroke. Previously the onChange was a TODO no-op
+  // so the user literally couldn't edit this field.
+  const initial = (progress.probe_roots && progress.probe_roots.length)
+    ? progress.probe_roots.join(', ')
+    : 'TV, Movies';
+  const [rootsText, setRootsText] = React.useState(initial);
+  const handleRootsChange = (v) => {
+    setRootsText(v);
+    const parsed = v.split(',').map((s) => s.trim()).filter(Boolean);
+    setField('probe_roots', parsed);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
@@ -460,10 +493,11 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
           shows real coverage on first paint instead of an empty state.
         </p>
       </div>
-      <FormRow label="Probe roots" hint="comma-separated, relative to library root">
+      <FormRow label="Probe roots"
+        hint={`subfolders of ${progress.media_root || '/media/library'}, comma-separated`}>
         <TextInput
-          value={(progress.probe_roots || ['TV', 'Movies']).join(', ')}
-          onChange={(v) => {/* parsed on submit */}}
+          value={rootsText}
+          onChange={handleRootsChange}
           placeholder="TV, Movies"
         />
       </FormRow>
@@ -476,7 +510,7 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
         <div style={{ padding: '14px 16px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.32)', borderRadius: 'var(--radius-md)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <StatusDot kind="ok" size="lg" />
-            <span style={{ fontWeight: 600 }}>{walkResult.walks.length} walk(s) started · running in background</span>
+            <span style={{ fontWeight: 600 }}>{walkResult.walks.length} walk(s) started</span>
           </div>
           <div style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {walkResult.walks.map((w, i) => (
@@ -485,6 +519,16 @@ function StepWalk({ progress, walkResult, onStart, isStarting }) {
               </span>
             ))}
           </div>
+          {/* #146: be concrete about what "background" means. The
+              walks run inside subarr's process, NOT the wizard. The
+              user can finish onboarding and go straight to using the
+              app; progress shows up on Library + Coverage tabs as
+              walks complete. */}
+          <p style={{ margin: '12px 0 0 18px', fontSize: 'var(--text-xs)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+            Running in the background — you can hit <b>Finish</b> now and watch progress
+            land on the Library + Coverage pages as each walk completes. Big libraries
+            can take 10-30 minutes; nothing breaks if you close the tab.
+          </p>
         </div>
       )}
     </div>
@@ -643,7 +687,7 @@ export function OnboardingPage() {
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
-    if (step.id === 'walk')    return <StepWalk progress={state.progress} walkResult={walkResult} onStart={onStartWalk} isStarting={busy} />;
+    if (step.id === 'walk')    return <StepWalk progress={state.progress} setField={setField} walkResult={walkResult} onStart={onStartWalk} isStarting={busy} />;
     return null;
   };
 
