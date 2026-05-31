@@ -748,10 +748,21 @@ export function WelcomeCard() {
       icon: '▶',
       title: 'Run your first coverage walk',
       copy: 'subarr will check Bazarr, Sonarr and Radarr to find files missing subs.',
+      // Match the PageHeader Run-now pattern: credentials, ok check, and
+      // don't announce success unless the POST actually succeeded.
+      // Previously a 401/500 still showed "Coverage walk started", which
+      // is the worst kind of broken — the user thinks they're done.
       cta: { label: 'Run now', href: '#run-now', onClick: async (e) => {
         e.preventDefault();
-        await fetch('/api/schedule/coverage_walk/run-now', { method: 'POST' });
-        alert('Coverage walk started. Watch the Coverage page.');
+        try {
+          const r = await fetch('/api/schedule/coverage_walk/run-now', {
+            method: 'POST', credentials: 'same-origin',
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          alert('Coverage walk started. Watch the Coverage page.');
+        } catch (err) {
+          alert(`Run now failed: ${err.message || err}`);
+        }
       }},
     },
     pendingCount > 0 ? {
