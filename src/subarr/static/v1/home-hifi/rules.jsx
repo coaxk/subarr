@@ -544,6 +544,234 @@ function ModeDeploy({ rulesDiff, scheduleDiff, saving, onSave, onDiscard }) {
   );
 }
 
+// ─── Friendly header — 4 panels above the editor ─────────────────
+//
+// The rules editor is a cold wall of fields without context: most users
+// land here, scan the toggles, and bounce because nothing connects to
+// "what's happening on MY library RIGHT NOW." Mirror the dashboard's
+// 4-panel pattern: 1 welcome card (what this page IS, with quick
+// presets) + 1 status row (mode / schedule / last result / active
+// filters). Same visual language as Home so the user feels at home.
+
+const MODE_TINT = {
+  off:            { dot: 'muted',  fg: 'var(--fg-2)',     copy: 'doing nothing right now' },
+  dashboard:      { dot: 'info',   fg: 'var(--cyan-400)', copy: 'walking, but never queueing' },
+  manual_confirm: { dot: 'warn',   fg: 'var(--warn-500)', copy: 'walking, asking before queue' },
+  auto_queue:     { dot: 'ok',     fg: 'var(--violet-400)', copy: 'walking + queueing eligible files' },
+};
+
+function HeaderTile({ label, value, sub, tint, tip }) {
+  return (
+    <div title={tip} style={{
+      flex: 1, minWidth: 0,
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '12px 14px',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {tint && <StatusDot kind={tint} />}
+        <span className="label">{label}</span>
+      </div>
+      <div style={{
+        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        color: 'var(--fg-0)', letterSpacing: '-0.01em',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        minHeight: 16,
+      }}>{sub}</div>
+    </div>
+  );
+}
+
+function fmtNextRun(ts) {
+  if (!ts) return null;
+  const diff = ts - Date.now() / 1000;
+  if (diff <= 0) return 'now';
+  const m = Math.floor(diff / 60);
+  if (m < 60) return `in ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `in ${h} h`;
+  return `in ${Math.floor(h / 24)} d`;
+}
+
+function RulesStatusRow({ serverRules, serverSchedule, preview }) {
+  // Status tiles read SERVER-side state, not the in-flight draft, so
+  // the user sees what's actually live RIGHT NOW. Once they Save, this
+  // updates automatically from the refetch.
+  const mode = serverRules?.mode || 'off';
+  const tint = MODE_TINT[mode] || MODE_TINT.off;
+
+  const schedEnabled = !!serverSchedule?.enabled;
+  const schedKind = serverSchedule?.kind || 'unscheduled';
+  const nextRunRel = fmtNextRun(serverSchedule?.next_run_at);
+
+  const lastQueue = preview?.would_queue;
+  const lastSkip = preview?.would_skip;
+  const lastConsidered = preview?.considered;
+
+  // Active filter count = anything constraining the candidate set.
+  const r = serverRules || {};
+  const filterParts = [];
+  if (r.require_monitored) filterParts.push('monitored');
+  if (r.skip_stale_disk)   filterParts.push('stale-disk');
+  if (r.skip_embedded_en)  filterParts.push('embedded-en');
+  const allowL = (r.allow_languages || []).length;
+  const denyL  = (r.deny_languages  || []).length;
+  const allowT = (r.allow_tags || []).length;
+  const denyT  = (r.deny_tags  || []).length;
+  const totalChips = allowL + denyL + allowT + denyT;
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      <HeaderTile
+        label="mode"
+        value={mode.replace('_', ' ')}
+        sub={tint.copy}
+        tint={tint.dot}
+        tip="What the scheduled walk is allowed to do. Off = nothing. Dashboard = walk only. Manual confirm = walk + ask. Auto-queue = walk + queue."
+      />
+      <HeaderTile
+        label="schedule"
+        value={schedEnabled ? schedKind : 'paused'}
+        sub={schedEnabled
+          ? (nextRunRel ? `next run ${nextRunRel}` : 'next run pending')
+          : 'manual re-walk still works'}
+        tint={schedEnabled ? 'ok' : 'muted'}
+        tip="When the next coverage walk fires. Pause to halt automation without losing the rules — manual walks from the Coverage page still run."
+      />
+      <HeaderTile
+        label="last dry-run"
+        value={preview ? `${lastQueue} would queue` : '—'}
+        sub={preview
+          ? `${lastSkip} skipped · ${lastConsidered} candidates considered`
+          : 'switch to Test to project against current Bazarr state'}
+        tint={preview ? (lastQueue > 0 ? 'violet' : 'muted') : undefined}
+        tip="Result of the most recent dry-run preview. Switch to Test mode (below) to refresh."
+      />
+      <HeaderTile
+        label="active filters"
+        value={`${filterParts.length + totalChips}`}
+        sub={[
+          filterParts.length && `${filterParts.length} toggle${filterParts.length === 1 ? '' : 's'}`,
+          allowL + denyL > 0 && `${allowL + denyL} lang chip${allowL + denyL === 1 ? '' : 's'}`,
+          allowT + denyT > 0 && `${allowT + denyT} tag chip${allowT + denyT === 1 ? '' : 's'}`,
+        ].filter(Boolean).join(' · ') || 'no filters — everything qualifies'}
+        tint={(filterParts.length + totalChips) > 0 ? 'info' : 'muted'}
+        tip="Everything narrowing the candidate set: require-monitored, skip-stale-disk, skip-embedded-en, plus per-language and per-tag allow/deny lists."
+      />
+    </div>
+  );
+}
+
+// Presets — one-click rule bundles users can apply. The buttons mutate
+// the local rulesDraft so the user can still review + Test before Save.
+const PRESETS = [
+  {
+    id: 'conservative',
+    label: 'Conservative',
+    sub: 'Walk + ask before queue. Sonarr/Radarr monitored only.',
+    apply: (d) => ({
+      ...d, mode: 'manual_confirm',
+      require_monitored: true, skip_stale_disk: true, skip_embedded_en: true,
+      min_score: 250,
+    }),
+  },
+  {
+    id: 'aggressive',
+    label: 'Aggressive',
+    sub: 'Auto-queue everything eligible up to 200/run.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      require_monitored: true, skip_stale_disk: true, skip_embedded_en: true,
+      min_score: 100, max_per_run: 200,
+    }),
+  },
+  {
+    id: 'foreign-only',
+    label: 'Foreign-only',
+    sub: 'Deny English subs — only queue when missing non-English.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      deny_languages: Array.from(new Set([...(d.deny_languages || []), 'eng', 'en'])),
+      require_monitored: true,
+    }),
+  },
+];
+
+function RulesWelcomeCard({ rulesDraft, setRulesDraft, mode, setMode }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem('subarr.rules.welcome.dismissed') === '1'; }
+    catch { return false; }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try { localStorage.setItem('subarr.rules.welcome.dismissed', '1'); } catch {}
+    setDismissed(true);
+  };
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.10), rgba(34,211,161,0.05))',
+      border: '1px solid rgba(139,92,246,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 22, lineHeight: 1 }}>🤖</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            Your background subtitle bot.
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 4, lineHeight: 1.5 }}>
+            Auto-queue rules tell subarr what to do on every scheduled walk. Pick a starting preset
+            below — or hand-tune the fields under <b>Build</b>, dry-run in <b>Test</b>, and ship in <b>Deploy</b>.
+            Nothing changes on the server until you click Save.
+          </div>
+        </div>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card on this device."
+          style={{ fontSize: 'var(--text-2xs)' }}>got it</button>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 10,
+      }}>
+        {PRESETS.map((p) => (
+          <div key={p.id} style={{
+            background: 'var(--bg-1)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 12,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>
+              {p.label}
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', flex: 1 }}>
+              {p.sub}
+            </div>
+            <div>
+              <button className="btn" style={{
+                fontSize: 'var(--text-2xs)', padding: '4px 10px',
+                background: 'var(--violet-500)', color: '#fff',
+              }} onClick={() => {
+                if (!rulesDraft) return;
+                setRulesDraft(p.apply(rulesDraft));
+                setMode('build');  // bounce to Build so user sees what changed
+              }} disabled={!rulesDraft}>
+                Apply preset
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Page wrapper ────────────────────────────────────────────────
 export function RulesPage() {
   const { data, loading, error, refetch } = useSchedule();
@@ -655,6 +883,22 @@ export function RulesPage() {
           </button>
         </div>
       </div>
+
+      {/* #195/#211-follow-up: 4-panel friendly header. Status row gives
+          users at-a-glance "what's running right now" before they touch
+          anything. Welcome card explains the page + offers presets so
+          first-time users aren't dropped into a cold form. */}
+      <RulesStatusRow
+        serverRules={serverRules}
+        serverSchedule={serverSchedule}
+        preview={preview}
+      />
+      <RulesWelcomeCard
+        rulesDraft={rulesDraft}
+        setRulesDraft={setRulesDraft}
+        mode={mode}
+        setMode={setMode}
+      />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <ModeSegment mode={mode} setMode={setMode} />

@@ -453,7 +453,17 @@ function SelectionBar({ selectedPaths, onClear, onQueue, queueState }) {
       zIndex: 10,
     }}>
       <CheckBox checked />
-      <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>{n} selected</span>
+      {/* #211 follow-up: the count is the number of EXPLICIT picks the user
+          ticked. Each pick that's a directory expands recursively at scan
+          time (the runner walks every file under it). "1 pick" reads
+          honest when a single folder covers many files; "1 selected"
+          implied the user had ticked only one row visible. */}
+      <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>
+        {n} {n === 1 ? 'pick' : 'picks'}
+      </span>
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+        · folders include everything inside
+      </span>
       {queueState?.errors > 0 && (
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
           · {queueState.errors} failed
@@ -590,7 +600,9 @@ export function LibraryPage() {
         </div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
-          {selected.size > 0 ? `${selected.size} selected` : 'click a row to select'}
+          {selected.size > 0
+            ? `${selected.size} ${selected.size === 1 ? 'pick' : 'picks'}`
+            : 'click a row to select'}
         </span>
       </div>
 
