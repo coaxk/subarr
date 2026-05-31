@@ -134,9 +134,15 @@ def _bazarr_with_scan_task(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/api/badges":
         return httpx.Response(200, json={"episodes": 0, "movies": 0, "providers": 1})
     if req.url.path == "/api/system/tasks" and req.method == "GET":
+        # bazarr_sync._TASK_HINTS now matches canonical Bazarr 1.5.x job_ids
+        # (series_full_scan_subtitles / movies_full_scan_subtitles) first.
+        # Stub returns those so _find_task_id resolves.
+        # Stub uses job_id as `name` too — bazarr_sync._find_task_id
+        # checks `name OR job_id` per row, and hint strings use underscores
+        # to match the canonical 1.5.x job_ids.
         return httpx.Response(200, json={"data": [
-            {"name": "Update Series list from Sonarr", "job_id": "update_series"},
-            {"name": "Sync Episodes from Sonarr", "job_id": "sync_episodes"},
+            {"name": "series_full_scan_subtitles", "job_id": "series_full_scan_subtitles"},
+            {"name": "movies_full_scan_subtitles", "job_id": "movies_full_scan_subtitles"},
         ]})
     if req.url.path == "/api/system/tasks" and req.method == "POST":
         return httpx.Response(200, json={"data": "triggered"})
@@ -149,9 +155,8 @@ def test_bazarr_sync_disk_happy(app_with_stub):
     assert r.status_code == 200
     body = r.json()
     assert body["triggered"] is True
-    # First hint matched is 'sync_episodes' (longer match wins among hints
-    # in priority order), but either is valid.
-    assert body["task_id"] in {"sync_episodes", "update_series"}
+    # Hint order in bazarr_sync: series_full_scan_subtitles is first.
+    assert body["task_id"] in {"series_full_scan_subtitles", "movies_full_scan_subtitles"}
 
 
 def _bazarr_no_matching_task(req: httpx.Request) -> httpx.Response:
