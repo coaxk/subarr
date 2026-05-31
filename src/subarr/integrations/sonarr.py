@@ -44,6 +44,36 @@ class SonarrClient(IntegrationClient):
         we map episodeFileId → path locally."""
         return await self._get("/api/v3/episodefile", params={"seriesId": series_id})
 
+    async def languages(self) -> list[dict[str, Any]]:
+        """Sonarr's language reference table. v1.1.1 #219: needed to map
+        ISO codes (en, fr, ger) → Sonarr's numeric language IDs before we
+        PUT episode-file language updates."""
+        return await self._get("/api/v3/language")
+
+    async def update_episode_file_languages(
+        self,
+        episode_file_id: int,
+        languages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """v1.1.1 #219 audio-lang loop closer: PUT Sonarr's per-file
+        language record so Bazarr's next sync sees the correct audio
+        language. Bazarr then unblinds itself — episodes that were silently
+        excluded from /wanted because file metadata claimed English get
+        re-evaluated against the now-correct foreign-language audio.
+
+        Uses /episodefile/bulk because the single-resource PUT
+        /episodefile/{id} silently accepts the request but doesn't update
+        the language field (Sonarr v4.0 behaviour confirmed against live
+        instance 2026-05-31). The bulk endpoint accepts an array of
+        {id, languages} and persists the change properly.
+
+        `languages` is the Sonarr language list shape — each entry
+        {id: int, name: str}."""
+        return await self._put(
+            "/api/v3/episodefile/bulk",
+            json_body=[{"id": episode_file_id, "languages": languages}],
+        )
+
     async def recent_imports(self, hours: int = 24) -> set[int]:
         """v1.1-I: Episode IDs imported in the last <hours> hours.
         Walks /history?eventType=3 (downloadFolderImported) until we

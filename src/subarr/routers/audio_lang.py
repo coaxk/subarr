@@ -51,6 +51,22 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
         confidence=req.confidence,
         evidence=req.evidence,
     )
+
+    # v1.1.1 #219 closer: propagate the user's audio-language verification
+    # to Sonarr's per-file record so Bazarr's next sync sees the correct
+    # foreign language. Bazarr re-evaluates "audio matches subs" against
+    # the now-correct audio code and the episode appears in /wanted —
+    # subarr's bazarr_blind flag clears naturally on the next coverage walk.
+    # Opt-in via SONARR_PROPAGATE_AUDIO_LANG=1. Failures are non-fatal:
+    # the local verification still persists, the propagation outcome is
+    # surfaced in the response so the UI can show what happened.
+    propagation: dict[str, Any] = {"attempted": False}
+    if settings.sonarr_propagate_audio_lang and req.source == "user":
+        propagation = await _propagate_to_sonarr(
+            request, canonical_path=req.canonical_path,
+            lang_code=req.lang_code,
+        )
+
     # v1.1 ARCH fix #197: kick a background coverage refresh so the
     # corresponding row's chip turns green within a few seconds, not 30.
     import asyncio as _asyncio
@@ -66,7 +82,185 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
                 log.warning("post-verify refresh failed: %s", e)
         _asyncio.create_task(_refresh())
     return {"verified": True, "canonical_path": req.canonical_path,
-            "lang_code": req.lang_code.lower()}
+            "lang_code": req.lang_code.lower(),
+            "sonarr_propagation": propagation}
+
+
+async def _propagate_to_sonarr(
+    request: Request, *, canonical_path: str, lang_code: str,
+) -> dict[str, Any]:
+    """Push the user's audio-language verification back to Sonarr's
+    per-episodeFile language record. Closes the bazarr-blind loop.
+
+    Steps:
+      1. Resolve canonical_path → series via the (already-fetched)
+         Sonarr series list; find episodeFile matching the path.
+      2. Resolve lang_code (en, fre, ger…) → Sonarr language ID via
+         /api/v3/language reference table (cached per process).
+      3. PUT the episodeFile with updated `languages` field.
+    Returns {attempted: True, ok: bool, detail: ...}."""
+    from ..integrations import IntegrationError
+    bundle = request.app.state.integrations
+    sonarr = bundle.sonarr
+    if not sonarr.is_configured():
+        return {"attempted": True, "ok": False,
+                "detail": "Sonarr not configured"}
+
+    # Find the episodeFile id for this canonical_path. We do this by
+    # walking the in-process episode-file path map the coverage cache
+    # populates. Fall back to a direct Sonarr lookup if cache empty.
+    arr_path = settings.arr_path_prefix.rstrip("/") + "/" + canonical_path.strip("/")
+    ep_file_id: int | None = None
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        snap = cov_cache.get_cached()
+        if snap is not None:
+            for item in snap.items:
+                if item.get("file_canonical_path") == canonical_path \
+                   and (item.get("bazarr") or {}).get("episode_id"):
+                    # Sonarr episode id → episodeFile id requires a lookup.
+                    try:
+                        ep = await sonarr.episode(
+                            item["bazarr"]["episode_id"]
+                        )
+                        ep_file_id = ep.get("episodeFileId")
+                        break
+                    except IntegrationError as e:
+                        log.debug("propagation episode lookup failed: %s", e)
+    if not ep_file_id:
+        return {"attempted": True, "ok": False,
+                "detail": "couldn't resolve episodeFile id for path "
+                          f"{canonical_path!r}"}
+
+    # Resolve the language name. Sonarr's /language returns
+    # [{id: 1, name: "English"}, {id: 2, name: "French"}, ...].
+    try:
+        langs = await sonarr.languages()
+    except IntegrationError as e:
+        return {"attempted": True, "ok": False,
+                "detail": f"sonarr /language fetch failed: {e}"}
+    name = _iso_to_sonarr_name(lang_code)
+    target = next(
+        (l for l in langs if (l.get("name") or "").lower() == name.lower()),
+        None,
+    )
+    if target is None:
+        return {"attempted": True, "ok": False,
+                "detail": f"Sonarr has no language named {name!r}"}
+
+    try:
+        await sonarr.update_episode_file_languages(
+            episode_file_id=ep_file_id,
+            languages=[{"id": target["id"], "name": target["name"]}],
+        )
+    except IntegrationError as e:
+        return {"attempted": True, "ok": False,
+                "detail": f"sonarr PUT failed: {e}"}
+    log.info(
+        "sonarr propagation OK: episodeFile=%s language=%s (id=%s) "
+        "via user verification on %s",
+        ep_file_id, target["name"], target["id"], canonical_path,
+    )
+
+    # Kick Bazarr's "Sync with Sonarr" task so it picks up the new audio
+    # language NOW rather than waiting for its scheduled sync (often hours).
+    # Bazarr re-evaluates "audio matches subs" on next sync against the now-
+    # correct foreign-language audio → the episode appears in /wanted.
+    # Best-effort: failure is logged but doesn't roll back the Sonarr write,
+    # because Sonarr is the source of truth — Bazarr will eventually sync
+    # on its own schedule regardless.
+    bazarr_sync = await _trigger_bazarr_sync(bundle)
+    return {"attempted": True, "ok": True,
+            "episode_file_id": ep_file_id,
+            "language": target["name"],
+            "bazarr_sync": bazarr_sync}
+
+
+# Cache the discovered Bazarr task id so we don't list/match every verify.
+_bazarr_sync_task_id: str | None = None
+
+
+async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
+    """Trigger Bazarr's update_series task — the metadata sync that pulls
+    fresh series + episode info from Sonarr. Bounded (~few seconds even
+    on large libraries) and idempotent. Returns {ok, detail}."""
+    from ..integrations import IntegrationError
+    global _bazarr_sync_task_id
+    bazarr = bundle.bazarr
+    if not bazarr.is_configured():
+        return {"attempted": False, "detail": "Bazarr not configured"}
+
+    # Discover the sync task id once per process. Bazarr exposes a stable
+    # `update_series` task; we match by job_id substring for forward-compat.
+    if _bazarr_sync_task_id is None:
+        try:
+            tasks = await bazarr.list_tasks()
+        except IntegrationError as e:
+            return {"attempted": False, "detail": f"bazarr task list failed: {e}"}
+        for t in tasks:
+            jid = (t.get("job_id") or "").lower()
+            name = (t.get("name") or "").lower()
+            if "update_series" in jid or "sync with sonarr" in name:
+                _bazarr_sync_task_id = t.get("job_id") or t.get("id") or t.get("name")
+                break
+        if _bazarr_sync_task_id is None:
+            return {"attempted": False,
+                    "detail": "no update_series task discovered in Bazarr"}
+
+    try:
+        await bazarr.trigger_task(_bazarr_sync_task_id)
+    except IntegrationError as e:
+        return {"attempted": True, "ok": False,
+                "detail": f"bazarr trigger failed: {e}"}
+    log.info("bazarr sync triggered: task=%s", _bazarr_sync_task_id)
+    return {"attempted": True, "ok": True, "task": _bazarr_sync_task_id}
+
+
+def _iso_to_sonarr_name(code: str) -> str:
+    """Map ISO 639-1/2 codes the UI uses to Sonarr's language names.
+    Sonarr stores names like "English", "French", "German"."""
+    m = {
+        "en": "English", "eng": "English",
+        "fr": "French", "fre": "French", "fra": "French",
+        "de": "German", "ger": "German", "deu": "German",
+        "es": "Spanish", "spa": "Spanish",
+        "it": "Italian", "ita": "Italian",
+        "pt": "Portuguese", "por": "Portuguese",
+        "ru": "Russian", "rus": "Russian",
+        "ja": "Japanese", "jpn": "Japanese",
+        "ko": "Korean", "kor": "Korean",
+        "zh": "Chinese", "chi": "Chinese", "zho": "Chinese",
+        "nl": "Dutch", "dut": "Dutch", "nld": "Dutch",
+        "pl": "Polish", "pol": "Polish",
+        "sv": "Swedish", "swe": "Swedish",
+        "no": "Norwegian", "nor": "Norwegian",
+        "da": "Danish", "dan": "Danish",
+        "fi": "Finnish", "fin": "Finnish",
+        "tr": "Turkish", "tur": "Turkish",
+        "ar": "Arabic", "ara": "Arabic",
+        "he": "Hebrew", "heb": "Hebrew",
+        "hi": "Hindi", "hin": "Hindi",
+        # 2026-05-31 — Balkan + Baltic + remaining EU slavic langs.
+        "bg": "Bulgarian", "bul": "Bulgarian",
+        "ca": "Catalan", "cat": "Catalan",
+        "hr": "Croatian", "hrv": "Croatian", "scr": "Croatian",
+        "cs": "Czech", "cze": "Czech", "ces": "Czech",
+        "et": "Estonian", "est": "Estonian",
+        "el": "Greek", "gre": "Greek", "ell": "Greek",
+        "hu": "Hungarian", "hun": "Hungarian",
+        "id": "Indonesian", "ind": "Indonesian",
+        "lv": "Latvian", "lav": "Latvian",
+        "lt": "Lithuanian", "lit": "Lithuanian",
+        "ms": "Malay", "may": "Malay", "msa": "Malay",
+        "ro": "Romanian", "rum": "Romanian", "ron": "Romanian",
+        "sr": "Serbian", "srp": "Serbian", "scc": "Serbian",
+        "sk": "Slovak", "slo": "Slovak", "slk": "Slovak",
+        "sl": "Slovenian", "slv": "Slovenian",
+        "th": "Thai", "tha": "Thai",
+        "uk": "Ukrainian", "ukr": "Ukrainian",
+        "vi": "Vietnamese", "vie": "Vietnamese",
+    }
+    return m.get(code.strip().lower(), code)
 
 
 @router.delete("/verifications/{canonical_path:path}")

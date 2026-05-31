@@ -126,9 +126,11 @@ function railItems(section, counts) {
     case 'operations': return [
       { id: 'coverage', label: 'Coverage', count: counts.coverage, href: '/coverage' },
       { id: 'queue',    label: 'Queue',    count: counts.queue,    href: '/queue' },
-      // Review: audio-language verification queue. Deep-links to /coverage
-      // with hash#review so the Coverage page auto-opens BatchReviewModal.
-      { id: 'review',   label: 'Review',   count: counts.review,   href: '/coverage#review' },
+      // Review: dedicated audio-language verification queue page. User
+      // sees the full list + picks which file to verify, no forced cycle.
+      // (Previous /coverage#review hack auto-opened batch modal; replaced
+      // 2026-05-31 with the standalone /review page.)
+      { id: 'review',   label: 'Review',   count: counts.review,   href: '/review' },
       { id: 'activity', label: 'Activity', count: null,            href: '/file-modal' },
       { id: 'logs',     label: 'Logs',     count: null,            href: '/logs' },
       { id: 'rules',    label: 'Rules',    count: counts.rules,    href: '/rules' },

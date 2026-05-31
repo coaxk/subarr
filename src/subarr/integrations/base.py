@@ -65,3 +65,19 @@ class IntegrationClient:
             return r.json()
         except ValueError:
             return None
+
+    async def _put(self, path: str, params: dict | None = None, json_body: dict | None = None) -> Any:
+        """PUT — used by v1.1.1 audio-lang propagation to Sonarr's
+        episodeFile resource. Same error-translation contract as _post."""
+        if not self._configured:
+            raise IntegrationError(f"{self.name}: not configured")
+        try:
+            r = await self._client.put(path, params=params, json=json_body)
+        except httpx.HTTPError as e:
+            raise IntegrationError(f"{self.name} {path}: {e}") from e
+        if r.status_code >= 400:
+            raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            return r.json()
+        except ValueError:
+            return None

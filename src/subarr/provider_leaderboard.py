@@ -101,15 +101,33 @@ def aggregate(
         # "Good" and "History" both indicate healthy. Anything else = throttle/error.
         s.throttled = status.lower() not in ("good", "history", "")
 
-    # action=1 means downloaded; other actions (e.g. upgraded, blacklisted)
-    # we count via the blacklisted flag separately.
+    # Bazarr action codes (verified against bazarr 1.5.6, 2026-05-31):
+    #   1 = downloaded from a provider                 ← count toward provider
+    #   2 = manually uploaded                          ← count: includes subarr's
+    #         v1.1-G direct multipart uploads of Whisper output from the
+    #         completion watcher (which carry provider='whisperai'). Live
+    #         Judd install: 19 such rows. Also includes embedded-sub
+    #         extractions which legitimately credit the 'embeddedsubtitles'
+    #         provider for surfacing them.
+    #   3 = upgraded                                   ← skip (already counted on prior 1/5)
+    #   4 = synced                                     ← skip (no new sub)
+    #   5 = translated                                 ← count: Whisper / subgen output.
+    #         Bazarr records NO provider name on these rows, so we synthesise
+    #         "whisperai" to surface its throughput. Live Judd install:
+    #         261 such rows, the single biggest "provider" by volume.
+    # Other actions (e.g. upgraded, blacklisted) tracked via the blacklisted flag.
     for row in episode_history + movie_history:
         provider = (row.get("provider") or "").strip()
-        if not provider:
-            continue
-        s = by_name.setdefault(provider, ProviderStats(name=provider))
         action = row.get("action")
-        if action == 1:  # download event
+        if not provider:
+            if action == 5:
+                # Whisper translation: Bazarr attributes none, we attribute
+                # it to "whisperai" so users see throughput from subgen.
+                provider = "whisperai"
+            else:
+                continue
+        s = by_name.setdefault(provider, ProviderStats(name=provider))
+        if action in (1, 2, 5):  # download OR manual-upload OR Whisper-translation
             s.downloads += 1
             score = _parse_score(row.get("score"))
             if score is not None:

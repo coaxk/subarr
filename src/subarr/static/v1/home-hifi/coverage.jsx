@@ -113,6 +113,14 @@ export function useLiveCoverage(intervalMs = 10000) {
 // ─── Normalize backend item → row shape used by the table ────────
 function deriveReason(item) {
   if (!item.monitored) return 'unmonitored';
+  // v1.1.1 #219: synthetic Bazarr-blind rows. Wins over bazarr-wanted
+  // because the row exists *despite* Bazarr — that's the whole story.
+  // After user verification, the metadata is no longer "mislabeled" in
+  // our view — we know the truth. But Bazarr still doesn't (until its
+  // next sync). Render that state as "awaiting-sync" so the chip
+  // accurately tells the user "you fixed it; waiting on Bazarr now".
+  if (item.bazarr_blind && item.audio_verified) return 'awaiting-bazarr-sync';
+  if (item.bazarr_blind) return 'audio-mislabel';
   if (item.embedded_en === 'EN' || item.embedded_en === 'EN(SDH)') return 'embedded-only';
   if (item.bazarr && item.bazarr.episode_id) return 'bazarr-wanted';
   return 'no-track';
@@ -233,23 +241,42 @@ const REASON_STYLE = {
   'no-track':       { fg: 'var(--error-500)',  bg: 'rgba(239,68,68,0.08)',  br: 'rgba(239,68,68,0.30)', label: 'no-track' },
   'embedded-only':  { fg: 'var(--warn-500)',   bg: 'rgba(245,158,11,0.08)', br: 'rgba(245,158,11,0.30)', label: 'embedded' },
   'bazarr-wanted':  { fg: 'var(--violet-400)', bg: 'rgba(139,92,246,0.10)', br: 'rgba(139,92,246,0.35)', label: 'wanted' },
+  // v1.1.1 #219: rows Bazarr can't see — file metadata lies, Bazarr's
+  // "audio matches subs" heuristic excludes them silently. Distinct
+  // cyan tone so they stand out from regular wanted rows in the table.
+  'audio-mislabel': { fg: 'var(--cyan-400)',   bg: 'rgba(34,211,238,0.10)', br: 'rgba(34,211,238,0.35)', label: 'mislabeled' },
+  // v1.1.1 #219 closer: user verified, subarr propagated to Sonarr +
+  // triggered Bazarr sync. Waiting for Bazarr to catch up. Calm violet
+  // to signal "you've done your part; system is reconciling".
+  'awaiting-bazarr-sync': { fg: 'var(--violet-400)', bg: 'rgba(139,92,246,0.08)', br: 'rgba(139,92,246,0.30)', label: 'syncing' },
   'low-score':      { fg: 'var(--fg-1)',       bg: 'var(--bg-2)',           br: 'var(--bg-4)',           label: 'low-score' },
   'unmonitored':    { fg: 'var(--fg-2)',       bg: 'transparent',           br: 'var(--bg-4)',           label: 'unmon' },
 };
 
+const REASON_TIPS = {
+  'no-track':       'No subtitle track present and no audio metadata to even guess. Run probe or queue Whisper.',
+  'embedded-only':  'File has an embedded English subtitle stream but no SRT sidecar. Plex/Apple TV need the sidecar.',
+  'bazarr-wanted':  "Bazarr's wanted list put this in front of us — standard pipeline.",
+  // v1.1.1 #219: distinct surface — explains *why* this row exists at all.
+  'audio-mislabel': "Bazarr can't see this episode because the file's audio metadata claims English, but Sonarr says the series is in another language. Subarr surfaced it independently. Permanent fix: edit the series in Sonarr → Language Profile = the right language.",
+  // v1.1.1 #219 closer: post-verification "we're done; waiting on Bazarr".
+  'awaiting-bazarr-sync': "You verified the audio language. Subarr pushed the correction to Sonarr and triggered Bazarr's sync — this row will reappear under 'wanted' once Bazarr re-evaluates (typically a few seconds; longer if you have many series).",
+  'low-score':      'Coverage signal exists but the score is below the queue threshold.',
+  'unmonitored':    "Series is unmonitored in Sonarr — subarr won't queue these unless you force.",
+};
+
 function ReasonChip({ r }) {
-  // Reverted: don't show client-side 'queued' optimistic state. Submission
-  // success ≠ actually queued — subgen can skip silently. Real outcome
-  // visible in the Featured Queue (Operations → Queue).
   const v = REASON_STYLE[r] || REASON_STYLE['no-track'];
+  const tip = REASON_TIPS[r];
   return (
-    <span className="mono" style={{
+    <span className="mono" title={tip || undefined} style={{
       display: 'inline-block', padding: '1px 7px',
       borderRadius: 2,
       border: `1px solid ${v.br}`, color: v.fg, background: v.bg,
       fontSize: 'var(--text-2xs)', lineHeight: '15px',
       letterSpacing: '0.01em',
       whiteSpace: 'nowrap',
+      cursor: tip ? 'help' : 'default',
     }}>{v.label}</span>
   );
 }
@@ -371,7 +398,7 @@ function FilterChip({ children, active, onClose }) {
   );
 }
 
-const REASON_FILTERS = ['all', 'no-track', 'bazarr-wanted', 'embedded-only', 'low-score', 'unmonitored'];
+const REASON_FILTERS = ['all', 'no-track', 'bazarr-wanted', 'audio-mislabel', 'awaiting-bazarr-sync', 'embedded-only', 'low-score', 'unmonitored'];
 
 // Languages I care about — persisted in localStorage so it survives reloads.
 // Reads on every fetch in useLiveCoverage. Empty string = show everything
@@ -1079,16 +1106,52 @@ function ArbiterModal() {
 
 // v1.1-O Layer 4: per-row audio-lang verification modal. Triggered by
 // CustomEvent('open-audio-review') from AudioLabelChip clicks.
+// Alphabetical by English name. ISO 639-2 (3-letter) codes — they're
+// what Bazarr / Sonarr / Plex all settle on internally, even when the
+// UI shows ISO 639-1 (2-letter) codes elsewhere. Expanded 2026-05-31
+// to cover the Balkan + Baltic + remaining EU slavic languages
+// (missing Serbian / Bulgarian / Croatian was a hole flagged by Judd).
 const LANG_PICKS = [
-  ['eng','English'],['spa','Spanish'],['fre','French'],['ger','German'],
-  ['ita','Italian'],['por','Portuguese'],['dut','Dutch'],['pol','Polish'],
-  ['rus','Russian'],['jpn','Japanese'],['kor','Korean'],['chi','Chinese'],
-  ['ara','Arabic'],['hin','Hindi'],['tur','Turkish'],['swe','Swedish'],
-  ['nor','Norwegian'],['dan','Danish'],['fin','Finnish'],['gre','Greek'],
-  ['heb','Hebrew'],['ind','Indonesian'],['may','Malay'],['tha','Thai'],
-  ['vie','Vietnamese'],['cze','Czech'],['hun','Hungarian'],['rum','Romanian'],
+  ['ara','Arabic'],
+  ['bul','Bulgarian'],
+  ['cat','Catalan'],
+  ['chi','Chinese'],
+  ['hrv','Croatian'],
+  ['cze','Czech'],
+  ['dan','Danish'],
+  ['dut','Dutch'],
+  ['eng','English'],
+  ['est','Estonian'],
+  ['fin','Finnish'],
+  ['fre','French'],
+  ['ger','German'],
+  ['gre','Greek'],
+  ['heb','Hebrew'],
+  ['hin','Hindi'],
+  ['hun','Hungarian'],
+  ['ind','Indonesian'],
+  ['ita','Italian'],
+  ['jpn','Japanese'],
+  ['kor','Korean'],
+  ['lav','Latvian'],
+  ['lit','Lithuanian'],
+  ['may','Malay'],
+  ['nor','Norwegian'],
+  ['pol','Polish'],
+  ['por','Portuguese'],
+  ['rum','Romanian'],
+  ['rus','Russian'],
+  ['srp','Serbian'],
+  ['slo','Slovak'],
+  ['slv','Slovenian'],
+  ['spa','Spanish'],
+  ['swe','Swedish'],
+  ['tha','Thai'],
+  ['tur','Turkish'],
+  ['ukr','Ukrainian'],
+  ['vie','Vietnamese'],
 ];
-function AudioReviewModal() {
+export function AudioReviewModal() {
   const [row, setRow] = useState(null);
   const [selected, setSelected] = useState('eng');
   const [saving, setSaving] = useState(false);

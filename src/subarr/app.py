@@ -291,6 +291,7 @@ if _STATIC_DIR.is_dir():
             "/queue":      "queue.html",
             "/library":    "library.html",
             "/logs":       "logs.html",
+            "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
         }
 
         def _make_v1_route(html_file: str):

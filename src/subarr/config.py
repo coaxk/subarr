@@ -51,6 +51,11 @@ class Settings:
     # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
     # Plex's own scheduler runs at.
     plex_partial_scan_enabled: bool
+    # v1.1.1 #219 closer: PUT user-verified audio language back to Sonarr's
+    # episodeFile so Bazarr's next sync sees the correct foreign-language
+    # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
+    # off; set SONARR_PROPAGATE_AUDIO_LANG=1 to enable.
+    sonarr_propagate_audio_lang: bool
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -117,6 +122,9 @@ def load() -> Settings:
         plex_partial_scan_enabled=os.environ.get(
             "PLEX_PARTIAL_SCAN_ENABLED", "1"
         ).strip().lower() not in ("0", "false", "no", "off", ""),
+        sonarr_propagate_audio_lang=os.environ.get(
+            "SONARR_PROPAGATE_AUDIO_LANG", "0"
+        ).strip().lower() in ("1", "true", "yes", "on"),
         bazarr_url=os.environ.get("BAZARR_URL", "http://bazarr:6767"),
         bazarr_api_key=os.environ.get("BAZARR_API_KEY", ""),
         sonarr_url=os.environ.get("SONARR_URL", "http://sonarr:8989"),
