@@ -386,9 +386,39 @@ function StepGpu({ gpuInfo }) {
           </div>
           <p style={{ margin: '8px 0 0 18px', fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
             Subarr works fine without a GPU — but subgen transcription will use CPU,
-            which is dramatically slower. If you have an NVIDIA GPU, ensure the
-            container has it passed through (nvidia-container-toolkit).
+            which is dramatically slower (think 30-60 min/episode instead of 1-2 min).
           </p>
+          {/* #145: failure-mode guidance. Most "no GPU" reports in homelabs are
+              actually misconfigured passthrough, not missing hardware. Give the
+              user a checklist they can paste into their compose file. */}
+          <div style={{ marginLeft: 18, marginTop: 14, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>If you DO have an NVIDIA GPU, check:</div>
+            <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6, color: 'var(--fg-2)' }}>
+              <li>
+                Host has the NVIDIA driver installed — run <code className="mono">nvidia-smi</code> on
+                the host (not in a container) and confirm it returns a card.
+              </li>
+              <li>
+                <code className="mono">nvidia-container-toolkit</code> is installed and registered with
+                Docker (run <code className="mono">sudo nvidia-ctk runtime configure --runtime=docker</code>
+                {' '}then restart the Docker daemon).
+              </li>
+              <li>
+                Your subgen <code className="mono">compose.yaml</code> declares the GPU under
+                {' '}<code className="mono">deploy.resources.reservations.devices</code> with
+                {' '}<code className="mono">driver: nvidia</code>, <code className="mono">count: 1</code>, and
+                {' '}<code className="mono">capabilities: [gpu]</code>.
+              </li>
+              <li>
+                The subgen container is using a CUDA-enabled image (mccloud/subgen:latest ships with
+                CUDA pre-baked).
+              </li>
+            </ol>
+            <p style={{ margin: '10px 0 0', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+              You can continue without resolving this — subgen will fall back to CPU automatically.
+              Revisit GPU setup later via the Subgen panel in Settings.
+            </p>
+          </div>
         </div>
       )}
     </div>
