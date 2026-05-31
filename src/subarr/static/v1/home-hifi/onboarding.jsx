@@ -337,28 +337,27 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           </div>
         </div>
       )}
-      <FormRow label="Library root (container view)"
-        hint="What subarr sees. Match the right-hand side of your bind mount.">
+      {/* #134: per user, label as "container's view" + give explicit guidance
+          on where to find each value. The right-hand side of every bind-mount
+          line in the relevant docker-compose.yaml IS the answer. */}
+      <FormRow label="Subarr's container view of media"
+        hint="Look in your subarr compose.yaml under `volumes:` — the part AFTER the colon (e.g. /mnt/nas/Media:/media/library → use /media/library).">
         <TextInput
           value={progress.media_root || '/media/library'}
           onChange={(v) => setField('media_root', v)}
           placeholder="/media/library"
         />
       </FormRow>
-      {/* #133: split per-service. Most homelabs have Sonarr at /data/TV/
-          and Radarr at /data/Movies/ — one shared prefix forced users to
-          pick a useless common parent. arr_path_prefix stays in progress
-          as a fallback so older onboarding states still load. */}
-      <FormRow label="Sonarr path prefix"
-        hint="What Sonarr stores as `path` — subarr strips this when canonicalising.">
+      <FormRow label="Sonarr's container view of media"
+        hint="Look in your Sonarr compose.yaml under `volumes:` — the right side of the mount that holds your TV library (e.g. /mnt/nas/Media/TV:/data/TV → use /data/TV).">
         <TextInput
           value={progress.sonarr_path_prefix || progress.arr_path_prefix || '/data/TV/'}
           onChange={(v) => setField('sonarr_path_prefix', v)}
           placeholder="/data/TV/"
         />
       </FormRow>
-      <FormRow label="Radarr path prefix"
-        hint="What Radarr stores as `path` — subarr strips this when canonicalising.">
+      <FormRow label="Radarr's container view of media"
+        hint="Same idea, in your Radarr compose.yaml under `volumes:` — right side of the mount holding your movie library.">
         <TextInput
           value={progress.radarr_path_prefix || progress.arr_path_prefix || '/data/Movies/'}
           onChange={(v) => setField('radarr_path_prefix', v)}
