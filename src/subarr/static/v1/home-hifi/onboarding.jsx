@@ -187,7 +187,7 @@ function TestResult({ result }) {
 // ─── Step components ────────────────────────────────────────────
 
 
-function StepWelcome({ onAutoDetect, detectedCount }) {
+function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <h1 className="display" style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.01em' }}>
@@ -219,6 +219,28 @@ function StepWelcome({ onAutoDetect, detectedCount }) {
             <span style={{ color: 'var(--violet-400)', fontWeight: 600 }}> Detected {detectedCount} service(s) on this host.</span>
           )}
         </span>
+        {/* #129: previously the button click was completely silent when
+            discovery wasn't configured (no socket proxy mounted). Users
+            assumed it was broken and abandoned. Now we surface the actual
+            reason inline AND tell them how to enable it. */}
+        {autoDetectError && (
+          <div style={{
+            marginTop: 4, padding: '10px 12px',
+            background: 'rgba(239,158,76,0.08)',
+            border: '1px solid rgba(239,158,76,0.32)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 'var(--text-xs)', color: 'var(--fg-1)', lineHeight: 1.5,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Auto-detect unavailable</div>
+            <div style={{ color: 'var(--fg-2)' }}>{autoDetectError}</div>
+            <div style={{ marginTop: 6, color: 'var(--fg-3)' }}>
+              To enable: mount the docker socket (or a tecnativa/docker-socket-proxy)
+              into subarr at <code className="mono">/var/run/docker.sock</code> and
+              restart. See <code className="mono">deploy/templates/tier2-socket-proxy.compose.yaml</code>.
+              Otherwise, fill the URLs by hand on each step.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -566,6 +588,7 @@ export function OnboardingPage() {
   const [walkResult, setWalkResult] = useState(null);
   const [gpuInfo, setGpuInfo] = useState(null);
   const [autoDetected, setAutoDetected] = useState(0);
+  const [autoDetectError, setAutoDetectError] = useState(null);
   const [busy, setBusy] = useState(false);
 
   // Initial load — fetch state from backend; if already complete,
@@ -610,10 +633,14 @@ export function OnboardingPage() {
 
   const onAutoDetect = async () => {
     setBusy(true);
+    setAutoDetectError(null);
     const r = await Api.autoDetect();
     setBusy(false);
     if (!r.available) {
-      setTestResult({ ok: false, error: r.reason || 'auto-detect unavailable' });
+      // #129: surface the actual reason in the welcome step instead of
+      // failing silently. testResult only renders on integration steps,
+      // so for the welcome-step button we need a dedicated slot.
+      setAutoDetectError(r.reason || 'auto-detect unavailable (no docker socket / socket-proxy mounted)');
       return;
     }
     const services = r.services || {};
@@ -683,7 +710,7 @@ export function OnboardingPage() {
   if (step.id === 'paths' && !state.progress.media_root) canContinue = false;
 
   const renderStep = () => {
-    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} />;
+    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} autoDetectError={autoDetectError} />;
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
