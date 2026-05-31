@@ -89,7 +89,7 @@ function ProgressBar({ pct, width = 220 }) {
   );
 }
 
-function QueueRow({ item, kind }) {
+function QueueRow({ item, kind, canCancel, onCancel, busy }) {
   // Subgen's processing entries (via subarr-next proxy) look like:
   // { path, type, progress: { pct, cur_s, tot_s, elapsed, eta, speed_s_per_s } }
   // Queued entries are bare { path, type, position? } — no progress block.
@@ -132,6 +132,25 @@ function QueueRow({ item, kind }) {
             textTransform: 'uppercase',
             cursor: 'help',
           }}>{stage}</span>
+        {/* #58 v4.4: cancel button on queued rows only. Processing rows
+            can't be safely killed mid-flight (would orphan the worker). */}
+        {kind === 'queued' && canCancel && (
+          <button className="btn ghost sm"
+            onClick={() => onCancel && onCancel(path)}
+            disabled={busy}
+            title="Remove this task from the subgen queue before it starts"
+            aria-label={`Cancel queued task ${path}`}>
+            {busy ? '…' : '✕ cancel'}
+          </button>
+        )}
+        {kind === 'queued' && !canCancel && (
+          <span className="mono"
+            title="Queue-cancel requires subarr-subgen v4.4+. Update the subgen container to enable cancel."
+            style={{
+              fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+              cursor: 'help', opacity: 0.6,
+            }}>cancel: needs v4.4+</span>
+        )}
       </div>
 
       {/* Row 2 (processing only): progress bar + numbers */}
@@ -350,6 +369,10 @@ export function QueuePage() {
     return c === 'ok' || c === 'running';
   });
   const counts = data?.history_counts || {};
+  // #58 v4.4: subgen advertises capabilities.queue_cancel via /queue.
+  // When present, render the cancel button on queued rows; when absent
+  // show the "needs v4.4+" hint so the user knows to upgrade.
+  const canCancel = data?.capabilities?.queue_cancel === true;
 
   const requeue = useCallback(async (path) => {
     setBusyAction(path);
@@ -367,6 +390,32 @@ export function QueuePage() {
       await refetch({ silent: true });
     } catch (e) {
       alert(`Requeue failed: ${e.message}`);
+    } finally { setBusyAction(null); }
+  }, [refetch]);
+
+  // #58 v4.4: cancel a queued (not yet processing) subgen task by path.
+  // Backend returns 503 if subgen doesn't advertise queue_cancel — the
+  // UI gates the button so this is a defence-in-depth check only.
+  const cancelQueued = useCallback(async (path) => {
+    setBusyAction(`cancel:${path}`);
+    try {
+      const r = await fetch('/api/queue/cancel', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+      }
+      const body = await r.json().catch(() => ({}));
+      if (body && body.cancelled === false && body.reason) {
+        alert(`Cancel skipped: ${body.reason}`);
+      }
+      await refetch({ silent: true });
+    } catch (e) {
+      alert(`Cancel failed: ${e.message}`);
     } finally { setBusyAction(null); }
   }, [refetch]);
 
@@ -482,9 +531,15 @@ export function QueuePage() {
               Nothing waiting in line.
             </div>
           )}
-          {queued.map((item, i) => (
-            <QueueRow key={`q-${i}`} item={item} kind="queued" />
-          ))}
+          {queued.map((item, i) => {
+            const p = item.path || item.canonical_path || item.file || '';
+            return (
+              <QueueRow key={`q-${i}`} item={item} kind="queued"
+                canCancel={canCancel}
+                onCancel={cancelQueued}
+                busy={busyAction === `cancel:${p}`} />
+            );
+          })}
         </div>
       </div>
 
