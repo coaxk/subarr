@@ -348,8 +348,12 @@ function RailFooter() {
 }
 
 function RailItem({ item }) {
+  // #153: No `|| '#'` fallback. Every NAV_ITEMS / RAIL_ITEMS entry above
+  // declares a concrete href; defaulting to "#" would silently hide a
+  // bug instead of surfacing it as a broken link the next time someone
+  // adds an item without one.
   return (
-    <a href={item.href || '#'} style={{
+    <a href={item.href} style={{
       position: 'relative',
       display: 'flex', alignItems: 'center', gap: 8,
       padding: '6px 16px 6px 14px',
