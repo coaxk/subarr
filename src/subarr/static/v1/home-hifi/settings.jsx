@@ -255,14 +255,20 @@ function SettingsHeaderTile({ label, value, sub, tint, tip, href, accent }) {
       }}>{sub}</div>
     </div>
   );
-  return href ? <a href={href} style={{ flex: 1, minWidth: 0 }}>{inner}</a> : inner;
+  return href
+    ? <a href={href} style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}>{inner}</a>
+    : inner;
 }
 
 function SettingsStatusRow({ rail, onView }) {
   // rail is the buildRailItems(health) output — every configured
-  // integration with its current ok/warn/error meta.
-  const healthy = rail.filter(r => r.meta?.kind === 'ok').length;
-  const degraded = rail.filter(r => r.meta?.kind && r.meta.kind !== 'ok').length;
+  // integration with its status string (set at line 208: 'ok' / 'error' /
+  // 'muted'). Originally I read r.meta.kind which doesn't exist on the
+  // rail items — meta is a version-or-status STRING per buildRailItems,
+  // not an object — so this filter always returned 0 and the tile read
+  // "0/6 all healthy" on a perfectly healthy install. Fixed.
+  const healthy = rail.filter(r => r.status === 'ok').length;
+  const degraded = rail.filter(r => r.status === 'error').length;
   const total = rail.length;
 
   // Telemetry + updates + provider state are cheap one-shot fetches —

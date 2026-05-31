@@ -777,10 +777,24 @@ function CoverageStatusRow({ data, rows, pendingReview }) {
 }
 
 const COVERAGE_WELCOME_KEY = 'subarr.coverage.welcome.dismissed';
+const COVERAGE_WELCOME_COLLAPSED_KEY = 'subarr.coverage.welcome.collapsed';
 
 function CoverageWelcomeCard({ rows, pendingReview }) {
+  // User feedback (2026-05-31): the original always-expanded card squashed
+  // the gap-list table on Coverage. Two-tier dismiss now:
+  //   - "got it" → dismissed entirely, no header bar (localStorage forever).
+  //   - chevron → collapsed to a single 32px row showing the one-line
+  //     intro + an "expand" affordance. Status tiles above always render;
+  //     the welcome card is only visible on demand.
+  // First-time visitors land on expanded so they get the orientation
+  // message; the moment they expand/collapse via the chevron OR click any
+  // quick-action, we flip collapsed=1 so the page stops eating space.
   const [dismissed, setDismissed] = useState(() => {
     try { return localStorage.getItem(COVERAGE_WELCOME_KEY) === '1'; }
+    catch { return false; }
+  });
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(COVERAGE_WELCOME_COLLAPSED_KEY) === '1'; }
     catch { return false; }
   });
   if (dismissed) return null;
@@ -788,6 +802,36 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
     try { localStorage.setItem(COVERAGE_WELCOME_KEY, '1'); } catch {}
     setDismissed(true);
   };
+  const persistCollapsed = (v) => {
+    try { localStorage.setItem(COVERAGE_WELCOME_COLLAPSED_KEY, v ? '1' : '0'); } catch {}
+    setCollapsed(v);
+  };
+
+  if (collapsed) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '8px 14px',
+        background: 'rgba(139,92,246,0.06)',
+        border: '1px solid rgba(139,92,246,0.20)',
+        borderRadius: 'var(--radius-md)',
+        fontSize: 'var(--text-sm)', color: 'var(--fg-1)',
+      }}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>🗂️</span>
+        <span style={{ flex: 1 }}>
+          Coverage is the live gap list — score 0-1000, higher = more likely you want the sub.
+        </span>
+        <button className="btn ghost" onClick={() => persistCollapsed(false)}
+          title="Expand the explainer + quick actions"
+          style={{ fontSize: 'var(--text-2xs)' }}>
+          ▾ expand
+        </button>
+        <button className="btn ghost" onClick={dismiss}
+          title="Hide this card entirely on this device"
+          style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
+      </div>
+    );
+  }
   // The 3 quick-action cards pivot off what's actually in the data.
   const worth = rows.filter(r => (r.score ?? 0) >= 200).length;
   const steps = [
@@ -844,9 +888,12 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
             and let subarr do it.
           </div>
         </div>
+        <button className="btn ghost" onClick={() => persistCollapsed(true)}
+          title="Collapse to a single hint bar — quick actions still accessible."
+          style={{ fontSize: 'var(--text-2xs)' }}>▴ collapse</button>
         <button className="btn ghost" onClick={dismiss}
-          title="Hide this card on this device."
-          style={{ fontSize: 'var(--text-2xs)' }}>got it</button>
+          title="Hide this card entirely on this device."
+          style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
       </div>
       <div style={{
         display: 'grid',
@@ -869,7 +916,12 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
               {s.copy}
             </div>
             <div>
-              <a href={s.cta.href || '#'} onClick={s.cta.onClick}
+              <a href={s.cta.href || '#'} onClick={(e) => {
+                // Auto-collapse so the page returns to the data-first
+                // layout after the user takes their first action.
+                persistCollapsed(true);
+                if (s.cta.onClick) s.cta.onClick(e);
+              }}
                 className="btn" style={{
                   textDecoration: 'none', display: 'inline-block',
                   fontSize: 'var(--text-2xs)', padding: '4px 10px',
