@@ -180,6 +180,40 @@ class RequeueRequest(BaseModel):
     reverse: bool = False
 
 
+# #58: subgen-side cancel. Proxies to subarr-subgen v4.4 POST /queue/cancel.
+class CancelRequest(BaseModel):
+    path: str
+
+
+@router.post("/queue/cancel")
+async def cancel_queued(req: CancelRequest, request: Request) -> dict:
+    """Cancel a queued (NOT processing) task in subgen. Routes through
+    the v4.4 capability — if the live subgen doesn't advertise
+    queue_cancel, return 503 so the UI can show 'upgrade subgen to v4.4'.
+
+    Response body mirrors what subgen returns:
+      { cancelled: bool, reason?: str, path: str }
+    """
+    canonical = (req.path or "").strip().strip("/")
+    if not canonical:
+        raise HTTPException(400, detail="path required")
+    caps = getattr(request.app.state, "subgen_caps", None)
+    if caps is None or not getattr(caps, "queue_cancel", False):
+        raise HTTPException(
+            503,
+            detail=(
+                "queue_cancel capability missing — upgrade subarr-subgen to v4.4+. "
+                "Current subgen rev: " + (getattr(caps, "subarr_subgen_patch_rev", None) or "vanilla")
+            ),
+        )
+    subgen = request.app.state.subgen
+    try:
+        result = await subgen.queue_cancel(canonical)
+    except SubgenUnavailable as e:
+        raise HTTPException(502, detail=f"subgen unavailable: {e}")
+    return result
+
+
 @router.post("/queue/requeue", status_code=202)
 async def requeue(req: RequeueRequest, request: Request) -> dict:
     """Resubmit a single path to subgen via the scan runner. Creates a

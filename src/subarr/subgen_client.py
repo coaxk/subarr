@@ -62,6 +62,10 @@ class SubgenCapabilities:
     # Detected via the /queue response's capabilities.audio_language_override
     # flag (only the v4.3+ patch ships it). Vanilla and v4.2 → False.
     audio_language_override: bool = False
+    # v4.4 capability: POST /queue/cancel?path=… accepts queue-cancel
+    # requests. subarr's Monitor cancel buttons gate on this; without
+    # it the buttons render disabled with an explainer.
+    queue_cancel: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -76,6 +80,7 @@ class SubgenCapabilities:
             "is_subarr_subgen": self.is_subarr_subgen,
             "compat_mode": not self.is_subarr_subgen,
             "audio_language_override": self.audio_language_override,
+            "queue_cancel": self.queue_cancel,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -84,7 +89,7 @@ class SubgenCapabilities:
         return cls(
             reachable=False, version=None,
             has_queue=False, has_batch=False, is_subarr_subgen=False,
-            audio_language_override=False, subarr_subgen_patch_rev=None,
+            audio_language_override=False, queue_cancel=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -107,6 +112,21 @@ class SubgenClient:
             return r.json()
         except ValueError as e:
             raise SubgenUnavailable(f"subgen /queue returned non-json: {e}") from e
+
+    async def queue_cancel(self, path: str) -> dict[str, Any]:
+        """v4.4+: cancel a queued task by canonical path. Returns the
+        full response body so callers can render the structured reason
+        when cancellation isn't possible (already processing, not in
+        queue). Callers should gate on capabilities.queue_cancel before
+        calling — vanilla/older subgen will 404 with no useful payload."""
+        try:
+            r = await self._client.post("/queue/cancel", params={"path": path})
+        except httpx.HTTPError as e:
+            raise SubgenUnavailable(f"subgen /queue/cancel failed: {e}") from e
+        try:
+            return r.json()
+        except ValueError:
+            return {"cancelled": False, "_raw": r.text[:200], "status_code": r.status_code}
 
     async def status(self) -> dict[str, Any]:
         try:
@@ -160,6 +180,7 @@ class SubgenClient:
         # 2. /queue — also surfaces v4.3+ patch_rev + capabilities block.
         has_queue = False
         audio_language_override = False
+        queue_cancel = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -179,6 +200,7 @@ class SubgenClient:
                             audio_language_override = bool(
                                 caps_block.get("audio_language_override")
                             )
+                            queue_cancel = bool(caps_block.get("queue_cancel"))
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -196,6 +218,7 @@ class SubgenClient:
             has_batch=has_batch,
             is_subarr_subgen=is_subarr_subgen,
             audio_language_override=audio_language_override,
+            queue_cancel=queue_cancel,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(
