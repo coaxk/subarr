@@ -142,6 +142,13 @@ async def _test_bazarr(body: TestRequest) -> dict[str, Any]:
 
 
 async def _test_sonarr(body: TestRequest) -> dict[str, Any]:
+    # #138: dropped the GET /api/v3/series count from the connection test.
+    # On a 1700-show library that endpoint returns multiple MB of JSON and
+    # can exceed the 15s timeout, making the onboarding step fail for
+    # *exactly* the users who need it most. system/status alone proves
+    # reachability + API-key validity (it's gated by auth), which is the
+    # only thing the wizard actually needs to gate "Continue" on.
+    # The series count surfaces later via the Coverage page anyway.
     import httpx
     headers = {"X-Api-Key": body.api_key or ""}
     async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
@@ -149,17 +156,17 @@ async def _test_sonarr(body: TestRequest) -> dict[str, Any]:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
-        r = await c.get("/api/v3/series")
-        r.raise_for_status()
-        series = r.json() or []
+    version = status.get("version")
     return {
-        "ok": True, "version": status.get("version"),
-        "detail": f"{len(series)} series tracked",
+        "ok": True, "version": version,
+        "detail": f"Sonarr {version or 'connected'}",
         "error": None,
     }
 
 
 async def _test_radarr(body: TestRequest) -> dict[str, Any]:
+    # #138: same as _test_sonarr — dropped GET /api/v3/movie. Equivalent
+    # large-library timeout for Radarr installs with 10k+ movies.
     import httpx
     headers = {"X-Api-Key": body.api_key or ""}
     async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
@@ -167,12 +174,10 @@ async def _test_radarr(body: TestRequest) -> dict[str, Any]:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
-        r = await c.get("/api/v3/movie")
-        r.raise_for_status()
-        movies = r.json() or []
+    version = status.get("version")
     return {
-        "ok": True, "version": status.get("version"),
-        "detail": f"{len(movies)} movies tracked",
+        "ok": True, "version": version,
+        "detail": f"Radarr {version or 'connected'}",
         "error": None,
     }
 
