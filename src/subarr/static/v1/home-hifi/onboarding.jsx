@@ -52,6 +52,10 @@ const Api = {
     const r = await fetch('/api/onboarding/auto-detect', { method: 'POST' });
     return r.ok ? r.json() : { available: false };
   },
+  async detectMounts() {
+    const r = await fetch('/api/onboarding/detect-mounts', { credentials: 'same-origin' });
+    return r.ok ? r.json() : { available: false, candidates: [] };
+  },
   async probePaths(mediaRoot) {
     const r = await fetch('/api/onboarding/probe-paths', {
       method: 'POST',
@@ -248,6 +252,15 @@ function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
 
 
 function StepPaths({ progress, setField, probeResult, onProbe }) {
+  // #130: auto-detect bind-mounted media candidates from /proc/self/mountinfo.
+  // One round-trip on mount; results render as one-click chips below the
+  // library-root input. Non-Linux / non-bound hosts get available:false and
+  // the section quietly hides.
+  const [mountDetect, setMountDetect] = useState(null);
+  React.useEffect(() => {
+    Api.detectMounts().then(setMountDetect).catch(() => setMountDetect({ available: false }));
+  }, []);
+
   // #136 fix: seed the displayed defaults into the underlying state once
   // so the Continue button isn't gated on a field that LOOKS filled in but
   // is actually empty. User sees /media/library, expects Continue to work.
@@ -284,6 +297,46 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           </span>
         </p>
       </div>
+      {/* #130: detected mount candidates surface as one-click chips so
+          the user doesn't have to type the path. Only renders when at
+          least one plausible candidate was found. */}
+      {mountDetect?.available && mountDetect.candidates?.length > 0 && (
+        <div style={{
+          padding: '10px 12px',
+          background: 'rgba(34,211,161,0.05)',
+          border: '1px solid rgba(34,211,161,0.20)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--fg-2)',
+          lineHeight: 1.45,
+        }}>
+          <div style={{ marginBottom: 6 }}>
+            <b style={{ color: 'var(--fg-1)' }}>Detected bind-mounts</b> from your container —
+            click to use as the library root:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {mountDetect.candidates.slice(0, 6).map((c) => (
+              <button key={c.path}
+                onClick={() => setField('media_root', c.path)}
+                title={`${c.fs_type || 'mount'}${c.source ? ' from ' + c.source : ''}${c.item_count != null ? ' · ' + c.item_count + ' top-level items' : ''}${c.top_entries?.length ? '\nFirst entries: ' + c.top_entries.join(', ') : ''}`}
+                style={{
+                  fontSize: 'var(--text-xs)', padding: '4px 10px',
+                  background: progress.media_root === c.path ? 'var(--violet-500)' : 'var(--bg-2)',
+                  color: progress.media_root === c.path ? '#fff' : 'var(--fg-1)',
+                  border: '1px solid var(--bg-4)',
+                  borderRadius: 'var(--radius-pill)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                {c.path}
+                {c.item_count != null && c.item_count > 0 && (
+                  <span style={{ marginLeft: 6, opacity: 0.6 }}>· {c.item_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <FormRow label="Library root (container view)"
         hint="What subarr sees. Match the right-hand side of your bind mount.">
         <TextInput
