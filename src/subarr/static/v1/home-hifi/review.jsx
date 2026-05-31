@@ -200,6 +200,19 @@ export function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [isRefetching, setIsRefetching] = useState(false);
   const [error, setError] = useState(null);
+  // User feedback (2026-05-31): "Refresh" button looked broken because the
+  // pending-review fetch returns in <100ms — the spinner flashed below the
+  // human perception floor. Track the last refresh time so we can render
+  // an "updated Xs ago" stamp that visibly resets on every click. Combined
+  // with a minimum-display-time on the inline spinner (in fetchPending),
+  // the user can SEE that something happened.
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
+  // Tick at 5s intervals so the "updated Xs ago" label stays current.
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, []);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   // Selection: file_canonical_path (or canonical_path) for each ticked episode.
@@ -216,6 +229,7 @@ export function ReviewPage() {
     // user-initiated Refresh click) sets `isRefetching` so the existing
     // list stays visible with a small spinner — no blank-and-redraw.
     setIsRefetching(true);
+    const startedAt = Date.now();
     try {
       const r = await fetch('/api/audio-lang/pending-review', {
         credentials: 'same-origin',
@@ -223,11 +237,18 @@ export function ReviewPage() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData(await r.json());
       setError(null);
+      setLastRefreshedAt(Date.now());
     } catch (e) {
       // On refetch error, KEEP the stale data visible. The error banner
       // surfaces below the list. Only blank on first-paint failure.
       setError(e);
     } finally {
+      // Minimum 350ms display so a sub-100ms fetch is still perceptible.
+      // Below ~300ms the human eye registers the spinner as a flicker,
+      // not a state change — they think the button didn't fire.
+      const elapsed = Date.now() - startedAt;
+      const padding = Math.max(0, 350 - elapsed);
+      if (padding > 0) await new Promise(resolve => setTimeout(resolve, padding));
       setIsRefetching(false);
       setLoading(false);
     }
@@ -407,6 +428,23 @@ export function ReviewPage() {
               Refreshing…
             </span>
           )}
+          {/* "updated Xs ago" stamp — clicks Refresh button reset it to 0.
+              Without this, the sub-100ms /api/audio-lang/pending-review
+              response made the spinner invisible and the user thought the
+              button was broken. */}
+          {lastRefreshedAt > 0 && !isRefetching && (() => {
+            const secs = Math.floor((nowTick - lastRefreshedAt) / 1000);
+            const label = secs < 5 ? 'just now'
+              : secs < 60 ? `${secs}s ago`
+              : secs < 3600 ? `${Math.floor(secs / 60)}m ago`
+              : `${Math.floor(secs / 3600)}h ago`;
+            return (
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}
+                title={`Last refreshed ${new Date(lastRefreshedAt).toLocaleTimeString()}`}>
+                updated {label}
+              </span>
+            );
+          })()}
           <button className="btn" onClick={() => fetchPending()} disabled={isRefetching}>
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
