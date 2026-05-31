@@ -828,6 +828,7 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
         </button>
         <button className="btn ghost" onClick={dismiss}
           title="Hide this card entirely on this device"
+          aria-label="Dismiss welcome card"
           style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
       </div>
     );
@@ -893,6 +894,7 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
           style={{ fontSize: 'var(--text-2xs)' }}>▴ collapse</button>
         <button className="btn ghost" onClick={dismiss}
           title="Hide this card entirely on this device."
+          aria-label="Dismiss welcome card"
           style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
       </div>
       <div style={{

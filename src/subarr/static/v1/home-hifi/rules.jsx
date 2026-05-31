@@ -277,7 +277,11 @@ function ToggleRow({ label, hint, on, onToggle }) {
         <div style={{ fontSize: 'var(--text-md)', color: 'var(--fg-0)' }}>{label}</div>
         {hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 2 }}>{hint}</div>}
       </div>
-      <button onClick={onToggle} style={{
+      <button onClick={onToggle}
+        role="switch"
+        aria-checked={!!on}
+        aria-label={`Toggle ${label}`}
+        style={{
         width: 36, height: 20, borderRadius: 99,
         background: on ? 'var(--violet-500)' : 'var(--bg-4)',
         position: 'relative', border: 'none', cursor: 'pointer', padding: 0,

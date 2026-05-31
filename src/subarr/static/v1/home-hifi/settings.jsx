@@ -152,11 +152,14 @@ function EditViaWizardButton({ field }) {
   );
 }
 
-function Toggle({ on, onToggle, busy }) {
+function Toggle({ on, onToggle, busy, label }) {
   return (
     <button
       onClick={onToggle}
       disabled={busy}
+      role="switch"
+      aria-checked={!!on}
+      aria-label={label || (on ? 'Disable' : 'Enable')}
       style={{
         display: 'inline-block', width: 36, height: 20,
         borderRadius: 99,
