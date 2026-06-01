@@ -97,6 +97,23 @@ def test_existing_direct_construction_still_works():
     assert r._subgen is sg
 
 
+def test_subgen_watchdog_resolves_subgen_via_provider():
+    """The watchdog must probe the CURRENT subgen client. If it captured
+    the boot client, _rebuild_runtime_clients closing the old client would
+    pin caps to 'unreachable' forever."""
+    from subarr.subgen_watchdog import SubgenWatchdog
+    s1, s2 = object(), object()
+    cur = {"s": s1}
+    w = SubgenWatchdog(
+        subgen_provider=lambda: cur["s"],
+        get_caps=lambda: None,
+        set_caps=lambda c: None,
+    )
+    assert w._subgen is s1
+    cur["s"] = s2
+    assert w._subgen is s2
+
+
 def test_apply_progress_mutates_frozen_settings():
     from subarr.routers.onboarding import _apply_progress_to_settings
     from subarr.config import settings

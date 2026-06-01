@@ -236,7 +236,9 @@ async def lifespan(app_: FastAPI):
         app_.state.subgen_caps = c
 
     app_.state.subgen_watchdog = SubgenWatchdog(
-        subgen=app_.state.subgen,
+        # Resolve subgen live so onboarding reload doesn't leave the
+        # watchdog probing the closed boot client.
+        subgen_provider=lambda: app_.state.subgen,
         get_caps=_get_caps,
         set_caps=_set_caps,
         on_restart=_on_subgen_restart,
