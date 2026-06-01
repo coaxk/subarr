@@ -56,6 +56,16 @@ The wizard tries to auto-detect Sonarr/Radarr/Bazarr/Tautulli/subgen on your exi
 
 **Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned `.srt` files whose basename drifted from the video. Read-only blocks this. If you don't want it, set `SUBARR_SIDECAR_RENAME=0` and mount `:ro`, the rest of the product works.
 
+## Two ways to use subarr
+
+Pick whichever fits how you work. You can do both.
+
+**Simple, "I just want a real frontend for subgen".** Install subarr, open the Library tab, tick a file or a folder or a whole series, hit "Queue for transcription". Watch it run. Re-queue, cancel, see what failed and why. Same way you'd use Sonarr's queue for downloads. No coverage walks, no rules, no scheduler. Just a working UI on top of subgen.
+
+**Advanced, "tell me what I should fix first".** Open the Coverage tab. Subarr has already walked your library and sorted gaps by score with reason chips per row (no track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). Apply auto-queue rules, run scheduled walks, integrate Tautulli playback signal into priority. Set it up once, walk away. Subarr decides what's worth running.
+
+Most installs start simple and grow into advanced as the coverage walk surfaces things worth doing. Nothing forces the move; both are valid forever.
+
 ## I already have subgen. What do I do?
 
 The most-asked question. Quick answer.
@@ -125,6 +135,16 @@ Subarr's audio-language pipeline:
 ```
 
 Once a verification exists, every downstream submission carries it through an evidence gate. Confidence below 0.5, or missing source field, refuses to forward the override. Whisper transcribes from the audio, the way it was meant to.
+
+## Common questions
+
+**Is this just for anime?** No. The audio-language detection problem hits anything where the first 30 seconds of a file aren't representative: foreign-language openings on dubbed releases, silent cold opens, music-only intros, opening narrations in a different language than the dialog. Anime gets cited a lot because the OP pattern is universal across the genre, but the technical problem is general across multi-language libraries. Coverage, scheduling, provenance, and the queue UI are all language-and-genre-agnostic.
+
+**Do I need ollama?** No. It enables two optional extras (structured enrichment and the vision pre-filter). Everything else works without it.
+
+**Do I need Tautulli?** No, but you get NOW PLAYING boost, just-imported boost, and per-user language profiles if you have it. Without Tautulli the scheduler still works, it just has one fewer priority signal.
+
+**Will this work with Jellyfin / Emby?** Not in v1.0. v1.1 candidate if there's demand. Open a feature request.
 
 ## Known limitations (v1.0)
 
