@@ -216,10 +216,14 @@ Subarr is a coordinator, not a transcriber. It owns no GPU code. Subgen does tha
 
 Subarr does not require ollama. If you do run it, subarr uses it for two things:
 
-- **Structured enrichment.** When Bazarr's wanted entries are vague, subarr asks ollama (any local model that supports the structured JSON output format) to classify the entry by language, genre hints, expected dialog density. Improves prioritisation accuracy.
-- **Vision pre-filter (qwen2.5vl).** Tautulli serves thumbnails; qwen2.5vl classifies the content frame by frame as dialog-heavy, music-heavy, visual-only, or mixed. Subarr suppresses transcribe submissions for content where Whisper would just hallucinate. Cuts wasted GPU minutes significantly on libraries with concerts, performances, or visual-only material.
+- **Structured enrichment.** When Bazarr's wanted entries are vague, subarr asks ollama (any local model that supports the structured JSON output format) to classify the entry by language, genre hints, expected dialog density. Improves prioritisation accuracy. Works with any text model you have installed.
+- **Vision pre-filter.** Tautulli serves thumbnails; a vision-capable model classifies the content frame by frame as dialog-heavy, music-heavy, visual-only, or mixed. Subarr suppresses transcribe submissions for content where Whisper would just hallucinate. Cuts wasted GPU minutes significantly on libraries with concerts, performances, or visual-only material.
 
-If you do not have ollama running, subarr falls back to less precise heuristics for both. Nothing breaks.
+**The two models are separate.** The text model and the vision model are different env knobs: `OLLAMA_MODEL` and `OLLAMA_VISION_MODEL`. Subarr defaults the vision model to `qwen2.5vl:7b` because that is the current best-fit for the thumb-classification job, but auto-detects any of the following families when you have one installed: `qwen2.5vl`, `qwen2-vl`, `llama3.2-vision`, `llava`, `bakllava`, `minicpm-v`, `moondream`. Set `OLLAMA_VISION_MODEL=auto` and subarr picks the first vision-capable model from your `/api/tags` list.
+
+**What happens if you do not have a vision-capable model installed.** Subarr's startup probe and the Settings page Integrations card surface this honestly: "Vision pre-filter inactive — no vision-capable model installed. Pull qwen2.5vl:7b (around 5 GB)." One click in the wizard or in Settings runs `POST /api/pull` with streamed progress and turns the pre-filter on the moment the pull finishes. Nothing else breaks: enrichment with your text model keeps working, every other ollama feature stays on, the pre-filter is just disabled. We never silently call a text model with image data attached — that path was a real launch-day wrinkle in earlier builds, now closed and regression-tested.
+
+If you do not have ollama running at all, subarr falls back to less precise heuristics for both enrichment and the pre-filter. Nothing breaks.
 
 ---
 

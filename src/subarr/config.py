@@ -95,6 +95,15 @@ class Settings:
     # for rows where Sonarr returned null/und).
     ollama_url: str
     ollama_model: str
+    # #232: Separate vision-capable model for v1.1-K (Tautulli thumb
+    # classification — hardcoded subs / dialog density). Text-only
+    # models like qwen2.5:7b cannot process images; calling them with
+    # `images=[...]` returns garbage. Subarr now detects whether the
+    # configured vision model is installed and gracefully disables the
+    # vision pre-filter when it is not — every other ollama feature
+    # keeps working with the text model. Set to "auto" to let subarr
+    # pick the first vision-capable model from /api/tags.
+    ollama_vision_model: str
 
     # Docker discovery (Tier-2 read-only introspection) — optional. When
     # set, the onboarding wizard pre-fills integration URLs by reading
@@ -184,6 +193,9 @@ def load() -> Settings:
         ),
         ollama_url=_env_or("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=_env_or("OLLAMA_MODEL", "qwen2.5:7b"),
+        # #232: defaults to qwen2.5vl:7b (the recommended pull). "auto"
+        # = subarr picks the first vision-capable installed model.
+        ollama_vision_model=_env_or("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
         docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),
         docker_socket_path=os.environ.get("SUBARR_DOCKER_SOCKET_PATH", ""),
         # telemetry_endpoint keeps bare .get(): empty = "don't transmit",

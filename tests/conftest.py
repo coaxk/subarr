@@ -178,6 +178,10 @@ def _make_ollama_stub(handler=None):
         def __init__(self):
             self._base_url = "http://ollama.test:11434"
             self._model = "test-model"
+            # #232: vision-model knobs added to OllamaClient. The stub
+            # bypasses super().__init__ so we replicate them here.
+            self._vision_model_config = "qwen2.5vl:7b"
+            self._vision_model_resolved = "qwen2.5vl:7b"  # pretend installed
             self._configured = True
             self._client = httpx.AsyncClient(
                 base_url="http://ollama.test:11434", transport=transport,
