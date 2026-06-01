@@ -20,9 +20,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..integrations.ollama import OllamaError
+from ..integrations.ollama import OllamaError, _VISION_FAMILIES
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
 log = logging.getLogger(__name__)
@@ -48,20 +49,103 @@ class VisionCheckRequest(BaseModel):
     prompt: str | None = None  # override prompt for advanced callers
 
 
+class VisionPullRequest(BaseModel):
+    # Onboarding + Settings "Pull vision model" button.
+    # Default is qwen2.5vl:7b (current best-fit for thumb classification).
+    name: str = VISION_MODEL_DEFAULT
+
+
+@router.get("/status")
+async def vision_status(request: Request) -> dict[str, Any]:
+    """#232: per-product vision-capability status.
+
+    Returns:
+      {
+        ollama_configured: bool,
+        vision_model_config: str,        # what env says (e.g. "qwen2.5vl:7b" / "auto")
+        vision_model_resolved: str|None, # what we actually use, after probing /api/tags
+        vision_capable: bool,            # True iff resolved != None
+        installed_models: list[str],     # everything on the box, for the picker
+        vision_capable_installed: list[str],  # subset matching the allowlist
+        suggested_pull: str,             # default to offer if vision_capable=False
+        families_supported: list[str],   # the allowlist, for UI hints
+      }
+    """
+    ollama = getattr(request.app.state, "ollama", None)
+    if ollama is None or not ollama.is_configured():
+        return {
+            "ollama_configured": False,
+            "vision_model_config": "",
+            "vision_model_resolved": None,
+            "vision_capable": False,
+            "installed_models": [],
+            "vision_capable_installed": [],
+            "suggested_pull": VISION_MODEL_DEFAULT,
+            "families_supported": list(_VISION_FAMILIES),
+        }
+    installed = await ollama.installed_models()
+    ollama.reset_vision_cache()
+    resolved = await ollama.resolve_vision_model()
+    vision_caps = [m for m in installed if any(
+        m.lower().startswith(f) for f in _VISION_FAMILIES
+    )]
+    return {
+        "ollama_configured": True,
+        "vision_model_config": ollama.vision_model_config,
+        "vision_model_resolved": resolved,
+        "vision_capable": bool(resolved),
+        "installed_models": installed,
+        "vision_capable_installed": vision_caps,
+        "suggested_pull": VISION_MODEL_DEFAULT,
+        "families_supported": list(_VISION_FAMILIES),
+    }
+
+
+@router.post("/pull")
+async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResponse:
+    """Stream POST /api/pull progress straight back to the browser. Each
+    line is a JSON event from ollama (`{"status":"downloading","total":..,
+    "completed":..}`) — the frontend renders it as a progress bar.
+
+    Used by the onboarding wizard's "Install vision model" button and by
+    the Settings → Integrations → Ollama vision card."""
+    ollama = getattr(request.app.state, "ollama", None)
+    if ollama is None or not ollama.is_configured():
+        raise HTTPException(503, detail="ollama not configured")
+
+    async def gen():
+        try:
+            async for line in ollama.pull_model(req.name):
+                yield (line + "\n").encode("utf-8")
+        except OllamaError as e:
+            err = json.dumps({"error": str(e)})
+            yield (err + "\n").encode("utf-8")
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
 @router.post("/check")
 async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, Any]:
     ollama = request.app.state.ollama
     if not ollama.is_configured():
         raise HTTPException(503, detail="ollama not configured")
     try:
+        # #232: pass model=None so resolve_vision_model() runs and we get
+        # honest "vision pre-filter unavailable" instead of a text-model
+        # hallucination. Caller can still override explicitly via req.model.
         raw = await ollama.vision_describe(
             image_url=req.image_url,
             image_b64=req.image_b64,
             prompt=req.prompt or PROMPT,
-            model=req.model or VISION_MODEL_DEFAULT,
+            model=req.model,  # None -> resolve_vision_model()
         )
     except OllamaError as e:
-        raise HTTPException(502, detail=str(e))
+        msg = str(e)
+        # #232: a missing vision model is NOT a backend failure — it's a
+        # missing prerequisite. 503 with the actionable hint, not 502.
+        if "no vision-capable model" in msg:
+            raise HTTPException(503, detail=msg)
+        raise HTTPException(502, detail=msg)
     # Best-effort JSON parse from the model output
     parsed: dict[str, Any] = {}
     try:

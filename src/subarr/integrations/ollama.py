@@ -28,11 +28,43 @@ class OllamaError(RuntimeError):
 _OLLAMA_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=3.0)
 
 
+# #232: Known vision-capable Ollama model families. Used to detect
+# whether the user has ANY vision model installed when they have not
+# explicitly configured OLLAMA_VISION_MODEL (or set it to "auto").
+# Match is on the family prefix because users tag size/quantisation
+# variants (qwen2.5vl:7b-q4, llava:13b-v1.6, etc.) — anything starting
+# with one of these is a fair candidate. Order = preference: qwen2.5vl
+# is current best-in-class for our specific job (thumb classification).
+_VISION_FAMILIES = (
+    "qwen2.5vl",      # current default + recommended
+    "qwen2-vl",       # predecessor, still common
+    "llama3.2-vision",
+    "llava",
+    "bakllava",
+    "minicpm-v",
+    "moondream",
+)
+
+
+def _is_vision_capable(model_name: str) -> bool:
+    """Family-prefix match against the known-vision-capable allowlist."""
+    if not model_name:
+        return False
+    n = model_name.lower()
+    return any(n.startswith(f) for f in _VISION_FAMILIES)
+
+
 class OllamaClient:
     def __init__(self, base_url: str | None = None, model: str | None = None,
+                 vision_model: str | None = None,
                  timeout: httpx.Timeout | None = None):
         self._base_url = (base_url or settings.ollama_url).rstrip("/")
         self._model = model or settings.ollama_model
+        # #232: explicit vision-model knob. "auto" defers picking until
+        # the first capability probe — we pick the first installed model
+        # whose name matches the vision allowlist.
+        self._vision_model_config = vision_model or settings.ollama_vision_model
+        self._vision_model_resolved: str | None = None  # cached after probe
         self._configured = bool(self._base_url and self._model)
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout or _OLLAMA_TIMEOUT)
 
@@ -42,6 +74,11 @@ class OllamaClient:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def vision_model_config(self) -> str:
+        """The configured vision-model identifier (could be 'auto')."""
+        return self._vision_model_config
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -98,21 +135,112 @@ class OllamaClient:
             raise OllamaError(f"ollama returned non-json: {e}") from e
         return (data.get("response") or "").strip()
 
+    async def installed_models(self) -> list[str]:
+        """#232: list installed model tags. Thin wrapper over /api/tags
+        that returns just the name strings — used by the vision-model
+        resolver and by the onboarding wizard's model picker."""
+        try:
+            data = await self.tags()
+        except OllamaError:
+            return []
+        models = data.get("models", []) if isinstance(data, dict) else []
+        return [m.get("name", "") for m in models if isinstance(m, dict)]
+
+    async def resolve_vision_model(self) -> str | None:
+        """#232: figure out which vision-capable model to use right now.
+
+        Logic:
+          1. If OLLAMA_VISION_MODEL is set to an explicit model name AND
+             that model is installed → use it as-is (user opted in).
+          2. If set to "auto" OR set explicitly but the model is NOT
+             installed → walk /api/tags and pick the first installed
+             model whose name family matches the vision allowlist.
+          3. If nothing vision-capable is installed → return None.
+             Callers MUST treat None as "vision pre-filter unavailable"
+             and gracefully skip — never call vision_describe in that
+             state, the text model would hallucinate.
+
+        Result is cached on the instance until reset_vision_cache() is
+        called (Settings save / model pull completion clears it)."""
+        if self._vision_model_resolved is not None:
+            return self._vision_model_resolved or None
+        if not self._configured:
+            self._vision_model_resolved = ""
+            return None
+        installed = await self.installed_models()
+        if not installed:
+            self._vision_model_resolved = ""
+            return None
+        cfg = self._vision_model_config.strip().lower()
+        # Path 1: explicit name AND installed
+        if cfg and cfg != "auto":
+            for name in installed:
+                if name.lower() == cfg:
+                    self._vision_model_resolved = name
+                    return name
+        # Path 2: auto-pick first vision-capable installed model
+        # Prefer in the order of _VISION_FAMILIES (best-fit first)
+        for family in _VISION_FAMILIES:
+            for name in installed:
+                if name.lower().startswith(family):
+                    self._vision_model_resolved = name
+                    return name
+        # Path 3: nothing vision-capable installed
+        self._vision_model_resolved = ""
+        return None
+
+    def reset_vision_cache(self) -> None:
+        """Clear the resolved-vision-model cache so the next call to
+        resolve_vision_model() re-probes /api/tags. Settings save +
+        model-pull completion both invoke this."""
+        self._vision_model_resolved = None
+
+    async def pull_model(self, name: str):
+        """POST /api/pull stream — pulls a model image. Yields raw JSON
+        progress events as bytes lines so the frontend can render a
+        progress bar without re-decoding. Used by the onboarding wizard
+        and Settings "Pull qwen2.5vl" button."""
+        if not self._configured:
+            raise OllamaError("ollama not configured")
+        body = {"name": name, "stream": True}
+        try:
+            async with self._client.stream("POST", "/api/pull", json=body) as r:
+                if r.status_code != 200:
+                    text = (await r.aread()).decode("utf-8", "replace")[:200]
+                    raise OllamaError(f"ollama /api/pull HTTP {r.status_code}: {text}")
+                async for chunk in r.aiter_lines():
+                    if chunk.strip():
+                        yield chunk
+        except httpx.HTTPError as e:
+            raise OllamaError(f"ollama /api/pull failed: {e}") from e
+        # New model — invalidate the vision-resolve cache.
+        self.reset_vision_cache()
+
     async def vision_describe(
         self, *, image_url: str | None = None, image_b64: str | None = None,
         prompt: str, model: str | None = None, num_predict: int = 256,
     ) -> str:
         """v1.1-K: vision-capable Ollama call. Pass either a URL we fetch
-        and base64-encode, or pre-encoded base64. Uses qwen2.5vl by default
-        (configurable via the `model` arg — e.g. for llama3.2-vision).
+        and base64-encode, or pre-encoded base64.
 
-        Used by subarr's vision pre-filter to ask the model:
-          'Does this frame show hardcoded/burned-in subtitles?'
-          'Is this a no-dialog scene (just action/music)?'
-        Skip subgen when the answer is yes for either."""
+        #232 hardened: model selection now goes through
+        resolve_vision_model() instead of falling back to self._model
+        (which is the TEXT model in most installs). If no vision-capable
+        model is installed, this raises OllamaError("no vision model")
+        and the caller MUST surface that as "vision pre-filter
+        unavailable" rather than treating it as a runtime failure —
+        every other ollama feature still works with the text model."""
         import base64, httpx
         if not self._configured:
             raise OllamaError("ollama not configured")
+        # #232: pick the vision model BEFORE fetching the image, so we
+        # fail fast and don't waste a Tautulli round-trip.
+        resolved = model or await self.resolve_vision_model()
+        if not resolved:
+            raise OllamaError(
+                "no vision-capable model installed (configure OLLAMA_VISION_MODEL "
+                "or pull a model from: " + ", ".join(_VISION_FAMILIES[:3]) + ")"
+            )
         if image_url and not image_b64:
             try:
                 async with httpx.AsyncClient(timeout=30.0) as fetch:
@@ -124,7 +252,7 @@ class OllamaClient:
         if not image_b64:
             raise OllamaError("vision_describe needs image_url or image_b64")
         body: dict[str, Any] = {
-            "model": model or self._model,
+            "model": resolved,
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,

@@ -27,6 +27,12 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
             # Surface model count + first-5 names for the Settings panel.
             tags = await client.tags()
             models = tags.get("models", []) if isinstance(tags, dict) else []
+            # #232: surface vision-pre-filter capability so the Settings
+            # panel can show "Vision pre-filter active / inactive" with
+            # the resolved model name, instead of users discovering it
+            # only when a vision call fails.
+            client.reset_vision_cache()
+            vision_resolved = await client.resolve_vision_model()
             return {
                 "name": name,
                 "online": True,
@@ -34,7 +40,10 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                 "badges": {
                     "models": len(models),
                     "model_names": ", ".join(m.get("name", "?") for m in models[:3])
-                                   + (" …" if len(models) > 3 else ""),
+                                   + (" ..." if len(models) > 3 else ""),
+                    "vision_model_config": client.vision_model_config,
+                    "vision_model_resolved": vision_resolved or "",
+                    "vision_capable": bool(vision_resolved),
                 },
             }
         if summary_kind == "bazarr_badges":

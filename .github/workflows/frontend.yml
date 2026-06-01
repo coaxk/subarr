@@ -12,21 +12,15 @@
 
 name: frontend
 
+# Runs on every PR + every push to main, unconditionally. Branch
+# protection treats "bundle drift check" as required, so the check
+# must produce a status on every commit — path-filtering it caused
+# PRs that don't touch frontend to be permanently BLOCKED (the
+# required check would never run, never go green).
 on:
   pull_request:
-    paths:
-      - "src/subarr/static/v1/**"
-      - "scripts/build-frontend.mjs"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/frontend.yml"
   push:
     branches: [main]
-    paths:
-      - "src/subarr/static/v1/**"
-      - "scripts/build-frontend.mjs"
-      - "package.json"
-      - "package-lock.json"
 
 jobs:
   drift:
