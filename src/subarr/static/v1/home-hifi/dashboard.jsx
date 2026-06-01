@@ -559,7 +559,9 @@ function NextRunCard({ data }) {
         <KV k="targets" v={<span className="mono" style={{ color: 'var(--fg-1)' }}>{targets.join(', ')}</span>} />
         <KV k="last run" v={<span style={{ color: 'var(--fg-3)' }} className="mono">{lastRun}</span>} />
       </div>
-      <div style={{ flex: 1 }} />
+      {/* Buttons sit right after the KV rows (no flex:1 spacer). When
+          the parent row drives sizing, the spacer would create a big
+          visual gap between 'last run' and the buttons. */}
       <div style={{ display: 'flex', gap: 8 }}>
         <NextRunActions />
       </div>
@@ -690,7 +692,7 @@ function ActivityCard({ data }) {
         </div>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing {rows.length}</span>
       </div>
-      <div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {rows.length === 0 ? (
           <div style={{ padding: '24px 16px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
             {allRows.length === 0
@@ -701,7 +703,7 @@ function ActivityCard({ data }) {
           rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
         )}
       </div>
-      <div style={{ marginTop: 'auto', padding: 'var(--row-dense)', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
+      <div style={{ padding: 'var(--row-dense)', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center', flex: '0 0 auto' }}>
         <a href="/file-modal" style={{
           fontSize: 'var(--text-xs)',
           color: 'var(--fg-2)',
@@ -852,8 +854,14 @@ export function WelcomeCard() {
 }
 
 export function NextRunActivitySplit({ nextRun, activity }) {
+  // Row is sized by NextRunCard's natural content height. We removed
+  // the earlier flex:1 because it made the row claim main-canvas's
+  // leftover vertical space, which over-stretched both cards and left
+  // a big visual gap above the Run now / Edit rule buttons inside the
+  // next-run card. With alignItems:stretch (default), the activity
+  // card matches next-run's content height and scrolls internally.
   return (
-    <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
       <NextRunCard data={nextRun} />
       <ActivityCard data={activity} />
     </div>
