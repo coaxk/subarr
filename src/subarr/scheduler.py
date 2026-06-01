@@ -251,31 +251,27 @@ class Scheduler:
                 "stale_count": len(stale),
             }
 
-        # Reuse the completion watcher's task-id cache if it's already
-        # discovered the scan-disk task id, otherwise discover it here.
-        # Watcher discovers on first ledger completion; coverage_walk may
-        # run before that on a fresh install.
-        watcher = getattr(self, "_watcher", None)
-        task_id = getattr(watcher, "_bazarr_task_id", None) if watcher else None
-        if task_id is None:
-            # Discover inline — same hints the watcher uses.
-            try:
-                tasks = await bazarr.list_tasks()
-                hints = (
-                    "series_full_scan_subtitles", "movies_full_scan_subtitles",
-                    "scan_disk_series", "scan_disk_episodes",
-                    "scan disk", "index all existing episodes",
-                )
-                for hint in hints:
-                    for t in tasks:
-                        if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
-                            task_id = t.get("job_id")
-                            break
-                    if task_id:
+        # Discover the Bazarr scan-disk task id. (A prior design reused a
+        # cached id off a self._watcher backref that was never wired, so
+        # discovery always ran anyway — removed the dead reuse path.)
+        task_id = None
+        try:
+            tasks = await bazarr.list_tasks()
+            hints = (
+                "series_full_scan_subtitles", "movies_full_scan_subtitles",
+                "scan_disk_series", "scan_disk_episodes",
+                "scan disk", "index all existing episodes",
+            )
+            for hint in hints:
+                for t in tasks:
+                    if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
+                        task_id = t.get("job_id")
                         break
-            except Exception as e:
-                log.warning("coverage_walk: bazarr task discovery failed: %s", e)
-                return {"fired": False, "reason": f"task discovery failed: {e}", "stale_count": len(stale)}
+                if task_id:
+                    break
+        except Exception as e:
+            log.warning("coverage_walk: bazarr task discovery failed: %s", e)
+            return {"fired": False, "reason": f"task discovery failed: {e}", "stale_count": len(stale)}
 
         if not task_id:
             return {"fired": False, "reason": "no scan-disk task id found", "stale_count": len(stale)}
