@@ -196,9 +196,30 @@ async def lifespan(app_: FastAPI):
             "patch_rev": getattr(new_caps, "subarr_subgen_patch_rev", None),
             "version": getattr(new_caps, "version", None),
         }
-        # Reconciliation hook lands in a follow-up commit. For this
-        # phase we just log and stamp — the UI can already surface
-        # "subgen restarted Xs ago" using the timestamp.
+        # #229 phase 2: reconcile orphaned scan_store entries. Walks
+        # scan_store for status=ok entries created before the restart
+        # detection, excludes those whose canonical_path appears in
+        # provenance.completed_paths_since (transcription confirmed),
+        # re-tags the rest as PATH_STATUS_ORPHANED with a clear reason.
+        # The Queue UI surfaces them in their own "Lost on restart"
+        # bucket (see queue.py history endpoint).
+        try:
+            scans = app_.state.scans
+            provenance = app_.state.provenance
+            # Look back 24h — anything older than that is from a previous
+            # session anyway. Anything completed_at >= cutoff is "real done".
+            cutoff = detected_at
+            completed = provenance.completed_paths_since(detected_at - 86400)
+            n = scans.mark_orphaned_before(cutoff, completed_paths=completed)
+            log.warning(
+                "subgen restart reconciliation: %d in-flight scan_store "
+                "entries marked ORPHANED (provenance confirms %d completed "
+                "in last 24h, preserved as ok)",
+                n, len(completed),
+            )
+        except Exception as e:
+            log.error("subgen restart reconciliation failed: %s", e,
+                      exc_info=True)
 
     def _get_caps():
         return getattr(app_.state, "subgen_caps", None)

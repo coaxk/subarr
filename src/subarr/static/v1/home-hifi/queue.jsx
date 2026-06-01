@@ -199,11 +199,15 @@ function QueueRow({ item, kind, canCancel, onCancel, busy }) {
 // outcome chip + reason + actions. Issues vs Recently-done sections
 // both use this — `compact` mode shrinks the row for the done list.
 const OUTCOME_STYLE = {
-  ok:      { fg: 'var(--success-500)', bg: 'rgba(52,211,153,0.10)',  br: 'rgba(52,211,153,0.35)', label: 'queued' },
-  running: { fg: 'var(--violet-400)',  bg: 'rgba(139,92,246,0.10)',  br: 'rgba(139,92,246,0.35)', label: 'running' },
-  skipped: { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
-  error:   { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
-  pending: { fg: 'var(--fg-2)',        bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'pending' },
+  ok:       { fg: 'var(--success-500)', bg: 'rgba(52,211,153,0.10)',  br: 'rgba(52,211,153,0.35)', label: 'queued' },
+  running:  { fg: 'var(--violet-400)',  bg: 'rgba(139,92,246,0.10)',  br: 'rgba(139,92,246,0.35)', label: 'running' },
+  skipped:  { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
+  error:    { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
+  // #229: subgen restarted before transcription completed. Distinct
+  // colour from 'failed' so it doesn't read like a real error — it's
+  // just lost work that should be requeued, not a broken file.
+  orphaned: { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.18)',  br: 'rgba(245,158,11,0.55)', label: 'lost on restart' },
+  pending:  { fg: 'var(--fg-2)',        bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'pending' },
 };
 
 function OutcomeChip({ category, label }) {
@@ -230,7 +234,8 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
                   : `${Math.floor(ageS/86400)}d ago`;
   // Requeue only makes sense for terminal outcomes (skipped/error/done).
   // For currently-running rows the action is hidden.
-  const canRequeue = category === 'skipped' || category === 'error' || category === 'ok';
+  const canRequeue = category === 'skipped' || category === 'error'
+                  || category === 'ok' || category === 'orphaned';
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
@@ -363,9 +368,11 @@ export function QueuePage() {
   const queued = data?.queued || [];
   const idle = data?.idle === true;
   const subgenVersion = data?.version;
-  // v1.1.1: Featured Queue history. Split into Issues (skipped/error) vs
-  // Recently done (ok/running) so the eye-catching problem rows are top.
+  // v1.1.1: Featured Queue history. Split into Issues (skipped/error),
+  // Lost on restart (orphaned — #229), and Recently done (ok/running)
+  // so the eye-catching problem rows are top.
   const history = data?.history || [];
+  const orphaned = history.filter(h => h.outcome?.category === 'orphaned');
   const issues = history.filter(h => {
     const c = h.outcome?.category;
     return c === 'skipped' || c === 'error';
@@ -542,6 +549,35 @@ export function QueuePage() {
           </AsyncState>
         </div>
       </div>
+
+      {/* #229: Lost on restart — subgen restarted before transcription
+          completed. Surfaced separately from Issues because the failure
+          mode is operational, not file-specific: requeue is always the
+          right action. Hidden when empty. */}
+      {orphaned.length > 0 && (
+        <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{
+            padding: 'var(--row-cozy)',
+            borderBottom: 'var(--border)',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span className="label" style={{ color: 'var(--warn-500)' }}>
+              Lost on restart — subgen rebooted mid-flight
+            </span>
+            <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              {orphaned.length}
+            </span>
+            <span style={{ flex: 1 }} />
+          </div>
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {orphaned.map((e) => (
+              <HistoryRow key={`o-${e.scan_id}-${e.path}`} entry={e}
+                          onRequeue={requeue} onRemove={removeOne}
+                          busy={busyAction === e.path || busyAction === e.scan_id} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* v1.1.1 Featured Queue — Issues (skipped + failed) */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

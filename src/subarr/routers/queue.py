@@ -32,6 +32,7 @@ from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import (
     PATH_STATUS_ERROR,
     PATH_STATUS_OK,
+    PATH_STATUS_ORPHANED,
     PATH_STATUS_RUNNING,
     PATH_STATUS_SKIPPED,
     SCAN_STATUS_DONE,
@@ -80,6 +81,14 @@ def _path_outcome_chip(status: str, body: dict | None, error: str | None) -> dic
     if status == PATH_STATUS_ERROR:
         return {"category": "error", "label": "failed",
                 "detail": error or "submission errored"}
+    if status == PATH_STATUS_ORPHANED:
+        # #229 phase 2: subgen restarted between subarr's accept and the
+        # .srt landing on disk. Surface in its own category so the Queue
+        # UI can route to a "Lost on restart" bucket and show a prominent
+        # requeue button rather than burying these in Recently-done.
+        return {"category": "orphaned", "label": "lost on restart",
+                "detail": error or
+                "subgen restarted before transcription completed"}
     return {"category": "pending", "label": status, "detail": ""}
 
 
@@ -132,7 +141,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     since = time.time() - history_window_s
     scans = store.list_recent(since_epoch=since, limit=500)
     history: list[dict] = []
-    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0}
+    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
     # Build a set of paths currently live in subgen so we don't double-count
     # an in-flight row as "running" via scan_store AND "processing" via subgen.
     live_paths: set[str] = set()
