@@ -64,10 +64,61 @@ def _match_progress(processing_path: str, progress_map: dict[str, dict]) -> dict
     return None
 
 
-def _path_outcome_chip(status: str, body: dict | None, error: str | None) -> dict:
+def _infer_skip_reason(canonical_path: str) -> str:
+    """Best-effort disambiguation of subgen's single 'skipped' counter.
+
+    subgen /batch returns one integer for 'skipped' regardless of which
+    should_skip_file branch fired (target sub exists, SKIP_IF_AUDIO_LANGUAGES,
+    internal sub language match, lrc exists, etc.). The per-file reason
+    only appears in subgen's logs. Until subgen emits a per-reason
+    breakdown (subgen-side patch — out of scope here), we infer the most
+    common case heuristically: if an .srt sits next to the video file the
+    user submitted, classify as 'sub_exists'. Otherwise 'unknown' (most
+    often audio_lang, but other branches are possible).
+
+    Returns 'sub_exists' | 'audio_lang' | 'unknown'. 'audio_lang' is
+    reserved for a future subgen-side patch; today this helper never
+    returns it.
+    """
+    try:
+        fs_path = canonical_to_fs(canonical_path)
+    except (PathOutsideRootError, OSError):
+        return "unknown"
+    # canonical_path may point at a directory (season folder) or a single
+    # file. For a directory we can't cheaply pick THE file subgen tripped
+    # on, so we conservatively report 'unknown'.
+    if not fs_path.is_file():
+        return "unknown"
+    parent = fs_path.parent
+    stem = fs_path.stem
+    if not parent.is_dir():
+        return "unknown"
+    try:
+        for sibling in parent.iterdir():
+            if not sibling.is_file():
+                continue
+            name = sibling.name
+            # Match `<stem>.srt`, `<stem>.<lang>.srt`, `<stem>.<lang>.<flag>.srt`
+            if name.startswith(stem + ".") and name.lower().endswith(".srt"):
+                return "sub_exists"
+    except OSError:
+        return "unknown"
+    return "unknown"
+
+
+def _path_outcome_chip(
+    status: str, body: dict | None, error: str | None,
+    canonical_path: str | None = None,
+) -> dict:
     """Derive a single 'outcome' shape per scan path for the UI:
-    {category: 'ok'|'skipped'|'error'|'running'|'pending', label, detail}.
-    The frontend picks chip colour from category."""
+    {category, label, detail, skip_reason?}.
+
+    skip_reason is set only when category == 'skipped' and is one of
+    'sub_exists' | 'audio_lang' | 'unknown'. The frontend uses it to
+    pick chip colour (info-gray for sub_exists — that's not really an
+    issue) vs. warn-amber (unknown — the user may want to verify their
+    audio-lang skip list).
+    """
     if status == PATH_STATUS_RUNNING:
         return {"category": "running", "label": "running",
                 "detail": "scan_runner forwarding to subgen"}
@@ -76,8 +127,19 @@ def _path_outcome_chip(status: str, body: dict | None, error: str | None) -> dic
         return {"category": "ok", "label": "queued",
                 "detail": f"subgen queued {queued}" if queued else "subgen accepted"}
     if status == PATH_STATUS_SKIPPED:
-        return {"category": "skipped", "label": "skipped",
-                "detail": error or "subgen walked but queued nothing"}
+        skip_reason = _infer_skip_reason(canonical_path) if canonical_path else "unknown"
+        if skip_reason == "sub_exists":
+            label = "sub already exists"
+            detail = ("matching .srt already on disk — subgen had nothing to "
+                      "do. Not an issue.")
+        else:
+            label = "skipped"
+            detail = (error
+                      or "subgen walked but queued nothing — likely "
+                         "audio-language match. Check your skip-language "
+                         "list if this surprised you.")
+        return {"category": "skipped", "label": label,
+                "detail": detail, "skip_reason": skip_reason}
     if status == PATH_STATUS_ERROR:
         return {"category": "error", "label": "failed",
                 "detail": error or "submission errored"}
@@ -158,7 +220,9 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
             # it'll be visible in the processing/queued section already.
             if basename in live_paths and r.status == PATH_STATUS_RUNNING:
                 continue
-            outcome = _path_outcome_chip(r.status, r.subgen_body, r.error)
+            outcome = _path_outcome_chip(
+                r.status, r.subgen_body, r.error, canonical_path=r.path,
+            )
             cat = outcome["category"]
             if cat in counts:
                 counts[cat] += 1

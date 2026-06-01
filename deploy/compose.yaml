@@ -35,6 +35,7 @@ services:
     - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen:ro
     - /mnt/c/DockerContainers/subarr/data:/data
     labels:
+    - maintenance_log=[2026-06-01] Queue issues panel disambiguates subgen-skipped rows (sub_exists vs unknown) — sub_exists rows route to Recently done, render in neutral grey
     - maintenance_log=[2026-05-27] GPU passthrough (utility capability only) for /api/gpu nvidia-smi access
     env_file:
     - .env
@@ -48,3 +49,4 @@ networks:
     external: true
 
 # [2026-05-27] GPU passthrough added (utility capability only) so /api/gpu can run nvidia-smi for the Monitor tab.
+# [2026-06-01] Queue Issues panel: disambiguate subgen-skipped rows. queue.py now infers sub_exists vs unknown from filesystem; UI routes sub_exists into Recently done with a neutral chip instead of warn-amber under Issues.
