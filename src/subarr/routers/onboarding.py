@@ -282,8 +282,12 @@ async def auto_detect(request: Request) -> dict[str, Any]:
 
 # Paths we ignore when scanning /proc/self/mountinfo — these are the
 # container's own filesystems, never the user's media.
+# nosec B108 — these are filter prefixes used to EXCLUDE container
+# system mounts from media-detection results. We never read from or
+# write to /tmp here; the literal exists so we can refuse to surface
+# /tmp as a "media candidate" in the onboarding wizard.
 _SKIP_MOUNT_PREFIXES = (
-    "/proc", "/sys", "/dev", "/run", "/tmp",
+    "/proc", "/sys", "/dev", "/run", "/tmp",  # nosec B108
     "/etc/", "/var/log", "/usr/", "/lib", "/bin", "/sbin",
     "/.", "/boot",
 )
