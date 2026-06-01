@@ -217,8 +217,13 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
         for r in scan.results:
             basename = os.path.basename(r.path)
             # Skip history row if this path is currently live in subgen —
-            # it'll be visible in the processing/queued section already.
-            if basename in live_paths and r.status == PATH_STATUS_RUNNING:
+            # it's already shown in the processing/queued section. This
+            # covers BOTH a running scan_store row AND a just-submitted OK
+            # row ("subgen queued 1"): without OK here, a freshly-queued
+            # file showed in the live Queued section AND again in
+            # Recently-done. Skipped/error/orphaned rows are kept so real
+            # outcomes still surface even if a newer submission is live.
+            if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
                 continue
             outcome = _path_outcome_chip(
                 r.status, r.subgen_body, r.error, canonical_path=r.path,
