@@ -26,6 +26,9 @@ SRC_PATHS=(
   src/subarr/static/v1/home-hifi/home.bundle.js
   src/subarr/static/v1/home-hifi/home.bundle.js.map
   src/subarr/static/v1/home-hifi/dashboard.jsx
+  src/subarr/static/v1/home-hifi/queue.bundle.js
+  src/subarr/static/v1/home-hifi/queue.bundle.js.map
+  src/subarr/static/v1/home-hifi/queue.jsx
   src/subarr/static/v1/home-hifi/chrome.jsx
   src/subarr/static/v1/home-hifi/settings.jsx
   src/subarr/static/v1/home-hifi/coverage.jsx
@@ -34,6 +37,8 @@ SRC_PATHS=(
   src/subarr/routers/telemetry.py
   src/subarr/routers/vision.py
   src/subarr/routers/integrations.py
+  src/subarr/routers/queue.py
+  src/subarr/scan_runner.py
   src/subarr/telemetry.py
   src/subarr/config.py
   src/subarr/integrations/ollama.py

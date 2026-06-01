@@ -1,0 +1,67 @@
+name: Provider leaderboard data point
+description: Share what's working (or not) on your install. Feeds v1.1 global provider leaderboard design.
+title: "[provider data] "
+labels: ["v1.1", "provider-leaderboard"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        v1.1 ships a global provider success leaderboard built from aggregated telemetry. The shape of the rankings depends on what real installs see in the wild. Sharing your numbers here helps tune the metric.
+
+        **Do NOT paste full Bazarr logs or anything with usernames / paths.** Just the per-provider success rate as Bazarr reports it.
+
+  - type: input
+    id: bazarr-version
+    attributes:
+      label: Bazarr version
+      placeholder: "1.5.6"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lang-mix
+    attributes:
+      label: Primary library languages
+      multiple: true
+      options:
+        - English
+        - French
+        - German
+        - Spanish
+        - Italian
+        - Portuguese
+        - Russian
+        - Japanese
+        - Korean
+        - Chinese (Mandarin/Cantonese)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: top-providers
+    attributes:
+      label: Your top 3 providers by success rate
+      description: |
+        Format: provider · success % · sample size (e.g. last 30 days)
+
+        Example:
+        - OpenSubtitles · 78% · 412 attempts
+        - Subscene · 64% · 287 attempts
+        - Addic7ed · 51% · 92 attempts
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: bottom-providers
+    attributes:
+      label: Your bottom providers (the ones you tolerate but don't trust)
+      description: Same format. Optional.
+      render: markdown
+
+  - type: textarea
+    id: surprises
+    attributes:
+      label: Any per-language surprises?
+      description: "E.g. 'OpenSubtitles is 89% for English but 11% for Japanese on my anime library'. These are the most useful data points."

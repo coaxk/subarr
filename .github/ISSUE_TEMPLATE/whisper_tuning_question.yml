@@ -1,0 +1,58 @@
+name: Whisper kwargs / tuning question
+description: Questions about per-language Whisper kwargs, initial_prompt, or upcoming tuning lab.
+title: "[whisper] "
+labels: ["whisper", "v1.1-tuning-lab"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Per-language Whisper kwargs are one of the trickiest parts of running subgen well. v1.1 ships an in-app tuning lab and a crowdsourced "best kwargs by language" recommendation pulled from opt-in telemetry. Until that lands, this template captures your question so the answer feeds the tuning lab's defaults.
+
+  - type: input
+    id: language
+    attributes:
+      label: Language affected
+      placeholder: "Japanese / French / Spanish / ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: content-type
+    attributes:
+      label: Content type
+      options:
+        - Anime
+        - TV drama / scripted
+        - Documentary
+        - Music-heavy / concert / performance
+        - Sports commentary
+        - Mixed / hard to say
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-kwargs
+    attributes:
+      label: Current kwargs (if you've tuned them)
+      description: Paste your `SUBGEN_KWARGS_LANG_XX` env var, or "I haven't touched the defaults".
+      render: bash
+
+  - type: textarea
+    id: observed-problem
+    attributes:
+      label: What you're seeing
+      description: |
+        Concrete example better than vague description. E.g.:
+
+        - "Whisper repeats the same phrase 8x at the end of every Japanese anime file"
+        - "Opening titles get hallucinated as random English text before the dialog starts"
+        - "Songs in the middle of episodes get transcribed as gibberish"
+    validations:
+      required: true
+
+  - type: textarea
+    id: subgen-version
+    attributes:
+      label: Subgen + Whisper version
+      placeholder: "subarr-subgen v4.7, whisper-large-v3"
