@@ -18,11 +18,13 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..config import settings
 from ..integrations.ollama import OllamaError, _VISION_FAMILIES
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
@@ -47,6 +49,34 @@ class VisionCheckRequest(BaseModel):
     image_b64: str | None = None
     model: str | None = None
     prompt: str | None = None  # override prompt for advanced callers
+
+
+def _image_url_allowed(url: str, allowed_hosts: set[str]) -> bool:
+    """True iff url is http(s) and its host[:port] is in allowed_hosts.
+
+    image_url is fetched server-side by vision_describe, so an unrestricted
+    value is an SSRF vector. Thumbnails only ever come from the configured
+    Plex / Tautulli hosts, so we allowlist exactly those netlocs. An empty
+    allowlist (neither configured) denies — the caller must pass image_b64.
+    """
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if p.scheme not in ("http", "https") or not p.netloc:
+        return False
+    return p.netloc.lower() in allowed_hosts
+
+
+def _allowed_image_hosts() -> set[str]:
+    """Netlocs (host[:port]) of the configured thumbnail sources."""
+    hosts: set[str] = set()
+    for url in (settings.plex_url, settings.tautulli_url):
+        if url:
+            netloc = urlparse(url).netloc.lower()
+            if netloc:
+                hosts.add(netloc)
+    return hosts
 
 
 class VisionPullRequest(BaseModel):
@@ -129,6 +159,16 @@ async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, A
     ollama = request.app.state.ollama
     if not ollama.is_configured():
         raise HTTPException(503, detail="ollama not configured")
+    # SSRF guard: image_url is fetched server-side. Only allow the
+    # configured Plex / Tautulli thumbnail hosts; everything else must
+    # arrive as image_b64.
+    if req.image_url and not req.image_b64:
+        if not _image_url_allowed(req.image_url, _allowed_image_hosts()):
+            raise HTTPException(
+                400,
+                detail=("image_url host not allowed — must be the configured "
+                        "Plex or Tautulli host, or pass image_b64 instead"),
+            )
     try:
         # #232: pass model=None so resolve_vision_model() runs and we get
         # honest "vision pre-filter unavailable" instead of a text-model

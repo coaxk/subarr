@@ -271,6 +271,11 @@ async def cancel_queued(req: CancelRequest, request: Request) -> dict:
     canonical = (req.path or "").strip().strip("/")
     if not canonical:
         raise HTTPException(400, detail="path required")
+    # Reject path-escape attempts, consistent with /queue/requeue.
+    try:
+        canonical_to_fs(canonical)
+    except (PathOutsideRootError, OSError):
+        raise HTTPException(400, detail=f"path escapes media root: {canonical!r}")
     caps = getattr(request.app.state, "subgen_caps", None)
     if caps is None or not getattr(caps, "queue_cancel", False):
         raise HTTPException(
