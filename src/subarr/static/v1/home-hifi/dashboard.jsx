@@ -559,7 +559,9 @@ function NextRunCard({ data }) {
         <KV k="targets" v={<span className="mono" style={{ color: 'var(--fg-1)' }}>{targets.join(', ')}</span>} />
         <KV k="last run" v={<span style={{ color: 'var(--fg-3)' }} className="mono">{lastRun}</span>} />
       </div>
-      <div style={{ flex: 1 }} />
+      {/* Buttons sit right after the KV rows (no flex:1 spacer). When
+          the parent row drives sizing, the spacer would create a big
+          visual gap between 'last run' and the buttons. */}
       <div style={{ display: 'flex', gap: 8 }}>
         <NextRunActions />
       </div>
@@ -852,16 +854,14 @@ export function WelcomeCard() {
 }
 
 export function NextRunActivitySplit({ nextRun, activity }) {
-  // alignItems: 'stretch' is the default, but we set it explicitly so
-  // future edits don't accidentally regress. Both children share the
-  // row's height — next-run grows with its content (KV rows + button
-  // bar), activity matches that height and scrolls internally so a
-  // long activity list never pushes the next-run buttons off-card.
+  // Row is sized by NextRunCard's natural content height. We removed
+  // the earlier flex:1 because it made the row claim main-canvas's
+  // leftover vertical space, which over-stretched both cards and left
+  // a big visual gap above the Run now / Edit rule buttons inside the
+  // next-run card. With alignItems:stretch (default), the activity
+  // card matches next-run's content height and scrolls internally.
   return (
-    <div style={{
-      display: 'flex', gap: 12, flex: 1, minHeight: 0,
-      alignItems: 'stretch',
-    }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
       <NextRunCard data={nextRun} />
       <ActivityCard data={activity} />
     </div>
