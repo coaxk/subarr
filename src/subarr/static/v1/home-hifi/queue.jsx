@@ -202,6 +202,11 @@ const OUTCOME_STYLE = {
   ok:       { fg: 'var(--success-500)', bg: 'rgba(52,211,153,0.10)',  br: 'rgba(52,211,153,0.35)', label: 'queued' },
   running:  { fg: 'var(--violet-400)',  bg: 'rgba(139,92,246,0.10)',  br: 'rgba(139,92,246,0.35)', label: 'running' },
   skipped:  { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
+  // skip_reason='sub_exists' — matching .srt already on disk. Not really
+  // an issue: subgen had nothing to do, the file is effectively "done".
+  // Render in neutral grey so it doesn't blend into the warning rows;
+  // routed to Recently-done instead of Issues.
+  sub_exists: { fg: 'var(--fg-2)',      bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'sub already exists' },
   error:    { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
   // #229: subgen restarted before transcription completed. Distinct
   // colour from 'failed' so it doesn't read like a real error — it's
@@ -226,7 +231,14 @@ function OutcomeChip({ category, label }) {
 function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   const path = entry.path;
   const out = entry.outcome || {};
-  const category = out.category || 'pending';
+  // For skipped rows where queue.py heuristically identified the
+  // matching .srt on disk, swap to a distinct chip style ('sub_exists').
+  // The underlying outcome.category stays 'skipped' for API consumers;
+  // only the visual category changes.
+  const rawCategory = out.category || 'pending';
+  const category = (rawCategory === 'skipped' && out.skip_reason === 'sub_exists')
+    ? 'sub_exists'
+    : rawCategory;
   const ageS = Math.max(0, (Date.now() / 1000) - (entry.created_at || 0));
   const ageLabel = ageS < 60 ? `${Math.round(ageS)}s ago`
                   : ageS < 3600 ? `${Math.floor(ageS/60)}m ago`
@@ -235,7 +247,8 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   // Requeue only makes sense for terminal outcomes (skipped/error/done).
   // For currently-running rows the action is hidden.
   const canRequeue = category === 'skipped' || category === 'error'
-                  || category === 'ok' || category === 'orphaned';
+                  || category === 'ok' || category === 'orphaned'
+                  || category === 'sub_exists';
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
@@ -373,13 +386,21 @@ export function QueuePage() {
   // so the eye-catching problem rows are top.
   const history = data?.history || [];
   const orphaned = history.filter(h => h.outcome?.category === 'orphaned');
+  // 'skipped + sub_exists' = matching .srt already on disk → not really an
+  // issue. Route those into Recently done. Everything else skipped
+  // (unknown reason, likely audio_lang) stays in Issues so the user
+  // notices and can verify their skip-language list.
   const issues = history.filter(h => {
-    const c = h.outcome?.category;
-    return c === 'skipped' || c === 'error';
+    const o = h.outcome || {};
+    if (o.category === 'error') return true;
+    if (o.category === 'skipped' && o.skip_reason !== 'sub_exists') return true;
+    return false;
   });
   const completed = history.filter(h => {
-    const c = h.outcome?.category;
-    return c === 'ok' || c === 'running';
+    const o = h.outcome || {};
+    if (o.category === 'ok' || o.category === 'running') return true;
+    if (o.category === 'skipped' && o.skip_reason === 'sub_exists') return true;
+    return false;
   });
   const counts = data?.history_counts || {};
   // #58 v4.4: subgen advertises capabilities.queue_cancel via /queue.
@@ -499,7 +520,7 @@ export function QueuePage() {
           number of concurrent transcribes (bounded by CONCURRENT_
           TRANSCRIPTIONS). Page scroll handles overflow if the user
           ever runs many parallel jobs. */}
-      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{
           padding: '12px 18px',
           borderBottom: 'var(--border)',
@@ -527,7 +548,7 @@ export function QueuePage() {
 
       {/* Queued — header padding aligned with Processing + submit panel.
           Auto-sizes; page scroll handles long queues. */}
-      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{
           padding: '12px 18px',
           borderBottom: 'var(--border)',
@@ -560,7 +581,7 @@ export function QueuePage() {
           mode is operational, not file-specific: requeue is always the
           right action. Hidden when empty. */}
       {orphaned.length > 0 && (
-        <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
           <div style={{
             padding: '12px 18px',
             borderBottom: 'var(--border)',
@@ -585,7 +606,7 @@ export function QueuePage() {
       )}
 
       {/* v1.1.1 Featured Queue — Issues (skipped + failed) */}
-      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{
           padding: '12px 18px',
           borderBottom: 'var(--border)',
@@ -621,7 +642,7 @@ export function QueuePage() {
       </div>
 
       {/* v1.1.1 Featured Queue — Recently done */}
-      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{
           padding: '12px 18px',
           borderBottom: 'var(--border)',

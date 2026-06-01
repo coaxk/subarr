@@ -170,17 +170,31 @@ class ScanRunner:
                 if status_code == 200 and walked > 0 and queued > 0:
                     result.status = PATH_STATUS_OK
                 elif status_code == 200 and walked > 0 and queued == 0 and skipped > 0:
-                    # Subgen walked the path but skipped everything — usually
-                    # because SKIP_IF_TARGET_SUBTITLES_EXIST hit (embedded EN
-                    # already present) or SKIP_IF_AUDIO_LANGUAGES matched.
-                    # NOT an error; the user just doesn't need subs for this.
+                    # Subgen walked the path but skipped everything — could be
+                    # SKIP_IF_TARGET_SUBTITLES_EXIST (embedded sub already
+                    # present), SKIP_IF_AUDIO_LANGUAGES match, or one of the
+                    # other should_skip_file branches. NOT an error.
+                    #
+                    # GAP: subgen's /batch returns a single "skipped" counter
+                    # without per-file reasons. The actual cause is only in
+                    # subgen's logs. queue.py does a filesystem heuristic to
+                    # promote "unknown" → "sub_exists" when an .srt sits next
+                    # to the file; everything else stays "unknown" (likely
+                    # audio_lang). A subgen-side patch to emit a per-reason
+                    # count would close this — see _path_outcome_chip docstring.
                     result.status = PATH_STATUS_SKIPPED
                     reasons = []
                     pending_detect = body.get("pending_language_detect", 0)
                     already_q = body.get("already_in_queue", 0)
                     no_audio = body.get("no_audio", 0)
                     if skipped:
-                        reasons.append(f"subgen skipped {skipped} (target sub exists / audio lang match)")
+                        reasons.append(
+                            f"subgen skipped {skipped} — reason not in /batch "
+                            f"response (target sub exists, audio-lang match, "
+                            f"or other skip rule). See subgen logs for the "
+                            f"per-file reason; queue.py infers sub_exists "
+                            f"vs audio_lang where possible."
+                        )
                     if already_q:
                         reasons.append(f"{already_q} already in queue")
                     if no_audio:
