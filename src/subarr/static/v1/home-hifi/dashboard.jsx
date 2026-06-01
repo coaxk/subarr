@@ -335,6 +335,11 @@ function GpuWidget({ data }) {
       display: 'flex', flexDirection: 'column',
       gap: 10,
       minWidth: 0,
+      // Fill the row height (the integration-tile grid beside it is
+      // taller) and spread header / stats so the box doesn't leave dead
+      // space now that the util sparkline row is gone.
+      height: '100%',
+      justifyContent: 'space-between',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
