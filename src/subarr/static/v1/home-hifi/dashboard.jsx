@@ -310,7 +310,14 @@ function GpuWidget({ data }) {
   //   { name, util_pct, vram_used_mb, vram_total_mb, temp_c, power_w,
   //     power_cap_w, processes }
   // null → fall back to demo numbers (mock until a GPU is detected).
-  const spark = useMemo(() => genSpark(40, 0.5, 0.35).map(v => Math.min(1, Math.max(0.1, v))), []);
+  // The util sparkline shows real history only — the backend doesn't
+  // emit util_history yet, so it stays hidden rather than animating
+  // fabricated noise next to live numbers. Wired the moment the payload
+  // carries history.
+  const spark = useMemo(
+    () => (data && Array.isArray(data.util_history) ? data.util_history : []),
+    [data],
+  );
   const util = data ? Math.round(data.util_pct) : 67;
   const vramUsedGB = data ? (data.vram_used_mb / 1024) : 8.4;
   const vramTotalGB = data ? (data.vram_total_mb / 1024) : 12;
@@ -328,6 +335,11 @@ function GpuWidget({ data }) {
       display: 'flex', flexDirection: 'column',
       gap: 10,
       minWidth: 0,
+      // Fill the row height (the integration-tile grid beside it is
+      // taller) and spread header / stats so the box doesn't leave dead
+      // space now that the util sparkline row is gone.
+      height: '100%',
+      justifyContent: 'space-between',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -356,14 +368,12 @@ function GpuWidget({ data }) {
                  tip="Current power draw vs configured limit. Sustained near-limit = card is working hard." />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Sparkline data={spark} width={180} height={20} fill="var(--cyan-500)" color="var(--cyan-500)" />
-        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>util · last 60s</span>
-        <span style={{ flex: 1 }} />
-        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
-          /Movies/Anora.mkv · whisper-large-v3
-        </span>
-      </div>
+      {spark.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Sparkline data={spark} width={180} height={20} fill="var(--cyan-500)" color="var(--cyan-500)" />
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>util · last 60s</span>
+        </div>
+      )}
     </div>
   );
 }
