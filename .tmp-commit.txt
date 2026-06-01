@@ -1,0 +1,80 @@
+v1.0 launch polish batch: #9 #10 #11 + vision frontend follow-up
+
+Four pre-launch items batched into one themed PR. Each closes a real
+launch-day wrinkle observed in production review.
+
+#10 Settings page missing SubRail (GPU/queue/walker widgets)
+
+  Settings was the only page rendering without the persistent
+  vitals widgets bottom-left. Promoted RailFooter to an export from
+  chrome.jsx and mounted it inside SettingsRail at the bottom of
+  the integrations sidebar. Restructured the aside as a flex
+  column: nav content scrolls in the middle band, widgets pin to
+  the bottom. Also tightened settings.html scroll containment to
+  match the pattern used by home/queue/rules (overflow:hidden on
+  app-body, overflow-y:auto on main-canvas).
+
+#11 Telemetry panel: timestamps, healthy chip, payload sent-at
+
+  Previous panel showed "Last error: HTTP 429" with no timestamp,
+  no overall health chip, and no sent-at on the payload. A
+  recovered installation read as broken.
+
+  Backend:
+  - migration 005: telemetry_state.last_error_at REAL (nullable)
+  - TelemetryState dataclass + state() SELECT + record_attempt
+    all wire the new column. Successful sends clear it.
+  - /api/telemetry/state computes derived 'healthy' bool: the
+    most recent successful ping is newer than the most recent
+    error, OR there have never been any errors.
+
+  Frontend (TelemetryPanel):
+  - Green/amber/gray health chip on the Telemetry row showing
+    healthy / degraded / paused
+  - Last ping shows absolute timestamp + relative ago
+  - Last error shows the error string + 'Xm ago - <timestamp>'
+  - Last payload card header shows 'sent <timestamp>' inline
+
+  The 429 we observed in dev is the receiving endpoint
+  rate-limiting us (telemetry.subarr.com not fully live yet), not
+  a client bug. Surfacing it honestly with a healthy/degraded chip
+  is the right product behaviour.
+
+#9 Review modal "Sample-position scan failed: HTTP 404"
+
+  Root cause: GET /api/audio-lang/sample-positions returns 404
+  when canonical_to_fs() resolves to a path that's not on disk
+  from subarr's view. Common cause is a path-prefix mismatch
+  between subarr and Sonarr/Plex. The audio sample player is a
+  nice-to-have aid; the user can still confirm the language.
+
+  Frontend now treats 404 as "preview unavailable" rather than a
+  hard error: posData={unavailable:true, reason} drives an amber
+  notice inside the player area explaining what subarr is seeing
+  and what to check (ARR_PATH_PREFIX / SONARR_PATH_PREFIX in
+  Settings). Confirm button remains active. No more scary red
+  setError() on what is an environmental config issue.
+
+  v1.1 follow-up: surface this same condition as a structured
+  warning on the coverage row itself ('subarr can't see file').
+
+Vision frontend follow-up (matches #232 backend that just landed)
+
+  New OllamaVisionCard component in the Settings -> Ollama panel.
+  Polls /api/vision/status on mount and renders:
+  - Active/Inactive status chip with resolved model name
+  - Configured model + resolved model rows
+  - Installed vision-capable models list
+  - Supported families hint
+  - When inactive: amber prompt explaining the pre-filter is
+    disabled but every other ollama feature still works, plus
+    a 'Pull qwen2.5vl:7b' button that streams /api/vision/pull
+    NDJSON progress into a live progress bar
+  - Auto-refetches /api/vision/status after a successful pull
+    so the chip flips to Active without a page reload
+
+  Closes the loop on #232: users now see the vision capability
+  state explicitly instead of discovering it only when a call
+  fails.
+
+Tests: 266 passed (full suite, no regressions).

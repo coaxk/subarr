@@ -107,6 +107,12 @@ class TelemetryState:
     last_payload_json: str | None
     last_error: str | None
     created_at: float
+    # #11: timestamp of the last failed send. Lets the Settings panel
+    # show "last error 9m ago" + decide whether the system is
+    # currently healthy (last_ping_at newer than last_error_at) or
+    # currently degraded (last_error_at newer or no successful ping
+    # ever). NULL = no known timestamp (legacy row pre-migration 005).
+    last_error_at: float | None = None
 
     @property
     def last_payload(self) -> dict[str, Any] | None:
@@ -177,7 +183,8 @@ class TelemetryCollector:
         try:
             row = conn.execute(
                 "SELECT install_id, opted_in, last_ping_at, "
-                "       last_payload_json, last_error, created_at "
+                "       last_payload_json, last_error, created_at, "
+                "       last_error_at "
                 "FROM telemetry_state WHERE id = 1"
             ).fetchone()
             assert row is not None, "telemetry_state row missing — migration 003 didn't run"
@@ -187,6 +194,7 @@ class TelemetryCollector:
                 last_ping_at=row[2],
                 last_payload_json=row[3],
                 last_error=row[4],
+                last_error_at=row[6],
                 created_at=row[5],
             )
         finally:
@@ -298,22 +306,30 @@ class TelemetryCollector:
     def _record_attempt(self, payload_json: str, error: str | None, transmit: bool) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
         try:
+            # #11: stamp last_error_at when error is set; clear it on
+            # successful sends so the panel can show "healthy now" the
+            # moment we recover. Without this the old error string sat
+            # in the UI forever even after the next tick succeeded.
+            now = time.time()
+            err_at = now if error else None
             # We update last_payload_json always (so the user can inspect
             # what we'd send) but last_ping_at only when we actually
             # transmitted (so "last sent" reflects reality).
             if transmit:
                 conn.execute(
                     "UPDATE telemetry_state "
-                    "SET last_payload_json = ?, last_ping_at = ?, last_error = ? "
+                    "SET last_payload_json = ?, last_ping_at = ?, "
+                    "    last_error = ?, last_error_at = ? "
                     "WHERE id = 1",
-                    (payload_json, time.time(), error),
+                    (payload_json, now, error, err_at),
                 )
             else:
                 conn.execute(
                     "UPDATE telemetry_state "
-                    "SET last_payload_json = ?, last_error = ? "
+                    "SET last_payload_json = ?, "
+                    "    last_error = ?, last_error_at = ? "
                     "WHERE id = 1",
-                    (payload_json, error),
+                    (payload_json, error, err_at),
                 )
         finally:
             conn.close()

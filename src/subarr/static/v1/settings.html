@@ -33,8 +33,8 @@
     background: var(--bg-0);
     min-width: 1280px;
   }
-  .app-body { flex: 1; display: flex; min-height: 0; }
-  .main-canvas { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+  .main-canvas { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow-y: auto; }
 </style>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>

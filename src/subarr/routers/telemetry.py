@@ -21,14 +21,31 @@ def telemetry_state(request: Request) -> dict[str, Any]:
     if tc is None:
         return {"available": False}
     st = tc.state()
+    # #11: derive a 'healthy' flag so the Settings panel can show a
+    # green chip on the Telemetry row instead of users having to
+    # compare two timestamps mentally. Definition: the most recent
+    # successful ping is newer than the most recent error, OR there
+    # have never been any errors. Inverse: degraded.
+    last_err_at = st.last_error_at
+    last_ok_at = st.last_ping_at
+    if st.last_error and last_err_at is not None:
+        healthy = (last_ok_at is not None and last_ok_at >= last_err_at)
+    else:
+        # No known error, OR error pre-dates migration 005 so we have
+        # no timestamp for it — treat as healthy iff we ever sent
+        # successfully. The post-migration error path always sets
+        # last_error_at so this branch only matters for legacy rows.
+        healthy = last_ok_at is not None
     return {
         "available": True,
         "install_id": st.install_id,
         "opted_in": st.opted_in,
         "last_ping_at": st.last_ping_at,
         "last_error": st.last_error,
+        "last_error_at": st.last_error_at,
         "last_payload": st.last_payload,
         "created_at": st.created_at,
+        "healthy": healthy,
     }
 
 
