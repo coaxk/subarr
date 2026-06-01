@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..integrations import IntegrationError
 from ..paths import PathOutsideRootError, canonical_to_fs
+from ..audio_lang_store import resolve_audio_language_override
 from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import PATH_STATUS_PENDING
 
@@ -105,72 +106,15 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
     if not (target.is_file() or target.is_dir()):
         raise HTTPException(400, detail=f"resolved path is neither file nor dir: {canonical!r}")
 
-    # v1.1.1 #224: pre-flight audio_language_override lookup.
-    # If the user has verified this file's audio language (review queue) AND
-    # the verified language is non-English (would otherwise trip subgen's
-    # SKIP_IF_AUDIO_LANGUAGES=eng default), forward the override. The
-    # capability advertisement on /queue tells us whether subgen will honour
-    # it; on vanilla / v4.2 we still send the param (it's silently ignored)
-    # so behaviour stays consistent if subgen upgrades mid-flight.
-    #
-    # v1.2 #105: evidence check. An override that sends the wrong language
-    # to Whisper is worse than no override — it forces Whisper to decode
-    # English audio as if it were Japanese (anime libraries with EN dub
-    # tracks are the canonical failure case). Refuse to forward when the
-    # evidence is weak:
-    #   - confidence below 0.5 → likely Tautulli-signal-only guess
-    #   - source unknown / empty → corrupt store entry
-    # Log the full evidence chain at INFO so post-hoc audits can answer
-    # "why did subgen transcribe E07 as JA?".
-    _RISKY_LANGS = {"ja", "ko", "zh"}  # non-Latin scripts where a wrong
-    # override is most expensive — Whisper outputs unusable nonsense
-    # rather than degraded English, which masks the bug.
-    _MIN_CONFIDENCE = 0.5
-
-    audio_language_override: str | None = None
-    audio_lang_store = getattr(request.app.state, "audio_lang", None)
-    if audio_lang_store is not None:
-        verification = audio_lang_store.get(canonical)
-        if verification is not None:
-            lang = (verification.lang_code or "").strip().lower()
-            src = (verification.source or "").strip().lower()
-            conf = float(getattr(verification, "confidence", 0.0) or 0.0)
-            # Only override when the verification disagrees with the default
-            # English skip-list — for English-verified files there's nothing
-            # to bypass.
-            if lang and lang not in ("en", "eng"):
-                # Evidence gate
-                if not src:
-                    log.warning(
-                        "coverage_queue: REFUSING override=%s for %s — "
-                        "verification has no source field (corrupt store entry?)",
-                        lang, canonical,
-                    )
-                elif conf < _MIN_CONFIDENCE:
-                    log.warning(
-                        "coverage_queue: REFUSING override=%s for %s — "
-                        "confidence %.2f < %.2f (source=%s). "
-                        "Let subgen detect from audio instead.",
-                        lang, canonical, conf, _MIN_CONFIDENCE, src,
-                    )
-                else:
-                    audio_language_override = lang
-                    # Extra-loud log for non-Latin scripts where a wrong
-                    # override produces unusable output (vs degraded text
-                    # for Latin-script languages — easier to spot the bug).
-                    evidence_keys = list((verification.evidence or {}).keys())
-                    if lang in _RISKY_LANGS:
-                        log.info(
-                            "coverage_queue: forwarding RISKY override=%s for %s "
-                            "(source=%s, conf=%.2f, evidence=%s)",
-                            lang, canonical, src, conf, evidence_keys,
-                        )
-                    else:
-                        log.info(
-                            "coverage_queue: forwarding audio_language_override=%s "
-                            "for %s (source=%s, conf=%.2f, evidence=%s)",
-                            lang, canonical, src, conf, evidence_keys,
-                        )
+    # #229: shared override-resolution helper. Same logic now used by
+    # the requeue endpoint — see audio_lang_store.resolve_audio_language_
+    # override for the evidence gate (#105) and the risky-script logging.
+    audio_language_override = resolve_audio_language_override(
+        getattr(request.app.state, "audio_lang", None),
+        canonical,
+        caller="coverage_queue",
+        log=log,
+    )
 
     # Enqueue via the existing scan store + runner.
     store = request.app.state.scans

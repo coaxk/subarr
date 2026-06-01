@@ -77,8 +77,9 @@ async def put_rules(req: RulesUpdate, request: Request) -> dict[str, Any]:
 
 
 @router.post("/schedule/coverage_walk/run-now")
-async def run_now(request: Request) -> dict[str, Any]:
+async def run_now(request: Request, wait: bool = False) -> dict[str, Any]:
     """Kick off a coverage walk in the background and return immediately.
+
     Previously this awaited the entire walk synchronously, which on a
     real-size library takes minutes hitting Bazarr/Sonarr/Radarr APIs,
     and the HTTP request would hang past every reasonable browser/curl
@@ -89,8 +90,14 @@ async def run_now(request: Request) -> dict[str, Any]:
     The walk's progress is observable elsewhere (Coverage page, dashboard
     DISCOVERED tile, scan_store history) — there's no value in blocking
     the HTTP response on it. Caller gets an immediate {started: true}.
+
+    `wait=true` forces synchronous behaviour — used by tests + any
+    automation that needs the structured walk result (mode, queued count,
+    pending_walk_id for manual_confirm flows, etc.).
     """
     scheduler = request.app.state.scheduler
+    if wait:
+        return await scheduler.run_coverage_walk()
     asyncio.create_task(scheduler.run_coverage_walk())
     return {"started": True}
 

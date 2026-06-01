@@ -26,6 +26,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..audio_lang_store import resolve_audio_language_override
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import (
@@ -228,10 +229,22 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
         raise HTTPException(400, detail=f"path escapes media root: {canonical!r}")
     if not target.exists():
         raise HTTPException(404, detail=f"not found on disk: {canonical!r}")
+    # #229: pass the audio_language_override if the user has verified
+    # this file's audio language. Previously requeue lacked this lookup
+    # so subgen would silently skip any file whose audio tag matched
+    # SKIP_IF_AUDIO_LANGUAGES — the requeue click "succeeded" (200 OK,
+    # green chip) but no transcription ever happened. The user had no
+    # working manual recovery path. Shared helper with coverage_queue.
+    audio_language_override = resolve_audio_language_override(
+        getattr(request.app.state, "audio_lang", None),
+        canonical,
+        caller="requeue",
+        log=log,
+    )
     store = request.app.state.scans
     runner = request.app.state.runner
     scan = store.create([canonical], reverse=req.reverse)
-    runner.start(scan)
+    runner.start(scan, audio_language_override=audio_language_override)
     provenance = request.app.state.provenance
     provenance.record(
         canonical_path=canonical, scan_id=scan.id, source=SOURCE_SUBGENSCAN,

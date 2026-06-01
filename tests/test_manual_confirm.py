@@ -76,7 +76,7 @@ def manconf_setup(app_with_stub):
     radarr_handler=_radarr_empty,
 )
 def test_manual_confirm_stashes_instead_of_enqueueing(manconf_setup):
-    r = manconf_setup.post("/api/schedule/coverage_walk/run-now")
+    r = manconf_setup.post("/api/schedule/coverage_walk/run-now?wait=true")
     assert r.status_code == 200
     body = r.json()
     assert body["mode"] == "manual_confirm"
@@ -100,7 +100,7 @@ def test_manual_confirm_stashes_instead_of_enqueueing(manconf_setup):
     radarr_handler=_radarr_empty,
 )
 def test_approve_all_enqueues_and_finalises(manconf_setup):
-    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now").json()["pending_walk_id"]
+    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now?wait=true").json()["pending_walk_id"]
     r = manconf_setup.post(f"/api/schedule/pending/{walk_id}/approve", json={"decision_ids": None})
     assert r.status_code == 200
     body = r.json()
@@ -119,7 +119,7 @@ def test_approve_all_enqueues_and_finalises(manconf_setup):
     radarr_handler=_radarr_empty,
 )
 def test_reject_all_finalises_without_enqueue(manconf_setup):
-    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now").json()["pending_walk_id"]
+    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now?wait=true").json()["pending_walk_id"]
     r = manconf_setup.post(f"/api/schedule/pending/{walk_id}/reject", json={"decision_ids": None})
     assert r.status_code == 200
     body = r.json()
@@ -134,7 +134,7 @@ def test_reject_all_finalises_without_enqueue(manconf_setup):
 )
 def test_approve_selected_subset(manconf_setup):
     # Same one-row walk; approve only its decision id explicitly.
-    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now").json()["pending_walk_id"]
+    walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now?wait=true").json()["pending_walk_id"]
     pending = manconf_setup.get(f"/api/schedule/pending").json()
     decision_id = pending["walks"][0]["decisions"][0]["id"]
 

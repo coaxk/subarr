@@ -278,3 +278,93 @@ class AudioLangStore:
             )
             n += 1
         return n
+
+
+# ─── Override-resolution helper (#229) ──────────────────────────────
+#
+# Used by both coverage_actions.queue (first-time submission from the
+# Coverage page) AND queue.requeue (replay from Queue history). Before
+# this lived inline in coverage_actions only, so requeue lost the
+# audio_language_override — subgen silently skipped any file whose
+# audio tag matched SKIP_IF_AUDIO_LANGUAGES, requeue clicks looked
+# successful (200 OK queued=0), and the user had no working manual
+# recovery path. One helper, two call sites, single source of truth.
+
+_RISKY_LANGS = {"ja", "ko", "zh"}
+_MIN_CONFIDENCE = 0.5
+
+
+def resolve_audio_language_override(
+    store: "AudioLangStore | None",
+    canonical: str,
+    *,
+    caller: str = "queue",
+    log: "logging.Logger | None" = None,
+) -> str | None:
+    """Look up the user-verified audio language for `canonical` and
+    decide whether to forward it to subgen as audio_language_override.
+
+    Returns the ISO 639-2/B code (e.g. 'jpn', 'fre') if the verification
+    passes the evidence gate, else None. None means "let subgen detect
+    from audio" — never returns an English code because subgen's default
+    SKIP_IF_AUDIO_LANGUAGES=eng makes the override redundant there.
+
+    Evidence gate (#105):
+      - lang missing or 'en'/'eng' → no override (no point)
+      - source field empty → REFUSE (corrupt store entry)
+      - confidence < 0.5 → REFUSE (likely Tautulli-signal-only guess)
+      - else → forward, with structured log at INFO
+
+    Risky non-Latin scripts (ja, ko, zh) log with 'RISKY override' phrasing
+    so post-hoc audits can grep specifically for the dangerous category
+    where a wrong override produces unusable Whisper output instead of
+    merely-degraded text.
+
+    `caller` is just a log-tag so the line answers "which submission path
+    forwarded this?" (`coverage_queue` vs `requeue`).
+    """
+    import logging as _logging
+    _log = log or _logging.getLogger(__name__)
+
+    if store is None:
+        return None
+    verification = store.get(canonical)
+    if verification is None:
+        return None
+
+    lang = (verification.lang_code or "").strip().lower()
+    src = (verification.source or "").strip().lower()
+    conf = float(getattr(verification, "confidence", 0.0) or 0.0)
+
+    if not lang or lang in ("en", "eng"):
+        return None
+
+    if not src:
+        _log.warning(
+            "%s: REFUSING override=%s for %s — verification has no "
+            "source field (corrupt store entry?)",
+            caller, lang, canonical,
+        )
+        return None
+    if conf < _MIN_CONFIDENCE:
+        _log.warning(
+            "%s: REFUSING override=%s for %s — confidence %.2f < %.2f "
+            "(source=%s). Let subgen detect from audio instead.",
+            caller, lang, canonical, conf, _MIN_CONFIDENCE, src,
+        )
+        return None
+
+    evidence_keys = list((verification.evidence or {}).keys())
+    if lang in _RISKY_LANGS:
+        _log.info(
+            "%s: forwarding RISKY override=%s for %s "
+            "(source=%s, conf=%.2f, evidence=%s)",
+            caller, lang, canonical, src, conf, evidence_keys,
+        )
+    else:
+        _log.info(
+            "%s: forwarding audio_language_override=%s for %s "
+            "(source=%s, conf=%.2f, evidence=%s)",
+            caller, lang, canonical, src, conf, evidence_keys,
+        )
+    return lang
