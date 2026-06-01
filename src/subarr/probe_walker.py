@@ -132,10 +132,15 @@ class ProbeWalker:
                 state.finished_at = time.time()
                 return
 
-            video_files = [
-                p for p in root_fs.rglob("*")
-                if p.is_file() and p.suffix.lower() in VIDEO_EXTS
-            ]
+            # #228: full-library rglob blocks the event loop for the entire
+            # enumeration (seconds → minutes on a real library). Offload so
+            # /api/health and dashboard polls keep responding while we walk.
+            def _enumerate_videos():
+                return [
+                    p for p in root_fs.rglob("*")
+                    if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+                ]
+            video_files = await asyncio.to_thread(_enumerate_videos)
             state.total_files = len(video_files)
             log.info("probe walk %s: %d files under %s", state.id, state.total_files, state.root)
 
