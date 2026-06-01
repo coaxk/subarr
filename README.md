@@ -165,9 +165,14 @@ Subarr ships with anonymous telemetry **on by default**. We are explicit about w
 - The v1.1 global provider success leaderboard is the same loop for Bazarr providers.
 - The v1.1 tuning lab pre-fills variant suggestions from cohort data.
 
-**Where to verify:** Settings → Telemetry shows the exact JSON of the last ping. Receiving worker source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). Public stats dashboard at `subarr.com/stats` [planned with v1.0 publish].
+**Where to verify:** Settings → Telemetry shows the exact JSON of the last ping. Receiving worker source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). Public stats dashboard at [`stats.subarr.com`](https://stats.subarr.com).
 
-**Note for Pi-hole users:** privacy-conscious regex blocklists deny anything matching `*telemetry*` by default. We use the literal subdomain `telemetry.subarr.com` because hiding behind a misleading name (`stats.subarr.com`) would be the opposite of honest. If you want telemetry off, do not allow it. If you want to send it, allow `subarr.com` in your Pi-hole.
+**Note for Pi-hole users:** there are two subarr subdomains and they do different things.
+
+- `telemetry.subarr.com`, the receiver your install posts heartbeats to. Privacy-conscious regex blocklists deny anything matching `*telemetry*` by default, which catches this one. That is working as intended: blocking it switches telemetry off without any further action.
+- `stats.subarr.com`, the public read-only dashboard. No PII, no auth, no requests from your install, just the aggregated numbers anyone can view. Most blocklists do not catch it because the name is honest about what it is.
+
+We picked these names deliberately. Hiding the sender behind something like `analytics.subarr.com` or putting it on the apex would be the opposite of honest. If you want telemetry off, do not allow `telemetry.subarr.com`. If you want it on, allow that one specifically rather than wildcarding the whole zone.
 
 ## Authentication
 
