@@ -7,8 +7,11 @@ Subarr is a peer service in the *arr family. It sits between Bazarr, Sonarr, Rad
 > Bazarr is the librarian. Subgen is the worker. Subarr is the brain.
 
 [![status](https://img.shields.io/badge/status-v1.0-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-246_passing-22d3ee)](#)
+[![tests](https://img.shields.io/badge/tests-246_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![security](https://img.shields.io/badge/security-bandit_%2B_semgrep_%2B_trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
+
+> **Proudly developed with AI assistance from Claude.** Please direct all complaints to `/dev/null`. The code is open and every PR is reviewed by a human (me) before it lands. Telemetry, security scans, and a published test count are how we keep ourselves honest about it.
 
 ---
 
@@ -24,6 +27,8 @@ The most-asked question from existing subgen users. Quick answer.
 | You are happy with Bazarr alone | Subarr is the layer above Bazarr that adds the coordination, prioritisation, audio-language ground truth, and quality measurement that Bazarr does not do. You can still install subarr without changing anything in Bazarr; Bazarr keeps doing what it does today and subarr adds the brain. |
 
 You do not need to pick at install time. Subarr re-probes subgen every 30 seconds and adopts new capabilities the moment you upgrade. You can start vanilla, decide you want Layer 3 detection a week later, swap the image, restart. No subarr config change needed.
+
+**Where we're going next:** v1.1 ships the in-app Whisper tuning lab (run multiple kwargs variants on one file, score them, adopt the winner per language). v1.2 closes the loop with a crowdsourced global "best kwargs by language" leaderboard from opt-in telemetry. Full [Roadmap](#roadmap) below.
 
 ---
 
@@ -342,6 +347,36 @@ Subarr works with any subgen. On startup it probes `/queue` and `/status` and fi
 | `mccloud/subgen` vanilla | no | plain text | none | Coverage, Provenance, scheduling. Scan submission shows "needs subarr-subgen" |
 
 The Settings panel shows the detected mode and version so there is never confusion about which features are active. When a feature requires a newer subgen than what is running, the UI surfaces the specific patch revision needed instead of silently degrading.
+
+---
+
+## Security
+
+Subarr is built to run inside your trusted LAN, but we hold the codebase to a higher bar than that. Full policy and threat model in [`SECURITY.md`](SECURITY.md); the headlines:
+
+**Continuous scanning, four tools, two repos.** Every push to `coaxk/subarr` and `coaxk/subarr-subgen` runs:
+
+| Tool | What it catches | Where to read |
+|---|---|---|
+| **Bandit** | Python security smells (eval, shell=True, weak crypto, hardcoded secrets) | GitHub Security tab, SARIF upload |
+| **Semgrep** | Pattern-based vulns (SQL injection, path traversal, auth bypass, unsafe deserialisation) | GitHub Security tab, SARIF upload |
+| **pip-audit** | Known CVEs in pinned dependencies | CI log, fails the build on HIGH or CRITICAL |
+| **Trivy** | Container image vulns on the published GHCR image | GitHub Security tab |
+
+Weekly scheduled runs catch CVEs disclosed between releases. Every dependency in `pyproject.toml` is version-pinned, so a transitive bump never sneaks in unverified.
+
+**Defences in the code itself** (each one regression-tested):
+
+- **Basic-auth** uses `secrets.compare_digest` (constant-time, defeats timing attacks). Test: `test_uses_constant_time_compare`.
+- **API keys never leave the backend.** Every API response that touches an integration key returns a masked form (`••••f6c0`). Raw key only lives in a dataclass internal field. Test: `test_api_key_never_surfaces_in_response`.
+- **Path safety.** Every filesystem operation routes through `canonical_to_fs()` which rejects path-traversal outside the configured media root. Test: `test_canonical_to_fs_rejects_traversal`.
+- **SQL.** Parameterised queries everywhere. Zero string-concat-into-SQL. Grepped in CI.
+- **Subprocess.** `shell=False` everywhere. No user input ever flows into `subprocess.run` args. Grepped in CI.
+- **Telemetry.** Payload contents are enumerated in `src/subarr/telemetry.py` and a regression test (`test_payload_never_includes_forbidden_fields`) guards against accidentally adding a fingerprintable field. The Settings panel shows the exact JSON of the last ping.
+
+**Reporting a vulnerability.** Email `security@subarr.com`. We acknowledge within 72 hours, scope, coordinate, and credit you in the release notes if you'd like recognition. Full details in [`SECURITY.md`](SECURITY.md).
+
+**246 tests passing on every push.** API contracts, security regressions, frontend smoke, capability negotiation, the whole audio-language pipeline. CI fails closed: if the security gates fail, the release does not ship.
 
 ---
 
