@@ -182,6 +182,28 @@ function Stat({ label, value, color }) {
 // ─── Integrations rail ───────────────────────────────────────────
 const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'tautulli', 'subgen', 'ollama'];
 
+// Friendly labels for integration badges. Source endpoints often
+// return terse keys (Bazarr's /api/badges: 'episodes' actually means
+// 'episodes-with-missing-subs', NOT total library size). Without an
+// override the UI rendered the raw key, which read as misleading.
+// Add entries here whenever a new badge key appears in /api/integrations/health.
+const BADGE_LABELS = {
+  // Bazarr /api/badges keys
+  episodes: 'episodes wanted',
+  movies: 'movies wanted',
+  providers: 'providers',
+  status: 'announcements',
+  sonarr_signalr: 'sonarr signalr',
+  radarr_signalr: 'radarr signalr',
+  announcements: 'announcements',
+  // Ollama integration probe
+  models: 'models installed',
+  model_names: 'top models',
+  vision_model_config: 'vision model (config)',
+  vision_model_resolved: 'vision model (active)',
+  vision_capable: 'vision pre-filter',
+};
+
 function buildRailItems(health) {
   if (!health) return [];
   const out = [];
@@ -1241,12 +1263,16 @@ function IntegrationPanel({ rail, refetchHealth }) {
         </button>
       </div>
 
-      {/* Badges (per-integration freshness counts) */}
+      {/* Badges (per-integration freshness counts).
+          Friendly labels — Bazarr's /api/badges returns raw keys like
+          'episodes' that are actually 'wanted-episodes' counts; the
+          raw label confused users into thinking it was total library
+          size. Override known keys here. */}
       {i.badges && (
         <SectionCard label="Live data">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 18 }}>
             {Object.entries(i.badges).map(([k, v]) => (
-              <Stat key={k} label={k.replace(/_/g, ' ')} value={typeof v === 'number' ? v.toLocaleString() : String(v)} />
+              <Stat key={k} label={BADGE_LABELS[k] || k.replace(/_/g, ' ')} value={typeof v === 'number' ? v.toLocaleString() : String(v)} />
             ))}
           </div>
         </SectionCard>
