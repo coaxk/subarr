@@ -23,6 +23,9 @@ SRC_PATHS=(
   src/subarr/static/v1/home-hifi/settings.bundle.js.map
   src/subarr/static/v1/home-hifi/coverage.bundle.js
   src/subarr/static/v1/home-hifi/coverage.bundle.js.map
+  src/subarr/static/v1/home-hifi/home.bundle.js
+  src/subarr/static/v1/home-hifi/home.bundle.js.map
+  src/subarr/static/v1/home-hifi/dashboard.jsx
   src/subarr/static/v1/home-hifi/chrome.jsx
   src/subarr/static/v1/home-hifi/settings.jsx
   src/subarr/static/v1/home-hifi/coverage.jsx
