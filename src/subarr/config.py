@@ -210,3 +210,37 @@ def load() -> Settings:
 
 
 settings = load()
+
+
+# ─── Onboarding clobber guard support ───────────────────────────────
+# Maps each Settings field the onboarding wizard can write to the env var
+# that backs it in load(). config owns this so the field<->env relationship
+# has a single source of truth (drift-checked in tests). Used by the
+# onboarding apply step: an env-set field is the operator's authoritative
+# declaration and must NOT be overwritten by stored wizard progress.
+FIELD_ENV_VARS: dict[str, str] = {
+    "media_root": "SUBARR_MEDIA_ROOT",
+    "arr_path_prefix": "ARR_PATH_PREFIX",
+    "bazarr_url": "BAZARR_URL",
+    "bazarr_api_key": "BAZARR_API_KEY",
+    "sonarr_url": "SONARR_URL",
+    "sonarr_api_key": "SONARR_API_KEY",
+    "radarr_url": "RADARR_URL",
+    "radarr_api_key": "RADARR_API_KEY",
+    "tautulli_url": "TAUTULLI_URL",
+    "tautulli_api_key": "TAUTULLI_API_KEY",
+    "subgen_url": "SUBGEN_URL",
+    "ollama_url": "OLLAMA_URL",
+    "ollama_model": "OLLAMA_MODEL",
+}
+
+
+def env_is_set(settings_attr: str) -> bool:
+    """True iff the env var backing this Settings field is present AND
+    non-empty (mirrors _env_or's empty==missing rule, so a blank
+    `BAZARR_URL=` line counts as unset)."""
+    name = FIELD_ENV_VARS.get(settings_attr)
+    if not name:
+        return False
+    raw = os.environ.get(name)
+    return raw is not None and raw.strip() != ""

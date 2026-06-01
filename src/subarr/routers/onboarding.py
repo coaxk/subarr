@@ -503,7 +503,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     we rely on the user pinning their env vars in compose after the
     wizard finishes (the wizard's final step shows a copy-paste
     snippet of the values they entered)."""
-    from ..config import settings
+    from ..config import settings, env_is_set
     mapping = {
         "media_root":       ("media_root", Path),
         "arr_path_prefix":  ("arr_path_prefix", str),
@@ -521,6 +521,17 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     }
     for src_key, (settings_attr, coerce) in mapping.items():
         if src_key in progress and progress[src_key]:
+            # Clobber guard: an env-set field is the operator's
+            # authoritative config. Do NOT overwrite it from stored wizard
+            # progress (stale/auto-detected progress clobbering an env-set
+            # value is the bug that broke subgen on dev). Fields not set via
+            # env still apply from the wizard (the primary first-run path).
+            # Trade-off: a wizard edit to an env-set field won't take effect
+            # live — env wins until the operator updates env + restarts.
+            if env_is_set(settings_attr):
+                log.debug("clobber-guard: kept env-set %s (ignored wizard value)",
+                          settings_attr)
+                continue
             try:
                 # Settings is a frozen dataclass — plain setattr raises
                 # FrozenInstanceError. object.__setattr__ bypasses the

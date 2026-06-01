@@ -114,7 +114,10 @@ def test_subgen_watchdog_resolves_subgen_via_provider():
     assert w._subgen is s2
 
 
-def test_apply_progress_mutates_frozen_settings():
+def test_apply_progress_mutates_frozen_settings(monkeypatch):
+    # Verifies the object.__setattr__ frozen-dataclass bypass. Must be a
+    # field that is NOT env-set, or the clobber guard correctly skips it.
+    monkeypatch.delenv("BAZARR_URL", raising=False)
     from subarr.routers.onboarding import _apply_progress_to_settings
     from subarr.config import settings
 
