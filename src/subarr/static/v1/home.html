@@ -42,8 +42,11 @@
     100% { transform: scale(2.4); opacity: 0;   }
   }
 
+  /* Lock the shell to viewport height so the SubRail (containing GPU
+     widget, walker state, queue vitals) stays sticky as the user
+     scrolls the main canvas. Same containment pattern as Coverage. */
   .app-shell {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
@@ -52,12 +55,11 @@
     min-width: 1280px;
   }
 
-  body { overflow: auto; }
-
   .app-body {
     flex: 1;
     display: flex;
     min-height: 0;
+    overflow: hidden;
   }
 
   .main-canvas {
@@ -67,6 +69,7 @@
     min-width: 0;
     padding: 22px 24px 20px;
     gap: 18px;
+    overflow-y: auto;
   }
 </style>
 
