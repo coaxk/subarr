@@ -494,10 +494,14 @@ export function QueuePage() {
         <SubmitScanForm onSubmitted={() => refetch({ silent: false })} />
       </div>
 
-      {/* Processing — header sticky, body scrolls internally */}
+      {/* Processing — header padding 12x18 to align with the SUBMIT
+          A MANUAL SCAN panel above. No maxHeight: auto-sizes to the
+          number of concurrent transcribes (bounded by CONCURRENT_
+          TRANSCRIPTIONS). Page scroll handles overflow if the user
+          ever runs many parallel jobs. */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: 'var(--row-cozy)',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -506,7 +510,7 @@ export function QueuePage() {
             {processing.length}
           </span>
         </div>
-        <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+        <div>
           <AsyncState
             loading={isInitialLoad}
             error={isError ? error : null}
@@ -521,10 +525,11 @@ export function QueuePage() {
         </div>
       </div>
 
-      {/* Queued — header sticky, body scrolls internally */}
+      {/* Queued — header padding aligned with Processing + submit panel.
+          Auto-sizes; page scroll handles long queues. */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: 'var(--row-cozy)',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -533,7 +538,7 @@ export function QueuePage() {
             {queued.length}
           </span>
         </div>
-        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+        <div>
           <AsyncState
             empty={!isInitialLoad && !isError && queued.length === 0}
             emptyMessage="Nothing waiting in line.">
@@ -557,7 +562,7 @@ export function QueuePage() {
       {orphaned.length > 0 && (
         <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{
-            padding: 'var(--row-cozy)',
+            padding: '12px 18px',
             borderBottom: 'var(--border)',
             display: 'flex', alignItems: 'center', gap: 10,
           }}>
@@ -582,7 +587,7 @@ export function QueuePage() {
       {/* v1.1.1 Featured Queue — Issues (skipped + failed) */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: 'var(--row-cozy)',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -618,7 +623,7 @@ export function QueuePage() {
       {/* v1.1.1 Featured Queue — Recently done */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: 'var(--row-cozy)',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
