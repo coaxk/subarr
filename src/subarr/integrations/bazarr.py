@@ -189,6 +189,34 @@ class BazarrClient(IntegrationClient):
         except ValueError:
             return None
 
+    async def download_movie_candidate(
+        self, *, movie_id: int, language: str, provider: str,
+        subtitles_id: str, score: int, forced: bool = False, hi: bool = False,
+    ) -> dict[str, Any] | None:
+        """Movie mirror of download_episode_candidate: POST
+        /api/providers/movies (form field `radarrid`, matching
+        candidate_movie_subtitles + upload_movie_subtitle) so the arbiter
+        accept loop works for movies too."""
+        data = {
+            "radarrid": str(movie_id),
+            "language": language,
+            "provider": provider,
+            "subtitles_id": subtitles_id,
+            "score": str(score),
+            "forced": "true" if forced else "false",
+            "hi": "true" if hi else "false",
+        }
+        try:
+            r = await self._client.post("/api/providers/movies", data=data)
+        except Exception as e:
+            raise IntegrationError(f"bazarr download_movie_candidate: {e}") from e
+        if r.status_code >= 400:
+            raise IntegrationError(f"bazarr download_movie_candidate HTTP {r.status_code}: {r.text[:200]}")
+        try:
+            return r.json()
+        except ValueError:
+            return None
+
     async def upload_episode_subtitle(
         self, *, series_id: int, episode_id: int, language: str,
         file_path: str, hi: bool = False, forced: bool = False,

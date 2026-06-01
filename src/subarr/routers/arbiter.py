@@ -111,8 +111,15 @@ async def accept_candidate(req: AcceptRequest, request: Request) -> dict[str, An
                 hi=req.hi,
             )
         else:
-            # Movie variant not yet shipped — fail clearly
-            raise HTTPException(501, detail="movie candidate accept not implemented yet")
+            result = await bazarr.download_movie_candidate(
+                movie_id=req.movie_id,
+                language=req.language,
+                provider=req.provider,
+                subtitles_id=req.subtitles_id,
+                score=req.score,
+                forced=req.forced,
+                hi=req.hi,
+            )
     except IntegrationError as e:
         raise HTTPException(502, detail=str(e))
     return {"accepted": True, "bazarr_response": result}
