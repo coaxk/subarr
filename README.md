@@ -11,10 +11,7 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 > Built with AI assistance from Claude. Code is open, every PR is human-reviewed. Telemetry, security scans, and a published test count are how we stay honest about that.
 
-<!-- HERO_GIF: insert 5s capture here once recorded.
-     Storyboard: anime episode with audio:eng tag → click 'Detect audio language'
-     → Layer 3 chunk evidence panel + 3-of-3 0.94 confidence → flips to audio:jpn
-     → Bazarr wanted-list row updates beneath it. -->
+![Subarr in action](docs/hero.gif)
 
 ---
 
