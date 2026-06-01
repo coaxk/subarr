@@ -12,6 +12,21 @@ Subarr is a peer service in the *arr family. It sits between Bazarr, Sonarr, Rad
 
 ---
 
+## "I already have subgen. What do I do?"
+
+The most-asked question from existing subgen users. Quick answer.
+
+| You have | What to do |
+|---|---|
+| Vanilla `mccloud/subgen` | Keep it. Add subarr next to it. Subarr detects vanilla on startup and runs in compat mode: Coverage, Provenance, scheduling, audio-language review all work. Scan submission shows a friendly "needs subarr-subgen" for the features that require our patches. You lose calibrated Layer 3 audio detection, queue cancel, and the curated initial_prompts (those need our patches). |
+| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image, plus 13 small patches that subarr's orchestration needs. Pull the new image, change one line in your compose, restart. No data loss, no config rewrite. The patches are open and auditable in [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
+| No subgen yet | Start with `ghcr.io/coaxk/subarr-subgen`. You get every feature on day one. |
+| You are happy with Bazarr alone | Subarr is the layer above Bazarr that adds the coordination, prioritisation, audio-language ground truth, and quality measurement that Bazarr does not do. You can still install subarr without changing anything in Bazarr; Bazarr keeps doing what it does today and subarr adds the brain. |
+
+You do not need to pick at install time. Subarr re-probes subgen every 30 seconds and adopts new capabilities the moment you upgrade. You can start vanilla, decide you want Layer 3 detection a week later, swap the image, restart. No subarr config change needed.
+
+---
+
 ## Three things nothing else in the *arr ecosystem does
 
 These are the anchor differentiators. Everything else in this README is plumbing in service of them.
@@ -23,23 +38,25 @@ Vanilla subgen samples one 30-second window at the start of a file and trusts wh
 Subarr ships a four-layer ground-truth funnel that arrives at a calibrated confidence value before any transcription begins:
 
 ```
-  L1  file metadata          ffprobe audio_language tag
-                             cheap, often wrong on retags
+  L1  file metadata          ffprobe audio_language tag.
+                             Cheap, often wrong on retags.
 
-  L2  Tautulli signal        which audio track is your household
+  L2  Tautulli signal        Which audio track is your household
                              actually picking when they watch?
 
-  L3  Whisper robust detect  sample 3 chunks across 10%/50%/90%
+  L3  Whisper robust detect  Sample 3 chunks across 10/50/90 percent
                              of the file, vote by majority,
-                             confidence is the minimum probability
-                             across the agreeing chunks
+                             confidence is the MINIMUM probability
+                             across the agreeing chunks (conservative,
+                             so one high-confidence chunk cannot
+                             mask a disagreeing chunk).
 
-  L4  user verification      review queue surfaces every suspect
-                             row; one click confirms, propagates
-                             back to Sonarr to unblind Bazarr
+  L4  user verification      Review queue surfaces every suspect
+                             row. One click confirms, propagates
+                             back to Sonarr to unblind Bazarr.
 ```
 
-Layer 3 is the part nothing else has. Three chunks across the middle 80 percent of the file, full per-chunk evidence, conservative aggregation (the confidence is the minimum probability across the agreeing chunks, not the average, so one high-confidence chunk cannot mask a disagreeing one). A 3-of-3 agreement at probability 0.97 is trustworthy. A 2-of-3 agreement at probability 0.41 lands in the manual review queue with the chunk evidence rendered inline.
+Layer 3 is the part nothing else has. Three chunks across the middle 80 percent of the file, full per-chunk evidence rendered in the review modal, conservative aggregation. A 3-of-3 agreement at probability 0.97 is trustworthy. A 2-of-3 agreement at probability 0.41 lands in the manual review queue with the chunk evidence visible.
 
 Once a verification exists, every downstream submission to subgen carries it through an evidence gate. A confidence below 0.5, or a missing source field, refuses to forward the override. Whisper transcribes from the audio, the way it was meant to.
 
@@ -52,7 +69,7 @@ Bazarr's UI shows you which providers are configured. It does not show you which
 - auto-blacklist rate (sub delivered then later flagged as desynced or wrong)
 - net success (the only column that matters)
 
-This is the first time anyone in the *arr space has measured what providers actually do for a real library rather than what they claim on their marketing page.
+First time anyone in the *arr space has measured what providers actually do for a real library rather than what they claim on their marketing page.
 
 The v1.1 roadmap closes the loop by aggregating across installs through the opt-in telemetry channel and publishing a global leaderboard at subarr.com/stats. Then a new user can answer "which providers should I bother with for French TV" by looking at what worked for the global cohort already running that exact pattern.
 
@@ -70,9 +87,41 @@ The marketing question this answers: are your subs gibberish, drifting, or hallu
 
 ---
 
+## What else nothing in the market does (the under-the-radar list)
+
+The three anchor differentiators are the headlines. Pulling the surface back, these are the structural capabilities that are also new to this space. Semi-technical inventory for anyone evaluating subarr against what they already run.
+
+- **Subgen restart reconciliation.** When the subgen container reboots (config change, version upgrade, crash) the in-flight queue evaporates. Subarr detects the restart via a watchdog that probes patch revision plus reachability transitions, reconciles every in-flight scan_store entry against the provenance ledger, and surfaces the orphans in a dedicated "Lost on restart" bucket on the Queue page. One click requeues each one through the audio-language override path so re-submission actually transcribes. Nothing else in this space has any concept of "in-flight item that became a ghost."
+
+- **Capability-driven graceful degrade.** Subarr probes subgen's `/queue` and `/status` on startup and again every 30 seconds. Each feature in the UI gates on a specific capability flag. If you swap subgen versions mid-flight, subarr picks up the change inside a minute and lights up or hides the affected surfaces automatically. The Settings panel shows you exactly which capabilities are present and what each one enables.
+
+- **Whisper-or-Bazarr arbiter.** When a file has Bazarr providers exhausted plus a clear Whisper signal, subarr chooses between submitting to subgen and asking Bazarr to retry, based on per-provider success history. Eliminates the common "Bazarr keeps churning a file no provider has" failure pattern.
+
+- **NOW PLAYING priority boost.** Tautulli `get_activity` is polled every cycle. Whatever your household is actively watching gets boosted in the coverage score so subs arrive in time. Reactive without the storm.
+
+- **Vision pre-filter via ollama qwen2.5vl.** Optional. Tautulli serves thumbnails; ollama's qwen2.5vl vision model classifies whether the content is dialog-heavy, music-heavy, or visual-only. Subarr suppresses transcribe submissions for content where Whisper would just hallucinate (extended musical performances, mostly-visual sequences). Cuts wasted GPU minutes substantially. Optional integration; subarr does not require ollama, it just gets smarter when it is present.
+
+- **Calendar JIT walks.** Sonarr's calendar tells subarr what is airing in the next 24 hours. A targeted walk runs against just those upcoming episodes, so subs are ready when the recording lands rather than queued behind a nightly batch.
+
+- **History-driven "just imported" score.** Recently imported episodes get a transient priority boost. The arrival pattern matches when humans actually want them.
+
+- **Sidecar basename mismatch detector.** When subgen and your renamer disagree, the .srt is invisible to Bazarr. Subarr scans for mismatches and proposes the corrected name; one click renames it.
+
+- **Auto-blacklist desync'd subs.** Subs that timing-match wrong stay in your library forever because nothing notices. Subarr catches the drift, blacklists the entry in Bazarr, and re-queues the search.
+
+- **Audio review with multi-track and batch cycle.** Files with multiple audio tracks (dub plus original) get a track selector in the review modal. Sample positions are auto-chosen from dialog-dense regions (silence avoided). Batch mode cycles through every pending row without leaving the modal.
+
+- **Provenance ledger.** Every transcribe job records: who submitted, which subgen patch revision, completion time, Bazarr scan-disk trigger time. Click any file anywhere in the UI, get the full timeline.
+
+- **Coverage caching with background refresh.** Coverage page loads instantly off a snapshot; refresh happens in the background. On a real-size library this is the difference between a 60 to 90 second wait per page load and a sub-100ms render.
+
+- **Concurrent transcribes surfaced.** Subgen has supported `CONCURRENT_TRANSCRIPTIONS` for a long time but no UI ever told you. Subarr's Settings panel surfaces the knob with a per-Whisper-model VRAM budget table so you can pick N correctly.
+
+---
+
 ## What it solves today
 
-The most-felt pains in the Bazarr plus subgen plus subtitle-automation space, documented across r/bazarr, GitHub issues, and TRaSH guide forums.
+The most-felt pains in the Bazarr plus subgen plus subtitle-automation space, documented across r/bazarr, GitHub issues, and TRaSH guide forums. Subarr fixes that, and a lot more besides.
 
 1. **Bazarr keeps re-searching subs you already have.** Subarr probes your media with ffprobe and knows what is already embedded or sidecar'd. Coverage walks suppress the false-positive gap rows that make Bazarr re-search forever.
 
@@ -90,55 +139,45 @@ The most-felt pains in the Bazarr plus subgen plus subtitle-automation space, do
 
 ## Quickstart
 
-The fastest path: pull two images, fill in a `.env`, `docker compose up -d`.
+The fastest path: drop a four-line compose, run it, walk the wizard. The wizard does the actual configuration.
+
+```yaml
+# compose.yaml
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:latest
+    container_name: subarr
+    restart: unless-stopped
+    ports: ["9922:9922"]
+    volumes:
+      - /mnt/nas/Media:/media/library:rw    # your library root
+      - ./data:/data                        # subarr's SQLite + ledger
+```
+
+Bring it up.
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:9922`. The 10-step onboarding wizard takes it from here: auto-detects your *arr stack if you bind the docker socket (Tier 2 template below), falls back to manual entry of URLs and API keys for every integration if not, and validates each connection live before committing it to settings. Auto-detect plus manual fallback is the design point. You always have a path forward.
+
+**Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned .srt files in place when you approve the rename. Mount read-only and that feature is the only thing that breaks; everything else still works. If you want the strongest containment posture and do not need auto-rename, change to `:ro` and live without that feature.
+
+### Full template with auto-detect and integration URLs
+
+For shared-network deploys where subarr can reach your *arr containers by name, use the Tier 2 template. It pre-fills the integration URLs so the wizard skips the manual entry steps.
 
 ```bash
 mkdir -p ~/subarr && cd ~/subarr
 curl -O https://raw.githubusercontent.com/coaxk/subarr/main/deploy/templates/tier2-socket-proxy.compose.yaml
 curl -O https://raw.githubusercontent.com/coaxk/subarr/main/deploy/templates/.env.example
 mv .env.example .env
-$EDITOR .env  # fill in TZ, MEDIA_ROOT, your *arr network name
+$EDITOR .env  # TZ, MEDIA_ROOT, your *arr docker network name
 docker compose -f tier2-socket-proxy.compose.yaml up -d
 ```
 
-Open `http://localhost:9922` and walk through the onboarding wizard.
-
-Three deployment tiers are available. See [`deploy/templates/README.md`](deploy/templates/README.md) for the trade-offs. **Tier 2 is the recommended default**.
-
-### Minimum compose stub (if you would rather hand-roll)
-
-If you do not want the socket-proxy and prefer to point subarr at your *arr stack manually, this is the smallest possible compose that runs.
-
-```yaml
-services:
-  subarr:
-    image: ghcr.io/coaxk/subarr:latest
-    container_name: subarr
-    restart: unless-stopped
-    networks: [media-stack]      # same network as Bazarr/Sonarr/Radarr
-    ports: ["9922:9922"]
-    environment:
-      TZ: Australia/Sydney
-      SUBARR_MEDIA_ROOT: /media/library
-      SUBGEN_URL: http://subgen:9000
-      # URLs filled by the wizard, or set them here to skip the wizard step
-      BAZARR_URL:   http://bazarr:6767
-      SONARR_URL:   http://sonarr:8989
-      RADARR_URL:   http://radarr:7878
-      TAUTULLI_URL: http://tautulli:8181
-    volumes:
-      # Host path (LEFT) is where your media lives on the host machine.
-      # Container path (RIGHT) MUST match SUBARR_MEDIA_ROOT above.
-      # /media/library is the wizard's default. Mount read-only when
-      # subarr is the only writer of sidecars (it is, by default).
-      - /mnt/nas/Media:/media/library:ro
-      - ./data:/data            # subarr's SQLite + provenance ledger
-networks:
-  media-stack:
-    external: true              # change to false if you want a new network
-```
-
-This skips auto-detect. The wizard still walks you through the rest. For socket-proxy-backed auto-detect, use the Tier 2 template above.
+Three deployment tiers are available. See [`deploy/templates/README.md`](deploy/templates/README.md) for the trade-offs. Tier 2 is the recommended default.
 
 ---
 
@@ -147,16 +186,16 @@ This skips auto-detect. The wizard still walks you through the rest. For socket-
 Subarr is a coordinator, not a transcriber. It owns no GPU code. Subgen does that. State lives in the upstream services (Bazarr, Sonarr, Radarr, Tautulli) plus Docker plus subarr's own SQLite for the work subarr itself initiates.
 
 ```
- +-----------+       +---------+       +---------+
- |  Bazarr   |<----->|         |------>| subgen  |
- |  Sonarr   |       |         |       | whisper |
- |  Radarr   |<----->| subarr  |<------|         |
- |  Tautulli |       |         |       +---------+
- |  Plex     |<----->|         |
- |  ollama   |<----->|         |       +---------+
- +-----------+       +---------+------>| host    |
-                                       | docker  |
-                                       +---------+
+   +-----------+        +---------+        +---------+
+   | Bazarr    |<------>|         |------->| subgen  |
+   | Sonarr    |        |         |        | whisper |
+   | Radarr    |<------>| subarr  |<-------|         |
+   | Tautulli  |        |         |        +---------+
+   | Plex      |<------>|         |
+   | ollama    |<------>|         |        +---------+
+   +-----------+        +---------+------->| host    |
+                                           | docker  |
+                                           +---------+
 ```
 
 | Layer | Tech |
@@ -168,6 +207,15 @@ Subarr is a coordinator, not a transcriber. It owns no GPU code. Subgen does tha
 | Storage | Single SQLite file at `/data/subarr.db` |
 | Telemetry | Anonymous, opt-out, roughly 1 KB per day. Public stats at subarr.com/stats |
 
+### About ollama (optional, recommended)
+
+Subarr does not require ollama. If you do run it, subarr uses it for two things:
+
+- **Structured enrichment.** When Bazarr's wanted entries are vague, subarr asks ollama (any local model that supports the structured JSON output format) to classify the entry by language, genre hints, expected dialog density. Improves prioritisation accuracy.
+- **Vision pre-filter (qwen2.5vl).** Tautulli serves thumbnails; qwen2.5vl classifies the content frame by frame as dialog-heavy, music-heavy, visual-only, or mixed. Subarr suppresses transcribe submissions for content where Whisper would just hallucinate. Cuts wasted GPU minutes significantly on libraries with concerts, performances, or visual-only material.
+
+If you do not have ollama running, subarr falls back to less precise heuristics for both. Nothing breaks.
+
 ---
 
 ## What is in v1.0
@@ -177,10 +225,10 @@ Subarr is a coordinator, not a transcriber. It owns no GPU code. Subgen does tha
 | Dashboard | Live column-as-stage pipeline (discovered, probing, bazarr-wanted, transcribing, written-back) plus GPU widget, integration health, next scheduled run, recent activity |
 | Coverage | Flat, dense gap-list table. Score-gradient sort. Reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). Bulk select plus apply rule plus queue |
 | Library | Tree view across all series and movies with audio, sub, runtime columns and probe-state indicators |
-| Queue | Featured Queue: live subgen Processing, Queued, Lost on restart (subgen-reboot reconciliation), Issues (silent fails subgen swallowed), and Recently submitted history with per-row requeue, remove, cancel |
+| Queue | Featured Queue: Processing, Queued, Lost on restart (subgen-reboot reconciliation), Issues (silent fails subgen swallowed), and Recently submitted history. Per-row actions: requeue, remove, cancel (when subgen is v4.4+). Promote, demote, reorder, and pause are not in v1.0 (see roadmap) |
 | Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, and Layer 3 Whisper detection inline |
-| Onboarding | 10-step wizard that auto-detects your *arr stack via docker-socket-proxy, pre-fills URLs from container metadata, optionally extracts API keys from mounted config files |
-| Rules | Build, Test, Deploy triad for auto-queue rules. Dry-run preview before commit. Includes curated rule packs (Anime, Hearing-impaired, Foreign-language learner, Movies-only) |
+| Onboarding | 10-step wizard. Auto-detect via docker-socket-proxy plus manual fallback at every step |
+| Rules | Build, Test, Deploy triad for auto-queue rules. Dry-run preview before commit. Curated rule packs (Anime, Hearing-impaired, Foreign-language learner, Movies-only) |
 | Settings | Integration test, telemetry transparency panel, updates panel, per-language Whisper kwargs surface, concurrent-transcribe VRAM guide, capability detection |
 | Per-file verdict | Modal timeline showing every probe, scan, write-back for any video file |
 
@@ -239,6 +287,10 @@ Phases:
 - v1.1-B: adopt button plus persistent per-language settings store
 - v1.1-C: telemetry payload extension (opt-in, sanitised) for kwargs and verification outcomes
 
+### v1.1 queue controls
+
+Promote, demote, reorder, and pause buttons on the Queue page. Requires a subgen-side patch (planned v4.9) that exposes queue mutation endpoints. Currently subgen's `DeduplicatedQueue` only supports insert plus cancel, so reorder needs the upstream change first.
+
 ### v1.2: Global tuning consensus
 
 - Cross-install aggregation of kwargs distributions ranked by verification outcomes
@@ -248,9 +300,9 @@ Phases:
 
 ### Other items in flight
 
-- README centrepiece: provider leaderboard as anchor differentiator with per-install plus global aggregation
-- subarr.com/stats public telemetry dashboard
+- Global provider leaderboard published at subarr.com/stats
 - Tuning lab presets for genre-specific content (Anime, Drama, Documentary, Music-heavy)
+- subarr.com/stats public telemetry dashboard
 
 ---
 
@@ -260,34 +312,34 @@ Subarr drives subgen through 13 small patches over upstream McCloudS/subgen. Eac
 
 | Patch | Capability | Why subarr needs it |
 |---|---|---|
-| 0001 | Per-language SUBGEN_KWARGS_LANG_XX env overrides | Different Whisper kwargs per source language |
+| 0001 | Per-language `SUBGEN_KWARGS_LANG_XX` env overrides | Different Whisper kwargs per source language |
 | 0002 | Eager model load on container start | Removes the cold-start delay on first batch |
 | 0003 | Reverse sort for transcribe-existing walks | Newest files first |
-| 0004 | POST /batch structured response | Subarr can count queued vs skipped vs error per submission |
-| 0005-0006 | Internal correctness fixes | LanguageCode.from_string and import safety |
-| 0007 | GET /queue with type-tracked deduplicated queue | Featured Queue UI |
+| 0004 | `POST /batch` structured response | Subarr can count queued vs skipped vs error per submission |
+| 0005-0006 | Internal correctness fixes | `LanguageCode.from_string` and import safety |
+| 0007 | `GET /queue` with type-tracked deduplicated queue | Featured Queue UI |
 | 0008 | Log language detection probability | Debug visibility |
-| 0009 | audio_language_override query param | Subarr can bypass SKIP_IF_AUDIO_LANGUAGES with verified evidence |
-| 0010 | POST /queue/cancel | Queue page cancel button |
-| 0011 | POST /detect_language_robust | Layer 3 multi-chunk Whisper detection |
-| 0012 | Curated per-language initial_prompts | Punctuation seeding for 12 major languages |
-| 0013 | SUBARR_SUBGEN_SAFE_DECODE preset | Opt-in anti-hallucination kwargs |
+| 0009 | `audio_language_override` query param | Subarr can bypass `SKIP_IF_AUDIO_LANGUAGES` with verified evidence |
+| 0010 | `POST /queue/cancel` | Queue page cancel button |
+| 0011 | `POST /detect_language_robust` | Layer 3 multi-chunk Whisper detection |
+| 0012 | Curated per-language `initial_prompt`s | Punctuation seeding for 12 major languages |
+| 0013 | `SUBARR_SUBGEN_SAFE_DECODE` preset | Opt-in anti-hallucination kwargs |
 
 The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v4.7` is current, with `latest`, `stable` (7-day soak), and per-version tags published.
 
-**You do not need our patched image.** Subarr detects which subgen you have pointed it at and gracefully degrades when capabilities are missing. See [Compat mode](#compat-mode) below.
+You do not need our patched image. See the decision table at the top of this README for the "I already have subgen" walkthrough.
 
 ---
 
 ## Compat mode
 
-Subarr works with any subgen, not just our patched fork. On startup it probes `/queue` and `/status` and figures out what is available. The watchdog re-probes every 30 seconds so capability changes between subgen restarts get picked up automatically.
+Subarr works with any subgen. On startup it probes `/queue` and `/status` and figures out what is available. The watchdog re-probes every 30 seconds so capability changes between subgen restarts get picked up automatically.
 
 | Subgen build | /queue | /batch structured | Capabilities | What works |
 |---|---|---|---|---|
-| `ghcr.io/coaxk/subarr-subgen` v4.5 plus | available | yes | queue_cancel, robust_language_detection, audio_language_override, curated_language_prompts, safe_decode_preset | Everything |
-| `ghcr.io/coaxk/subarr-subgen` v4.3 to v4.4 | available | yes | audio_language_override | Most things, no Layer 3 |
-| `mccloud/subgen` vanilla | missing | plain text | none | Coverage, Provenance, scheduling. Scan submission shows "needs subarr-subgen" |
+| `ghcr.io/coaxk/subarr-subgen` v4.5 plus | yes | yes | queue_cancel, robust_language_detection, audio_language_override, curated_language_prompts, safe_decode_preset | Everything |
+| `ghcr.io/coaxk/subarr-subgen` v4.3 to v4.4 | yes | yes | audio_language_override | Most things, no Layer 3 |
+| `mccloud/subgen` vanilla | no | plain text | none | Coverage, Provenance, scheduling. Scan submission shows "needs subarr-subgen" |
 
 The Settings panel shows the detected mode and version so there is never confusion about which features are active. When a feature requires a newer subgen than what is running, the UI surfaces the specific patch revision needed instead of silently degrading.
 
@@ -295,18 +347,26 @@ The Settings panel shows the detected mode and version so there is never confusi
 
 ## Telemetry
 
-Subarr ships with anonymous telemetry on by default. Honest and open.
+Subarr ships with anonymous telemetry on by default. We are being explicit about what telemetry buys you because there is a direct line between the data the cohort sends and the value the cohort gets back.
+
+**Why telemetry being on by default helps you specifically:**
+
+- The v1.2 global Whisper kwargs leaderboard is built from aggregated telemetry. The more installs that send their per-language kwargs plus verification outcomes, the more accurate the "best French settings" recommendation gets. If you opt out, you still get the recommendations; you just do not contribute to making them better.
+- The v1.1 global provider leaderboard is the same loop for Bazarr providers. Send your per-provider success rates, see the cohort's success rates, decide which providers are worth your time based on what works for installs like yours.
+- The v1.1 tuning lab pre-fills variant suggestions from the cohort. Without telemetry contributions, the tool still works locally; with them, your starting variants are already the ones the cohort has found best for your language plus genre profile.
+
+Concretely:
 
 - Roughly 1 KB per day payload
 - Public dashboard at subarr.com/stats (goes live with v1.0 publish)
 - Settings panel shows the **exact JSON** sent on the most recent ping
 - One-click opt-out in Settings or during the onboarding wizard
 
-**What is in the payload:** install ID (random UUID, generated locally), subarr version, Python version, OS or arch, subgen kind (subarr-subgen, vanilla, unreachable), subgen version, integration booleans (configured yes or no, never URLs or keys), library size bucket (under 100, 100 to 1k, 1k to 10k, over 10k), scheduler mode, walks per day rolling average, error counts by exception class, docker tier.
+**What is in the v1.0 payload:** install ID (random UUID, generated locally), subarr version, Python version, OS or arch, subgen kind (subarr-subgen, vanilla, unreachable), subgen version, integration booleans (configured yes or no, never URLs or keys), library size bucket (under 100, 100 to 1k, 1k to 10k, over 10k), scheduler mode, walks per day rolling average, error counts by exception class, docker tier.
 
 **Never in the payload:** file paths, titles, IPs, hostnames, API keys, languages, anything user-fingerprintable. Enforced by a regression test.
 
-**Coming in v1.1 (opt-in granularity):** per-language Whisper kwargs hash plus shape (never the raw initial_prompt string), verification confirmation counts per language, experiment winning-kwargs hash. Three separate toggles in Settings so users can choose to share any combination.
+**Coming in v1.1 (opt-in granularity, separate toggles in Settings):** per-language Whisper kwargs hash plus shape (never the raw `initial_prompt` string, only the hash), verification confirmation counts per language, experiment winning-kwargs hash. Three separate toggles so users can choose to share any combination.
 
 **Note for Pi-hole users:** many privacy-conscious Pi-hole regex blocklists deny anything matching `*telemetry*` by default. We use the literal subdomain `telemetry.subarr.com` because hiding behind a misleading name (for example `stats.subarr.com`) would be the opposite of honest. If you actively want telemetry off, do not allow it. If you want to send it, allow `subarr.com` in your Pi-hole and the regex deny will no longer apply.
 
@@ -332,14 +392,22 @@ When both are set, every non-monitoring request requires Basic credentials. `/ap
 
 Subarr polls GitHub releases once per 24 hours for both `coaxk/subarr` and `coaxk/subarr-subgen`. The subarr-subgen comparison uses patch-stack revision (v4.7 versus v4.8) rather than upstream subgen version, so patch-level updates are detected even when the underlying McCloudS/subgen version stays the same.
 
-When a new version is available:
+When a new version is available the header version label gets a soft violet pip and the Home dashboard surfaces an "Update available" tile. Click through to Settings, Updates panel, which shows:
 
-- Soft violet pip on the header version label
-- "Update available" tile on the Home dashboard
-- Full details in Settings, Updates panel with copy-paste compose edit instructions
-- Breaking-change banner if the GitHub release flags it
+- Current version versus latest, per product (subarr and subarr-subgen)
+- The release notes for the new version, inline
+- Copy-paste compose edit instructions for changing the image tag
+- A breaking-change banner if the GitHub release flags it
 
-No auto-update. You always run `docker compose pull && up -d` yourself.
+The actual update is two commands you run on your host. The panel shows you the exact commands for your detected compose location.
+
+```bash
+# In the directory with your compose.yaml
+docker compose pull
+docker compose up -d
+```
+
+No auto-update by design. You always run the upgrade yourself so you know exactly when it happens.
 
 ---
 

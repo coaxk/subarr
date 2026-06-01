@@ -1,0 +1,94 @@
+name: Bug Report
+description: Something isn't working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the sections below so we can reproduce and fix it.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When I click Run Now on the dashboard welcome card, the button responds but no walk starts."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Browse to my stacks directory
+        2. Scan
+        3. Drill into Sonarr
+        4. Click Apply Fix
+        5. See error in console
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: dropdown
+    id: pathway
+    attributes:
+      label: Which pathway?
+      options:
+        - Browse (directory picker / scan)
+        - Paste (error text paste)
+        - Both
+        - N/A
+    validations:
+      required: true
+  - type: textarea
+    id: compose
+    attributes:
+      label: Compose file (if relevant)
+      description: Paste the relevant compose file. Redact any API keys or passwords.
+      render: yaml
+  - type: input
+    id: version
+    attributes:
+      label: Subarr version
+      description: Check Settings or `/api/health`
+      placeholder: "v1.5.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Subarr?
+      options:
+        - Docker
+        - Bare metal (Python)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: "Ubuntu 24.04 / Windows 11 + WSL2 / Synology DSM 7.2"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: "Chrome 131 / Firefox 133"
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or error logs
+      description: Drag and drop screenshots, or paste console errors.
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic export
+      description: If you exported a diagnostic zip, attach it here or paste the analysis output.

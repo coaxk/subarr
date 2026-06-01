@@ -1,0 +1,77 @@
+name: Beta Test Report
+description: Submit structured test results from the testing form
+title: "[Beta] "
+labels: ["beta-testing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for beta testing! If you used the testing form (`tools/testing-form-v2.html`), export the JSON and attach it below. Otherwise, fill in the sections manually.
+  - type: input
+    id: version
+    attributes:
+      label: Subarr version tested
+      placeholder: "v1.5.2-beta.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker
+        - Bare metal (Python)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: "Ubuntu 24.04 / Unraid 7.0 / Synology DSM 7.2 / Windows 11 + WSL2"
+    validations:
+      required: true
+  - type: input
+    id: stack_count
+    attributes:
+      label: How many stacks / services in your setup?
+      placeholder: "12 stacks, ~35 services"
+  - type: textarea
+    id: json_export
+    attributes:
+      label: Test results JSON
+      description: Export from the testing form and paste or attach the JSON file.
+      render: json
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Overall impressions — what worked well, what didn't, anything surprising.
+    validations:
+      required: true
+  - type: textarea
+    id: bugs
+    attributes:
+      label: Bugs found
+      description: List any bugs not captured in the JSON export.
+  - type: textarea
+    id: suggestions
+    attributes:
+      label: UX suggestions
+      description: Anything that felt awkward, confusing, or could be improved?
+  - type: dropdown
+    id: overall
+    attributes:
+      label: Overall experience
+      options:
+        - "Excellent - ready to ship"
+        - "Good - minor issues only"
+        - "Fair - some rough edges"
+        - "Needs work - significant issues"
+    validations:
+      required: true
+  - type: textarea
+    id: compose
+    attributes:
+      label: Compose file (if relevant to a specific bug)
+      description: Redact secrets.
+      render: yaml

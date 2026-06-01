@@ -1,0 +1,48 @@
+name: Feature Request
+description: Suggest an idea for Subarr
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea? We'd love to hear it. The more context you give about the problem you're solving, the better we can design the solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What's the current pain point or gap?
+      placeholder: "I have 15 stacks and applying fixes one by one is tedious..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: How would you like it to work?
+      description: Describe your ideal solution.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches you've thought about?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Analysis / Detection
+        - Apply Fix / Remediation
+        - UI / Dashboard
+        - Paste Flow
+        - Docker Deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, compose files, links to TRaSH guides, anything relevant.
