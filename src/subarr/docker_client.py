@@ -136,6 +136,59 @@ class DockerOps:
             log.debug("recent_progress error (non-fatal): %s", e)
             return {}
 
+    async def recent_skips(self, tail: int = 400) -> dict[str, str]:
+        """Pull recent 'Skipping <basename>: <reason>' lines from subgen logs.
+
+        subgen's /batch response collapses every should_skip_file branch
+        into a single 'skipped' integer counter, so the per-file reason
+        only lives in the container's stdout. Tail enough lines to cover a
+        burst of skips from a season-folder scan (subgen logs one line per
+        skipped file plus surrounding INFO chatter — 400 lines covers
+        ~50–80 skips in practice).
+
+        Returns {basename → reason_string} with the LAST occurrence
+        winning per basename (matches our last-write-wins model in
+        recent_progress). Reason string is the suffix after the colon,
+        e.g. "Contains a skipped audio language." or "Subtitles already
+        exist in English." — queue.py maps it to a skip_reason enum.
+
+        Returns {} on any docker error so scan_runner can gracefully
+        fall back to the filesystem heuristic.
+        """
+        def _do() -> dict[str, str]:
+            client = self._get()
+            try:
+                container = client.containers.get(settings.subgen_container)
+            except NotFound:
+                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+            raw = container.logs(tail=tail, stream=False, timestamps=False)
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            out: dict[str, str] = {}
+            for line in text.splitlines():
+                # subgen formats these as `Skipping <basename>: <reason>`,
+                # usually after a log-level + module prefix like
+                # `INFO:root:Skipping foo.mkv: ...`. Anchor on the literal.
+                idx = line.find("Skipping ")
+                if idx < 0:
+                    continue
+                tail_str = line[idx + len("Skipping "):]
+                colon = tail_str.find(":")
+                if colon <= 0:
+                    continue
+                basename = tail_str[:colon].strip()
+                reason = tail_str[colon + 1:].strip()
+                if basename and reason:
+                    out[basename] = reason  # last-write-wins
+            return out
+
+        try:
+            return await asyncio.to_thread(_do)
+        except DockerUnavailable:
+            return {}
+        except Exception as e:
+            log.debug("recent_skips error (non-fatal): %s", e)
+            return {}
+
     async def stream_subgen_logs(self, tail: int = 200) -> AsyncIterator[str]:
         """Yields log lines from subgen, decoded UTF-8 (errors replaced).
 

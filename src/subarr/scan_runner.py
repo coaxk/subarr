@@ -40,9 +40,16 @@ class CompatModeError(RuntimeError):
 
 class ScanRunner:
     def __init__(self, subgen: SubgenClient, store: ScanStore,
-                 caps_provider=None):
+                 caps_provider=None, docker_provider=None):
         self._subgen = subgen
         self._store = store
+        # Lazy DockerOps accessor — used to tail subgen's container log
+        # right after /batch returns so we can pull per-file skip reasons
+        # (subgen's response collapses them all into one integer). May
+        # legitimately be None during tests / when docker is unreachable;
+        # the read-skip-reasons path tolerates that and degrades to the
+        # filesystem heuristic in queue.py.
+        self._docker_provider = docker_provider or (lambda: None)
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         # v1.1.1 #224: per-scan audio_language_override (ISO 639-1 or
@@ -171,18 +178,29 @@ class ScanRunner:
                     result.status = PATH_STATUS_OK
                 elif status_code == 200 and walked > 0 and queued == 0 and skipped > 0:
                     # Subgen walked the path but skipped everything — could be
-                    # SKIP_IF_TARGET_SUBTITLES_EXIST (embedded sub already
-                    # present), SKIP_IF_AUDIO_LANGUAGES match, or one of the
-                    # other should_skip_file branches. NOT an error.
+                    # SKIP_IF_TARGET_SUBTITLES_EXIST, SKIP_IF_AUDIO_LANGUAGES,
+                    # SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE, lrc-exists, etc.
+                    # NOT an error.
                     #
-                    # GAP: subgen's /batch returns a single "skipped" counter
-                    # without per-file reasons. The actual cause is only in
-                    # subgen's logs. queue.py does a filesystem heuristic to
-                    # promote "unknown" → "sub_exists" when an .srt sits next
-                    # to the file; everything else stays "unknown" (likely
-                    # audio_lang). A subgen-side patch to emit a per-reason
-                    # count would close this — see _path_outcome_chip docstring.
+                    # /batch returns a single "skipped" integer with no
+                    # per-file reasons, but subgen logs them one line each:
+                    #   `Skipping <basename>: <reason>`
+                    # Tail the container log right now (the lines are fresh —
+                    # we just got the response) and attach the per-basename
+                    # reasons to subgen_body so queue.py can classify each
+                    # row into a skip_reason enum. Falls back to None on any
+                    # docker error; queue.py then uses a filesystem heuristic.
                     result.status = PATH_STATUS_SKIPPED
+                    docker_ops = self._docker_provider()
+                    if docker_ops is not None and isinstance(body, dict):
+                        try:
+                            skip_map = await docker_ops.recent_skips(tail=400)
+                        except Exception as e:
+                            log.debug("recent_skips failed (non-fatal): %s", e)
+                            skip_map = {}
+                        if skip_map:
+                            body["skip_reasons"] = skip_map
+                            result.subgen_body = body
                     reasons = []
                     pending_detect = body.get("pending_language_detect", 0)
                     already_q = body.get("already_in_queue", 0)

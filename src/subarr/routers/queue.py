@@ -64,29 +64,51 @@ def _match_progress(processing_path: str, progress_map: dict[str, dict]) -> dict
     return None
 
 
-def _infer_skip_reason(canonical_path: str) -> str:
-    """Best-effort disambiguation of subgen's single 'skipped' counter.
+# subgen logs a `Skipping <basename>: <reason>` line per skipped file.
+# Map each known reason phrase to the skip_reason enum value the UI
+# uses. Phrases come from subgen_patched.py should_skip_file() — keep
+# this table in sync if subgen adds a new branch. Matched case-insensitive
+# on substring so log-prefix variations (timestamps, log levels) don't
+# break the classifier.
+_SKIP_REASON_PHRASES: tuple[tuple[str, str], ...] = (
+    # SKIP_IF_TARGET_SUBTITLES_EXIST + sibling-extension matches
+    ("subtitles already exist", "sub_exists"),
+    ("generated subtitle", "sub_exists"),
+    ("lrc file already exists", "sub_exists"),
+    # SKIP_IF_AUDIO_LANGUAGES
+    ("contains a skipped audio language", "audio_lang"),
+    # LIMIT_TO_PREFERRED_AUDIO_LANGUAGES
+    ("no preferred audio tracks", "audio_lang"),
+    # SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE
+    ("internal subtitles in", "internal_sub_lang"),
+    # SKIP_SUBTITLE_LANGUAGES
+    ("contains a skipped subtitle language", "internal_sub_lang"),
+    # SKIP_UNKNOWN_LANGUAGE / SKIP_IF_NO_LANGUAGE_BUT_SUBTITLES_EXIST
+    ("audio language unknown", "unknown_audio_lang"),
+)
 
-    subgen /batch returns one integer for 'skipped' regardless of which
-    should_skip_file branch fired (target sub exists, SKIP_IF_AUDIO_LANGUAGES,
-    internal sub language match, lrc exists, etc.). The per-file reason
-    only appears in subgen's logs. Until subgen emits a per-reason
-    breakdown (subgen-side patch — out of scope here), we infer the most
-    common case heuristically: if an .srt sits next to the video file the
-    user submitted, classify as 'sub_exists'. Otherwise 'unknown' (most
-    often audio_lang, but other branches are possible).
 
-    Returns 'sub_exists' | 'audio_lang' | 'unknown'. 'audio_lang' is
-    reserved for a future subgen-side patch; today this helper never
-    returns it.
-    """
+def _classify_subgen_log_reason(reason: str) -> str:
+    """Map a subgen `Skipping <name>: <reason>` log suffix to a skip_reason
+    enum value. Returns 'unknown' if no phrase matches."""
+    low = reason.lower()
+    for phrase, enum_val in _SKIP_REASON_PHRASES:
+        if phrase in low:
+            return enum_val
+    return "unknown"
+
+
+def _fs_skip_reason_heuristic(canonical_path: str) -> str:
+    """Fallback for when the subgen log read failed or didn't include a
+    line for this basename. If an .srt sits next to the video file the
+    user submitted, classify as 'sub_exists'; otherwise 'unknown'."""
     try:
         fs_path = canonical_to_fs(canonical_path)
     except (PathOutsideRootError, OSError):
         return "unknown"
-    # canonical_path may point at a directory (season folder) or a single
-    # file. For a directory we can't cheaply pick THE file subgen tripped
-    # on, so we conservatively report 'unknown'.
+    # canonical_path may point at a directory (season folder); we can't
+    # cheaply pick THE file subgen tripped on from a directory, so
+    # conservatively report 'unknown'.
     if not fs_path.is_file():
         return "unknown"
     parent = fs_path.parent
@@ -98,12 +120,55 @@ def _infer_skip_reason(canonical_path: str) -> str:
             if not sibling.is_file():
                 continue
             name = sibling.name
-            # Match `<stem>.srt`, `<stem>.<lang>.srt`, `<stem>.<lang>.<flag>.srt`
             if name.startswith(stem + ".") and name.lower().endswith(".srt"):
                 return "sub_exists"
     except OSError:
         return "unknown"
     return "unknown"
+
+
+def _infer_skip_reason(canonical_path: str, body: dict | None) -> tuple[str, str | None]:
+    """Best-effort disambiguation of subgen's single 'skipped' counter.
+
+    Two-stage resolution, in priority order:
+
+    1. **subgen log** (authoritative). scan_runner attaches a
+       `skip_reasons: {basename: reason_string}` map to subgen_body
+       right after /batch returns, tailed from the subgen container log.
+       We look up the canonical_path's basename and classify the reason
+       phrase via _classify_subgen_log_reason. Covers every
+       should_skip_file branch — audio_lang, internal_sub_lang,
+       sub_exists, lrc, no_preferred_audio, unknown_audio_lang.
+
+    2. **Filesystem heuristic** (fallback). When the log read failed
+       (docker down, log line rotated, basename collision) we check for
+       a sibling .srt — catches sub_exists but nothing else.
+
+    Returns (skip_reason, raw_log_reason_or_None). The raw log string is
+    handed back so the UI can show it verbatim in the detail line — far
+    more useful than a generic "audio-lang match" when the user wants to
+    know WHICH language was skipped.
+
+    Enum values: 'sub_exists' | 'audio_lang' | 'internal_sub_lang' |
+    'unknown_audio_lang' | 'unknown'.
+    """
+    raw: str | None = None
+    if isinstance(body, dict):
+        skip_map = body.get("skip_reasons")
+        if isinstance(skip_map, dict) and canonical_path:
+            basename = os.path.basename(canonical_path)
+            raw = skip_map.get(basename)
+            if isinstance(raw, str) and raw:
+                classified = _classify_subgen_log_reason(raw)
+                if classified != "unknown":
+                    return classified, raw
+                # Log line found but we don't recognise the phrase — still
+                # return the raw text so the UI can show it. Reason stays
+                # 'unknown' which routes to Issues, which is appropriate
+                # for unrecognised reasons.
+                return "unknown", raw
+    # Fallback to filesystem heuristic; raw stays None.
+    return _fs_skip_reason_heuristic(canonical_path) if canonical_path else "unknown", None
 
 
 def _path_outcome_chip(
@@ -127,17 +192,34 @@ def _path_outcome_chip(
         return {"category": "ok", "label": "queued",
                 "detail": f"subgen queued {queued}" if queued else "subgen accepted"}
     if status == PATH_STATUS_SKIPPED:
-        skip_reason = _infer_skip_reason(canonical_path) if canonical_path else "unknown"
+        skip_reason, raw = _infer_skip_reason(canonical_path or "", body)
+        # Pick the label + detail. When subgen gave us the raw log reason
+        # we prefer it verbatim — it names the actual language / branch,
+        # which is more actionable than a generic enum description.
         if skip_reason == "sub_exists":
             label = "sub already exists"
-            detail = ("matching .srt already on disk — subgen had nothing to "
-                      "do. Not an issue.")
+            detail = raw or ("matching .srt already on disk — subgen had "
+                             "nothing to do. Not an issue.")
+        elif skip_reason == "audio_lang":
+            label = "audio-lang skip"
+            detail = raw or ("audio language is in your SKIP_IF_AUDIO_LANGUAGES "
+                             "list. Verify the file's actual language if "
+                             "this surprised you.")
+        elif skip_reason == "internal_sub_lang":
+            label = "internal sub skip"
+            detail = raw or ("internal subtitle language matched a skip "
+                             "rule (SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE / "
+                             "SKIP_SUBTITLE_LANGUAGES).")
+        elif skip_reason == "unknown_audio_lang":
+            label = "unknown audio lang"
+            detail = raw or ("subgen couldn't detect the audio language "
+                             "and SKIP_UNKNOWN_LANGUAGE is enabled.")
         else:
             label = "skipped"
-            detail = (error
-                      or "subgen walked but queued nothing — likely "
-                         "audio-language match. Check your skip-language "
-                         "list if this surprised you.")
+            detail = (raw or error
+                      or "subgen walked but queued nothing — reason not "
+                         "found in container log. See subgen logs for the "
+                         "per-file reason.")
         return {"category": "skipped", "label": label,
                 "detail": detail, "skip_reason": skip_reason}
     if status == PATH_STATUS_ERROR:

@@ -36,6 +36,8 @@ SRC_PATHS=(
   src/subarr/routers/integrations.py
   src/subarr/routers/queue.py
   src/subarr/scan_runner.py
+  src/subarr/docker_client.py
+  src/subarr/app.py
   src/subarr/telemetry.py
   src/subarr/config.py
   src/subarr/integrations/ollama.py

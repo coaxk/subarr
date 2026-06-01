@@ -204,9 +204,18 @@ const OUTCOME_STYLE = {
   skipped:  { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
   // skip_reason='sub_exists' — matching .srt already on disk. Not really
   // an issue: subgen had nothing to do, the file is effectively "done".
-  // Render in neutral grey so it doesn't blend into the warning rows;
-  // routed to Recently-done instead of Issues.
+  // Routed to Recently-done in neutral grey.
   sub_exists: { fg: 'var(--fg-2)',      bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'sub already exists' },
+  // skip_reason='audio_lang' — file's audio is in SKIP_IF_AUDIO_LANGUAGES.
+  // Expected but worth a glance — render warn-amber and keep in Issues.
+  audio_lang: { fg: 'var(--warn-500)',  bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'audio-lang skip' },
+  // skip_reason='internal_sub_lang' — embedded sub matched a skip rule.
+  // Same colour family as audio_lang; the detail line names the rule.
+  internal_sub_lang: { fg: 'var(--warn-500)', bg: 'rgba(245,158,11,0.10)', br: 'rgba(245,158,11,0.35)', label: 'internal sub skip' },
+  // skip_reason='unknown_audio_lang' — subgen couldn't detect the audio
+  // language and SKIP_UNKNOWN_LANGUAGE is on. User-actionable: they can
+  // declare the language manually via the audio-lang override flow.
+  unknown_audio_lang: { fg: 'var(--warn-500)', bg: 'rgba(245,158,11,0.10)', br: 'rgba(245,158,11,0.35)', label: 'unknown audio lang' },
   error:    { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
   // #229: subgen restarted before transcription completed. Distinct
   // colour from 'failed' so it doesn't read like a real error — it's
@@ -231,13 +240,18 @@ function OutcomeChip({ category, label }) {
 function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   const path = entry.path;
   const out = entry.outcome || {};
-  // For skipped rows where queue.py heuristically identified the
-  // matching .srt on disk, swap to a distinct chip style ('sub_exists').
-  // The underlying outcome.category stays 'skipped' for API consumers;
-  // only the visual category changes.
+  // outcome.category stays 'skipped' for API consumers. For visual
+  // routing we map the skip_reason enum to a more specific chip style
+  // so the user can read the reason at a glance.
   const rawCategory = out.category || 'pending';
-  const category = (rawCategory === 'skipped' && out.skip_reason === 'sub_exists')
-    ? 'sub_exists'
+  const SKIP_VISUAL = {
+    sub_exists: 'sub_exists',
+    audio_lang: 'audio_lang',
+    internal_sub_lang: 'internal_sub_lang',
+    unknown_audio_lang: 'unknown_audio_lang',
+  };
+  const category = (rawCategory === 'skipped' && SKIP_VISUAL[out.skip_reason])
+    ? SKIP_VISUAL[out.skip_reason]
     : rawCategory;
   const ageS = Math.max(0, (Date.now() / 1000) - (entry.created_at || 0));
   const ageLabel = ageS < 60 ? `${Math.round(ageS)}s ago`
@@ -248,7 +262,9 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   // For currently-running rows the action is hidden.
   const canRequeue = category === 'skipped' || category === 'error'
                   || category === 'ok' || category === 'orphaned'
-                  || category === 'sub_exists';
+                  || category === 'sub_exists' || category === 'audio_lang'
+                  || category === 'internal_sub_lang'
+                  || category === 'unknown_audio_lang';
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
