@@ -362,12 +362,12 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
       {expanded && (
         <>
           {childrenLoading && (
-            <div style={{ paddingLeft: indent + 32, color: 'var(--fg-3)', fontSize: 'var(--text-xs)', padding: '8px 16px' }}>
+            <div style={{ paddingLeft: indent + 32, color: 'var(--fg-3)', fontSize: 'var(--text-xs)', padding: 'var(--row-dense)' }}>
               Loading…
             </div>
           )}
           {childrenError && (
-            <div style={{ paddingLeft: indent + 32, color: 'var(--error-500)', fontSize: 'var(--text-xs)', padding: '8px 16px' }}>
+            <div style={{ paddingLeft: indent + 32, color: 'var(--error-500)', fontSize: 'var(--text-xs)', padding: 'var(--row-dense)' }}>
               Couldn't load: {String(childrenError.message || childrenError)}
             </div>
           )}
@@ -592,7 +592,7 @@ export function LibraryPage() {
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600 }}>Library</h1>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600 }}>Library</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
             Browse your media library. Pick whatever you want — single files, full seasons, whole shows — and send them all to the queue.
           </div>

@@ -70,7 +70,7 @@ const STAGES = [
   },
   {
     id: 'scanning',
-    label: 'scanning',
+    label: 'transcribing',
     count: 6,
     delta: 6,
     spark: genSpark(20, 4, 3),
@@ -158,7 +158,7 @@ export function PageHeader({ now }) {
       <div>
         <h1 style={{
           margin: 0,
-          fontSize: 22, lineHeight: 1.15,
+          fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)',
           fontWeight: 600,
           letterSpacing: '-0.005em',
         }}>Dashboard</h1>
@@ -210,7 +210,7 @@ const STAGE_HREF = {
 
 const STAGE_TIPS = {
   discovered:  'Total files subarr has indexed (probed or pending). Includes both video files and subtitle sidecars subarr has noticed.',
-  probing:     'Files currently being ffprobed by an active walk. Live count drops to 0 when the walk finishes.',
+  probing:     "Files currently being ffprobed by an active probe walk. Probe walks are separate from coverage walks — they only run after coverage discovery completes, or when you trigger one manually from Library. 0 here means no probe walks are active right now, not that something's broken.",
   wanted:      'Bazarr-wanted entries — subtitles missing per Bazarr. Includes both actionable (file exists) and pending-download (file not yet imported).',
   scanning:    'Files currently in subgen\'s transcribe queue or actively being transcribed.',
   written:     'Completed transcribes — subarr generated a subtitle file and (where possible) uploaded it directly to Bazarr.',
@@ -243,7 +243,7 @@ function StageTile({ s }) {
 
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 28, lineHeight: 1,
+          fontSize: 'var(--text-display-xl)', lineHeight: 1,
           fontWeight: 500,
           color: 'var(--fg-0)',
           letterSpacing: '-0.01em',
@@ -373,7 +373,7 @@ function GpuStat({ label, value, sub, bar, tip }) {
     <div title={tip} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, cursor: tip ? 'help' : 'default' }}>
       <span className="label">{label}</span>
       <span className="display num" style={{
-        fontSize: 20, lineHeight: 1,
+        fontSize: 'var(--text-xl)', lineHeight: 1,
         fontWeight: 500,
         color: 'var(--fg-0)',
         whiteSpace: 'nowrap',
@@ -546,7 +546,7 @@ function NextRunCard({ data }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 32, lineHeight: 1,
+          fontSize: 'var(--text-display-2xl)', lineHeight: 1,
           fontWeight: 500,
           letterSpacing: '-0.01em',
           color: enabled ? 'var(--fg-0)' : 'var(--fg-3)',
@@ -668,7 +668,7 @@ function ActivityCard({ data }) {
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10,
-        padding: '12px 16px',
+        padding: 'var(--row-cozy)',
         borderBottom: 'var(--border)',
       }}>
         <span className="label">Recent activity</span>
@@ -701,7 +701,7 @@ function ActivityCard({ data }) {
           rows.map((a, i) => <ActivityRow key={a.ledger_id || i} a={a} last={i === rows.length - 1} />)
         )}
       </div>
-      <div style={{ marginTop: 'auto', padding: '8px 16px', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
+      <div style={{ marginTop: 'auto', padding: 'var(--row-dense)', borderTop: '1px solid var(--bg-3)', display: 'flex', alignItems: 'center' }}>
         <a href="/file-modal" style={{
           fontSize: 'var(--text-xs)',
           color: 'var(--fg-2)',
@@ -748,10 +748,21 @@ export function WelcomeCard() {
       icon: '▶',
       title: 'Run your first coverage walk',
       copy: 'subarr will check Bazarr, Sonarr and Radarr to find files missing subs.',
+      // Match the PageHeader Run-now pattern: credentials, ok check, and
+      // don't announce success unless the POST actually succeeded.
+      // Previously a 401/500 still showed "Coverage walk started", which
+      // is the worst kind of broken — the user thinks they're done.
       cta: { label: 'Run now', href: '#run-now', onClick: async (e) => {
         e.preventDefault();
-        await fetch('/api/schedule/coverage_walk/run-now', { method: 'POST' });
-        alert('Coverage walk started. Watch the Coverage page.');
+        try {
+          const r = await fetch('/api/schedule/coverage_walk/run-now', {
+            method: 'POST', credentials: 'same-origin',
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          alert('Coverage walk started. Watch the Coverage page.');
+        } catch (err) {
+          alert(`Run now failed: ${err.message || err}`);
+        }
       }},
     },
     pendingCount > 0 ? {

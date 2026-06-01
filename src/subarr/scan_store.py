@@ -31,6 +31,12 @@ PATH_STATUS_SKIPPED = "skipped"  # subgen walked + skipped all (e.g. embedded EN
                                  # SKIP_IF_AUDIO_LANGUAGES, etc.)
 PATH_STATUS_EMPTY = "empty"      # subgen returned 404 / walked == 0
 PATH_STATUS_ERROR = "error"
+# #229: subgen restarted between our submission (PATH_STATUS_OK) and the
+# .srt landing on disk. Subgen's in-memory queue evaporated, so the work
+# we counted as "in-flight" is gone. The restart_watchdog marks these so
+# the UI surfaces them in a "Lost on restart" bucket and so the
+# completion_watcher stops waiting on them.
+PATH_STATUS_ORPHANED = "orphaned"
 
 
 @dataclass
@@ -190,6 +196,45 @@ class ScanStore:
             )
             for row in rows
         ]
+
+    def mark_orphaned_before(self, cutoff_epoch: float,
+                             completed_paths: set[str] | None = None) -> int:
+        """#229 reconciliation: walk all scans created before cutoff_epoch,
+        find PathResult rows with status=PATH_STATUS_OK that aren't in the
+        completed_paths set (paths confirmed done via provenance.completed_at),
+        and re-tag them as PATH_STATUS_ORPHANED with reason='subgen restarted
+        before completion'. Returns count of paths reclassified.
+
+        Called from the SubgenWatchdog on_restart hook in app lifespan.
+        completed_paths is provenance.recent_completed_paths() so we don't
+        orphan items subgen actually finished before the restart.
+        """
+        completed = completed_paths or set()
+        n_reclassified = 0
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, current_index, results_json FROM scans "
+                "WHERE created_at < ?",
+                (cutoff_epoch,),
+            ).fetchall()
+            for scan_id, current_index, results_json in rows:
+                results = [PathResult.from_dict(d) for d in json.loads(results_json)]
+                changed = False
+                for r in results:
+                    if r.status == PATH_STATUS_OK and r.path not in completed:
+                        r.status = PATH_STATUS_ORPHANED
+                        r.error = (
+                            "subgen restarted before transcription completed — "
+                            "click ↻ requeue to retry"
+                        )
+                        changed = True
+                        n_reclassified += 1
+                if changed:
+                    self._conn.execute(
+                        "UPDATE scans SET results_json = ? WHERE id = ?",
+                        (json.dumps([r.to_dict() for r in results]), scan_id),
+                    )
+        return n_reclassified
 
     def delete(self, scan_id: str) -> bool:
         """Drop a single scan from history. Returns True if a row was deleted."""

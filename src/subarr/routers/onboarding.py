@@ -277,6 +277,127 @@ async def auto_detect(request: Request) -> dict[str, Any]:
     return {"available": True, "services": enriched, "count": len(enriched)}
 
 
+# ─── Mount detection (#130) ─────────────────────────────────────────
+
+
+# Paths we ignore when scanning /proc/self/mountinfo — these are the
+# container's own filesystems, never the user's media.
+# nosec B108 — these are filter prefixes used to EXCLUDE container
+# system mounts from media-detection results. We never read from or
+# write to /tmp here; the literal exists so we can refuse to surface
+# /tmp as a "media candidate" in the onboarding wizard.
+_SKIP_MOUNT_PREFIXES = (
+    "/proc", "/sys", "/dev", "/run", "/tmp",  # nosec B108
+    "/etc/", "/var/log", "/usr/", "/lib", "/bin", "/sbin",
+    "/.", "/boot",
+)
+# Mount source types that are NEVER the user's media volume.
+_SKIP_FS_TYPES = {
+    "overlay", "tmpfs", "proc", "sysfs", "devpts", "cgroup", "cgroup2",
+    "mqueue", "ramfs", "pstore", "bpf", "tracefs", "debugfs", "securityfs",
+    "configfs", "fusectl", "autofs", "rpc_pipefs",
+}
+
+
+@router.get("/onboarding/detect-mounts")
+def detect_mounts() -> dict[str, Any]:
+    """Scan /proc/self/mountinfo for bind-mounted media candidates.
+
+    Inside a docker container, every `-v /host/path:/container/path`
+    line in compose surfaces here as a real mount. We filter to plausible
+    media-volume targets (under common roots) and return them ranked by
+    how-media-like they look so the wizard's paths step can offer them
+    as one-click options instead of forcing the user to type the path.
+
+    Heuristics (in priority order):
+      1. mountpoint under /media or /library — explicit media intent.
+      2. mountpoint under /data — common for arr-stack media volumes.
+      3. mountpoint under /mnt — less explicit but often where mounts land.
+      4. anything else gets dropped — we don't want to suggest /app or /tmp.
+
+    Read-only when not available (non-Linux, missing /proc): returns
+    {available: false, reason: ...} so the wizard knows to hide the
+    auto-detect button.
+    """
+    mountinfo_path = "/proc/self/mountinfo"
+    if not os.path.exists(mountinfo_path):
+        return {
+            "available": False,
+            "reason": f"{mountinfo_path} not present (non-Linux or restricted container)",
+            "candidates": [],
+        }
+
+    candidates: list[dict[str, Any]] = []
+    try:
+        with open(mountinfo_path, encoding="utf-8") as f:
+            for line in f:
+                # Format: ID PARENT MAJ:MIN ROOT MOUNTPOINT OPTIONS ... - FSTYPE SOURCE SUPER_OPTS
+                # We need fields 4 (mountpoint), 8 (after ' - '), and the FS type.
+                parts = line.strip().split(" ")
+                if len(parts) < 7:
+                    continue
+                try:
+                    mountpoint = parts[4]
+                    dash_idx = parts.index("-")
+                    fs_type = parts[dash_idx + 1] if dash_idx + 1 < len(parts) else None
+                    source = parts[dash_idx + 2] if dash_idx + 2 < len(parts) else None
+                except (ValueError, IndexError):
+                    continue
+                if fs_type in _SKIP_FS_TYPES:
+                    continue
+                if any(mountpoint.startswith(p) for p in _SKIP_MOUNT_PREFIXES):
+                    continue
+                if mountpoint in ("/", "/etc/hostname", "/etc/hosts", "/etc/resolv.conf"):
+                    continue
+                # Heuristic priority
+                if mountpoint.startswith("/media") or mountpoint.startswith("/library"):
+                    priority = 0
+                elif mountpoint.startswith("/data"):
+                    priority = 1
+                elif mountpoint.startswith("/mnt"):
+                    priority = 2
+                else:
+                    continue
+                # Probe the mount: exists? has children?
+                try:
+                    p = Path(mountpoint)
+                    if not p.is_dir():
+                        continue
+                    top_entries = sorted(
+                        [e.name for e in p.iterdir() if not e.name.startswith(".")],
+                    )[:5]
+                    item_count = sum(1 for _ in p.iterdir())
+                except (PermissionError, OSError):
+                    top_entries = []
+                    item_count = None
+                candidates.append({
+                    "path": mountpoint,
+                    "fs_type": fs_type,
+                    "source": source,
+                    "priority": priority,
+                    "top_entries": top_entries,
+                    "item_count": item_count,
+                })
+    except OSError as e:
+        return {
+            "available": False,
+            "reason": f"could not read {mountinfo_path}: {e}",
+            "candidates": [],
+        }
+
+    # Sort by priority + then "looks more like a media root" (has subdirs).
+    candidates.sort(key=lambda c: (
+        c["priority"],
+        -(c["item_count"] or 0),
+        c["path"],
+    ))
+
+    return {
+        "available": True,
+        "candidates": candidates,
+    }
+
+
 # ─── Probe paths ────────────────────────────────────────────────────
 
 

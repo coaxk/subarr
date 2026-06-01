@@ -1,14 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Bazarr issue
-    url: https://github.com/morpheus65535/bazarr/issues
-    about: For Bazarr bugs (we coordinate Bazarr but don't maintain it)
-  - name: Upstream subgen issue
-    url: https://github.com/McCloudS/subgen/issues
-    about: For subgen transcription / model / Whisper issues — file upstream
-  - name: subarr-subgen patch issue
-    url: https://github.com/coaxk/subarr-subgen/issues
-    about: For issues specific to our patches on top of subgen
-  - name: Security vulnerability
-    url: https://github.com/coaxk/subarr/blob/main/SECURITY.md
-    about: Don't open a public issue — see SECURITY.md
+  - name: Support / Questions
+    url: https://github.com/coaxk/subarr/discussions/categories/support
+    about: For help and troubleshooting, use Discussions instead of Issues.
+  - name: Feature Ideas
+    url: https://github.com/coaxk/subarr/discussions/categories/ideas
+    about: For early-stage ideas and brainstorming, start a Discussion first.

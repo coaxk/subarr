@@ -30,8 +30,8 @@ from .routers import (
     providers as r_providers, vision as r_vision,
     enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
     onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
-    queue, scan, schedule as r_schedule, telemetry as r_telemetry,
-    updates as r_updates,
+    queue, scan, schedule as r_schedule, sidecar as r_sidecar,
+    telemetry as r_telemetry, updates as r_updates,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -57,12 +57,19 @@ async def lifespan(app_: FastAPI):
         log.info("schema migrations applied this boot: %s",
                  [m.name for m in applied])
     app_.state.subgen = SubgenClient()
-    # Probe subgen capabilities once. The result drives:
+    # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth
     #   - whether completion_watcher polls /queue vs the provenance table
     #   - whether the scan-submit UI is enabled or shows "needs subarr-subgen"
     # Stored on app.state for the health endpoint + downstream gating.
+    # #229: re-probed periodically by SubgenWatchdog (started further down)
+    # so subgen restarts get detected; on restart, in-flight scan_store
+    # entries can be reconciled as orphaned instead of pretending they
+    # are still queued.
     app_.state.subgen_caps = await app_.state.subgen.probe_capabilities()
+    app_.state.subgen_restart_detected_at = None
+    app_.state.subgen_restart_from = None
+    app_.state.subgen_restart_to = None
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
     app_.state.runner = ScanRunner(
@@ -141,16 +148,92 @@ async def lifespan(app_: FastAPI):
     # Update notification poller — once-per-24h GitHub release check
     # cached to update_checks table. Backs /api/updates which the UI
     # consumes for the header pill + Home tile + Settings panel.
+    #
+    # #108: the patch-stack revision (subarr_subgen_patch_rev = 'v4.7')
+    # is the version we compare against coaxk/subarr-subgen release
+    # tags. Previously we sent subgen_caps.version (the UPSTREAM subgen
+    # version, e.g. '2026.05.3') which is meaningful for vanilla subgen
+    # but never matches the patch-stack tags — so users running an old
+    # patch level never saw an update notification. Fall back to the
+    # upstream version when running vanilla subgen (no patch_rev), and
+    # to None when subgen is unreachable.
+    _subgen_caps = getattr(app_.state, "subgen_caps", None)
+    if _subgen_caps and getattr(_subgen_caps, "subarr_subgen_patch_rev", None):
+        _subgen_current = _subgen_caps.subarr_subgen_patch_rev
+    elif _subgen_caps and _subgen_caps.version:
+        # Vanilla subgen — keep the legacy behaviour (compare upstream
+        # version against the McCloudS/subgen tag, though release_notes
+        # link still points to our repo by DEFAULT_PRODUCTS).
+        _subgen_current = _subgen_caps.version
+    else:
+        _subgen_current = None
     from .update_checker import UpdateChecker
     current_versions = {
         "subarr": __version__,
-        "subarr-subgen": app_.state.subgen_caps.version if app_.state.subgen_caps else None,
+        "subarr-subgen": _subgen_current,
     }
     app_.state.update_checker = UpdateChecker(
         db_path=settings.db_path,
         current_version_resolver=current_versions,
     )
     app_.state.update_checker.start()
+
+    # #229: subgen identity watchdog. Periodically re-probes subgen's
+    # /queue + /status to detect restarts (patch_rev or version change).
+    # On restart, stamps app.state.subgen_restart_detected_at so the
+    # queue UI can surface the event + reconcile orphaned scan_store
+    # entries. Reconciliation hook lives on the watchdog so this module
+    # stays decoupled from scan_store + watcher details.
+    from .subgen_watchdog import SubgenWatchdog
+
+    async def _on_subgen_restart(old_caps, new_caps, detected_at):
+        app_.state.subgen_restart_detected_at = detected_at
+        app_.state.subgen_restart_from = {
+            "patch_rev": getattr(old_caps, "subarr_subgen_patch_rev", None),
+            "version": getattr(old_caps, "version", None),
+        }
+        app_.state.subgen_restart_to = {
+            "patch_rev": getattr(new_caps, "subarr_subgen_patch_rev", None),
+            "version": getattr(new_caps, "version", None),
+        }
+        # #229 phase 2: reconcile orphaned scan_store entries. Walks
+        # scan_store for status=ok entries created before the restart
+        # detection, excludes those whose canonical_path appears in
+        # provenance.completed_paths_since (transcription confirmed),
+        # re-tags the rest as PATH_STATUS_ORPHANED with a clear reason.
+        # The Queue UI surfaces them in their own "Lost on restart"
+        # bucket (see queue.py history endpoint).
+        try:
+            scans = app_.state.scans
+            provenance = app_.state.provenance
+            # Look back 24h — anything older than that is from a previous
+            # session anyway. Anything completed_at >= cutoff is "real done".
+            cutoff = detected_at
+            completed = provenance.completed_paths_since(detected_at - 86400)
+            n = scans.mark_orphaned_before(cutoff, completed_paths=completed)
+            log.warning(
+                "subgen restart reconciliation: %d in-flight scan_store "
+                "entries marked ORPHANED (provenance confirms %d completed "
+                "in last 24h, preserved as ok)",
+                n, len(completed),
+            )
+        except Exception as e:
+            log.error("subgen restart reconciliation failed: %s", e,
+                      exc_info=True)
+
+    def _get_caps():
+        return getattr(app_.state, "subgen_caps", None)
+
+    def _set_caps(c):
+        app_.state.subgen_caps = c
+
+    app_.state.subgen_watchdog = SubgenWatchdog(
+        subgen=app_.state.subgen,
+        get_caps=_get_caps,
+        set_caps=_set_caps,
+        on_restart=_on_subgen_restart,
+    )
+    app_.state.subgen_watchdog.start()
 
     # Anonymous telemetry — ON by default per v1.0 product decision.
     # Opt-out one-click in Settings. Stats published publicly at
@@ -189,6 +272,10 @@ async def lifespan(app_: FastAPI):
             await app_.state.docker_discovery.aclose()
         await app_.state.telemetry.stop()
         await app_.state.update_checker.stop()
+        try:
+            await app_.state.subgen_watchdog.stop()
+        except (AttributeError, Exception):
+            pass
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
         try:
@@ -251,6 +338,7 @@ app.include_router(r_discovery.router)
 app.include_router(r_telemetry.router)
 app.include_router(r_home.router)
 app.include_router(r_onboarding.router)
+app.include_router(r_sidecar.router)
 
 
 @app.get("/api/health")

@@ -52,6 +52,10 @@ const Api = {
     const r = await fetch('/api/onboarding/auto-detect', { method: 'POST' });
     return r.ok ? r.json() : { available: false };
   },
+  async detectMounts() {
+    const r = await fetch('/api/onboarding/detect-mounts', { credentials: 'same-origin' });
+    return r.ok ? r.json() : { available: false, candidates: [] };
+  },
   async probePaths(mediaRoot) {
     const r = await fetch('/api/onboarding/probe-paths', {
       method: 'POST',
@@ -190,7 +194,7 @@ function TestResult({ result }) {
 function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <h1 className="display" style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.01em' }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-xl)', fontWeight: 600, letterSpacing: '-0.01em' }}>
         Welcome to subarr
       </h1>
       <p style={{ margin: 0, fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -248,6 +252,15 @@ function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
 
 
 function StepPaths({ progress, setField, probeResult, onProbe }) {
+  // #130: auto-detect bind-mounted media candidates from /proc/self/mountinfo.
+  // One round-trip on mount; results render as one-click chips below the
+  // library-root input. Non-Linux / non-bound hosts get available:false and
+  // the section quietly hides.
+  const [mountDetect, setMountDetect] = useState(null);
+  React.useEffect(() => {
+    Api.detectMounts().then(setMountDetect).catch(() => setMountDetect({ available: false }));
+  }, []);
+
   // #136 fix: seed the displayed defaults into the underlying state once
   // so the Continue button isn't gated on a field that LOOKS filled in but
   // is actually empty. User sees /media/library, expects Continue to work.
@@ -269,7 +282,7 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           Where's your library?
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -284,28 +297,67 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           </span>
         </p>
       </div>
-      <FormRow label="Library root (container view)"
-        hint="What subarr sees. Match the right-hand side of your bind mount.">
+      {/* #130: detected mount candidates surface as one-click chips so
+          the user doesn't have to type the path. Only renders when at
+          least one plausible candidate was found. */}
+      {mountDetect?.available && mountDetect.candidates?.length > 0 && (
+        <div style={{
+          padding: '10px 12px',
+          background: 'rgba(34,211,161,0.05)',
+          border: '1px solid rgba(34,211,161,0.20)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--fg-2)',
+          lineHeight: 1.45,
+        }}>
+          <div style={{ marginBottom: 6 }}>
+            <b style={{ color: 'var(--fg-1)' }}>Detected bind-mounts</b> from your container —
+            click to use as the library root:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {mountDetect.candidates.slice(0, 6).map((c) => (
+              <button key={c.path}
+                onClick={() => setField('media_root', c.path)}
+                title={`${c.fs_type || 'mount'}${c.source ? ' from ' + c.source : ''}${c.item_count != null ? ' · ' + c.item_count + ' top-level items' : ''}${c.top_entries?.length ? '\nFirst entries: ' + c.top_entries.join(', ') : ''}`}
+                style={{
+                  fontSize: 'var(--text-xs)', padding: '4px 10px',
+                  background: progress.media_root === c.path ? 'var(--violet-500)' : 'var(--bg-2)',
+                  color: progress.media_root === c.path ? '#fff' : 'var(--fg-1)',
+                  border: '1px solid var(--bg-4)',
+                  borderRadius: 'var(--radius-pill)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                {c.path}
+                {c.item_count != null && c.item_count > 0 && (
+                  <span style={{ marginLeft: 6, opacity: 0.6 }}>· {c.item_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* #134: per user, label as "container's view" + give explicit guidance
+          on where to find each value. The right-hand side of every bind-mount
+          line in the relevant docker-compose.yaml IS the answer. */}
+      <FormRow label="Subarr's container view of media"
+        hint="Look in your subarr compose.yaml under `volumes:` — the part AFTER the colon (e.g. /mnt/nas/Media:/media/library → use /media/library).">
         <TextInput
           value={progress.media_root || '/media/library'}
           onChange={(v) => setField('media_root', v)}
           placeholder="/media/library"
         />
       </FormRow>
-      {/* #133: split per-service. Most homelabs have Sonarr at /data/TV/
-          and Radarr at /data/Movies/ — one shared prefix forced users to
-          pick a useless common parent. arr_path_prefix stays in progress
-          as a fallback so older onboarding states still load. */}
-      <FormRow label="Sonarr path prefix"
-        hint="What Sonarr stores as `path` — subarr strips this when canonicalising.">
+      <FormRow label="Sonarr's container view of media"
+        hint="Look in your Sonarr compose.yaml under `volumes:` — the right side of the mount that holds your TV library (e.g. /mnt/nas/Media/TV:/data/TV → use /data/TV).">
         <TextInput
           value={progress.sonarr_path_prefix || progress.arr_path_prefix || '/data/TV/'}
           onChange={(v) => setField('sonarr_path_prefix', v)}
           placeholder="/data/TV/"
         />
       </FormRow>
-      <FormRow label="Radarr path prefix"
-        hint="What Radarr stores as `path` — subarr strips this when canonicalising.">
+      <FormRow label="Radarr's container view of media"
+        hint="Same idea, in your Radarr compose.yaml under `volumes:` — right side of the mount holding your movie library.">
         <TextInput
           value={progress.radarr_path_prefix || progress.arr_path_prefix || '/data/Movies/'}
           onChange={(v) => setField('radarr_path_prefix', v)}
@@ -397,7 +449,7 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
             </>
           )}
         </div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           Connect {labels.display}
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
@@ -476,7 +528,7 @@ function StepIntegration({ step, progress, setField, testResult, onTest, isTesti
 function StepGpu({ gpuInfo }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
         GPU check
       </h1>
       {gpuInfo ? (
@@ -555,7 +607,7 @@ function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div>
-        <h1 className="display" style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           First walk
         </h1>
         <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>

@@ -26,11 +26,13 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..audio_lang_store import resolve_audio_language_override
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import (
     PATH_STATUS_ERROR,
     PATH_STATUS_OK,
+    PATH_STATUS_ORPHANED,
     PATH_STATUS_RUNNING,
     PATH_STATUS_SKIPPED,
     SCAN_STATUS_DONE,
@@ -79,6 +81,14 @@ def _path_outcome_chip(status: str, body: dict | None, error: str | None) -> dic
     if status == PATH_STATUS_ERROR:
         return {"category": "error", "label": "failed",
                 "detail": error or "submission errored"}
+    if status == PATH_STATUS_ORPHANED:
+        # #229 phase 2: subgen restarted between subarr's accept and the
+        # .srt landing on disk. Surface in its own category so the Queue
+        # UI can route to a "Lost on restart" bucket and show a prominent
+        # requeue button rather than burying these in Recently-done.
+        return {"category": "orphaned", "label": "lost on restart",
+                "detail": error or
+                "subgen restarted before transcription completed"}
     return {"category": "pending", "label": status, "detail": ""}
 
 
@@ -131,7 +141,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     since = time.time() - history_window_s
     scans = store.list_recent(since_epoch=since, limit=500)
     history: list[dict] = []
-    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0}
+    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
     # Build a set of paths currently live in subgen so we don't double-count
     # an in-flight row as "running" via scan_store AND "processing" via subgen.
     live_paths: set[str] = set()
@@ -180,6 +190,40 @@ class RequeueRequest(BaseModel):
     reverse: bool = False
 
 
+# #58: subgen-side cancel. Proxies to subarr-subgen v4.4 POST /queue/cancel.
+class CancelRequest(BaseModel):
+    path: str
+
+
+@router.post("/queue/cancel")
+async def cancel_queued(req: CancelRequest, request: Request) -> dict:
+    """Cancel a queued (NOT processing) task in subgen. Routes through
+    the v4.4 capability — if the live subgen doesn't advertise
+    queue_cancel, return 503 so the UI can show 'upgrade subgen to v4.4'.
+
+    Response body mirrors what subgen returns:
+      { cancelled: bool, reason?: str, path: str }
+    """
+    canonical = (req.path or "").strip().strip("/")
+    if not canonical:
+        raise HTTPException(400, detail="path required")
+    caps = getattr(request.app.state, "subgen_caps", None)
+    if caps is None or not getattr(caps, "queue_cancel", False):
+        raise HTTPException(
+            503,
+            detail=(
+                "queue_cancel capability missing — upgrade subarr-subgen to v4.4+. "
+                "Current subgen rev: " + (getattr(caps, "subarr_subgen_patch_rev", None) or "vanilla")
+            ),
+        )
+    subgen = request.app.state.subgen
+    try:
+        result = await subgen.queue_cancel(canonical)
+    except SubgenUnavailable as e:
+        raise HTTPException(502, detail=f"subgen unavailable: {e}")
+    return result
+
+
 @router.post("/queue/requeue", status_code=202)
 async def requeue(req: RequeueRequest, request: Request) -> dict:
     """Resubmit a single path to subgen via the scan runner. Creates a
@@ -194,10 +238,22 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
         raise HTTPException(400, detail=f"path escapes media root: {canonical!r}")
     if not target.exists():
         raise HTTPException(404, detail=f"not found on disk: {canonical!r}")
+    # #229: pass the audio_language_override if the user has verified
+    # this file's audio language. Previously requeue lacked this lookup
+    # so subgen would silently skip any file whose audio tag matched
+    # SKIP_IF_AUDIO_LANGUAGES — the requeue click "succeeded" (200 OK,
+    # green chip) but no transcription ever happened. The user had no
+    # working manual recovery path. Shared helper with coverage_queue.
+    audio_language_override = resolve_audio_language_override(
+        getattr(request.app.state, "audio_lang", None),
+        canonical,
+        caller="requeue",
+        log=log,
+    )
     store = request.app.state.scans
     runner = request.app.state.runner
     scan = store.create([canonical], reverse=req.reverse)
-    runner.start(scan)
+    runner.start(scan, audio_language_override=audio_language_override)
     provenance = request.app.state.provenance
     provenance.record(
         canonical_path=canonical, scan_id=scan.id, source=SOURCE_SUBGENSCAN,

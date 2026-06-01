@@ -11,7 +11,29 @@ permissions:
   packages: write
 
 jobs:
+  # Tag pushes block on tests + drift check first. Main-branch pushes also
+  # block — every image we publish to GHCR ran the test suite on the same
+  # commit. Cheap insurance against a typo shipping to :latest.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -e .[dev]
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci || npm install
+      # Drift check: rebuild bundles and fail if anything changed. Forces
+      # contributors to commit their bundle changes alongside the JSX.
+      - run: npm run check:frontend
+      - run: PYTHONPATH=src pytest -q --tb=line
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +52,9 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
-            type-semver,pattern={{version}}
+            type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 

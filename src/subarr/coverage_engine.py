@@ -886,7 +886,13 @@ async def build_coverage(
         s = sonarr_by_id.get(sonarr_id, {})
         canonical = _strip_arr_prefix(s.get("path"))
         if canonical and canonical not in series_srt_index:
-            series_srt_index[canonical] = _scan_for_srt_recursive(canonical)
+            # #228: rglob blocks the event loop. On a real-size library this
+            # is the difference between the app feeling responsive during a
+            # walk vs. timeouts on /api/health. Offload to a thread per call;
+            # we already dedupe per-series via series_srt_index above.
+            series_srt_index[canonical] = await asyncio.to_thread(
+                _scan_for_srt_recursive, canonical
+            )
         srt_paths = series_srt_index.get(canonical or "", [])
         missing_codes = [ms.get("code2") or ms.get("name") or "?"
                          for ms in (w.get("missing_subtitles") or [])]
@@ -935,7 +941,13 @@ async def build_coverage(
         title = w.get("title") or w.get("movieTitle") or ""
         m = radarr_by_title.get(title.strip().lower(), {})
         canonical = _strip_arr_prefix(m.get("path"))
-        has_srt, srts = _scan_for_srt(canonical) if canonical else (False, [])
+        # #228: iterdir on each movie folder blocks the event loop. Shallow
+        # scan (one level deep) so per-call cost is small, but with 500+
+        # movies the cumulative block is real. Thread it.
+        if canonical:
+            has_srt, srts = await asyncio.to_thread(_scan_for_srt, canonical)
+        else:
+            has_srt, srts = False, []
         item = CoverageItem(
             media_type="movie",
             title=title,
@@ -1078,7 +1090,10 @@ async def _add_bazarr_blind_synthetic_rows(
         sid = s.get("id")
         series_canonical = _strip_arr_prefix(s.get("path"))
         if series_canonical and series_canonical not in series_srt_index:
-            series_srt_index[series_canonical] = _scan_for_srt_recursive(series_canonical)
+            # #228: same offload as the main loop above.
+            series_srt_index[series_canonical] = await asyncio.to_thread(
+                _scan_for_srt_recursive, series_canonical
+            )
         srt_paths = series_srt_index.get(series_canonical or "", [])
         # Iterate this series's episodes. We already collected sonarr_eps_by_id
         # for the wanted_series_ids set + foreign extras above.

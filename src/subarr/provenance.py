@@ -181,6 +181,19 @@ class ProvenanceStore:
             ).fetchall()
         return [LedgerEntry(*r) for r in rows]
 
+    def completed_paths_since(self, since_epoch: float) -> set[str]:
+        """#229 reconciliation helper: canonical paths whose transcription
+        completed (completed_at IS NOT NULL) on or after since_epoch. Used
+        by ScanStore.mark_orphaned_before to NOT orphan paths that subgen
+        actually finished before the restart."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path FROM subs_generated "
+                "WHERE completed_at IS NOT NULL AND completed_at >= ?",
+                (since_epoch,),
+            ).fetchall()
+        return {r[0] for r in rows}
+
     def completed_without_bazarr(self, max_age_s: int = 86400) -> list[LedgerEntry]:
         """Entries that completed transcribe but never fired Bazarr's
         scan-disk task. Retry fodder for the completion watcher.

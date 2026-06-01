@@ -277,7 +277,11 @@ function ToggleRow({ label, hint, on, onToggle }) {
         <div style={{ fontSize: 'var(--text-md)', color: 'var(--fg-0)' }}>{label}</div>
         {hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 2 }}>{hint}</div>}
       </div>
-      <button onClick={onToggle} style={{
+      <button onClick={onToggle}
+        role="switch"
+        aria-checked={!!on}
+        aria-label={`Toggle ${label}`}
+        style={{
         width: 36, height: 20, borderRadius: 99,
         background: on ? 'var(--violet-500)' : 'var(--bg-4)',
         position: 'relative', border: 'none', cursor: 'pointer', padding: 0,
@@ -575,7 +579,7 @@ function HeaderTile({ label, value, sub, tint, tip }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -698,6 +702,64 @@ const PRESETS = [
       ...d, mode: 'auto_queue',
       deny_languages: Array.from(new Set([...(d.deny_languages || []), 'eng', 'en'])),
       require_monitored: true,
+    }),
+  },
+  // #121: curated rule packs for common workflows. These build on the three
+  // archetypes above with more opinionated defaults targeting specific
+  // user needs.
+  {
+    id: 'anime',
+    label: 'Anime',
+    sub: 'Auto-queue Japanese audio missing English subs. Whisper translates.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      allow_languages: ['jpn', 'ja'],
+      deny_languages: (d.deny_languages || []).filter(l => !['eng', 'en'].includes(l)),
+      skip_embedded_en: false,  // EN sub IS the goal, not a skip signal
+      require_monitored: true,
+      skip_stale_disk: true,
+      min_score: 150,
+    }),
+  },
+  {
+    id: 'hearing-impaired',
+    label: 'Hearing-impaired',
+    sub: 'Prefer SDH/CC subs from Bazarr; Whisper only when none exist.',
+    apply: (d) => ({
+      ...d, mode: 'manual_confirm',  // Bazarr first; Whisper is fallback
+      require_monitored: true,
+      skip_stale_disk: true,
+      skip_embedded_en: true,  // Already has SDH-tagged embedded sub? Skip.
+      min_score: 200,
+    }),
+  },
+  {
+    id: 'foreign-language-learner',
+    label: 'Language learner',
+    sub: 'Original audio + English subs. Allows English only, transcribe task.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      allow_languages: ['eng', 'en'],
+      deny_languages: [],
+      skip_embedded_en: true,  // Don't double-create when already there
+      require_monitored: true,
+      min_score: 150,
+    }),
+  },
+  {
+    id: 'movies-only',
+    label: 'Movies only',
+    sub: 'Scope to your movies tree; boost recently-watched. TV is excluded.',
+    apply: (d) => ({
+      ...d, mode: 'auto_queue',
+      require_monitored: true,
+      skip_stale_disk: true,
+      skip_embedded_en: true,
+      // No path-allowlist field yet; users wanting strict scoping should
+      // pair this preset with a path-filter rule in v1.2. For now, the
+      // higher min_score + Tautulli scoring delta does most of the work.
+      min_score: 300,
+      max_per_run: 50,
     }),
   },
 ];
@@ -864,7 +926,7 @@ export function RulesPage() {
             <span>/</span>
             <span className="mono" style={{ color: 'var(--fg-1)' }}>auto-queue</span>
           </div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, display: 'flex', alignItems: 'baseline', gap: 10 }}>
             Auto-queue rules
             {dirtyCount > 0 && (
               <span style={{ fontSize: 'var(--text-xs)', color: 'var(--warn-500)', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}>dirty</span>

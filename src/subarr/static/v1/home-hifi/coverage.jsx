@@ -698,7 +698,7 @@ function CoverageHeaderTile({ label, value, sub, tint, tip, accent }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -828,6 +828,7 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
         </button>
         <button className="btn ghost" onClick={dismiss}
           title="Hide this card entirely on this device"
+          aria-label="Dismiss welcome card"
           style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
       </div>
     );
@@ -893,6 +894,7 @@ function CoverageWelcomeCard({ rows, pendingReview }) {
           style={{ fontSize: 'var(--text-2xs)' }}>▴ collapse</button>
         <button className="btn ghost" onClick={dismiss}
           title="Hide this card entirely on this device."
+          aria-label="Dismiss welcome card"
           style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>×</button>
       </div>
       <div style={{
@@ -1423,6 +1425,15 @@ export function AudioReviewModal() {
   const [posLoading, setPosLoading] = useState(false);
   const [track, setTrack] = useState(0);
   const [activeSampleIdx, setActiveSampleIdx] = useState(0);
+  // v1.2-A Layer 3 (#179): Whisper robust detection result.
+  // Sync subgen call; ~6-12s wall on RTX 3090. We don't auto-run on
+  // open because it's expensive; user clicks the button when they
+  // want the evidence. Result shape from /api/audio-lang/whisper-detect:
+  //   { chunks: [{offset_s, language, language_name, probability}, ...],
+  //     aggregate: {language, n_agreeing, n_total, min_probability} }
+  const [whisperResult, setWhisperResult] = useState(null);
+  const [whisperRunning, setWhisperRunning] = useState(false);
+  const [whisperError, setWhisperError] = useState(null);
 
   useEffect(() => {
     const handler = (e) => {
@@ -1432,6 +1443,9 @@ export function AudioReviewModal() {
       setPosData(null);
       setTrack(0);
       setActiveSampleIdx(0);
+      setWhisperResult(null);
+      setWhisperRunning(false);
+      setWhisperError(null);
       // Fetch sample positions immediately so the player is ready.
       if (e.detail?._canonical_path) {
         setPosLoading(true);
@@ -1460,7 +1474,46 @@ export function AudioReviewModal() {
   }, [track]);
 
   if (!row) return null;
-  const close = () => { setRow(null); setPosData(null); };
+  const close = () => { setRow(null); setPosData(null); setWhisperResult(null); };
+  // v1.2-A Layer 3 (#179): call subgen via subarr proxy. ~6-12s typical
+  // on a warm model. On 503 (capability missing) surface the upgrade
+  // hint inline so the user knows their subgen is too old, rather than
+  // making them dig in logs.
+  const runWhisper = async () => {
+    setWhisperRunning(true);
+    setWhisperError(null);
+    setWhisperResult(null);
+    try {
+      const r = await fetch('/api/audio-lang/whisper-detect', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          canonical_path: row._canonical_path,
+          chunks: 3,
+          chunk_length_s: 30,
+        }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${r.status}`);
+      }
+      const body = await r.json();
+      setWhisperResult(body);
+      // Auto-prefill the language selector with the aggregate top
+      // result so a confident detection becomes one click to confirm.
+      const agg = body && body.aggregate;
+      if (agg && agg.language && agg.language !== 'und' && agg.n_total > 0) {
+        // Match the audio_lang_store selector format. The selector
+        // accepts ISO-639-1 (2-char) values; subgen returns 2-char.
+        setSelected(agg.language);
+      }
+    } catch (e) {
+      setWhisperError(String(e.message || e));
+    } finally {
+      setWhisperRunning(false);
+    }
+  };
   const save = async (langCode) => {
     setSaving(true);
     setError(null);
@@ -1602,6 +1655,105 @@ export function AudioReviewModal() {
           {posData && (!posData.positions || posData.positions.length === 0) && (
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
               Couldn&apos;t find a non-silent region in this file. (Very short / all-music / corrupted?)
+            </div>
+          )}
+        </div>
+
+        {/* v1.2-A Layer 3 (#179): robust Whisper detection. The user
+            clicks → subgen runs N-chunk detection (~6-12s) → we render
+            the per-chunk breakdown + aggregate vote and auto-prefill
+            the language selector below. Calibrated confidence: 3/3 high
+            prob = trust; 2/3 with mid prob = surface the disagreement. */}
+        <div style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', fontWeight: 600 }}>
+              🤖 Ask Whisper (Layer 3)
+            </span>
+            <span style={{ flex: 1 }} />
+            <button className="btn ghost sm"
+              onClick={runWhisper}
+              disabled={whisperRunning}
+              title="Sample 3 audio chunks across the file and ask Whisper to identify the language. ~6-12s on a warm GPU."
+              aria-label="Run Whisper multi-chunk language detection">
+              {whisperRunning ? '…running' : (whisperResult ? '↻ re-run' : 'run detection')}
+            </button>
+          </div>
+          {whisperRunning && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
+              <span className="spinner-ring" />
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                Sampling 3 chunks · running Whisper inference… (~6-12s)
+              </span>
+            </div>
+          )}
+          {whisperError && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
+              {whisperError}
+            </div>
+          )}
+          {whisperResult && !whisperRunning && (() => {
+            const agg = whisperResult.aggregate || {};
+            const chunks = whisperResult.chunks || [];
+            const confident = agg.n_total > 0 && agg.n_agreeing === agg.n_total
+                              && (agg.min_probability || 0) >= 0.85;
+            const suspect = !confident && agg.n_total > 0;
+            return (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className={`chip ${confident ? 'violet' : (suspect ? 'amber' : '')}`}
+                    style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)' }}>
+                    {confident ? '✓ confident' : (suspect ? '⚠ suspect' : '? no data')}
+                  </span>
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>
+                    <b className="mono">{agg.language || 'und'}</b>
+                    {agg.n_total > 0 && (
+                      <span style={{ color: 'var(--fg-3)' }}>
+                        {' '}· {agg.n_agreeing}/{agg.n_total} agree
+                        {' '}· min p={(agg.min_probability || 0).toFixed(2)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {chunks.map((c, i) => (
+                    <div key={i} className="mono" style={{
+                      display: 'flex', gap: 10,
+                      fontSize: 'var(--text-2xs)',
+                      color: c.error ? 'var(--error-500)' : 'var(--fg-2)',
+                    }}>
+                      <span style={{ color: 'var(--fg-3)', minWidth: 70 }}>
+                        chunk {i + 1} · {Math.floor((c.offset_s || 0) / 60)}:
+                        {String(Math.floor((c.offset_s || 0) % 60)).padStart(2, '0')}
+                      </span>
+                      {c.error ? (
+                        <span>{c.error}</span>
+                      ) : (
+                        <>
+                          <span style={{ color: 'var(--fg-1)', minWidth: 60 }}>{c.language}</span>
+                          <span style={{ color: 'var(--fg-3)' }}>p={(c.probability || 0).toFixed(2)}</span>
+                          {c.language_name && (
+                            <span style={{ color: 'var(--fg-3)' }}>· {c.language_name}</span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                  {confident
+                    ? 'All chunks agree with high probability — prefilled below.'
+                    : (suspect
+                        ? 'Chunks disagree or low probability — listen above and confirm manually.'
+                        : 'Whisper returned no signal — listen above and pick from the list.')}
+                </div>
+              </>
+            );
+          })()}
+          {!whisperResult && !whisperRunning && !whisperError && (
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              Multi-chunk Whisper detection samples three points across the file (skipping
+              opening + closing credits) and votes on the language. Useful when ffprobe is
+              tagged wrong or unknown. Requires subarr-subgen v4.5+.
             </div>
           )}
         </div>
@@ -1794,7 +1946,7 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
     <div style={{
       position: 'sticky', bottom: 0,
       display: 'flex', alignItems: 'center', gap: 12,
-      padding: '10px 16px',
+      padding: 'var(--row-cozy)',
       background: 'var(--bg-2)',
       border: 'var(--border)',
       borderRadius: 'var(--radius-lg)',
@@ -2170,7 +2322,7 @@ export function CoveragePage() {
       {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.005em' }}>Coverage</h1>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, letterSpacing: '-0.005em' }}>Coverage</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
             Files where subarr thinks a subtitle is missing or below threshold.
           </div>
@@ -2196,7 +2348,7 @@ export function CoveragePage() {
       {/* Coverage strip — kept below the panels as a one-line technical
           summary; the panels above are for "what's the situation?" and this
           is for "where does the data come from?" */}
-      <div className="panel" style={{ padding: '12px 16px' }}>
+      <div className="panel" style={{ padding: 'var(--row-cozy)' }}>
         <CoverageStrip data={data} loading={loading} error={error} />
       </div>
 

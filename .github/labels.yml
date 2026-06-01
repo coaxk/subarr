@@ -1,0 +1,95 @@
+# Core
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+- name: enhancement
+  color: "a2eeef"
+  description: "New feature or request"
+- name: documentation
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+- name: security
+  color: "e11d48"
+  description: "Security hardening"
+- name: dependencies
+  color: "0366d6"
+  description: "Dependency updates"
+
+# Areas
+- name: backend
+  color: "3b82f6"
+  description: "FastAPI / Python backend"
+- name: frontend
+  color: "8b5cf6"
+  description: "JavaScript frontend / UI"
+- name: analysis-engine
+  color: "f59e0b"
+  description: "Conflict detection & fix generation"
+- name: apply-fix
+  color: "34d399"
+  description: "Fix generation & application"
+- name: paste-flow
+  color: "a78bfa"
+  description: "Error paste pathway"
+- name: UX
+  color: "ec4899"
+  description: "User experience improvements"
+- name: infrastructure
+  color: "6b7280"
+  description: "CI/CD, Docker, deployment"
+- name: tech-debt
+  color: "f97316"
+  description: "Code restructuring & cleanup"
+
+# Process
+- name: beta-testing
+  color: "10b981"
+  description: "Beta test reports & feedback"
+- name: elder-council
+  color: "fbbf24"
+  description: "Originated from Elder Council review"
+- name: good first issue
+  color: "7057ff"
+  description: "Good for newcomers"
+- name: help wanted
+  color: "008672"
+  description: "Extra attention is needed"
+
+# Stages
+- name: stage-1
+  color: "dc2626"
+  description: "Pre-beta priority"
+- name: stage-2
+  color: "ea580c"
+  description: "First patch"
+- name: stage-3
+  color: "ca8a04"
+  description: "Code health + UX"
+- name: stage-4
+  color: "16a34a"
+  description: "Strategic / v2.0"
+
+# Lifecycle
+- name: stale
+  color: "ededed"
+  description: "No recent activity"
+- name: pinned
+  color: "006b75"
+  description: "Exempt from stale bot"
+- name: skip-changelog
+  color: "ededed"
+  description: "Exclude from release notes"
+
+# Triage
+- name: duplicate
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+- name: invalid
+  color: "e4e669"
+  description: "This doesn't seem right"
+- name: wontfix
+  color: "ffffff"
+  description: "This will not be worked on"
+- name: question
+  color: "d876e3"
+  description: "Further information is requested"

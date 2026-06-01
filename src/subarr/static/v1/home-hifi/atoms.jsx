@@ -124,6 +124,137 @@ export function fmtTime(d) {
   return `${h}:${m}:${s}`;
 }
 
+// ─── Icon kit: semantic → emoji map (#172) ─────────────────────
+//
+// One source of truth for the emoji glyphs we use as inline icons.
+// Pages were drifting (settings ⚙ vs gear, leaderboard 📊 vs chart,
+// etc.) and the same semantic ended up with different glyphs on
+// different pages. Importing ICONS.X by intent rather than typing
+// the literal keeps everything in sync and makes a swap a one-line
+// change here.
+//
+// Rules:
+//   - One semantic = one glyph. Don't add a second key for the same
+//     concept ("gear" + "settings" — pick one).
+//   - Use the semantic key in JSX, not the emoji literal: {ICONS.settings}.
+//   - Decorative emoji inside copy strings can stay inline (a one-off
+//     🎉 in a celebratory message is not a UI icon, it's content).
+export const ICONS = Object.freeze({
+  settings:    '⚙',
+  leaderboard: '📊',
+  warning:     '⚠',
+  verified:    '✓',
+  listen:      '🎧',
+  whisper:     '🤖',
+  celebrate:   '🎉',
+  close:       '✕',
+  edit:        '✎',
+  save:        '💾',
+  refresh:     '🔁',
+  plug:        '🔌',
+  folder:      '🗂',
+  target:      '🎯',
+  brain:       '🧠',
+  llama:       '🦙',
+  build:       '🛠',
+});
+
+// ─── SectionCard: panel + label header + optional action slot (#213) ──
+//
+// The canonical "labelled panel" shape used across settings, queue,
+// coverage, review. Local copies drifted on padding (16/18 vs 12/16)
+// and gap (10/12/14) — promoting to a single atom locks the rhythm
+// so a designer change is one edit, not a grep across 5 files.
+//
+// Caller passes label (string or node), optional action (rendered
+// right-aligned in the header — refresh button, status chip, etc.),
+// and children (the actual content). Use the className escape hatch
+// if a page needs extra layout flags (e.g. flex:1 to grow).
+export function SectionCard({ label, children, action, className, style }) {
+  return (
+    <section className={className} style={{
+      background: 'var(--bg-1)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '16px 18px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+      ...style,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {typeof label === 'string'
+          ? <span className="label">{label}</span>
+          : label}
+        <span style={{ flex: 1 }} />
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+// ─── AsyncState: shared loading / error / empty render (#214) ────
+//
+// Five pages render the same loading / error / empty pattern with
+// drifting copy and inconsistent padding. This atom consolidates the
+// state machine so every page picks the right state from the same
+// precedence + shows the same visual language:
+//
+//   - loading wins over everything (first-paint spinner).
+//   - error wins over empty (we have data, just can't refresh).
+//   - empty renders when there's no error and no rows.
+//   - otherwise → render children unchanged.
+//
+// Pages that distinguish "first paint" from "background refetch"
+// (see #225) should pass loading=isInitialLoad, not raw `loading` —
+// the atom doesn't know about staleness.
+//
+// All three states render at the same padding + colour so a page
+// flipping between them doesn't jump.
+export function AsyncState({
+  loading,
+  error,
+  empty,
+  loadingMessage = 'Loading…',
+  emptyMessage = 'Nothing here yet.',
+  errorPrefix = "Couldn't load",
+  children,
+}) {
+  if (loading) {
+    return (
+      <div role="status" aria-live="polite" style={{
+        padding: 32, textAlign: 'center',
+        color: 'var(--fg-2)', fontSize: 'var(--text-sm)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+      }}>
+        <span className="spinner-ring" aria-hidden="true" />
+        <span>{loadingMessage}</span>
+      </div>
+    );
+  }
+  if (error) {
+    const msg = error && (error.message || String(error));
+    return (
+      <div role="alert" style={{
+        padding: 32, textAlign: 'center',
+        color: 'var(--error-500)', fontSize: 'var(--text-sm)',
+      }}>
+        {errorPrefix}: {msg || 'unknown error'}
+      </div>
+    );
+  }
+  if (empty) {
+    return (
+      <div style={{
+        padding: 24, textAlign: 'center',
+        color: 'var(--fg-3)', fontSize: 'var(--text-sm)',
+      }}>
+        {emptyMessage}
+      </div>
+    );
+  }
+  return children == null ? null : children;
+}
+
 // Demo data store — generated once, used everywhere.
 export function genSpark(n, base, vol) {
   return Array.from({ length: n }, (_, i) => {

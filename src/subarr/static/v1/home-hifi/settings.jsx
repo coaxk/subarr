@@ -11,7 +11,7 @@
 // initial config write and subsequent edits happen via env vars. When a
 // PUT /api/integrations/config exists we'll re-introduce the dirty bar.
 
-import { StatusDot } from './atoms.jsx';
+import { SectionCard, StatusDot } from './atoms.jsx';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -93,24 +93,8 @@ function useUpdatesState() {
 }
 
 // ─── Primitives ──────────────────────────────────────────────────
-function SectionCard({ label, children, action }) {
-  return (
-    <section style={{
-      background: 'var(--bg-1)',
-      border: 'var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '16px 18px',
-      display: 'flex', flexDirection: 'column', gap: 14,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <span className="label">{label}</span>
-        <span style={{ flex: 1 }} />
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
+// SectionCard now lives in atoms.jsx (#213) — same shape, single
+// source of truth across pages.
 
 function Row({ label, value, hint, control }) {
   return (
@@ -152,11 +136,14 @@ function EditViaWizardButton({ field }) {
   );
 }
 
-function Toggle({ on, onToggle, busy }) {
+function Toggle({ on, onToggle, busy, label }) {
   return (
     <button
       onClick={onToggle}
       disabled={busy}
+      role="switch"
+      aria-checked={!!on}
+      aria-label={label || (on ? 'Disable' : 'Enable')}
       style={{
         display: 'inline-block', width: 36, height: 20,
         borderRadius: 99,
@@ -183,7 +170,7 @@ function Stat({ label, value, color }) {
       <span className="label">{label}</span>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span className="display num" style={{
-          fontSize: 26, lineHeight: 1, fontWeight: 500,
+          fontSize: 'var(--text-display-lg)', lineHeight: 1, fontWeight: 500,
           color: color || 'var(--fg-0)', letterSpacing: '-0.01em',
         }}>{value}</span>
       </div>
@@ -245,7 +232,7 @@ function SettingsHeaderTile({ label, value, sub, tint, tip, href, accent }) {
         <span className="label">{label}</span>
       </div>
       <div style={{
-        fontSize: 22, lineHeight: 1.05, fontWeight: 500,
+        fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 500,
         color: accent || 'var(--fg-0)', letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{value}</div>
@@ -648,7 +635,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <span className="label">integrations</span>
         </div>
         {items.length === 0 && (
-          <div style={{ padding: '8px 16px', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
+          <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
           const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive;
@@ -873,6 +860,81 @@ function SubgenKwargsCard() {
   );
 }
 
+// #230: surface the CONCURRENT_TRANSCRIPTIONS knob — subgen supports N
+// parallel Whisper workers but the env var is invisible to the operator
+// inside subarr. We read live /api/queue to track the highest observed
+// processing[] depth (a lower bound on the current value), and document
+// the VRAM cost per Whisper model so users can pick N correctly.
+function SubgenConcurrencyCard() {
+  const [observedMax, setObservedMax] = React.useState(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function tick() {
+      if (cancelled) return;
+      try {
+        const r = await fetch('/api/queue', { credentials: 'same-origin' });
+        if (r.ok) {
+          const d = await r.json();
+          const n = (d.processing || []).length;
+          setObservedMax(prev => (prev == null || n > prev) ? n : prev);
+        }
+      } catch { /* silent */ }
+      if (!cancelled) timer = setTimeout(tick, 5000);
+    }
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, []);
+
+  const observedLabel = observedMax == null
+    ? 'measuring…'
+    : observedMax === 0
+      ? 'no transcribes seen yet'
+      : `at least ${observedMax} (observed max processing depth)`;
+
+  return (
+    <SectionCard label="Concurrent transcribes (subarr-subgen)">
+      <div style={{
+        fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5,
+      }}>
+        Subgen can run N Whisper workers in parallel. Each worker holds
+        one transcribe in memory + on GPU. Bigger N = faster catch-up on
+        large libraries, but every worker needs its own VRAM slice.
+      </div>
+
+      <Row label="Currently configured"
+           value={observedLabel}
+           hint="subarr can't read subgen's env directly — it infers from /api/queue" />
+      <Row label="Env knob"
+           value="CONCURRENT_TRANSCRIPTIONS"
+           hint="set in your subgen-next compose, then restart the container" />
+
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        background: 'var(--bg-2)', padding: 12,
+        borderRadius: 'var(--radius-md)', lineHeight: 1.5,
+      }}>
+        <div style={{ marginBottom: 6, color: 'var(--fg-1)', fontWeight: 600 }}>
+          VRAM budget per worker (float16):
+        </div>
+        <div className="mono" style={{ display: 'grid',
+          gridTemplateColumns: '120px 1fr', gap: '2px 12px',
+        }}>
+          <span>tiny</span>            <span style={{ color: 'var(--fg-3)' }}>~1 GB</span>
+          <span>base</span>            <span style={{ color: 'var(--fg-3)' }}>~1 GB</span>
+          <span>small</span>           <span style={{ color: 'var(--fg-3)' }}>~2 GB</span>
+          <span>medium</span>          <span style={{ color: 'var(--fg-3)' }}>~5 GB</span>
+          <span>large / large-v3</span><span style={{ color: 'var(--fg-3)' }}>~10 GB</span>
+        </div>
+        <div style={{ marginTop: 8, color: 'var(--fg-3)' }}>
+          Pick N so N × per-worker-VRAM &lt; total VRAM. Leave 1–2 GB
+          headroom for the container itself + CUDA cache.
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 function KwargsTable({ kwargs, compact }) {
   const entries = Object.entries(kwargs);
   if (entries.length === 0) {
@@ -931,6 +993,12 @@ function IntegrationPanel({ rail, refetchHealth }) {
       // exercises each integration. We surface the per-integration
       // online flag from the refreshed payload.
       await refetchHealth({ silent: false });
+      // Also force-refresh the dashboard cache so the dashboard's
+      // integrations tiles reflect the new state immediately, rather
+      // than carrying the stale "offline" for up to 30s (cache TTL).
+      // Fire-and-forget — we don't block the test UI on this.
+      fetch('/api/home/dashboard?fresh=true', { credentials: 'same-origin' })
+        .catch(() => {});
       setTestResult({ state: 'ok', at: Date.now() });
     } catch (e) {
       setTestResult({ state: 'error', error: e.message, at: Date.now() });
@@ -1040,6 +1108,13 @@ function IntegrationPanel({ rail, refetchHealth }) {
           subgen and was completely invisible in the UI. Pulls from GET
           /api/mode which already parses the compose file. */}
       {rail.id === 'subgen' && <SubgenKwargsCard />}
+
+      {/* #230: subgen-only — concurrent transcribes knob. Reads max
+          observed Processing[] depth from /api/queue as a lower bound
+          on the current CONCURRENT_TRANSCRIPTIONS env. Static
+          documentation row explains how to change it + the VRAM
+          implications per Whisper model size. */}
+      {rail.id === 'subgen' && <SubgenConcurrencyCard />}
 
       <SectionCard label="Connection (read-only — env-driven in v1)">
         <Row label="Name" value={rail.name} />
@@ -1336,7 +1411,7 @@ export function SettingsPage() {
                   </React.Fragment>
                 ))}
               </div>
-              <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.005em' }}>{heading}</h1>
+              <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600, letterSpacing: '-0.005em' }}>{heading}</h1>
               <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>{subhead}</div>
             </div>
           </div>

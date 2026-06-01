@@ -84,6 +84,61 @@ def test_enrich_lang_returns_iso_code(app_with_stub):
     assert r2.json()["cached"] is True
 
 
+# ───── #156 structured JSON output ────────────────────────────────────
+
+
+def _ollama_returns_json(req: httpx.Request) -> httpx.Response:
+    if req.url.path == "/api/tags":
+        return httpx.Response(200, json={"models": [{"name": "test-model"}]})
+    if req.url.path == "/api/generate":
+        # Simulate a real Ollama JSON-mode response: the model returns a
+        # serialised JSON object as a string in the `response` field.
+        return httpx.Response(200, json={
+            "response": '{"iso_code": "ko", "confidence": 0.93, "reasoning": "Squid Game is a Korean Netflix series."}',
+        })
+    return httpx.Response(404)
+
+
+@pytest.mark.ollama_stub(handler=_ollama_returns_json)
+@pytest.mark.subgen(handler=_subgen_idle)
+def test_enrich_lang_parses_structured_output(app_with_stub):
+    """#156: with format_schema set, Ollama returns JSON; we parse iso_code
+    out of the structured payload AND surface confidence + reasoning."""
+    r = app_with_stub.post(
+        "/api/enrichment/lang",
+        json={"canonical_path": "TV/Squid Game", "title": "Squid Game"},
+    )
+    assert r.status_code == 200, r.json()
+    body = r.json()
+    assert body["iso_code"] == "ko"
+    assert body["confidence"] == pytest.approx(0.93)
+    assert "Korean" in (body["reasoning"] or "")
+
+
+def _ollama_returns_und_json(req: httpx.Request) -> httpx.Response:
+    if req.url.path == "/api/tags":
+        return httpx.Response(200, json={"models": [{"name": "test-model"}]})
+    if req.url.path == "/api/generate":
+        return httpx.Response(200, json={
+            "response": '{"iso_code": "und", "confidence": 0.2, "reasoning": "Title is ambiguous."}',
+        })
+    return httpx.Response(404)
+
+
+@pytest.mark.ollama_stub(handler=_ollama_returns_und_json)
+@pytest.mark.subgen(handler=_subgen_idle)
+def test_enrich_lang_und_normalised_to_null(app_with_stub):
+    """'und' in the structured response must normalise to iso_code: null
+    so downstream coverage scoring doesn't treat 'und' as a real language."""
+    r = app_with_stub.post(
+        "/api/enrichment/lang",
+        json={"canonical_path": "TV/Ambiguous", "title": "Ambiguous"},
+    )
+    body = r.json()
+    assert body["iso_code"] is None  # 'und' becomes null
+    assert body["confidence"] == pytest.approx(0.2)
+
+
 # ───── GPU-idle gating ────────────────────────────────────────────────
 
 

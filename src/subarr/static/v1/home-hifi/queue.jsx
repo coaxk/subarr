@@ -9,7 +9,7 @@
 // require new subgen endpoints (or careful use of /api/scan store
 // state). Out of scope for v1.0 ship.
 
-import { StatusDot } from './atoms.jsx';
+import { AsyncState, StatusDot } from './atoms.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -89,7 +89,7 @@ function ProgressBar({ pct, width = 220 }) {
   );
 }
 
-function QueueRow({ item, kind }) {
+function QueueRow({ item, kind, canCancel, onCancel, busy }) {
   // Subgen's processing entries (via subarr-next proxy) look like:
   // { path, type, progress: { pct, cur_s, tot_s, elapsed, eta, speed_s_per_s } }
   // Queued entries are bare { path, type, position? } — no progress block.
@@ -107,7 +107,11 @@ function QueueRow({ item, kind }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: '10px 16px',
+      // Row body indented further than the section header (which uses
+      // row-cozy = 16px horizontal) so rows read as children of their
+      // section. Otherwise the path + dot slam against the panel edge
+      // at the same x as the section title.
+      padding: '10px 24px 10px 32px',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
@@ -132,6 +136,25 @@ function QueueRow({ item, kind }) {
             textTransform: 'uppercase',
             cursor: 'help',
           }}>{stage}</span>
+        {/* #58 v4.4: cancel button on queued rows only. Processing rows
+            can't be safely killed mid-flight (would orphan the worker). */}
+        {kind === 'queued' && canCancel && (
+          <button className="btn ghost sm"
+            onClick={() => onCancel && onCancel(path)}
+            disabled={busy}
+            title="Remove this task from the subgen queue before it starts"
+            aria-label={`Cancel queued task ${path}`}>
+            {busy ? '…' : '✕ cancel'}
+          </button>
+        )}
+        {kind === 'queued' && !canCancel && (
+          <span className="mono"
+            title="Queue-cancel requires subarr-subgen v4.4+. Update the subgen container to enable cancel."
+            style={{
+              fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+              cursor: 'help', opacity: 0.6,
+            }}>cancel: needs v4.4+</span>
+        )}
       </div>
 
       {/* Row 2 (processing only): progress bar + numbers */}
@@ -176,11 +199,15 @@ function QueueRow({ item, kind }) {
 // outcome chip + reason + actions. Issues vs Recently-done sections
 // both use this — `compact` mode shrinks the row for the done list.
 const OUTCOME_STYLE = {
-  ok:      { fg: 'var(--success-500)', bg: 'rgba(52,211,153,0.10)',  br: 'rgba(52,211,153,0.35)', label: 'queued' },
-  running: { fg: 'var(--violet-400)',  bg: 'rgba(139,92,246,0.10)',  br: 'rgba(139,92,246,0.35)', label: 'running' },
-  skipped: { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
-  error:   { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
-  pending: { fg: 'var(--fg-2)',        bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'pending' },
+  ok:       { fg: 'var(--success-500)', bg: 'rgba(52,211,153,0.10)',  br: 'rgba(52,211,153,0.35)', label: 'queued' },
+  running:  { fg: 'var(--violet-400)',  bg: 'rgba(139,92,246,0.10)',  br: 'rgba(139,92,246,0.35)', label: 'running' },
+  skipped:  { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.10)',  br: 'rgba(245,158,11,0.35)', label: 'skipped' },
+  error:    { fg: 'var(--error-500)',   bg: 'rgba(239,68,68,0.10)',   br: 'rgba(239,68,68,0.35)',  label: 'failed' },
+  // #229: subgen restarted before transcription completed. Distinct
+  // colour from 'failed' so it doesn't read like a real error — it's
+  // just lost work that should be requeued, not a broken file.
+  orphaned: { fg: 'var(--warn-500)',    bg: 'rgba(245,158,11,0.18)',  br: 'rgba(245,158,11,0.55)', label: 'lost on restart' },
+  pending:  { fg: 'var(--fg-2)',        bg: 'var(--bg-2)',            br: 'var(--bg-4)',           label: 'pending' },
 };
 
 function OutcomeChip({ category, label }) {
@@ -207,11 +234,14 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
                   : `${Math.floor(ageS/86400)}d ago`;
   // Requeue only makes sense for terminal outcomes (skipped/error/done).
   // For currently-running rows the action is hidden.
-  const canRequeue = category === 'skipped' || category === 'error' || category === 'ok';
+  const canRequeue = category === 'skipped' || category === 'error'
+                  || category === 'ok' || category === 'orphaned';
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: '10px 16px',
+      // Match the indent on Processing/Queued rows so all 4 sections
+      // visually align under their respective section headers.
+      padding: '10px 24px 10px 32px',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
@@ -338,9 +368,11 @@ export function QueuePage() {
   const queued = data?.queued || [];
   const idle = data?.idle === true;
   const subgenVersion = data?.version;
-  // v1.1.1: Featured Queue history. Split into Issues (skipped/error) vs
-  // Recently done (ok/running) so the eye-catching problem rows are top.
+  // v1.1.1: Featured Queue history. Split into Issues (skipped/error),
+  // Lost on restart (orphaned — #229), and Recently done (ok/running)
+  // so the eye-catching problem rows are top.
   const history = data?.history || [];
+  const orphaned = history.filter(h => h.outcome?.category === 'orphaned');
   const issues = history.filter(h => {
     const c = h.outcome?.category;
     return c === 'skipped' || c === 'error';
@@ -350,6 +382,10 @@ export function QueuePage() {
     return c === 'ok' || c === 'running';
   });
   const counts = data?.history_counts || {};
+  // #58 v4.4: subgen advertises capabilities.queue_cancel via /queue.
+  // When present, render the cancel button on queued rows; when absent
+  // show the "needs v4.4+" hint so the user knows to upgrade.
+  const canCancel = data?.capabilities?.queue_cancel === true;
 
   const requeue = useCallback(async (path) => {
     setBusyAction(path);
@@ -367,6 +403,32 @@ export function QueuePage() {
       await refetch({ silent: true });
     } catch (e) {
       alert(`Requeue failed: ${e.message}`);
+    } finally { setBusyAction(null); }
+  }, [refetch]);
+
+  // #58 v4.4: cancel a queued (not yet processing) subgen task by path.
+  // Backend returns 503 if subgen doesn't advertise queue_cancel — the
+  // UI gates the button so this is a defence-in-depth check only.
+  const cancelQueued = useCallback(async (path) => {
+    setBusyAction(`cancel:${path}`);
+    try {
+      const r = await fetch('/api/queue/cancel', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => '');
+        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+      }
+      const body = await r.json().catch(() => ({}));
+      if (body && body.cancelled === false && body.reason) {
+        alert(`Cancel skipped: ${body.reason}`);
+      }
+      await refetch({ silent: true });
+    } catch (e) {
+      alert(`Cancel failed: ${e.message}`);
     } finally { setBusyAction(null); }
   }, [refetch]);
 
@@ -408,7 +470,7 @@ export function QueuePage() {
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 16, overflow: 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 600 }}>Queue</h1>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600 }}>Queue</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
             Live view of what subgen is currently transcribing and what's waiting in line.
             {subgenVersion && <span> Subgen <span className="mono">v{subgenVersion}</span>.</span>}
@@ -432,10 +494,14 @@ export function QueuePage() {
         <SubmitScanForm onSubmitted={() => refetch({ silent: false })} />
       </div>
 
-      {/* Processing — header sticky, body scrolls internally */}
+      {/* Processing — header padding 12x18 to align with the SUBMIT
+          A MANUAL SCAN panel above. No maxHeight: auto-sizes to the
+          number of concurrent transcribes (bounded by CONCURRENT_
+          TRANSCRIPTIONS). Page scroll handles overflow if the user
+          ever runs many parallel jobs. */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -444,30 +510,26 @@ export function QueuePage() {
             {processing.length}
           </span>
         </div>
-        <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-          {isInitialLoad && (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--fg-2)' }}>Loading queue…</div>
-          )}
-          {isError && (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--error-500)' }}>
-              Couldn't load queue: {String(error.message || error)}
-            </div>
-          )}
-          {!isInitialLoad && !isError && processing.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-              Nothing transcribing right now.
-            </div>
-          )}
-          {processing.map((item, i) => (
-            <QueueRow key={`p-${i}`} item={item} kind="processing" />
-          ))}
+        <div>
+          <AsyncState
+            loading={isInitialLoad}
+            error={isError ? error : null}
+            empty={!isInitialLoad && !isError && processing.length === 0}
+            loadingMessage="Loading queue…"
+            emptyMessage="Nothing transcribing right now."
+            errorPrefix="Couldn't load queue">
+            {processing.map((item, i) => (
+              <QueueRow key={`p-${i}`} item={item} kind="processing" />
+            ))}
+          </AsyncState>
         </div>
       </div>
 
-      {/* Queued — header sticky, body scrolls internally */}
+      {/* Queued — header padding aligned with Processing + submit panel.
+          Auto-sizes; page scroll handles long queues. */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -476,22 +538,56 @@ export function QueuePage() {
             {queued.length}
           </span>
         </div>
-        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-          {!isInitialLoad && !isError && queued.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-              Nothing waiting in line.
-            </div>
-          )}
-          {queued.map((item, i) => (
-            <QueueRow key={`q-${i}`} item={item} kind="queued" />
-          ))}
+        <div>
+          <AsyncState
+            empty={!isInitialLoad && !isError && queued.length === 0}
+            emptyMessage="Nothing waiting in line.">
+          {queued.map((item, i) => {
+            const p = item.path || item.canonical_path || item.file || '';
+            return (
+              <QueueRow key={`q-${i}`} item={item} kind="queued"
+                canCancel={canCancel}
+                onCancel={cancelQueued}
+                busy={busyAction === `cancel:${p}`} />
+            );
+          })}
+          </AsyncState>
         </div>
       </div>
+
+      {/* #229: Lost on restart — subgen restarted before transcription
+          completed. Surfaced separately from Issues because the failure
+          mode is operational, not file-specific: requeue is always the
+          right action. Hidden when empty. */}
+      {orphaned.length > 0 && (
+        <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{
+            padding: '12px 18px',
+            borderBottom: 'var(--border)',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span className="label" style={{ color: 'var(--warn-500)' }}>
+              Lost on restart — subgen rebooted mid-flight
+            </span>
+            <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              {orphaned.length}
+            </span>
+            <span style={{ flex: 1 }} />
+          </div>
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {orphaned.map((e) => (
+              <HistoryRow key={`o-${e.scan_id}-${e.path}`} entry={e}
+                          onRequeue={requeue} onRemove={removeOne}
+                          busy={busyAction === e.path || busyAction === e.scan_id} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* v1.1.1 Featured Queue — Issues (skipped + failed) */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
@@ -527,7 +623,7 @@ export function QueuePage() {
       {/* v1.1.1 Featured Queue — Recently done */}
       <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{
-          padding: '12px 16px',
+          padding: '12px 18px',
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>

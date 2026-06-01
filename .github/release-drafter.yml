@@ -1,0 +1,49 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+categories:
+  - title: "Security"
+    labels:
+      - "security"
+  - title: "Features"
+    labels:
+      - "enhancement"
+      - "feature"
+  - title: "Bug Fixes"
+    labels:
+      - "bug"
+      - "fix"
+  - title: "Infrastructure"
+    labels:
+      - "ci/cd"
+      - "infrastructure"
+  - title: "Documentation"
+    labels:
+      - "documentation"
+  - title: "Dependencies"
+    labels:
+      - "dependencies"
+change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
+change-title-escapes: '\<*_&'
+version-resolver:
+  major:
+    labels:
+      - "major"
+  minor:
+    labels:
+      - "minor"
+      - "enhancement"
+      - "feature"
+  patch:
+    labels:
+      - "bug"
+      - "fix"
+      - "dependencies"
+  default: patch
+exclude-labels:
+  - "skip-changelog"

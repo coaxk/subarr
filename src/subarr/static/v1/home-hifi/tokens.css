@@ -108,6 +108,22 @@
   --text-display-xl: 28px;
   --text-display-2xl: 32px;
 
+  /* P1 density tokens (#215). Row paddings drifted across pages
+     (8x16/10x16/12x16) with no semantic — tables felt cramped on
+     coverage + library where rows packed at 8x16, comfy on settings
+     at 14x18. Three densities, fixed horizontal padding 16px to
+     match panel inset, vertical varies by density.
+       dense — file rows, large lists where information density wins
+       cozy  — queue rows, history rows: balance density + breathing
+       comfy — settings list rows where each row is its own decision */
+  --row-dense:  8px 16px;
+  --row-cozy:  10px 16px;
+  --row-comfy: 14px 16px;
+  /* Paired heights so a CSS reset to .row applies the right rhythm */
+  --row-h-dense: 36px;
+  --row-h-cozy:  40px;
+  --row-h-comfy: 48px;
+
   --border:        1px solid var(--bg-4);
   --border-strong: 1px solid var(--bg-5);
 

@@ -6,6 +6,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 
 <link rel="icon" type="image/svg+xml" href="/static/v1/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/v1/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/v1/favicon-16.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/static/v1/favicon-192.png">
+<link rel="manifest" href="/static/v1/site.webmanifest">
+
+<!-- OpenGraph + Twitter share preview (#116) -->
+<meta property="og:title" content="Subarr">
+<meta property="og:description" content="The queue + control layer subgen never had.">
+<meta property="og:image" content="https://github.com/coaxk/subarr/raw/main/src/subarr/static/v1/og-card.png">
+<meta property="og:url" content="https://github.com/coaxk/subarr">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -14,20 +26,22 @@
 
 <style>
   html, body, #root { height: 100%; }
+  /* Lock shell to viewport so SubRail stays sticky as Rules scrolls. */
   .app-shell {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
     min-width: 1280px;
   }
-  body { overflow: auto; }
-  .app-body { flex: 1; display: flex; min-height: 0; }
+  body { overflow: hidden; }
+  .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
   .main-canvas {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    overflow-y: auto;
   }
 </style>
 
