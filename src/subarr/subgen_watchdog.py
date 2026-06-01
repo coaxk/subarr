@@ -40,13 +40,17 @@ class SubgenWatchdog:
 
     def __init__(
         self,
-        subgen,
-        get_caps: Callable[[], Any],
-        set_caps: Callable[[Any], None],
+        subgen=None,
+        get_caps: Callable[[], Any] = None,
+        set_caps: Callable[[Any], None] = None,
         on_restart: Callable[[Any, Any, float], Awaitable[None]] | None = None,
         interval_s: int = DEFAULT_INTERVAL_S,
+        subgen_provider=None,
     ):
-        self._subgen = subgen
+        # Resolve subgen live so onboarding live-reload (which swaps and
+        # closes the boot client) doesn't leave the watchdog probing a
+        # dead client and pinning caps to 'unreachable'.
+        self._subgen_provider = subgen_provider or (lambda: subgen)
         self._get_caps = get_caps
         self._set_caps = set_caps
         self._on_restart = on_restart
@@ -58,6 +62,11 @@ class SubgenWatchdog:
         self.last_restart_at: float | None = None
         self.last_restart_from: dict[str, Any] | None = None
         self.last_restart_to: dict[str, Any] | None = None
+
+    @property
+    def _subgen(self):
+        """Current subgen client (resolved live for onboarding reload)."""
+        return self._subgen_provider()
         # Detects same-version container bounces: subgen briefly going
         # unreachable then becoming reachable again, even if patch_rev
         # stayed the same. Without this flag, restarting subgen-next

@@ -39,9 +39,13 @@ class CompatModeError(RuntimeError):
 
 
 class ScanRunner:
-    def __init__(self, subgen: SubgenClient, store: ScanStore,
-                 caps_provider=None):
-        self._subgen = subgen
+    def __init__(self, subgen: SubgenClient | None = None, store: ScanStore = None,
+                 caps_provider=None, subgen_provider=None):
+        # subgen is resolved through a provider so onboarding live-reload
+        # can swap the client on app.state without restarting the runner.
+        # Backward compatible: a directly-passed `subgen` is wrapped in a
+        # constant provider.
+        self._subgen_provider = subgen_provider or (lambda: subgen)
         self._store = store
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
@@ -58,6 +62,11 @@ class ScanRunner:
         # The provider may return None (caps not yet probed) — treated
         # as "assume capable" so first-boot scans don't fail spuriously.
         self._caps_provider = caps_provider or (lambda: None)
+
+    @property
+    def _subgen(self):
+        """Current subgen client (resolved live for onboarding reload)."""
+        return self._subgen_provider()
 
     def _check_can_scan(self) -> None:
         """Raise CompatModeError when /batch isn't available.

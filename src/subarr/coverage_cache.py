@@ -193,25 +193,32 @@ DEFAULT_INTERVAL_S = 300  # 5 min
 
 async def background_refresh_loop(
     cache: CoverageCache,
-    bundle,
-    probe_store,
-    audio_lang_store,
+    bundle=None,
+    probe_store=None,
+    audio_lang_store=None,
     interval_s: int = DEFAULT_INTERVAL_S,
+    bundle_provider=None,
 ) -> None:
-    """Sleep, refresh, repeat. Exits on cancellation."""
+    """Sleep, refresh, repeat. Exits on cancellation.
+
+    The integration bundle is resolved per-refresh via bundle_provider
+    (falling back to a directly-passed bundle) so onboarding live-reload
+    can swap clients on app.state without restarting this loop.
+    """
+    get_bundle = bundle_provider or (lambda: bundle)
     # Initial refresh on boot if nothing cached yet — fills the snapshot
     # so the first /api/coverage request after a fresh deploy doesn't
     # block for 90s.
     if cache.get_cached() is None:
         log.info("coverage cache: no snapshot found; warming on boot")
         try:
-            await cache.refresh(bundle, probe_store, audio_lang_store)
+            await cache.refresh(get_bundle(), probe_store, audio_lang_store)
         except Exception as e:
             log.warning("coverage cache: initial warm failed: %s", e)
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await cache.refresh(bundle, probe_store, audio_lang_store)
+            await cache.refresh(get_bundle(), probe_store, audio_lang_store)
         except asyncio.CancelledError:
             raise
         except Exception as e:

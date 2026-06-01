@@ -107,16 +107,21 @@ class Scheduler:
     def __init__(
         self,
         schedule_store: ScheduleStore,
-        bundle: IntegrationBundle,
-        scan_store: ScanStore,
-        runner: ScanRunner,
-        provenance: ProvenanceStore,
+        bundle: IntegrationBundle | None = None,
+        scan_store: ScanStore = None,
+        runner: ScanRunner = None,
+        provenance: ProvenanceStore = None,
         probe_walker: ProbeWalker | None = None,
         pending_store: PendingStore | None = None,
         tick_s: int = TICK_S,
+        bundle_provider=None,
     ):
         self._schedule = schedule_store
-        self._bundle = bundle
+        # Resolve the integration bundle live so onboarding live-reload can
+        # swap clients on app.state without restarting the scheduler.
+        # Backward compatible: a directly-passed bundle becomes a constant
+        # provider.
+        self._bundle_provider = bundle_provider or (lambda: bundle)
         self._scan_store = scan_store
         self._runner = runner
         self._provenance = provenance
@@ -132,6 +137,11 @@ class Scheduler:
         # at a time; clicks while a walk is in flight return immediately
         # with already_running=True.
         self._walk_lock = asyncio.Lock()
+
+    @property
+    def _bundle(self):
+        """Current integration bundle (resolved live for onboarding reload)."""
+        return self._bundle_provider()
 
     def start(self) -> None:
         if self._task and not self._task.done():
