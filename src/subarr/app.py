@@ -57,12 +57,19 @@ async def lifespan(app_: FastAPI):
         log.info("schema migrations applied this boot: %s",
                  [m.name for m in applied])
     app_.state.subgen = SubgenClient()
-    # Probe subgen capabilities once. The result drives:
+    # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth
     #   - whether completion_watcher polls /queue vs the provenance table
     #   - whether the scan-submit UI is enabled or shows "needs subarr-subgen"
     # Stored on app.state for the health endpoint + downstream gating.
+    # #229: re-probed periodically by SubgenWatchdog (started further down)
+    # so subgen restarts get detected; on restart, in-flight scan_store
+    # entries can be reconciled as orphaned instead of pretending they
+    # are still queued.
     app_.state.subgen_caps = await app_.state.subgen.probe_capabilities()
+    app_.state.subgen_restart_detected_at = None
+    app_.state.subgen_restart_from = None
+    app_.state.subgen_restart_to = None
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
     app_.state.runner = ScanRunner(
@@ -171,6 +178,42 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.update_checker.start()
 
+    # #229: subgen identity watchdog. Periodically re-probes subgen's
+    # /queue + /status to detect restarts (patch_rev or version change).
+    # On restart, stamps app.state.subgen_restart_detected_at so the
+    # queue UI can surface the event + reconcile orphaned scan_store
+    # entries. Reconciliation hook lives on the watchdog so this module
+    # stays decoupled from scan_store + watcher details.
+    from .subgen_watchdog import SubgenWatchdog
+
+    async def _on_subgen_restart(old_caps, new_caps, detected_at):
+        app_.state.subgen_restart_detected_at = detected_at
+        app_.state.subgen_restart_from = {
+            "patch_rev": getattr(old_caps, "subarr_subgen_patch_rev", None),
+            "version": getattr(old_caps, "version", None),
+        }
+        app_.state.subgen_restart_to = {
+            "patch_rev": getattr(new_caps, "subarr_subgen_patch_rev", None),
+            "version": getattr(new_caps, "version", None),
+        }
+        # Reconciliation hook lands in a follow-up commit. For this
+        # phase we just log and stamp — the UI can already surface
+        # "subgen restarted Xs ago" using the timestamp.
+
+    def _get_caps():
+        return getattr(app_.state, "subgen_caps", None)
+
+    def _set_caps(c):
+        app_.state.subgen_caps = c
+
+    app_.state.subgen_watchdog = SubgenWatchdog(
+        subgen=app_.state.subgen,
+        get_caps=_get_caps,
+        set_caps=_set_caps,
+        on_restart=_on_subgen_restart,
+    )
+    app_.state.subgen_watchdog.start()
+
     # Anonymous telemetry — ON by default per v1.0 product decision.
     # Opt-out one-click in Settings. Stats published publicly at
     # subarr.com/stats so users see what we see.
@@ -208,6 +251,10 @@ async def lifespan(app_: FastAPI):
             await app_.state.docker_discovery.aclose()
         await app_.state.telemetry.stop()
         await app_.state.update_checker.stop()
+        try:
+            await app_.state.subgen_watchdog.stop()
+        except (AttributeError, Exception):
+            pass
         await app_.state.probe_walker.aclose()
         await app_.state.scheduler.stop()
         try:

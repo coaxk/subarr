@@ -31,6 +31,12 @@ PATH_STATUS_SKIPPED = "skipped"  # subgen walked + skipped all (e.g. embedded EN
                                  # SKIP_IF_AUDIO_LANGUAGES, etc.)
 PATH_STATUS_EMPTY = "empty"      # subgen returned 404 / walked == 0
 PATH_STATUS_ERROR = "error"
+# #229: subgen restarted between our submission (PATH_STATUS_OK) and the
+# .srt landing on disk. Subgen's in-memory queue evaporated, so the work
+# we counted as "in-flight" is gone. The restart_watchdog marks these so
+# the UI surfaces them in a "Lost on restart" bucket and so the
+# completion_watcher stops waiting on them.
+PATH_STATUS_ORPHANED = "orphaned"
 
 
 @dataclass
