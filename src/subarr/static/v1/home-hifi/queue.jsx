@@ -107,7 +107,11 @@ function QueueRow({ item, kind, canCancel, onCancel, busy }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: 'var(--row-cozy)',
+      // Row body indented further than the section header (which uses
+      // row-cozy = 16px horizontal) so rows read as children of their
+      // section. Otherwise the path + dot slam against the panel edge
+      // at the same x as the section title.
+      padding: '10px 24px 10px 32px',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
@@ -230,7 +234,9 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
-      padding: 'var(--row-cozy)',
+      // Match the indent on Processing/Queued rows so all 4 sections
+      // visually align under their respective section headers.
+      padding: '10px 24px 10px 32px',
       borderBottom: '1px solid var(--bg-3)',
       gap: 4,
     }}>
