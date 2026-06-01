@@ -28,3 +28,4 @@ Thumbs.db
 # src/subarr/static/v1/home-hifi/) so `pip install` ships a working
 # SPA without a Node toolchain on consumer machines.
 node_modules/
+.tmp-*
