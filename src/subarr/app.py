@@ -73,22 +73,26 @@ async def lifespan(app_: FastAPI):
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
     app_.state.runner = ScanRunner(
-        app_.state.subgen, app_.state.scans,
+        store=app_.state.scans,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+        # Resolve subgen live so onboarding can swap the client without
+        # restarting the runner.
+        subgen_provider=lambda: app_.state.subgen,
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
     app_.state.provenance.init_schema()
     app_.state.watcher = CompletionWatcher(
-        subgen=app_.state.subgen,
-        bazarr=app_.state.integrations.bazarr,
         provenance=app_.state.provenance,
-        # v1.1.1: pass Plex client so completion fires partial-scan when
-        # the sidecar lands — closes the Apple TV loop without waiting
-        # for Plex's periodic full library scan.
-        plex=app_.state.integrations.plex,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+        # Resolve clients live so onboarding can swap them without
+        # restarting the watcher. bundle_provider supplies bazarr + the
+        # Plex client (Plex fires partial-scan when the sidecar lands,
+        # closing the Apple TV loop without waiting for Plex's periodic
+        # full library scan).
+        bundle_provider=lambda: app_.state.integrations,
+        subgen_provider=lambda: app_.state.subgen,
     )
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
@@ -115,7 +119,9 @@ async def lifespan(app_: FastAPI):
     app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
-        bundle=app_.state.integrations,
+        # Resolve the bundle live so onboarding can swap clients without
+        # restarting the scheduler.
+        bundle_provider=lambda: app_.state.integrations,
         scan_store=app_.state.scans,
         runner=app_.state.runner,
         provenance=app_.state.provenance,
@@ -130,7 +136,9 @@ async def lifespan(app_: FastAPI):
     app_.state.coverage_cache_task = asyncio.create_task(
         background_refresh_loop(
             cache=app_.state.coverage_cache,
-            bundle=app_.state.integrations,
+            # Resolve the bundle live so onboarding can swap clients
+            # without restarting this refresh loop.
+            bundle_provider=lambda: app_.state.integrations,
             probe_store=app_.state.probe_store,
             audio_lang_store=app_.state.audio_lang,
         )

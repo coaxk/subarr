@@ -59,12 +59,20 @@ _BAZARR_SCAN_TASK_HINTS = (
 
 
 class CompletionWatcher:
-    def __init__(self, subgen: SubgenClient, bazarr: BazarrClient,
-                 provenance: ProvenanceStore, interval_s: int = WATCHER_INTERVAL_S,
-                 caps_provider=None, plex: PlexClient | None = None):
-        self._subgen = subgen
-        self._bazarr = bazarr
-        self._plex = plex
+    def __init__(self, subgen: SubgenClient | None = None,
+                 bazarr: BazarrClient | None = None,
+                 provenance: ProvenanceStore = None,
+                 interval_s: int = WATCHER_INTERVAL_S,
+                 caps_provider=None, plex: PlexClient | None = None,
+                 bundle_provider=None, subgen_provider=None):
+        # Clients are resolved live so onboarding can swap them on
+        # app.state without restarting the watcher. When a bundle_provider
+        # is given, bazarr + plex come from the live bundle; otherwise the
+        # directly-passed clients are used (backward compatible).
+        self._bundle_provider = bundle_provider
+        self._bazarr_direct = bazarr
+        self._plex_direct = plex
+        self._subgen_provider = subgen_provider or (lambda: subgen)
         self._provenance = provenance
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
@@ -77,6 +85,18 @@ class CompletionWatcher:
         # landing on disk so provenance entries can still auto-complete.
         self._caps_provider = caps_provider or (lambda: None)
         self._warned_no_queue = False
+
+    @property
+    def _subgen(self):
+        return self._subgen_provider()
+
+    @property
+    def _bazarr(self):
+        return self._bundle_provider().bazarr if self._bundle_provider else self._bazarr_direct
+
+    @property
+    def _plex(self):
+        return self._bundle_provider().plex if self._bundle_provider else self._plex_direct
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():

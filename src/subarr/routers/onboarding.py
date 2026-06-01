@@ -63,12 +63,14 @@ def put_state(body: StateUpdate, request: Request) -> dict[str, Any]:
 
 
 @router.post("/onboarding/complete")
-def complete(request: Request) -> dict[str, Any]:
-    # Flush progress into running settings so the rest of the app sees
-    # the wizard's values without a restart.
+async def complete(request: Request) -> dict[str, Any]:
+    # Flush progress into running settings, then rebuild the integration
+    # clients so the rest of the app talks to the newly configured
+    # services without a restart.
     state = request.app.state.onboarding.complete()
     _apply_progress_to_settings(state.progress)
-    log.info("onboarding completed — applied progress to settings")
+    await _rebuild_runtime_clients(request.app.state)
+    log.info("onboarding completed — applied progress + rebuilt clients")
     return state.to_dict()
 
 
@@ -520,7 +522,53 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     for src_key, (settings_attr, coerce) in mapping.items():
         if src_key in progress and progress[src_key]:
             try:
-                setattr(settings, settings_attr, coerce(progress[src_key]))
+                # Settings is a frozen dataclass — plain setattr raises
+                # FrozenInstanceError. object.__setattr__ bypasses the
+                # freeze for this deliberate runtime patch.
+                object.__setattr__(settings, settings_attr, coerce(progress[src_key]))
             except Exception as e:
                 log.warning("settings flush: %s=%r failed: %s",
                             settings_attr, progress[src_key], e)
+
+
+async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:
+    """Rebuild the integration clients on app.state after the wizard's
+    values land in Settings, so the running app talks to the newly
+    configured services without a restart.
+
+    The long-lived background loops (Scheduler, CompletionWatcher,
+    ScanRunner, coverage refresh) resolve their clients through providers
+    that read app.state, so swapping the instances here is enough — no
+    loop teardown required. The HTTP routers already read app.state per
+    request.
+
+    reprobe=False skips the subgen capability re-probe (keeps unit tests
+    hermetic; the app calls with the default).
+    """
+    from ..coverage_engine import IntegrationBundle
+    from ..subgen_client import SubgenClient
+    from ..integrations.ollama import OllamaClient
+
+    old_integrations = getattr(state, "integrations", None)
+    old_subgen = getattr(state, "subgen", None)
+    old_ollama = getattr(state, "ollama", None)
+
+    # Construct fresh clients — they read the now-updated Settings.
+    state.integrations = IntegrationBundle()
+    state.subgen = SubgenClient()
+    state.ollama = OllamaClient()
+
+    if reprobe:
+        try:
+            state.subgen_caps = await state.subgen.probe_capabilities()
+        except Exception as e:
+            log.warning("live-reload: subgen caps re-probe failed: %s", e)
+
+    # Close the old clients after the swap so nothing routes to them.
+    for old in (old_integrations, old_subgen, old_ollama):
+        if old is None:
+            continue
+        try:
+            await old.aclose()
+        except Exception as e:
+            log.debug("live-reload: closing old client failed: %s", e)
