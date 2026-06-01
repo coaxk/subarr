@@ -1447,13 +1447,28 @@ export function AudioReviewModal() {
       setWhisperRunning(false);
       setWhisperError(null);
       // Fetch sample positions immediately so the player is ready.
+      // #9: a 404 here means subarr's media_root view of the path
+      // doesn't resolve to a real file (path-prefix mismatch between
+      // subarr and Sonarr/Plex is the common cause). The user can
+      // still confirm the language; the audio preview is a nice-to-have.
+      // We surface 404 as posData={unavailable:true} so the player
+      // area renders an amber "preview unavailable" notice instead of
+      // a scary red error that blocks the eye, and we DO NOT call
+      // setError (which is reserved for hard verify failures).
       if (e.detail?._canonical_path) {
         setPosLoading(true);
         fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(e.detail._canonical_path)}&track=0&n=3`,
               { credentials: 'same-origin' })
-          .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(async r => {
+            if (r.ok) return r.json();
+            if (r.status === 404) {
+              const body = await r.json().catch(() => ({}));
+              return { unavailable: true, reason: body?.detail || 'file not found at expected path' };
+            }
+            return Promise.reject(new Error(`HTTP ${r.status}`));
+          })
           .then(setPosData)
-          .catch(err => setError('Sample-position scan failed: ' + (err.message || err)))
+          .catch(err => setPosData({ unavailable: true, reason: err.message || String(err) }))
           .finally(() => setPosLoading(false));
       }
     };
@@ -1467,9 +1482,16 @@ export function AudioReviewModal() {
     if (posData.track === track) return;
     setPosLoading(true);
     fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(row._canonical_path)}&track=${track}&n=3`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(async r => {
+        if (r.ok) return r.json();
+        if (r.status === 404) {
+          const body = await r.json().catch(() => ({}));
+          return { unavailable: true, reason: body?.detail || 'file not found at expected path' };
+        }
+        return Promise.reject(new Error(`HTTP ${r.status}`));
+      })
       .then(d => { setPosData(d); setActiveSampleIdx(0); })
-      .catch(err => setError('Sample-position scan failed: ' + (err.message || err)))
+      .catch(err => setPosData({ unavailable: true, reason: err.message || String(err) }))
       .finally(() => setPosLoading(false));
   }, [track]);
 
@@ -1623,6 +1645,39 @@ export function AudioReviewModal() {
               <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
                 Scanning audio for non-silent regions… (one-time per file)
               </span>
+            </div>
+          )}
+
+          {/* #9: graceful degrade when subarr's view of the path
+              doesn't resolve to a real file (path-prefix mismatch
+              between subarr and Sonarr/Plex is the common cause).
+              The user can still confirm the language; the audio
+              preview is a nice-to-have. */}
+          {!posLoading && posData?.unavailable && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px',
+              background: 'rgba(245, 158, 11, 0.10)',
+              border: '1px solid rgba(245, 158, 11, 0.25)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+            }}>
+              <span style={{ fontSize: 14 }}>⚠</span>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>
+                  Audio preview unavailable
+                </span>
+                <span>
+                  Subarr can't read this file from disk. You can still confirm
+                  the language below. Common cause: subarr's media mount
+                  doesn't match where Sonarr/Plex sees the file. Check
+                  ARR_PATH_PREFIX / SONARR_PATH_PREFIX in Settings.
+                </span>
+                {posData.reason && (
+                  <span className="mono" style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
+                    {posData.reason}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 

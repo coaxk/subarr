@@ -12,6 +12,7 @@
 // PUT /api/integrations/config exists we'll re-introduce the dirty bar.
 
 import { SectionCard, StatusDot } from './atoms.jsx';
+import { RailFooter } from './chrome.jsx';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -618,14 +619,22 @@ function ProvidersPanel() {
 }
 
 function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders }) {
+  // #10: render the same persistent GPU/queue/walker footer that the
+  // other pages show in SubRail, so the bottom-left vitals are
+  // visible everywhere including Settings. Aside becomes a flex
+  // column: nav content scrolls in the middle band, footer pins to
+  // the bottom.
   return (
     <aside style={{
       width: 220, flex: '0 0 220px',
       borderRight: 'var(--border)',
       background: 'var(--bg-1)',
-      padding: '18px 0 12px',
-      overflowY: 'auto',
+      display: 'flex', flexDirection: 'column',
     }}>
+      <div style={{
+        flex: 1, minHeight: 0, overflowY: 'auto',
+        padding: '18px 0 12px',
+      }}>
       <div style={{ padding: '0 16px 12px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0, fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>Settings</h2>
         <span className="num mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>v1.0.0</span>
@@ -677,6 +686,8 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           }}>{it.label}</button>
         ))}
       </div>
+      </div>
+      <RailFooter />
     </aside>
   );
 }
@@ -970,6 +981,175 @@ function KwargsTable({ kwargs, compact }) {
   );
 }
 
+// #232 vision capability surface for the Ollama integration panel.
+// Polls /api/vision/status on mount, shows current state, lets user
+// pull the recommended vision model with streamed NDJSON progress.
+function OllamaVisionCard() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [pullState, setPullState] = useState(null);
+    // null | { running:true, pct, status } | { error } | { done }
+
+  const refetch = async () => {
+    try {
+      const r = await fetch('/api/vision/status', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setStatus(await r.json());
+    } catch (e) {
+      setStatus({ error: e.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { refetch(); }, []);
+
+  const pull = async (name) => {
+    setPullState({ running: true, status: 'starting', pct: 0 });
+    try {
+      const r = await fetch('/api/vision/pull', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (ev.error) { setPullState({ error: ev.error }); return; }
+            const pct = ev.total && ev.completed
+              ? Math.round((ev.completed / ev.total) * 100) : null;
+            setPullState({ running: true, status: ev.status || '...', pct });
+          } catch {}
+        }
+      }
+      setPullState({ done: true });
+      await refetch();
+    } catch (e) {
+      setPullState({ error: e.message });
+    }
+  };
+
+  if (loading) {
+    return <SectionCard label="Vision pre-filter">
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>Checking capability…</div>
+    </SectionCard>;
+  }
+  if (!status || status.error) {
+    return <SectionCard label="Vision pre-filter">
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+        Could not query vision status: {status?.error || 'unknown'}
+      </div>
+    </SectionCard>;
+  }
+  if (!status.ollama_configured) {
+    return <SectionCard label="Vision pre-filter">
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+        Ollama is not configured. Configure it above to enable vision pre-filter.
+      </div>
+    </SectionCard>;
+  }
+
+  const active = status.vision_capable;
+  const chipBg = active ? 'rgba(34, 197, 94, 0.10)' : 'rgba(245, 158, 11, 0.10)';
+  const chipBorder = active ? 'rgba(34, 197, 94, 0.30)' : 'rgba(245, 158, 11, 0.30)';
+  const chipFg = active ? '#22c55e' : '#f59e0b';
+
+  return (
+    <SectionCard label="Vision pre-filter" action={
+      <button className="btn sm" onClick={refetch}>Refresh</button>
+    }>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '10px 14px',
+        background: chipBg,
+        border: `1px solid ${chipBorder}`,
+        borderRadius: 'var(--radius-md)',
+      }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: chipFg }} />
+        <span style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-0)', fontWeight: 600 }}>
+          {active ? 'Active' : 'Inactive'}
+        </span>
+        {active && (
+          <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
+            {status.vision_model_resolved}
+          </span>
+        )}
+      </div>
+
+      <Row label="Configured model" value={status.vision_model_config || '(none)'}
+           hint={status.vision_model_config === 'auto'
+             ? "Set to 'auto' — subarr picks the first vision-capable installed model"
+             : 'Set OLLAMA_VISION_MODEL to change'} />
+      <Row label="Resolved model"
+           value={status.vision_model_resolved || 'none'}
+           hint={active ? 'Used by every vision call' : 'No vision-capable model installed'} />
+      <Row label="Vision-capable models installed"
+           value={(status.vision_capable_installed || []).join(', ') || '(none)'} />
+      <Row label="Supported families"
+           value={(status.families_supported || []).join(', ')}
+           hint="Any installed model starting with one of these is vision-capable" />
+
+      {!active && !pullState && (
+        <div style={{
+          padding: '10px 14px',
+          background: 'rgba(245, 158, 11, 0.06)',
+          border: '1px solid rgba(245, 158, 11, 0.20)',
+          borderRadius: 'var(--radius-md)',
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+            No vision-capable model installed. The pre-filter is disabled but
+            every other ollama feature still works with your text model.
+            Recommended pull: <span className="mono">{status.suggested_pull}</span> (~5 GB).
+          </div>
+          <button className="btn sm" onClick={() => pull(status.suggested_pull)}>
+            Pull {status.suggested_pull}
+          </button>
+        </div>
+      )}
+
+      {pullState?.running && (
+        <div style={{ padding: '10px 14px', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <span className="spinner-ring" />
+            <span style={{ flex: 1, fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>
+              {pullState.status}
+            </span>
+            {pullState.pct != null && <span className="mono" style={{ fontSize: 'var(--text-xs)' }}>{pullState.pct}%</span>}
+          </div>
+          {pullState.pct != null && (
+            <div style={{ height: 4, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${pullState.pct}%`, height: '100%', background: 'var(--violet-500)' }} />
+            </div>
+          )}
+        </div>
+      )}
+      {pullState?.error && (
+        <div style={{ padding: 10, color: '#ef4444', fontSize: 'var(--text-sm)' }}>
+          Pull failed: {pullState.error}
+        </div>
+      )}
+      {pullState?.done && (
+        <div style={{ padding: 10, color: '#22c55e', fontSize: 'var(--text-sm)' }}>
+          Pull complete. Vision pre-filter is now active.
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+
 function IntegrationPanel({ rail, refetchHealth }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -1081,6 +1261,12 @@ function IntegrationPanel({ rail, refetchHealth }) {
           <Row label="compat mode" value={i.compat_mode ? 'on' : 'off'} hint="when on, subarr serialises scans for vanilla subgens" />
         </SectionCard>
       )}
+
+      {/* #232 vision capability card — only on the Ollama panel.
+          Shows whether the vision pre-filter is currently active,
+          which model it resolved to, and offers a one-click pull
+          of qwen2.5vl:7b when no vision-capable model is installed. */}
+      {rail.id === 'ollama' && <OllamaVisionCard />}
 
       {/* Bazarr-specific action */}
       {rail.id === 'bazarr' && (
@@ -1251,6 +1437,28 @@ function TelemetryPanel() {
   }
 
   const last = data.last_payload || {};
+  // #11: relative-time helper for "9m ago" hints.
+  const ago = (ts) => {
+    if (!ts) return '';
+    const dt = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (dt < 60) return `${dt}s ago`;
+    if (dt < 3600) return `${Math.floor(dt / 60)}m ago`;
+    if (dt < 86400) return `${Math.floor(dt / 3600)}h ago`;
+    return `${Math.floor(dt / 86400)}d ago`;
+  };
+  const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : 'never';
+  // Health chip: green when telemetry is succeeding, amber when
+  // failing but eventually-consistent (rate-limited / endpoint slow),
+  // gray when opted out.
+  const healthy = data.healthy === true;
+  const healthChip = !data.opted_in
+    ? { dot: 'var(--fg-3)', text: 'paused' }
+    : healthy
+    ? { dot: 'var(--green-500, #22c55e)', text: 'healthy' }
+    : { dot: 'var(--amber-500, #f59e0b)', text: 'degraded' };
+  // Sent-at for the payload card header. last_payload.sent_at is set
+  // every successful transmit; missing = preview-only payload.
+  const sentAt = last && last.sent_at ? fmt(last.sent_at) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 820 }}>
@@ -1259,14 +1467,38 @@ function TelemetryPanel() {
           Subarr can send an anonymous weekly install heartbeat. Nothing identifying you, your media, or your subtitle content is included. You can read exactly what's sent below.
         </div>
         <Row label="Telemetry"
-          hint={data.opted_in ? 'enabled — weekly heartbeat ON' : 'disabled — nothing leaves this machine'}
-          control={<Toggle on={data.opted_in} onToggle={toggle} busy={busy} />} />
+          hint={data.opted_in
+            ? (healthy ? 'enabled — sending OK' : 'enabled — last send failed, will retry')
+            : 'disabled — nothing leaves this machine'}
+          control={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+                              fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: healthChip.dot,
+                }} />
+                {healthChip.text}
+              </span>
+              <Toggle on={data.opted_in} onToggle={toggle} busy={busy} />
+            </div>
+          } />
         <Row label="Install ID" value={data.install_id} hint="random per-install identifier — no PII" />
-        <Row label="Last ping" value={data.last_ping_at ? new Date(data.last_ping_at * 1000).toLocaleString() : 'never'} />
-        {data.last_error && <Row label="Last error" value={data.last_error} hint="last failed send" />}
+        <Row label="Last ping"
+             value={fmt(data.last_ping_at)}
+             hint={data.last_ping_at ? ago(data.last_ping_at) : 'no successful send yet'} />
+        {data.last_error && (
+          <Row label="Last error"
+               value={data.last_error}
+               hint={data.last_error_at
+                 ? `${ago(data.last_error_at)} — ${fmt(data.last_error_at)}`
+                 : 'timestamp unknown (pre-migration row)'} />
+        )}
       </SectionCard>
 
-      <SectionCard label="Last payload (exactly what was sent)" action={
+      <SectionCard label={sentAt
+        ? `Last payload (sent ${sentAt})`
+        : 'Last payload (exactly what was sent)'} action={
         <button className="btn sm" onClick={sendNow}>Send now</button>
       }>
         <pre style={{

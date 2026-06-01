@@ -256,7 +256,10 @@ export function SubRail({ section = 'overview', activeId, footer }) {
 
 // Footer renders the live walker state + GPU + queue vitals,
 // polled from /api/home/dashboard + /api/queue. Persistent across pages.
-function RailFooter() {
+// Exported so the Settings page can mount it in its own sidebar
+// footer without using the standard SubRail (Settings has a custom
+// integrations-nav sidebar). #10 close-out.
+export function RailFooter() {
   const [data, setData] = useState(null);
   const [queue, setQueue] = useState(null);
   useEffect(() => {
