@@ -860,8 +860,16 @@ export function NextRunActivitySplit({ nextRun, activity }) {
   // a big visual gap above the Run now / Edit rule buttons inside the
   // next-run card. With alignItems:stretch (default), the activity
   // card matches next-run's content height and scrolls internally.
+  //
+  // flexShrink:0 is REQUIRED: main-canvas is a flex column with
+  // overflow-y:auto, so its default flex-shrink:1 will squeeze this
+  // last row below its content height when the page overflows. The
+  // activity card hides its overflow and scrolls, but the next-run
+  // card has no overflow guard, so it would spill its content past
+  // the card border. Pinning shrink to 0 keeps the row at natural
+  // height and lets main-canvas scroll instead.
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexShrink: 0 }}>
       <NextRunCard data={nextRun} />
       <ActivityCard data={activity} />
     </div>
