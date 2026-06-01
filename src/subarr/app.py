@@ -35,6 +35,7 @@ from .routers import (
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
+from .error_store import ErrorStore
 from .schedule_store import ScheduleStore
 from .scheduler import Scheduler
 from .subgen_client import SubgenClient
@@ -72,12 +73,16 @@ async def lifespan(app_: FastAPI):
     app_.state.subgen_restart_to = None
     app_.state.scans = ScanStore(settings.db_path)
     app_.state.scans.init_schema()
+    # Anonymous error-class log for telemetry (schema via migration 006).
+    app_.state.errors = ErrorStore(settings.db_path)
     app_.state.runner = ScanRunner(
         store=app_.state.scans,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
         # Resolve subgen live so onboarding can swap the client without
         # restarting the runner.
         subgen_provider=lambda: app_.state.subgen,
+        # Best-effort anonymous error-class recording for telemetry.
+        error_recorder=lambda cls: app_.state.errors.record(cls),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
@@ -304,6 +309,7 @@ async def lifespan(app_: FastAPI):
         await app_.state.integrations.aclose()
         await app_.state.ollama.aclose()
         app_.state.scans.close()
+        app_.state.errors.close()
         app_.state.provenance.close()
         app_.state.schedule.close()
         app_.state.enrichment.close()
