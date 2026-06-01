@@ -12,9 +12,11 @@ only makes one round-trip per poll. Five sections:
   - next_run     : scheduler config + countdown to next walk
   - activity     : last N provenance entries with kind classification
 
-Designed to be cheap: each section is a single store query, no network
-fan-out to upstreams beyond what the existing /api/integrations/health
-already does. Caller polls this on a 5s tick.
+Cost note: most sections are single store queries, but the stages block
+DOES fan out to Bazarr (episodes/movies wanted) + subgen /queue. To keep
+that off the request path, a 30s DashboardCache (see app.py) fronts this
+builder — the frontend's 5s poll mostly hits the cached snapshot, and the
+upstream fan-out runs on the cache's own 30s tick.
 """
 
 from __future__ import annotations

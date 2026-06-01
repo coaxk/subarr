@@ -1225,31 +1225,6 @@ async def _add_bazarr_blind_synthetic_rows(
     return items
 
 
-def _lookup_probe_audio_langs(
-    file_canonical: str,
-    probe_by_series_prefix: dict[str, list[tuple[str, Any]]],
-) -> list[str] | None:
-    """Find probe-cache audio_langs for `file_canonical` if any entry
-    matches. Probe entries are ProbeResult objects whose audio_langs
-    must be derived via `audio_lang_summary_with_titles()` rather than
-    a direct attribute lookup.
-
-    Returns None when no probe entry exists — caller treats as
-    'insufficient evidence' and skips synthesis (no false positives)."""
-    from .media_probe import audio_lang_summary_with_titles
-    parts = file_canonical.split("/")
-    for i in range(len(parts) - 1, 0, -1):
-        prefix = "/".join(parts[:i])
-        for path, entry in probe_by_series_prefix.get(prefix, []):
-            if path == file_canonical:
-                try:
-                    langs, _notes = audio_lang_summary_with_titles(entry)
-                    return list(langs or [])
-                except Exception:
-                    return []
-    return None
-
-
 def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     """The Bazarr-blind signature: file's audio metadata claims English
     OR is undetected, on a series Sonarr knows is foreign-language.
