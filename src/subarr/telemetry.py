@@ -356,6 +356,27 @@ class TelemetryCollector:
 # ─── Default stats provider — reads from app.state ─────────────────
 
 
+def _walks_per_day_30d(app_state) -> float:
+    """Coverage activity: scans created in the last 30 days / 30. Fixed
+    divisor keeps it comparable across installs (a new install reports a
+    low rate, which is correct). Best-effort: 0.0 if the store is
+    unavailable."""
+    try:
+        cutoff = time.time() - 30 * 86400
+        return round(app_state.scans.count_since(cutoff) / 30.0, 2)
+    except Exception:
+        return 0.0
+
+
+def _error_counts_30d(app_state) -> dict[str, int]:
+    """Anonymous {exc_class: count} over the last 30 days. Best-effort."""
+    try:
+        cutoff = time.time() - 30 * 86400
+        return app_state.errors.counts_since(cutoff)
+    except Exception:
+        return {}
+
+
 def make_default_stats_provider(app_state) -> Any:
     """Returns a callable suitable for TelemetryCollector(stats_provider=...)
     that pulls live data off app.state. Kept separate so tests can swap
@@ -418,8 +439,8 @@ def make_default_stats_provider(app_state) -> Any:
             "library_bucket": bucket,
             "scheduler_enabled": sched_enabled,
             "scheduler_mode": sched_mode,
-            "walks_per_day_30d": 0.0,  # TODO: compute from pending_walks 30d history
-            "error_counts_30d": {},     # TODO: tally from logs (later)
+            "walks_per_day_30d": _walks_per_day_30d(app_state),
+            "error_counts_30d": _error_counts_30d(app_state),
             "docker_tier": docker_tier,
         }
 

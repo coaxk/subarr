@@ -40,7 +40,7 @@ class CompatModeError(RuntimeError):
 
 class ScanRunner:
     def __init__(self, subgen: SubgenClient | None = None, store: ScanStore = None,
-                 caps_provider=None, subgen_provider=None):
+                 caps_provider=None, subgen_provider=None, error_recorder=None):
         # subgen is resolved through a provider so onboarding live-reload
         # can swap the client on app.state without restarting the runner.
         # Backward compatible: a directly-passed `subgen` is wrapped in a
@@ -62,6 +62,10 @@ class ScanRunner:
         # The provider may return None (caps not yet probed) — treated
         # as "assume capable" so first-boot scans don't fail spuriously.
         self._caps_provider = caps_provider or (lambda: None)
+        # Best-effort anonymous error-class recorder for telemetry. No-op by
+        # default; app.py wires it to ErrorStore.record. Must never raise
+        # into the scan path (ErrorStore.record already swallows).
+        self._error_recorder = error_recorder or (lambda cls: None)
 
     @property
     def _subgen(self):
@@ -223,6 +227,7 @@ class ScanRunner:
             except SubgenUnavailable as e:
                 result.status = PATH_STATUS_ERROR
                 result.error = str(e)
+                self._error_recorder(type(e).__name__)
             except asyncio.CancelledError:
                 result.status = PATH_STATUS_ERROR
                 result.error = "cancelled"
@@ -234,6 +239,7 @@ class ScanRunner:
             except Exception as e:
                 result.status = PATH_STATUS_ERROR
                 result.error = repr(e)
+                self._error_recorder(type(e).__name__)
 
             result.finished_at = time.time()
             self._store.save(scan)

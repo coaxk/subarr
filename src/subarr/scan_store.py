@@ -165,6 +165,16 @@ class ScanStore:
             results=[PathResult.from_dict(d) for d in json.loads(row[6])],
         )
 
+    def count_since(self, since_epoch: float) -> int:
+        """Number of scans created at or after since_epoch (telemetry:
+        walks_per_day_30d)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM scans WHERE created_at >= ?",
+                (since_epoch,),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def save(self, scan: Scan) -> None:
         with self._lock:
             self._conn.execute(
