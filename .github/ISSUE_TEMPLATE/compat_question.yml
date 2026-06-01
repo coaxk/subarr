@@ -1,0 +1,45 @@
+name: Compat mode question
+description: Questions about running subarr with vanilla subgen, or which subarr-subgen patches are needed for what.
+title: "[compat] "
+labels: ["compat-mode", "question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The compat-mode story is one of the most-asked questions at launch. Use this template if your question is about: "do I have to swap to subarr-subgen?", "which features need which subgen patch?", "what works on vanilla subgen?", or "can I run both side by side?".
+
+        For bugs in an existing install, use the bug-report template instead.
+
+  - type: input
+    id: subgen-version
+    attributes:
+      label: What subgen image are you running?
+      placeholder: "mccloud/subgen:latest, or ghcr.io/coaxk/subarr-subgen:v4.7, or unsure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: detected-mode
+    attributes:
+      label: What does subarr's Settings → Integrations → Subgen show?
+      options:
+        - "Compat mode (vanilla detected)"
+        - "Full feature set (subarr-subgen detected)"
+        - "Subgen unreachable"
+        - "Not yet installed / haven't checked"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you're trying to do, and what you're unsure about.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Any context that might matter
+      description: Compose snippet, current Bazarr setup, library size, language mix, GPU vs CPU. Optional but speeds up the answer.

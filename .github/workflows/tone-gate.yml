@@ -1,0 +1,90 @@
+# Tone gate — fails the build if launch-sensitive marketing copy uses
+# phrasing that locked synthesis decision §6 explicitly disallowed.
+#
+# The whole product story rests on "subarr stands BESIDE Bazarr". Any
+# language that reads as a Bazarr-killer gets screencapped on r/bazarr
+# within hours and the launch dies. This gate is a copy-level CI check
+# so well-meaning future edits can't quietly drift back into dunk
+# phrasing.
+#
+# Scope: README.md + landing-asset copy. Code comments and tests are
+# intentionally NOT scanned — they are not user-facing.
+#
+# Adding a banned phrase here: edit the BANNED array below + open a PR.
+# Adding an allowed exception: prefix the offending line with the
+# tone-allow marker comment `<!-- tone-allow: <reason> -->` on the
+# preceding line.
+
+name: tone-gate
+
+on:
+  pull_request:
+    paths:
+      - README.md
+      - .github/workflows/tone-gate.yml
+  push:
+    branches: [main]
+    paths:
+      - README.md
+
+jobs:
+  scan:
+    name: scan for tone tripwires
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: scan
+        run: |
+          set -e
+          # Phrases that would read as Bazarr-killer framing.
+          # Case-insensitive. Multi-word phrases match across spaces.
+          BANNED=(
+            'replaces Bazarr'
+            'replace Bazarr'
+            'finally fix'
+            'unlike Bazarr'
+            "Bazarr can't"
+            "Bazarr cannot"
+            "Bazarr doesn't"
+            "Bazarr does not show"
+            "Bazarr does not do"
+            'better than Bazarr'
+            'kills Bazarr'
+            'Bazarr is dumb'
+            'Bazarr is broken'
+            # 'subarr is the brain' specifically — earlier draft used
+            # this and it reads as condescending toward Bazarr.
+            'subarr is the brain'
+            'adds the brain'
+          )
+          FAIL=0
+          for phrase in "${BANNED[@]}"; do
+            # Look for the phrase in README. -F = fixed string, -i =
+            # case-insensitive, -n = line numbers, -B 1 = one line of
+            # context so we can spot the tone-allow marker on the
+            # preceding line.
+            if matches=$(grep -i -F -n -B 1 "$phrase" README.md 2>/dev/null); then
+              # Check each match: if the previous line carries
+              # 'tone-allow:' then this is an explicit exception.
+              while IFS= read -r line; do
+                # grep -B output uses '--' between match groups; skip.
+                [ "$line" = "--" ] && continue
+                # Match line format: filename-LINENO-content OR filename:LINENO:content
+                if [[ "$line" == *":"* ]] && [[ "$line" != *"tone-allow:"* ]]; then
+                  echo "::error::Tone tripwire \"$phrase\" found:"
+                  echo "  $line"
+                  FAIL=1
+                fi
+              done <<< "$matches"
+            fi
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "Locked tone rule: subarr stands BESIDE Bazarr."
+            echo "Synthesis decision §6 (2026-05-28) + launch-plan amendment (2026-06-01)."
+            echo ""
+            echo "If a banned phrase is genuinely needed, prefix the line above"
+            echo "with: <!-- tone-allow: <reason> --> and the gate will let it pass."
+            exit 1
+          fi
+          echo "tone gate: clean."
