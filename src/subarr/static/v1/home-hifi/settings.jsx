@@ -860,6 +860,81 @@ function SubgenKwargsCard() {
   );
 }
 
+// #230: surface the CONCURRENT_TRANSCRIPTIONS knob — subgen supports N
+// parallel Whisper workers but the env var is invisible to the operator
+// inside subarr. We read live /api/queue to track the highest observed
+// processing[] depth (a lower bound on the current value), and document
+// the VRAM cost per Whisper model so users can pick N correctly.
+function SubgenConcurrencyCard() {
+  const [observedMax, setObservedMax] = React.useState(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    async function tick() {
+      if (cancelled) return;
+      try {
+        const r = await fetch('/api/queue', { credentials: 'same-origin' });
+        if (r.ok) {
+          const d = await r.json();
+          const n = (d.processing || []).length;
+          setObservedMax(prev => (prev == null || n > prev) ? n : prev);
+        }
+      } catch { /* silent */ }
+      if (!cancelled) timer = setTimeout(tick, 5000);
+    }
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, []);
+
+  const observedLabel = observedMax == null
+    ? 'measuring…'
+    : observedMax === 0
+      ? 'no transcribes seen yet'
+      : `at least ${observedMax} (observed max processing depth)`;
+
+  return (
+    <SectionCard label="Concurrent transcribes (subarr-subgen)">
+      <div style={{
+        fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5,
+      }}>
+        Subgen can run N Whisper workers in parallel. Each worker holds
+        one transcribe in memory + on GPU. Bigger N = faster catch-up on
+        large libraries, but every worker needs its own VRAM slice.
+      </div>
+
+      <Row label="Currently configured"
+           value={observedLabel}
+           hint="subarr can't read subgen's env directly — it infers from /api/queue" />
+      <Row label="Env knob"
+           value="CONCURRENT_TRANSCRIPTIONS"
+           hint="set in your subgen-next compose, then restart the container" />
+
+      <div style={{
+        fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+        background: 'var(--bg-2)', padding: 12,
+        borderRadius: 'var(--radius-md)', lineHeight: 1.5,
+      }}>
+        <div style={{ marginBottom: 6, color: 'var(--fg-1)', fontWeight: 600 }}>
+          VRAM budget per worker (float16):
+        </div>
+        <div className="mono" style={{ display: 'grid',
+          gridTemplateColumns: '120px 1fr', gap: '2px 12px',
+        }}>
+          <span>tiny</span>            <span style={{ color: 'var(--fg-3)' }}>~1 GB</span>
+          <span>base</span>            <span style={{ color: 'var(--fg-3)' }}>~1 GB</span>
+          <span>small</span>           <span style={{ color: 'var(--fg-3)' }}>~2 GB</span>
+          <span>medium</span>          <span style={{ color: 'var(--fg-3)' }}>~5 GB</span>
+          <span>large / large-v3</span><span style={{ color: 'var(--fg-3)' }}>~10 GB</span>
+        </div>
+        <div style={{ marginTop: 8, color: 'var(--fg-3)' }}>
+          Pick N so N × per-worker-VRAM &lt; total VRAM. Leave 1–2 GB
+          headroom for the container itself + CUDA cache.
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 function KwargsTable({ kwargs, compact }) {
   const entries = Object.entries(kwargs);
   if (entries.length === 0) {
@@ -1033,6 +1108,13 @@ function IntegrationPanel({ rail, refetchHealth }) {
           subgen and was completely invisible in the UI. Pulls from GET
           /api/mode which already parses the compose file. */}
       {rail.id === 'subgen' && <SubgenKwargsCard />}
+
+      {/* #230: subgen-only — concurrent transcribes knob. Reads max
+          observed Processing[] depth from /api/queue as a lower bound
+          on the current CONCURRENT_TRANSCRIPTIONS env. Static
+          documentation row explains how to change it + the VRAM
+          implications per Whisper model size. */}
+      {rail.id === 'subgen' && <SubgenConcurrencyCard />}
 
       <SectionCard label="Connection (read-only — env-driven in v1)">
         <Row label="Name" value={rail.name} />
