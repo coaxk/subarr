@@ -5,10 +5,9 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
-## [Unreleased]
+## [1.0.0] - 2026-06-02
 
-Active development on `feat/wire-chrome-dashboard-queue-library` — will fold
-into the next minor release.
+First public release.
 
 ### Added
 - Brand assets: 4-size favicon (16/32/192/512 PNG) + 1200×630 OpenGraph
