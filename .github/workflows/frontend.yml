@@ -43,9 +43,20 @@ jobs:
       - run: npm ci
 
       - name: Build bundles and assert no drift
+        # We check ONLY the compiled .js + .html — the source-of-truth
+        # for runtime behaviour. We do NOT check .map files: esbuild
+        # emits platform-dependent unicode-escape encoding for
+        # sourcesContent (Windows vs Linux differ on chars like ─),
+        # so a Win-built bundle is byte-different from a Linux-built
+        # bundle even though both produce identical runtime behaviour.
+        # Gating releases on .map byte-equality would mean either
+        # forcing devs to build only on Linux or removing maps from
+        # version control — neither buys us actual safety. The .js
+        # check still catches the real bug (source edited, bundle not
+        # rebuilt) because the executable code IS deterministic.
         run: |
           npm run build:frontend
-          if ! git diff --exit-code -- src/subarr/static/v1/home-hifi; then
+          if ! git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'; then
             echo ""
             echo "::error::Frontend bundles are stale. Run 'npm run build:frontend' locally and commit the result."
             exit 1

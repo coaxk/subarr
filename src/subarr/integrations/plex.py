@@ -32,7 +32,10 @@ from __future__ import annotations
 import logging
 from pathlib import PurePosixPath
 from typing import Optional
-from xml.etree import ElementTree as ET
+# defusedxml hardens against billion-laughs / external-entity attacks.
+# Plex is a trusted local service but a compromised Plex container
+# should not be a foothold into subarr — defusedxml is a 1-line swap.
+import defusedxml.ElementTree as ET  # noqa: N814
 
 import httpx
 
