@@ -40,12 +40,15 @@ function _shallowEqualCounts(a, b) {
 }
 
 async function _fetchChromeCounts() {
-  const [dash, health, queue, schedule, review] = await Promise.all([
+  const [dash, health, queue, schedule, review, updates] = await Promise.all([
     fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/schedule', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    // /api/updates is a single cached SQLite read (the actual GitHub poll
+    // runs on a 24h background loop) — cheap to fold into the shared tick.
+    fetch('/api/updates', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   const next = {};
   if (dash?.stages) {
@@ -70,6 +73,16 @@ async function _fetchChromeCounts() {
   }
   if (next.health) next.config_integrations = next.health;
   if (review?.count != null) next.review = review.count;
+  // Update affordance + real running version for the header. We always
+  // set update_available (defaulting false) so the shallow-equal dedup
+  // stays stable. subarr_version backs the header label so it reflects
+  // the actually-running build instead of a hardcoded string.
+  next.update_available = !!updates?.any_update_available;
+  const subarrProduct = (updates?.products || []).find((p) => p.product === 'subarr');
+  if (subarrProduct?.current_version) next.subarr_version = subarrProduct.current_version;
+  if (subarrProduct?.has_update && subarrProduct.latest_version) {
+    next.subarr_latest = subarrProduct.latest_version;
+  }
   return next;
 }
 
@@ -237,7 +250,30 @@ export function TopBar({ section = 'overview' }) {
       <span style={{ width: 1, height: 22, background: 'var(--bg-4)' }} />
       <div style={{ width: 14 }} />
 
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num mono">v1.0.0</span>
+      {counts.update_available && (
+        <a href="/settings#updates" title={counts.subarr_latest
+            ? `Update available — v${counts.subarr_latest.replace(/^v/, '')}. View in Settings.`
+            : 'Update available. View in Settings.'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginRight: 14, padding: '3px 9px',
+            fontSize: 'var(--text-xs)', fontWeight: 600,
+            color: 'var(--violet-300, #c4b5fd)',
+            background: 'var(--violet-500-a12, rgba(139,92,246,0.12))',
+            border: '1px solid var(--violet-500-a30, rgba(139,92,246,0.30))',
+            borderRadius: 999, textDecoration: 'none',
+            transition: 'background var(--dur-fast) var(--ease-out)',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--violet-500-a20, rgba(139,92,246,0.20))')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--violet-500-a12, rgba(139,92,246,0.12))')}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--violet-400, #a78bfa)' }} />
+          Update
+        </a>
+      )}
+
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num mono">
+        {counts.subarr_version ? `v${counts.subarr_version.replace(/^v/, '')}` : 'v1.0.1'}
+      </span>
     </header>
   );
 }
