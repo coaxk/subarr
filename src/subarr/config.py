@@ -80,6 +80,11 @@ class Settings:
     # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
     # off; set SONARR_PROPAGATE_AUDIO_LANG=1 to enable.
     sonarr_propagate_audio_lang: bool
+    # #12: read the user's per-show selected audio language directly from
+    # Plex metadata (funnel layer L2.6, below Tautulli-live). Adds Plex API
+    # calls per coverage build, so OPT-IN. Default off; set
+    # PLEX_AUDIO_HINTS=1 to enable.
+    plex_audio_hints: bool
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -167,6 +172,9 @@ def load() -> Settings:
         ).strip().lower() not in ("0", "false", "no", "off"),
         sonarr_propagate_audio_lang=os.environ.get(
             "SONARR_PROPAGATE_AUDIO_LANG", "0"
+        ).strip().lower() in ("1", "true", "yes", "on"),
+        plex_audio_hints=os.environ.get(
+            "PLEX_AUDIO_HINTS", "0"
         ).strip().lower() in ("1", "true", "yes", "on"),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by

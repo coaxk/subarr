@@ -483,6 +483,19 @@ async def _fetch_calendar_upcoming(client, sources: dict) -> set[int]:
         return set()
 
 
+async def _fetch_plex_audio_hints(plex: Any, titles: set[str], sources: dict) -> dict[str, str]:
+    """#12: title_lc → per-show selected audio lang from Plex. Best-effort —
+    a failure logs into sources['plex'].warnings and returns {} so the
+    coverage build is never blocked on Plex."""
+    try:
+        hints = await plex.audio_lang_hints(titles)
+        sources.setdefault("plex", {})["audio_hints"] = len(hints)
+        return hints
+    except Exception as e:  # noqa: BLE001 — never let Plex break the build
+        sources.setdefault("plex", {}).setdefault("warnings", []).append(f"audio_hints: {e}")
+        return {}
+
+
 async def _fetch_tautulli_activity(t: TautulliClient, sources: dict) -> dict:
     """v1.1-E + v1.1-O Layer 2.5: Tautulli get_activity → set of
     grandparent_title (series) currently streaming + subset where Plex is
@@ -580,7 +593,8 @@ def _episode_filename_pattern(episode_number: str | None) -> str | None:
 def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                           tautulli_hints: dict[str, str] | None = None,
                           user_verifications: dict[str, str] | None = None,
-                          failed_idx: dict[str, list] | None = None) -> None:
+                          failed_idx: dict[str, list] | None = None,
+                          plex_hints: dict[str, str] | None = None) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
     audio_langs + file_canonical_path onto the item and mark it verified.
@@ -602,7 +616,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
             if notes:
                 item.audio_label_notes.extend(notes)
             _classify_audio_label(item, tautulli_hints=tautulli_hints,
-                                  user_verifications=user_verifications)
+                                  user_verifications=user_verifications,
+                                  plex_hints=plex_hints)
             item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
@@ -616,7 +631,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
 def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
                         tautulli_hints: dict[str, str] | None = None,
                         user_verifications: dict[str, str] | None = None,
-                        failed_idx: dict[str, list] | None = None) -> None:
+                        failed_idx: dict[str, list] | None = None,
+                        plex_hints: dict[str, str] | None = None) -> None:
     """Movies: a single video file lives directly under the movie dir.
     First probe under the movie's canonical wins → verified. No probe but a
     recorded failure → probe_failed. Otherwise unprobed."""
@@ -636,13 +652,15 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
     if notes:
         item.audio_label_notes.extend(notes)
     _classify_audio_label(item, tautulli_hints=tautulli_hints,
-                          user_verifications=user_verifications)
+                          user_verifications=user_verifications,
+                          plex_hints=plex_hints)
     item.verification_state = "verified"
 
 
 def _classify_audio_label(item: CoverageItem,
                           tautulli_hints: dict[str, str] | None = None,
-                          user_verifications: dict[str, str] | None = None) -> None:
+                          user_verifications: dict[str, str] | None = None,
+                          plex_hints: dict[str, str] | None = None) -> None:
     """v1.1-O: cross-check audio_langs against Sonarr/Radarr originalLanguage.
 
     Three outcomes:
@@ -678,6 +696,20 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_langs = [plex_lang]
         item.audio_label_notes.append(
             f"Plex audio-track pick = {plex_lang!r} (overrides ffprobe)"
+        )
+        item.audio_label_suspect = False
+        item.audio_label_unknown = False
+        return
+    # Layer 2.6 (#12): the user's persisted per-show audio pick, read
+    # directly from Plex metadata (selected audio stream). Below Tautulli-
+    # live (which reflects the freshest in-session choice) but above the
+    # ffprobe heuristics. Authoritative when present — same treatment as
+    # the Tautulli pick, since both are the user's deliberate Plex choice.
+    if plex_hints and title_lc in plex_hints:
+        plex_lang = plex_hints[title_lc]
+        item.audio_langs = [plex_lang]
+        item.audio_label_notes.append(
+            f"Plex selected-audio = {plex_lang!r} (per-show pick, overrides ffprobe)"
         )
         item.audio_label_suspect = False
         item.audio_label_unknown = False
@@ -836,6 +868,14 @@ async def build_coverage(
     history = await tautulli_task if tautulli_task else []
     activity = await tautulli_activity_task if tautulli_activity_task else {"now_playing_titles": set(), "transcoding_titles": set()}
 
+    # #12: per-show selected audio language from Plex (opt-in, funnel L2.6,
+    # below Tautulli-live). Show-level signal → episodes only. Best-effort:
+    # never breaks the build. Cached on the Plex client across builds.
+    plex_audio_hints: dict[str, str] = {}
+    if settings.plex_audio_hints and bundle.plex.is_configured():
+        ep_titles = {(w.get("seriesTitle") or "") for w in bz_eps}
+        plex_audio_hints = await _fetch_plex_audio_hints(bundle.plex, ep_titles, sources)
+
     sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
     radarr_by_title = {m.get("title", "").strip().lower(): m
                        for m in radarr_movies if isinstance(m, dict)}
@@ -960,7 +1000,8 @@ async def build_coverage(
         _attach_probe_episode(item, probe_by_series_prefix,
                               tautulli_hints=activity.get("audio_lang_hints") or {},
                               user_verifications=user_verifications,
-                              failed_idx=probe_failed_by_prefix)
+                              failed_idx=probe_failed_by_prefix,
+                              plex_hints=plex_audio_hints)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1001,7 +1042,8 @@ async def build_coverage(
         _attach_probe_movie(item, probe_by_series_prefix,
                             tautulli_hints=activity.get("audio_lang_hints") or {},
                             user_verifications=user_verifications,
-                            failed_idx=probe_failed_by_prefix)
+                            failed_idx=probe_failed_by_prefix,
+                            plex_hints=plex_audio_hints)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1040,6 +1082,7 @@ async def build_coverage(
             failed_idx=probe_failed_by_prefix,
             user_verifications=user_verifications,
             sources=sources,
+            plex_hints=plex_audio_hints,
         )
 
     items.sort(key=lambda i: i.score, reverse=True)
@@ -1066,6 +1109,7 @@ async def _add_bazarr_blind_synthetic_rows(
     failed_idx: dict[str, list] | None = None,
     user_verifications: dict[str, str],
     sources: dict,
+    plex_hints: dict[str, str] | None = None,
 ) -> list[CoverageItem]:
     """Build synthetic CoverageItem rows for episodes Bazarr can't see —
     foreign-language series where the file metadata lies and Bazarr's
@@ -1213,6 +1257,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 tautulli_hints=activity.get("audio_lang_hints") or {},
                 user_verifications=user_verifications,
                 failed_idx=failed_idx,
+                plex_hints=plex_hints,
             )
             # Bazarr-blind requires positive evidence the file is not
             # what Bazarr thinks it is. Two ways to get there:
