@@ -90,3 +90,37 @@ def test_queue_history_only_when_subgen_down(app_with_stub):
     assert "subgen" in body["subgen_error"].lower()
     assert "history" in body
     assert "history_counts" in body
+
+
+# ── #queue-cancel: subgen-space path must pass through verbatim ──────────
+# Regression: the cancel endpoint used to strip("/") + canonicalise the
+# path as if it were subarr-relative. But /api/queue returns subgen's OWN
+# path space (e.g. /media/...), and subgen matches its queue by exact path
+# — stripping the leading slash made every cancel fail "not in queue".
+
+_CANCEL_SEEN = {}
+
+
+def _cancel_handler(req):
+    if req.url.path == "/queue/cancel":
+        _CANCEL_SEEN["path"] = req.url.params.get("path")
+        return httpx.Response(200, json={"cancelled": True, "path": _CANCEL_SEEN["path"]})
+    # keep boot + GET /queue happy
+    return httpx.Response(200, json={"active": None, "queue": []})
+
+
+@pytest.mark.subgen(handler=_cancel_handler)
+def test_cancel_passes_subgen_path_verbatim(app_with_stub):
+    import dataclasses
+    from subarr.subgen_client import SubgenCapabilities
+    c = app_with_stub
+    base = c.app.state.subgen_caps or SubgenCapabilities()
+    c.app.state.subgen_caps = dataclasses.replace(base, queue_cancel=True)
+    _CANCEL_SEEN.clear()
+
+    full = "/media/TV/Innato/Season 1/Innate - S01E06 - x.mkv"
+    r = c.post("/api/queue/cancel", json={"path": full})
+    assert r.status_code == 200, r.text
+    assert r.json().get("cancelled") is True
+    # The exact subgen path (leading slash + all) must reach subgen.
+    assert _CANCEL_SEEN["path"] == full

@@ -273,14 +273,19 @@ async def cancel_queued(req: CancelRequest, request: Request) -> dict:
     Response body mirrors what subgen returns:
       { cancelled: bool, reason?: str, path: str }
     """
-    canonical = (req.path or "").strip().strip("/")
+    # The path here is a SUBGEN queue key — it lives in subgen's path space
+    # (e.g. /media/...), which is NOT the same mount as subarr's media root
+    # (/media/library/...). It comes straight from GET /api/queue, and
+    # subgen matches its queue by EXACT path. So pass it through verbatim:
+    # stripping the leading slash or canonicalising it against subarr's root
+    # (the previous behaviour) made every cancel miss with "not in queue".
+    # subgen only does an in-memory queue lookup here, so this never touches
+    # the filesystem; a basic traversal guard is the only check that applies.
+    canonical = (req.path or "").strip()
     if not canonical:
         raise HTTPException(400, detail="path required")
-    # Reject path-escape attempts, consistent with /queue/requeue.
-    try:
-        canonical_to_fs(canonical)
-    except (PathOutsideRootError, OSError):
-        raise HTTPException(400, detail=f"path escapes media root: {canonical!r}")
+    if ".." in canonical:
+        raise HTTPException(400, detail=f"invalid path: {canonical!r}")
     caps = getattr(request.app.state, "subgen_caps", None)
     if caps is None or not getattr(caps, "queue_cancel", False):
         raise HTTPException(
