@@ -162,6 +162,101 @@ def test_run_migrations_helper_uses_bundled_dir(db_path: Path):
     assert expected.issubset(tables), f"missing: {expected - tables}"
 
 
+def test_bundled_migrations_full_parity(db_path: Path):
+    """Migrations alone must build the COMPLETE schema — every table,
+    gap column, and seed row the per-store init_schema() methods create.
+    This is the precondition for removing init_schema: migrations become
+    the single source of truth, so a fresh DB built by migrations only
+    must be fully functional."""
+    run_migrations(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        expected = {
+            # 001 baseline
+            "scans", "subs_generated", "schedule_config", "auto_queue_rules",
+            "lang_enrichment", "media_probe", "pending_walks", "pending_decisions",
+            # 002-007
+            "update_checks", "telemetry_state", "onboarding_state",
+            "error_events", "probe_failures",
+            # 008 parity (previously created ONLY by init_schema)
+            "audio_lang_verifications", "series_lang_intent", "coverage_snapshot",
+            "schema_versions",
+        }
+        assert expected.issubset(tables), f"missing tables: {expected - tables}"
+
+        # Gap columns (added only by init_schema before 008).
+        enr_cols = {r[1] for r in conn.execute("PRAGMA table_info(lang_enrichment)")}
+        assert {"confidence", "reasoning"}.issubset(enr_cols), f"lang_enrichment cols: {enr_cols}"
+        probe_cols = {r[1] for r in conn.execute("PRAGMA table_info(media_probe)")}
+        assert "source" in probe_cols, f"media_probe cols: {probe_cols}"
+
+        # Seed: the default coverage_walk schedule row (disabled, opt-in).
+        n = conn.execute(
+            "SELECT COUNT(*) FROM schedule_config WHERE name='coverage_walk'"
+        ).fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
+def test_runner_tolerates_duplicate_column(db_path: Path, tmp_migrations: Path):
+    """ADD COLUMN is not idempotent in SQLite and there's no IF NOT EXISTS.
+    On a transitional DB (one a prior init_schema already extended), a
+    parity migration's ADD COLUMN hits 'duplicate column name'. The runner
+    must treat that as a no-op for that statement, still record the
+    migration as applied, and NOT abort boot."""
+    write_migration(tmp_migrations, 1, "base",
+                    "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
+    write_migration(tmp_migrations, 2, "addcol",
+                    "ALTER TABLE t ADD COLUMN a TEXT;")  # 'a' already exists
+    runner = MigrationRunner(db_path, tmp_migrations)
+    applied = runner.run()  # must NOT raise
+    assert [m.version for m in applied] == [1, 2]
+    # recorded as applied so it doesn't retry forever
+    assert runner.applied_versions() == [1, 2]
+
+
+def test_runner_still_aborts_on_real_error(db_path: Path, tmp_migrations: Path):
+    """Tolerating duplicate-column must NOT swallow genuine SQL errors —
+    those still roll back + abort, preserving the atomic contract."""
+    write_migration(tmp_migrations, 1, "good", "CREATE TABLE g (id INTEGER PRIMARY KEY);")
+    write_migration(tmp_migrations, 2, "bad", "ALTER TABLE does_not_exist ADD COLUMN x TEXT;")
+    runner = MigrationRunner(db_path, tmp_migrations)
+    with pytest.raises(sqlite3.OperationalError):
+        runner.run()
+    assert runner.applied_versions() == [1]  # version 2 NOT recorded
+
+
+def test_bundled_migrations_idempotent_on_init_schema_db(subarr_env, tmp_path: Path):
+    """Truest transitional test: build a DB exactly as the legacy
+    init_schema path does (all stores), then run the bundled migrations.
+    Migration 008's ADD COLUMNs hit columns init_schema already created —
+    the runner must tolerate them and finish clean."""
+    from subarr.audio_lang_store import AudioLangStore
+    from subarr.coverage_cache import CoverageCache
+    from subarr.enrichment import EnrichmentStore
+    from subarr.pending_store import PendingStore
+    from subarr.probe_store import ProbeStore
+    from subarr.provenance import ProvenanceStore
+    from subarr.scan_store import ScanStore
+    from subarr.schedule_store import ScheduleStore
+
+    db = tmp_path / "transitional.db"
+    for store in (
+        ScanStore(db), ProvenanceStore(db), ScheduleStore(db), AudioLangStore(db),
+        CoverageCache(db), EnrichmentStore(db), ProbeStore(db), PendingStore(db),
+    ):
+        store.init_schema()
+
+    # Now run the real bundled migrations on this init_schema-built DB.
+    applied = run_migrations(db)  # must NOT raise on duplicate columns/tables
+    # 008 must be among those applied (older ones were never recorded here).
+    assert 8 in [m.version for m in applied]
+
+
 def test_existing_v0x_db_upgrades_cleanly(db_path: Path):
     """A user upgrading from v0.x already has the tables. The baseline
     migration uses IF NOT EXISTS so it's a no-op against their data, but
