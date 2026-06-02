@@ -8,6 +8,7 @@ just for ordering. JSON columns are cheap and queries against them are rare
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -208,7 +209,8 @@ class ScanStore:
         ]
 
     def mark_orphaned_before(self, cutoff_epoch: float,
-                             completed_paths: set[str] | None = None) -> int:
+                             completed_paths: set[str] | None = None,
+                             live_basenames: set[str] | None = None) -> int:
         """#229 reconciliation: walk all scans created before cutoff_epoch,
         find PathResult rows with status=PATH_STATUS_OK that aren't in the
         completed_paths set (paths confirmed done via provenance.completed_at),
@@ -220,6 +222,12 @@ class ScanStore:
         orphan items subgen actually finished before the restart.
         """
         completed = completed_paths or set()
+        # Basenames of items still sitting in subgen's live queue. A real
+        # restart empties subgen's queue, so these are absent and get
+        # orphaned; a connectivity blip leaves them present, so we must NOT
+        # mark them lost. This is the evidence that makes "lost on restart"
+        # mean genuinely gone.
+        live = live_basenames or set()
         n_reclassified = 0
         with self._lock:
             rows = self._conn.execute(
@@ -231,7 +239,9 @@ class ScanStore:
                 results = [PathResult.from_dict(d) for d in json.loads(results_json)]
                 changed = False
                 for r in results:
-                    if r.status == PATH_STATUS_OK and r.path not in completed:
+                    if (r.status == PATH_STATUS_OK
+                            and r.path not in completed
+                            and os.path.basename(r.path) not in live):
                         r.status = PATH_STATUS_ORPHANED
                         r.error = (
                             "subgen restarted before transcription completed — "
