@@ -54,6 +54,8 @@ The wizard tries to auto-detect Sonarr/Radarr/Bazarr/Tautulli/subgen on your exi
 
 **Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned `.srt` files whose basename drifted from the video. Read-only blocks this. If you don't want it, set `SUBARR_SIDECAR_RENAME=0` and mount `:ro`, the rest of the product works.
 
+**Plex (optional).** Set `PLEX_URL` + `PLEX_TOKEN` (and optionally `PLEX_SECTION`) to enable two things: an instant Plex library refresh the moment subarr writes a sub (instead of waiting for Plex's own periodic scan), and the opt-in per-show audio-language read (`PLEX_AUDIO_HINTS=1`). Plex shows in the dashboard + Settings integration health either way, so you can see its status at a glance. Activity/now-playing still comes through Tautulli.
+
 ## Two ways to use subarr
 
 Pick whichever fits how you work. You can do both.
