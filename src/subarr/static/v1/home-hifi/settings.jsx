@@ -180,7 +180,7 @@ function Stat({ label, value, color }) {
 }
 
 // ─── Integrations rail ───────────────────────────────────────────
-const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'tautulli', 'subgen', 'ollama'];
+const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'plex', 'tautulli', 'subgen', 'ollama'];
 
 // Friendly labels for integration badges. Source endpoints often
 // return terse keys (Bazarr's /api/badges: 'episodes' actually means

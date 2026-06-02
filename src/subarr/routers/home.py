@@ -227,6 +227,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
         _probe("bazarr", bundle.bazarr, "bazarr_badges"),
         _probe("sonarr", bundle.sonarr),
         _probe("radarr", bundle.radarr),
+        _probe("plex", bundle.plex),
         _probe("tautulli", bundle.tautulli),
     )
     out = [_to_tile(p) for p in probes]

@@ -84,6 +84,7 @@ async def integrations_health(request: Request) -> dict[str, Any]:
         _probe("bazarr", integrations.bazarr, "bazarr_badges"),
         _probe("sonarr", integrations.sonarr),
         _probe("radarr", integrations.radarr),
+        _probe("plex", integrations.plex),
         _probe("tautulli", integrations.tautulli),
     ]
     if ollama is not None:

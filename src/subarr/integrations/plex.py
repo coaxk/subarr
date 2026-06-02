@@ -209,6 +209,16 @@ class PlexClient:
         return {"triggered": True, "section": sid, "scope": "partial",
                 "plex_path": scan_dir, "plex_status": r.status_code}
 
+    async def status(self) -> dict:
+        """Liveness + version probe for /api/integrations/health. Hits Plex
+        /identity (cheap — no library scan). Raises IntegrationError on
+        failure so the health router marks Plex offline."""
+        root = await self._get_xml("/identity")
+        return {
+            "version": root.get("version"),
+            "machine_id": root.get("machineIdentifier"),
+        }
+
     # ── #12: per-show selected audio language ───────────────────────────
 
     async def _get_xml(self, path: str, extra_params: dict | None = None):
