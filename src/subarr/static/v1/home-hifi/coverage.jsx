@@ -2222,7 +2222,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
 // row only becomes actionable once subarr has actually probed it. Holds
 // rows visibly until then (or, for failures, until the file is fixed) so
 // nothing the user hasn't seen silently disappears.
-function CoverageBucket({ kind, rows }) {
+function CoverageBucket({ kind, rows, onProbeNow, probing }) {
   const [open, setOpen] = useState(false);
   if (!rows.length) return null;
   const meta = kind === 'unprobed'
@@ -2251,6 +2251,17 @@ function CoverageBucket({ kind, rows }) {
         <span style={{ fontWeight: 600, color: 'var(--fg-0)' }}>{meta.label}</span>
         <span className="chip">{rows.length}</span>
         <span style={{ flex: 1 }} />
+        {kind === 'unprobed' && onProbeNow && (
+          <button
+            className="btn btn-sm"
+            disabled={probing}
+            onClick={(e) => { e.stopPropagation(); onProbeNow(); }}
+            title="Probe these files now so they become verified gaps (or drop out if already covered). Probing also runs automatically on each refresh."
+            style={{ marginRight: 4 }}
+          >
+            {probing ? 'Probing…' : 'Probe now'}
+          </button>
+        )}
         <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
           {open ? 'hide' : 'show'}
         </span>
@@ -2410,6 +2421,39 @@ export function CoveragePage() {
     }
   }, [refetch]);
 
+  // "Probe now" on the Analyzing bucket — triggers a background coverage
+  // refresh, which eager-probes the unprobed wanted files (PR-C). Probing
+  // backgrounds; rows flip from Analyzing → verified gap (or drop out if
+  // already covered) as they're probed. Poll the refresh status, then
+  // refetch so the buckets update without a manual reload.
+  const [probing, setProbing] = useState(false);
+  const handleProbeNow = useCallback(async () => {
+    setProbing(true);
+    try {
+      const r = await fetch('/api/coverage/refresh', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Wait for the rebuild (which kicks the eager-probe) to finish, then
+      // refetch so newly-probed rows surface. Capped poll so a stuck build
+      // can't pin the spinner forever.
+      for (let i = 0; i < 90; i++) {
+        await new Promise(res => setTimeout(res, 2000));
+        try {
+          const s = await fetch('/api/coverage/status', { credentials: 'same-origin' })
+            .then(x => (x.ok ? x.json() : null));
+          if (s && s.refreshing === false) break;
+        } catch { /* transient — keep polling */ }
+      }
+      await refetch({ fresh: false, silent: true });
+    } catch (e) {
+      alert(`Probe failed: ${e.message}`);
+    } finally {
+      setProbing(false);
+    }
+  }, [refetch]);
+
   // Sync to Bazarr — fires Bazarr's scan-disk task directly. Useful when
   // user has just added/restored .srt files manually and wants Bazarr's
   // wanted count to drop NOW without waiting for the next coverage walk
@@ -2540,6 +2584,16 @@ export function CoveragePage() {
         monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
       />
 
+      {/* Analyzing bucket ABOVE the table — these are files subarr hasn't
+          probed yet; surfacing them up top (with a Probe-now action) so
+          they're seen, not buried under a long gap list. */}
+      <CoverageBucket
+        kind="unprobed"
+        rows={analyzingRows}
+        onProbeNow={handleProbeNow}
+        probing={probing}
+      />
+
       {/* Table — grows to fit its rows; the PAGE (main-canvas) scrolls
           rather than squeezing the table into a sliver. The column header
           is position:sticky so it stays pinned while the page scrolls. */}
@@ -2595,8 +2649,9 @@ export function CoveragePage() {
         </div>
       </div>
 
-      {/* Probe-gate buckets — sticky, read-only, never queueable. */}
-      <CoverageBucket kind="unprobed" rows={analyzingRows} />
+      {/* "Couldn't analyze" failures stay below the table — exceptions,
+          not the main flow. The "Analyzing" bucket moved ABOVE the table
+          (see below) so it's visible without scrolling to the bottom. */}
       <CoverageBucket kind="probe_failed" rows={failedRows} />
 
       {/* Bottom selection bar — sits in page flow but sticky */}
