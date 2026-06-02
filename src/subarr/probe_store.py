@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS media_probe (
     probed_at       REAL NOT NULL,
     source          TEXT NOT NULL DEFAULT 'ffprobe'
 );
+-- Probe failures (also created by migration 007). Lets the coverage
+-- probe-gate distinguish "couldn't analyze" from "not yet probed".
+CREATE TABLE IF NOT EXISTS probe_failures (
+    canonical_path  TEXT PRIMARY KEY,
+    error           TEXT NOT NULL,
+    failed_at       REAL NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 1
+);
 """
 
 # v1.1-A migration: add `source` column to track whether the row came from
@@ -132,6 +140,46 @@ class ProbeStore:
                     time.time(), source,
                 ),
             )
+            # A successful probe clears any prior failure so a recovered file
+            # leaves the "couldn't analyze" bucket.
+            self._conn.execute(
+                "DELETE FROM probe_failures WHERE canonical_path = ?",
+                (canonical_path,),
+            )
+
+    # ─── Probe failures (probe-gate "couldn't analyze") ─────────────
+
+    def record_failure(self, canonical_path: str, error: str) -> None:
+        """Persist that probing this file failed. Idempotent per path:
+        re-failing bumps attempts and refreshes the error/timestamp."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO probe_failures (canonical_path, error, failed_at, attempts) "
+                "VALUES (?, ?, ?, 1) "
+                "ON CONFLICT(canonical_path) DO UPDATE SET "
+                "  error=excluded.error, failed_at=excluded.failed_at, "
+                "  attempts=probe_failures.attempts + 1",
+                (canonical_path, str(error)[:500], time.time()),
+            )
+
+    def failed_paths(self) -> set[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path FROM probe_failures"
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def get_failure(self, canonical_path: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT canonical_path, error, failed_at, attempts "
+                "FROM probe_failures WHERE canonical_path = ?",
+                (canonical_path,),
+            ).fetchone()
+        if not row:
+            return None
+        return {"canonical_path": row[0], "error": row[1],
+                "failed_at": row[2], "attempts": row[3]}
 
     def count_by_source(self) -> dict[str, int]:
         """v1.1-A: telemetry for the arr_mediainfo win. Counts

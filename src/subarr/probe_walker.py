@@ -171,8 +171,10 @@ class ProbeWalker:
                         state.probed += 1
                     except ProbeError as e:
                         state.errors.append({"path": canonical, "error": str(e)})
+                        self._store.record_failure(canonical, str(e))
                     except Exception as e:
                         state.errors.append({"path": canonical, "error": repr(e)})
+                        self._store.record_failure(canonical, repr(e))
                     finally:
                         state.processed += 1
 
