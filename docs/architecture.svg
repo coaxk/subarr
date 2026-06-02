@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 480" width="1280" height="480" role="img" aria-label="subarr architecture: a coordination layer that reads inputs from Bazarr, Sonarr/Radarr, library files and Tautulli/Plex, verifies coverage on disk via ffprobe, and coordinates transcription to subgen.">
+  <defs>
+    
+    <marker id="ahL" markerWidth="9" markerHeight="9" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path class="ah-link" d="M0,0 L6,3 L0,6 Z" fill="#b0b6c0"></path>
+    </marker>
+    <marker id="ahV" markerWidth="10" markerHeight="10" refX="6" refY="3.2" orient="auto" markerUnits="userSpaceOnUse">
+      <path class="ah-acc" d="M0,0 L6.5,3.2 L0,6.4 Z" fill="#8b5cf6"></path>
+    </marker>
+  </defs>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, &#34;Segoe UI&#34;, Roboto, Helvetica, Arial, sans-serif">
+  <text class="zone" x="177" y="36" text-anchor="middle" font-size="12" fill="#6f7884" font-weight="700" letter-spacing="2.5">INPUTS</text>
+  <text class="zone" x="1102" y="36" text-anchor="middle" font-size="12" fill="#6f7884" font-weight="700" letter-spacing="2.5">OUTPUT</text>
+
+  <path class="link" d="M315,98  C400,98  400,150 466,150" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+  <path class="link" d="M315,201 C400,201 400,225 466,225" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+  <path class="link" d="M315,304 C400,304 400,300 466,300" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+  <path class="link" d="M315,407 C400,407 400,372 466,372" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+
+  <path class="link-acc" d="M830,400 C902,400 902,143 961,143" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#ahV)"></path>
+
+  <path class="link" d="M1102,183 L1102,209" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+  <path class="link" d="M1102,293 L1102,319" fill="none" stroke="#b0b6c0" stroke-width="1.5" marker-end="url(#ahL)"></path>
+
+  <rect class="node" x="40" y="58" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="58" y="91" font-size="16.5" fill="#39404d" font-weight="600">Bazarr</text>
+  <text class="sub" x="58" y="112" font-size="11.5" fill="#6f7884">wanted-list —</text>
+  <text class="sub" x="58" y="128" font-size="11.5" fill="#6f7884">what subs are missing</text>
+
+  <rect class="node" x="40" y="161" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="58" y="194" font-size="16.5" fill="#39404d" font-weight="600">Sonarr / Radarr</text>
+  <text class="sub" x="58" y="215" font-size="11.5" fill="#6f7884">episode &amp; movie</text>
+  <text class="sub" x="58" y="231" font-size="11.5" fill="#6f7884">file paths</text>
+
+  <rect class="node" x="40" y="264" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="58" y="297" font-size="16.5" fill="#39404d" font-weight="600">Library files on disk</text>
+  <text class="sub" x="58" y="318" font-size="11.5" fill="#6f7884">media scanned directly</text>
+
+  <rect class="node" x="40" y="367" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="58" y="400" font-size="16.5" fill="#39404d" font-weight="600">Tautulli / Plex</text>
+  <text class="sub" x="58" y="421" font-size="11.5" fill="#6f7884">activity + (opt-in)</text>
+  <text class="sub" x="58" y="437" font-size="11.5" fill="#6f7884">audio-language hints</text>
+
+  <rect class="subarr-box" x="470" y="58" width="360" height="389" rx="16" fill="rgba(139,92,246,0.055)" stroke="#8b5cf6" stroke-width="2"></rect>
+  <text class="kicker" x="490" y="87" font-size="10.5" fill="#8b5cf6" font-weight="700" letter-spacing="3">ORCHESTRATION LAYER</text>
+  <text class="acc" x="488" y="118" font-size="28" fill="#8b5cf6" font-weight="700">subarr</text>
+  <text class="sub" x="490" y="138" font-size="12" fill="#6f7884">persistent service · its own scheduler</text>
+  <line class="divider" x1="488" y1="151" x2="812" y2="151" stroke="rgba(139,92,246,0.22)" stroke-width="1.2"></line>
+
+  <rect class="stage" x="490" y="164" width="320" height="58" rx="9" fill="#ffffff" stroke="#e6e3f1" stroke-width="1.2"></rect>
+  <text class="title" x="508" y="189" font-size="15" fill="#39404d" font-weight="600">Scheduler</text>
+  <text class="sub" x="508" y="208" font-size="11.5" fill="#6f7884">walks the library on a cadence</text>
+
+  <rect class="stage-probe" x="490" y="234" width="320" height="58" rx="9" fill="rgba(139,92,246,0.11)" stroke="#8b5cf6" stroke-width="1.4"></rect>
+  <text class="acc" x="508" y="259" font-size="15" fill="#8b5cf6" font-weight="700">Probe-gate</text>
+  <text class="sub" x="508" y="278" font-size="11.5" fill="#6f7884"><tspan class="acc-soft" font-family="ui-monospace, SFMono-Regular, &#34;SF Mono&#34;, Menlo, Consolas, monospace" fill="#7c4ddb">ffprobe</tspan> — audio language + embedded subs</text>
+
+  <rect class="stage" x="490" y="304" width="320" height="58" rx="9" fill="#ffffff" stroke="#e6e3f1" stroke-width="1.2"></rect>
+  <text class="title" x="508" y="329" font-size="15" fill="#39404d" font-weight="600">Coverage</text>
+  <text class="sub" x="508" y="348" font-size="11.5" fill="#6f7884">verified gaps, not raw Bazarr-wanted noise</text>
+
+  <rect class="stage" x="490" y="374" width="320" height="58" rx="9" fill="#ffffff" stroke="#e6e3f1" stroke-width="1.2"></rect>
+  <text class="title" x="508" y="399" font-size="15" fill="#39404d" font-weight="600">Queue</text>
+  <text class="sub" x="508" y="418" font-size="11.5" fill="#6f7884">what to transcribe, deduped</text>
+
+  <path class="chev" d="M644,225 L650,231 L656,225" fill="none" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+  <path class="chev" d="M644,295 L650,301 L656,295" fill="none" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+  <path class="chev" d="M644,365 L650,371 L656,365" fill="none" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+
+  <rect class="node" x="965" y="103" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="983" y="136" font-size="16.5" fill="#39404d" font-weight="600">subgen <tspan class="sub" font-size="12.5" font-weight="400" fill="#6f7884">(Whisper)</tspan></text>
+  <text class="sub" x="983" y="157" font-size="11.5" fill="#6f7884">transcribes in the</text>
+  <text class="sub" x="983" y="173" font-size="11.5" fill="#6f7884">verified language</text>
+
+  <rect class="node" x="965" y="213" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="983" y="246" font-size="16.5" fill="#39404d" font-weight="600">writes <tspan class="acc-soft" font-family="ui-monospace, SFMono-Regular, &#34;SF Mono&#34;, Menlo, Consolas, monospace" font-size="15" fill="#7c4ddb">.srt</tspan></text>
+  <text class="sub" x="983" y="267" font-size="11.5" fill="#6f7884">next to the media file</text>
+
+  <rect class="node" x="965" y="323" width="275" height="80" rx="11" fill="#f8f9fb" stroke="#cdd3db" stroke-width="1.4"></rect>
+  <text class="title" x="983" y="356" font-size="16.5" fill="#39404d" font-weight="600">Plex library refresh</text>
+  <text class="sub" x="983" y="377" font-size="11.5" fill="#6f7884">+ provenance ledger</text>
+  </g>
+</svg>
