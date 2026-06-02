@@ -64,6 +64,12 @@ class PlexClient:
         # Discovered section list — list[dict(id, paths=[str,...])].
         # Lazily fetched on first partial_scan(); refreshed only on restart.
         self._sections: list[dict] | None = None
+        # #12 audio-hint caches. _show_index: title_lc → show ratingKey
+        # (built once). _audio_hint_cache: title_lc → lang3 | None (None =
+        # resolved-but-no-pick, so we don't re-query). Both cleared only on
+        # restart — per-show audio prefs are stable.
+        self._show_index: dict[str, str] | None = None
+        self._audio_hint_cache: dict[str, str | None] = {}
 
     def is_configured(self) -> bool:
         return bool(self._base_url and self._token)
@@ -202,6 +208,95 @@ class PlexClient:
         log.info("plex partial_scan: section=%s path=%s", sid, scan_dir)
         return {"triggered": True, "section": sid, "scope": "partial",
                 "plex_path": scan_dir, "plex_status": r.status_code}
+
+    # ── #12: per-show selected audio language ───────────────────────────
+
+    async def _get_xml(self, path: str, extra_params: dict | None = None):
+        """GET a Plex endpoint and return the parsed XML root."""
+        params = {"X-Plex-Token": self._token, **(extra_params or {})}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(f"{self._base_url}{path}", params=params)
+        except httpx.HTTPError as e:
+            raise IntegrationError(f"plex {path}: {e}") from e
+        if r.status_code >= 400:
+            raise IntegrationError(f"plex {path} HTTP {r.status_code}")
+        try:
+            return ET.fromstring(r.text)
+        except ET.ParseError as e:
+            raise IntegrationError(f"plex {path}: bad XML ({e})") from e
+
+    async def _ensure_show_index(self) -> None:
+        """Build title_lc → show ratingKey across all show-type sections.
+        One listing call per show section; cached for the process lifetime."""
+        if self._show_index is not None:
+            return
+        idx: dict[str, str] = {}
+        root = await self._get_xml("/library/sections")
+        show_section_ids = [
+            d.get("key") for d in root.iter("Directory")
+            if d.get("type") == "show" and d.get("key")
+        ]
+        for sid in show_section_ids:
+            try:
+                sroot = await self._get_xml(f"/library/sections/{sid}/all", {"type": "2"})
+            except IntegrationError as e:
+                log.debug("plex show listing failed for section %s: %s", sid, e)
+                continue
+            for d in sroot.iter("Directory"):
+                t = (d.get("title") or "").strip().lower()
+                rk = d.get("ratingKey")
+                if t and rk and t not in idx:
+                    idx[t] = rk
+        self._show_index = idx
+
+    async def _show_selected_audio(self, show_key: str) -> str | None:
+        """Read the selected audio stream's language for a show, by sampling
+        its first episode (Plex exposes Stream selection only per-item).
+        Returns a 3-letter language code (e.g. 'dan') or None."""
+        leaves = await self._get_xml(f"/library/metadata/{show_key}/allLeaves")
+        ep = next(leaves.iter("Video"), None)
+        ep_key = ep.get("ratingKey") if ep is not None else None
+        if not ep_key:
+            return None
+        meta = await self._get_xml(f"/library/metadata/{ep_key}")
+        for s in meta.iter("Stream"):
+            if s.get("streamType") == "2" and s.get("selected") == "1":
+                code = (s.get("languageCode") or "").strip().lower()
+                return code or None
+        return None
+
+    async def audio_lang_hints(self, titles) -> dict[str, str]:
+        """Return {title_lc: lang3} of the user's per-show selected audio for
+        the given show titles, read from Plex. Cached per-title across calls
+        (incl. negative results) so steady-state builds add no Plex I/O.
+        Best-effort: a lookup failure yields no hint for that title rather
+        than raising — never breaks a coverage build."""
+        if not self.is_configured():
+            return {}
+        wanted = {(t or "").strip().lower() for t in titles if t and t.strip()}
+        unresolved = wanted - set(self._audio_hint_cache)
+        if unresolved:
+            try:
+                await self._ensure_show_index()
+            except IntegrationError as e:
+                log.warning("plex audio hints: show index failed: %s", e)
+                # Mark as resolved-empty so we don't hammer Plex every build.
+                for tl in unresolved:
+                    self._audio_hint_cache.setdefault(tl, None)
+                self._show_index = self._show_index or {}
+            for tl in unresolved:
+                key = (self._show_index or {}).get(tl)
+                lang: str | None = None
+                if key:
+                    try:
+                        lang = await self._show_selected_audio(key)
+                    except IntegrationError as e:
+                        log.debug("plex audio hint failed for %r: %s", tl, e)
+                self._audio_hint_cache[tl] = lang
+        return {tl: self._audio_hint_cache[tl]
+                for tl in wanted
+                if self._audio_hint_cache.get(tl)}
 
     async def aclose(self) -> None:
         # Stateless — each call opens its own client. Nothing to close.
