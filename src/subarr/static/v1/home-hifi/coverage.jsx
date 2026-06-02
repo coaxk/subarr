@@ -185,6 +185,10 @@ function normalizeRow(item, idx) {
     now_playing: !!item.now_playing,
     just_imported: !!item.just_imported,
     airing_soon: !!item.airing_soon,
+    // Probe-gate: only 'verified' rows are real, actionable gaps. 'unprobed'
+    // and 'probe_failed' are bucketed separately (Analyzing / Couldn't
+    // analyze) and never enter the gap table or bulk-select.
+    vstate: item.verification_state || 'verified',
     // raw fields kept for action handlers
     _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
     _canonical_path: item.file_canonical_path || item.canonical_path,
@@ -724,7 +728,12 @@ function fmtRel(ts) {
 function CoverageStatusRow({ data, rows, pendingReview }) {
   // Read from the loaded coverage payload so the tiles auto-refresh on
   // every poll without an extra round-trip.
-  const total = data?.totals?.items ?? null;
+  // Probe-gate: "open gaps" = VERIFIED gaps (what's in the table). Un-probed
+  // rows live in the Analyzing bucket, not the gap count, so the tile and
+  // the table agree.
+  const verif = data?.totals?.verification;
+  const total = (verif ? verif.verified : data?.totals?.items) ?? null;
+  const analyzing = verif?.unprobed ?? 0;
   const suspectAudio = rows.filter(r => r.reason === 'audio-mislabel').length;
   // "Worth a look right now" = high-score rows the user would most likely
   // actually want subtitles for. Threshold matches the auto-queue default.
@@ -739,9 +748,11 @@ function CoverageStatusRow({ data, rows, pendingReview }) {
       <CoverageHeaderTile
         label="open gaps"
         value={total == null ? '—' : total.toLocaleString('en-US')}
-        sub={total === 0 ? 'nothing missing right now' : 'rows in the table below'}
+        sub={total === 0
+          ? (analyzing ? `${analyzing} still being analyzed` : 'nothing missing right now')
+          : (analyzing ? `in the table · ${analyzing} more analyzing` : 'rows in the table below')}
         tint={total > 0 ? 'warn' : 'ok'}
-        tip="Every file Bazarr says is missing a sub, after subarr's reconciliation passes."
+        tip="Verified gaps — files subarr has probed and confirmed are missing a sub. Un-probed files wait in the Analyzing bucket until checked."
       />
       <CoverageHeaderTile
         label="worth queueing"
@@ -2207,6 +2218,68 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
 }
 
 // ─── Page ────────────────────────────────────────────────────────
+// Probe-gate sticky buckets. Read-only: no checkbox, no queue button — a
+// row only becomes actionable once subarr has actually probed it. Holds
+// rows visibly until then (or, for failures, until the file is fixed) so
+// nothing the user hasn't seen silently disappears.
+function CoverageBucket({ kind, rows }) {
+  const [open, setOpen] = useState(false);
+  if (!rows.length) return null;
+  const meta = kind === 'unprobed'
+    ? {
+        icon: '⏳', label: 'Analyzing',
+        tint: 'var(--cyan-500)',
+        blurb: 'subarr probes each file before calling it a gap, so it never '
+             + 'queues something already covered. These are awaiting analysis '
+             + 'and will move up once probed (or drop out if already covered).',
+      }
+    : {
+        icon: '⚠', label: "Couldn't analyze",
+        tint: 'var(--error-500)',
+        blurb: "subarr couldn't probe these files (unreadable, corrupt, or the "
+             + 'probe timed out). Held here, not silently dropped — fix the '
+             + 'file or check logs, and they re-probe on the next walk.',
+      };
+  return (
+    <div className="panel" style={{
+      flexShrink: 0, padding: '10px 14px',
+      borderLeft: `2px solid ${meta.tint}`,
+    }}>
+      <div onClick={() => setOpen(o => !o)}
+           style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+        <span>{meta.icon}</span>
+        <span style={{ fontWeight: 600, color: 'var(--fg-0)' }}>{meta.label}</span>
+        <span className="chip">{rows.length}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
+          {open ? 'hide' : 'show'}
+        </span>
+      </div>
+      <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)', marginTop: 4 }}>
+        {meta.blurb}
+      </div>
+      {open && (
+        <div style={{ marginTop: 8, maxHeight: 240, overflow: 'auto' }}>
+          {rows.map(r => (
+            <div key={r.id} style={{
+              display: 'flex', gap: 10, padding: '4px 0',
+              fontSize: 'var(--text-sm)', borderTop: '1px solid var(--bg-3)',
+            }}>
+              <span style={{ color: 'var(--fg-1)' }}>{r.title}</span>
+              {r.ep && <span className="mono" style={{ color: 'var(--fg-3)' }}>{r.ep}</span>}
+              <span style={{ flex: 1 }} />
+              <span className="mono" style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
+                {r.type}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function CoveragePage() {
   const [groupBy, setGroupBy] = useState('tree');  // tree-by-show default — matches original subarr
   const [reasonFilter, setReasonFilter] = useState('all');
@@ -2249,16 +2322,31 @@ export function CoveragePage() {
     return data.items.map((it, idx) => normalizeRow(it, idx));
   }, [data]);
 
-  // Apply UI filters.
+  // Apply UI filters. Probe-gate: the gap table is VERIFIED-only — an
+  // un-probed row isn't a trustworthy gap (it may already have an embedded
+  // sub subgen would skip), so it never enters the table or bulk-select.
   const rows = useMemo(() => {
     if (!allRows) return [];
     return allRows.filter(r => {
+      if (r.vstate !== 'verified') return false;
       if (monitoredOnly && !r.mon) return false;
       if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
       if (typeFilter !== 'all' && r.type !== typeFilter) return false;
       return true;
     }).map(r => ({ ...r, sel: selected.has(r.id) }));
   }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected]);
+
+  // Probe-gate buckets — sticky (NOT subject to the UI filters above) and
+  // never queueable. They hold rows until the probe runs, then those rows
+  // become verified (entering the table) or drop out as covered.
+  const analyzingRows = useMemo(
+    () => (allRows || []).filter(r => r.vstate === 'unprobed'),
+    [allRows],
+  );
+  const failedRows = useMemo(
+    () => (allRows || []).filter(r => r.vstate === 'probe_failed'),
+    [allRows],
+  );
 
   const toggleRow = useCallback((id) => {
     setSelected(prev => {
@@ -2478,7 +2566,9 @@ export function CoveragePage() {
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
               {allRows && allRows.length === 0
                 ? 'No gaps to address — every monitored file has its subs.'
-                : 'No rows match the current filters.'}
+                : analyzingRows.length
+                  ? `No verified gaps yet — ${analyzingRows.length} file(s) still being analyzed (below).`
+                  : 'No rows match the current filters.'}
             </div>
           )}
           {!isInitialLoad && !isError && groupBy === 'flat' && rows.map(r => (
@@ -2501,6 +2591,10 @@ export function CoveragePage() {
           )}
         </div>
       </div>
+
+      {/* Probe-gate buckets — sticky, read-only, never queueable. */}
+      <CoverageBucket kind="unprobed" rows={analyzingRows} />
+      <CoverageBucket kind="probe_failed" rows={failedRows} />
 
       {/* Bottom selection bar — sits in page flow but sticky */}
       <div style={{ position: 'sticky', bottom: 16, marginTop: 0, marginBottom: 16 }}>
