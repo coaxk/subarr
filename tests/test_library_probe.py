@@ -197,15 +197,17 @@ def test_auto_queue_skip_embedded_en(subarr_env):
     from subarr.coverage_engine import CoverageItem
     from subarr.schedule_store import AutoQueueRules, MODE_AUTO_RULES
 
+    # verification_state="verified" — these rows passed the probe-gate, so
+    # evaluate() reaches the embedded-EN skip logic this test exercises.
     items = [
         CoverageItem(media_type="episode", title="A", episode_number="1x1",
                      original_language="Korean", monitored=True,
                      canonical_path="TV/A", embedded_en="EN", score=500,
-                     bazarr_episode_id=1),
+                     bazarr_episode_id=1, verification_state="verified"),
         CoverageItem(media_type="episode", title="B", episode_number="1x1",
                      original_language="Korean", monitored=True,
                      canonical_path="TV/B", embedded_en=None, score=500,
-                     bazarr_episode_id=2),
+                     bazarr_episode_id=2, verification_state="verified"),
     ]
     rules = AutoQueueRules(mode=MODE_AUTO_RULES, min_score=0,
                            deny_languages=[], require_monitored=True,
@@ -226,7 +228,7 @@ def test_auto_queue_skip_embedded_en_off(subarr_env):
         CoverageItem(media_type="episode", title="A", episode_number="1x1",
                      original_language="Korean", monitored=True,
                      canonical_path="TV/A", embedded_en="EN", score=500,
-                     bazarr_episode_id=1),
+                     bazarr_episode_id=1, verification_state="verified"),
     ]
     rules = AutoQueueRules(mode=MODE_AUTO_RULES, min_score=0,
                            deny_languages=[], require_monitored=True,

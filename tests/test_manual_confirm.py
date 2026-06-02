@@ -58,9 +58,21 @@ def manconf_setup(app_with_stub):
     """Set mode=manual_confirm + a rule that lets ManConf through, plant
     the resolved file so _enqueue's exists() check passes."""
     from subarr.config import settings
+    from subarr.media_probe import ProbeResult
     folder = settings.media_root / "TV" / "ManConf" / "Season 1"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "manconf.S01E01.mkv").write_bytes(b"x")
+    f = folder / "manconf.S01E01.mkv"
+    f.write_bytes(b"x")
+    # Probe-gate (#39): only verified rows are actionable. Seed a probe
+    # result for the wanted file so build_coverage marks it verified and
+    # evaluate() considers it — mirrors production, where a wanted file is
+    # eager-probed before it can become a queue decision.
+    canonical = "TV/ManConf/Season 1/manconf.S01E01.mkv"
+    st = f.stat()
+    app_with_stub.app.state.probe_store.upsert(
+        canonical_path=canonical, mtime=st.st_mtime, size=st.st_size,
+        result=ProbeResult(canonical_path=canonical),
+    )
     app_with_stub.put("/api/schedule/rules", json={
         "mode": "manual_confirm",
         "min_score": 0,

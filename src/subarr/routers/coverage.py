@@ -45,9 +45,12 @@ async def refresh_coverage(request: Request) -> dict[str, Any]:
     probe_store = request.app.state.probe_store
     audio_lang_store = getattr(request.app.state, "audio_lang", None)
 
+    probe_walker = getattr(request.app.state, "probe_walker", None)
+
     async def _do():
         try:
-            await cov_cache.refresh(bundle, probe_store, audio_lang_store)
+            await cov_cache.refresh(bundle, probe_store, audio_lang_store,
+                                    probe_walker=probe_walker)
         except Exception as e:
             log.warning("manual coverage refresh failed: %s", e)
 
@@ -174,6 +177,7 @@ async def get_coverage(
     if cov_cache is not None and fresh:
         snap = await cov_cache.refresh(
             bundle, probe_store, audio_lang_store, use_tautulli=tautulli,
+            probe_walker=getattr(request.app.state, "probe_walker", None),
         )
         body = {
             "generated_at": snap.generated_at,
