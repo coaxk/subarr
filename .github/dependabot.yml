@@ -1,0 +1,43 @@
+version: 2
+# Version-update PRs (security alerts already enabled separately). Weekly,
+# grouped, labelled `dependencies` so they triage cleanly.
+updates:
+  # Python backend (pyproject.toml)
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    groups:
+      python:
+        patterns: ["*"]
+
+  # Frontend build tooling (root package.json — esbuild)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    groups:
+      frontend-build:
+        patterns: ["*"]
+
+  # E2E tooling (Playwright)
+  - package-ecosystem: npm
+    directory: "/tests/e2e"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    groups:
+      e2e:
+        patterns: ["*"]
+
+  # GitHub Actions versions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    groups:
+      actions:
+        patterns: ["*"]
