@@ -96,6 +96,13 @@ class CoverageItem:
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
+    # Probe-gate: has subarr actually analyzed this file?
+    #   verified     — a probe matched this row (audio/embedded data resolved)
+    #   probe_failed — the file is in probe_failures (couldn't analyze)
+    #   unprobed     — no probe + no failure yet (not analyzed)
+    # Only `verified` rows are presented as confident, actionable gaps; the
+    # rest are bucketed and held until the probe runs.
+    verification_state: str = "unprobed"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +137,7 @@ class CoverageItem:
             "audio_verified": self.audio_verified,
             "score": self.score,
             "score_reasons": self.score_reasons,
+            "verification_state": self.verification_state,
         }
 
 
@@ -571,20 +579,20 @@ def _episode_filename_pattern(episode_number: str | None) -> str | None:
 
 def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                           tautulli_hints: dict[str, str] | None = None,
-                          user_verifications: dict[str, str] | None = None) -> None:
+                          user_verifications: dict[str, str] | None = None,
+                          failed_idx: dict[str, list] | None = None) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
-    audio_langs + file_canonical_path onto the item."""
+    audio_langs + file_canonical_path onto the item and mark it verified.
+    On no probe match, mark probe_failed if a probe failure matches the
+    same episode, else leave it unprobed (the probe-gate then buckets it)."""
     from .media_probe import audio_lang_summary_with_titles, english_track_summary
     if not item.canonical_path:
-        return
-    candidates = idx.get(item.canonical_path) or []
-    if not candidates:
         return
     pattern = _episode_filename_pattern(item.episode_number)
     if not pattern:
         return
-    for file_canonical, probe in candidates:
+    for file_canonical, probe in (idx.get(item.canonical_path) or []):
         basename = file_canonical.rsplit("/", 1)[-1].lower()
         if pattern in basename:
             item.file_canonical_path = file_canonical
@@ -595,19 +603,30 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                 item.audio_label_notes.extend(notes)
             _classify_audio_label(item, tautulli_hints=tautulli_hints,
                                   user_verifications=user_verifications)
+            item.verification_state = "verified"
             return
+    # No successful probe matched — was this episode a probe FAILURE?
+    for failed_canonical in ((failed_idx or {}).get(item.canonical_path) or []):
+        if pattern in failed_canonical.rsplit("/", 1)[-1].lower():
+            item.verification_state = "probe_failed"
+            return
+    # else: leave default "unprobed"
 
 
 def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
                         tautulli_hints: dict[str, str] | None = None,
-                        user_verifications: dict[str, str] | None = None) -> None:
+                        user_verifications: dict[str, str] | None = None,
+                        failed_idx: dict[str, list] | None = None) -> None:
     """Movies: a single video file lives directly under the movie dir.
-    First probe under the movie's canonical wins."""
+    First probe under the movie's canonical wins → verified. No probe but a
+    recorded failure → probe_failed. Otherwise unprobed."""
     from .media_probe import audio_lang_summary_with_titles, english_track_summary
     if not item.canonical_path:
         return
     candidates = idx.get(item.canonical_path) or []
     if not candidates:
+        if (failed_idx or {}).get(item.canonical_path):
+            item.verification_state = "probe_failed"
         return
     file_canonical, probe = candidates[0]
     item.file_canonical_path = file_canonical
@@ -618,6 +637,7 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
         item.audio_label_notes.extend(notes)
     _classify_audio_label(item, tautulli_hints=tautulli_hints,
                           user_verifications=user_verifications)
+    item.verification_state = "verified"
 
 
 def _classify_audio_label(item: CoverageItem,
@@ -838,6 +858,20 @@ async def build_coverage(
                 prefix = "/".join(parts[:i])
                 probe_by_series_prefix.setdefault(prefix, []).append((path, entry))
 
+    # Probe-FAILURE index (same prefix scheme). Rows whose file is recorded
+    # as a probe failure get tagged probe_failed rather than appearing as an
+    # un-flagged gap that subgen would then skip.
+    probe_failed_by_prefix: dict[str, list[str]] = {}
+    if probe_store is not None:
+        failed = probe_store.failed_paths()
+        if failed and "probe_cache" in sources:
+            sources["probe_cache"]["failures"] = len(failed)
+        for path in failed:
+            parts = path.split("/")
+            for i in range(2, len(parts)):
+                prefix = "/".join(parts[:i])
+                probe_failed_by_prefix.setdefault(prefix, []).append(path)
+
     # v1.1-O Layer 4: load user verifications. These OVERRIDE all
     # auto-detected signals — user has ground truth.
     user_verifications: dict[str, str] = (
@@ -925,7 +959,8 @@ async def build_coverage(
             item.pending_download = True
         _attach_probe_episode(item, probe_by_series_prefix,
                               tautulli_hints=activity.get("audio_lang_hints") or {},
-                              user_verifications=user_verifications)
+                              user_verifications=user_verifications,
+                              failed_idx=probe_failed_by_prefix)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -965,7 +1000,8 @@ async def build_coverage(
             item.pending_download = True
         _attach_probe_movie(item, probe_by_series_prefix,
                             tautulli_hints=activity.get("audio_lang_hints") or {},
-                            user_verifications=user_verifications)
+                            user_verifications=user_verifications,
+                            failed_idx=probe_failed_by_prefix)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1001,6 +1037,7 @@ async def build_coverage(
             activity=activity,
             tt_signals=tt_signals,
             probe_by_series_prefix=probe_by_series_prefix,
+            failed_idx=probe_failed_by_prefix,
             user_verifications=user_verifications,
             sources=sources,
         )
@@ -1026,6 +1063,7 @@ async def _add_bazarr_blind_synthetic_rows(
     activity: dict,
     tt_signals: dict,
     probe_by_series_prefix: dict[str, list[tuple[str, Any]]],
+    failed_idx: dict[str, list] | None = None,
     user_verifications: dict[str, str],
     sources: dict,
 ) -> list[CoverageItem]:
@@ -1174,6 +1212,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 item, probe_by_series_prefix,
                 tautulli_hints=activity.get("audio_lang_hints") or {},
                 user_verifications=user_verifications,
+                failed_idx=failed_idx,
             )
             # Bazarr-blind requires positive evidence the file is not
             # what Bazarr thinks it is. Two ways to get there:
