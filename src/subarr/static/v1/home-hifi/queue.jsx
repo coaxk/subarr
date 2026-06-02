@@ -228,7 +228,25 @@ function OutcomeChip({ category, label }) {
   );
 }
 
-function HistoryRow({ entry, onRequeue, onRemove, busy }) {
+// Small theme-matched checkbox for queue bulk-select.
+function QCheck({ checked, onChange, indeterminate }) {
+  return (
+    <span
+      onClick={(e) => { e.stopPropagation(); onChange(); }}
+      role="checkbox" aria-checked={checked}
+      style={{
+        width: 14, height: 14, flex: '0 0 14px', borderRadius: 3, cursor: 'pointer',
+        border: `1.5px solid ${checked || indeterminate ? 'var(--violet-500)' : 'var(--bg-5)'}`,
+        background: checked || indeterminate ? 'var(--violet-500)' : 'transparent',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontSize: 10, lineHeight: 1,
+      }}>
+      {checked ? '✓' : (indeterminate ? '–' : '')}
+    </span>
+  );
+}
+
+function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) {
   const path = entry.path;
   const out = entry.outcome || {};
   // For skipped rows where queue.py heuristically identified the
@@ -259,6 +277,7 @@ function HistoryRow({ entry, onRequeue, onRemove, busy }) {
       gap: 4,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {onToggleSel && <QCheck checked={!!checked} onChange={onToggleSel} />}
         <OutcomeChip category={category} label={out.label} />
         <span className="mono" title={path} style={{
           flex: 1, fontSize: 'var(--text-xs)', color: 'var(--fg-1)',
@@ -376,6 +395,30 @@ function SubmitScanForm({ onSubmitted }) {
 export function QueuePage() {
   const { data, loading, error, refetch } = useLiveQueue();
   const [busyAction, setBusyAction] = useState(null);  // scan_id or 'clear'
+  // Bulk-select across the history sections (Lost-on-restart / Issues /
+  // Recently done). Keyed by scan_id::path so requeue (by path) and remove
+  // (by scan_id) both work from one selection.
+  const [selRows, setSelRows] = useState(() => new Map());
+  const [bulkBusy, setBulkBusy] = useState(null);  // 'requeue' | 'remove' | null
+  const isSel = useCallback((e) => selRows.has(`${e.scan_id}::${e.path}`), [selRows]);
+  const toggleSel = useCallback((e) => {
+    setSelRows(prev => {
+      const n = new Map(prev); const k = `${e.scan_id}::${e.path}`;
+      if (n.has(k)) n.delete(k); else n.set(k, { path: e.path, scanId: e.scan_id });
+      return n;
+    });
+  }, []);
+  const setSectionSel = useCallback((entries, on) => {
+    setSelRows(prev => {
+      const n = new Map(prev);
+      for (const e of entries) {
+        const k = `${e.scan_id}::${e.path}`;
+        if (on) n.set(k, { path: e.path, scanId: e.scan_id }); else n.delete(k);
+      }
+      return n;
+    });
+  }, []);
+  const clearSel = useCallback(() => setSelRows(new Map()), []);
 
   const processing = data?.processing || [];
   const queued = data?.queued || [];
@@ -402,6 +445,7 @@ export function QueuePage() {
     if (o.category === 'skipped' && o.skip_reason === 'sub_exists') return true;
     return false;
   });
+  const completedShown = completed.slice(0, 100);  // section caps display at 100
   const counts = data?.history_counts || {};
   // #58 v4.4: subgen advertises capabilities.queue_cancel via /queue.
   // When present, render the cancel button on queued rows; when absent
@@ -465,6 +509,47 @@ export function QueuePage() {
       alert(`Remove failed: ${e.message}`);
     } finally { setBusyAction(null); }
   }, [refetch]);
+
+  // Bulk actions over the current selection. Serial (Bazarr/Sonarr are
+  // rate-limited upstream), one refetch at the end, then clear selection.
+  const bulkRequeue = useCallback(async () => {
+    const targets = [...selRows.values()];
+    if (!targets.length) return;
+    setBulkBusy('requeue');
+    let errs = 0;
+    for (const t of targets) {
+      try {
+        const r = await fetch('/api/queue/requeue', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: t.path }),
+        });
+        if (!r.ok && r.status !== 202) errs += 1;
+      } catch { errs += 1; }
+    }
+    setBulkBusy(null); clearSel();
+    if (errs) alert(`${errs} of ${targets.length} requeue(s) failed`);
+    await refetch({ silent: true });
+  }, [selRows, refetch, clearSel]);
+
+  const bulkRemove = useCallback(async () => {
+    const targets = [...selRows.values()];
+    if (!targets.length) return;
+    if (!window.confirm(`Remove ${targets.length} entr${targets.length === 1 ? 'y' : 'ies'} from history?`)) return;
+    setBulkBusy('remove');
+    let errs = 0;
+    for (const t of targets) {
+      try {
+        const r = await fetch(`/api/queue/scan/${t.scanId}`, {
+          method: 'DELETE', credentials: 'same-origin',
+        });
+        if (!r.ok) errs += 1;
+      } catch { errs += 1; }
+    }
+    setBulkBusy(null); clearSel();
+    if (errs) alert(`${errs} of ${targets.length} remove(s) failed`);
+    await refetch({ silent: true });
+  }, [selRows, refetch, clearSel]);
 
   const clearByStatus = useCallback(async (statuses, label) => {
     if (!window.confirm(`Clear all ${label} from history? This can't be undone.`)) return;
@@ -587,6 +672,9 @@ export function QueuePage() {
             borderBottom: 'var(--border)',
             display: 'flex', alignItems: 'center', gap: 10,
           }}>
+            <QCheck checked={orphaned.length > 0 && orphaned.every(isSel)}
+                    indeterminate={orphaned.some(isSel) && !orphaned.every(isSel)}
+                    onChange={() => setSectionSel(orphaned, !orphaned.every(isSel))} />
             <span className="label" style={{ color: 'var(--warn-500)' }}>
               Lost on restart — subgen rebooted mid-flight
             </span>
@@ -599,6 +687,7 @@ export function QueuePage() {
             {orphaned.map((e) => (
               <HistoryRow key={`o-${e.scan_id}-${e.path}`} entry={e}
                           onRequeue={requeue} onRemove={removeOne}
+                          checked={isSel(e)} onToggleSel={() => toggleSel(e)}
                           busy={busyAction === e.path || busyAction === e.scan_id} />
             ))}
           </div>
@@ -612,6 +701,11 @@ export function QueuePage() {
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
+          {issues.length > 0 && (
+            <QCheck checked={issues.every(isSel)}
+                    indeterminate={issues.some(isSel) && !issues.every(isSel)}
+                    onChange={() => setSectionSel(issues, !issues.every(isSel))} />
+          )}
           <span className="label" style={{ color: issues.length ? 'var(--warn-500)' : undefined }}>
             Issues — silent fails subgen swallowed
           </span>
@@ -636,6 +730,7 @@ export function QueuePage() {
           ) : issues.map((e) => (
             <HistoryRow key={`i-${e.scan_id}-${e.path}`} entry={e}
                         onRequeue={requeue} onRemove={removeOne}
+                        checked={isSel(e)} onToggleSel={() => toggleSel(e)}
                         busy={busyAction === e.path || busyAction === e.scan_id} />
           ))}
         </div>
@@ -648,6 +743,11 @@ export function QueuePage() {
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
+          {completedShown.length > 0 && (
+            <QCheck checked={completedShown.every(isSel)}
+                    indeterminate={completedShown.some(isSel) && !completedShown.every(isSel)}
+                    onChange={() => setSectionSel(completedShown, !completedShown.every(isSel))} />
+          )}
           <span className="label">Recently done</span>
           <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
             {completed.length}
@@ -667,9 +767,10 @@ export function QueuePage() {
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
               No completed submissions in the last 24h.
             </div>
-          ) : completed.slice(0, 100).map((e) => (
+          ) : completedShown.map((e) => (
             <HistoryRow key={`d-${e.scan_id}-${e.path}`} entry={e}
                         onRequeue={requeue} onRemove={removeOne}
+                        checked={isSel(e)} onToggleSel={() => toggleSel(e)}
                         busy={busyAction === e.path || busyAction === e.scan_id} />
           ))}
         </div>
@@ -684,6 +785,32 @@ export function QueuePage() {
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', padding: '0 6px' }}>
         Featured Queue (v1.1.1): live subgen state + last 24h of submission outcomes from subarr's scan store. Nothing fails silently.
       </div>
+
+      {/* Bulk action bar — appears when history rows are selected. */}
+      {selRows.size > 0 && (
+        <div style={{ position: 'sticky', bottom: 16, marginBottom: 16, zIndex: 5 }}>
+          <div className="panel" style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '12px 16px',
+            boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+            border: '1px solid var(--violet-500)',
+          }}>
+            <span style={{ fontWeight: 600, color: 'var(--fg-0)' }}>{selRows.size} selected</span>
+            <span style={{ flex: 1 }} />
+            <button className="btn ghost sm" onClick={clearSel} disabled={bulkBusy !== null}>
+              clear
+            </button>
+            <button className="btn sm" onClick={bulkRemove} disabled={bulkBusy !== null}
+              title="Remove the selected entries from history (does not affect the live subgen queue)">
+              {bulkBusy === 'remove' ? 'Removing…' : `✕ Remove (${selRows.size})`}
+            </button>
+            <button className="btn primary sm" onClick={bulkRequeue} disabled={bulkBusy !== null}
+              title="Resubmit the selected paths to subgen as new scans">
+              {bulkBusy === 'requeue' ? 'Requeuing…' : `↻ Requeue (${selRows.size})`}
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
