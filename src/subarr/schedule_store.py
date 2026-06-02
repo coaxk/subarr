@@ -102,43 +102,12 @@ class AutoQueueRules:
         return cls(**{k: v for k, v in d.items() if k in valid})
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS schedule_config (
-    name             TEXT PRIMARY KEY,
-    enabled          INTEGER NOT NULL DEFAULT 0,
-    kind             TEXT NOT NULL,
-    interval_minutes INTEGER NOT NULL DEFAULT 360,
-    daily_hhmm       TEXT NOT NULL DEFAULT '03:00',
-    day_of_week      INTEGER NOT NULL DEFAULT 0,
-    last_run_at      REAL,
-    next_run_at      REAL,
-    last_result      TEXT,
-    probe_roots      TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS auto_queue_rules (
-    id               INTEGER PRIMARY KEY CHECK (id = 1),
-    payload_json     TEXT NOT NULL,
-    updated_at       REAL NOT NULL
-);
-"""
-
-# Cheap idempotent migration for installs predating the probe_roots column.
-_MIGRATIONS = [
-    "ALTER TABLE schedule_config ADD COLUMN probe_roots TEXT NOT NULL DEFAULT ''",
-]
-
-
-_DEFAULT_SCHEDULE = ScheduleConfig(
-    name="coverage_walk",
-    enabled=False,                # off by default — user opts in
-    kind=KIND_DAILY,
-    interval_minutes=360,
-    daily_hhmm="03:00",
-    day_of_week=0,
-    last_run_at=None,
-    next_run_at=None,
-    last_result=None,
-)
+# Schema (schedule_config, auto_queue_rules) is owned by
+# migrations/001_baseline.sql, and the default disabled 'coverage_walk'
+# schedule row is seeded by migrations/008_init_schema_parity.sql.
+# run_migrations() runs at boot before this store — no per-store
+# init_schema(). auto_queue_rules needs no seed: get_rules() returns a
+# default AutoQueueRules() when the row is absent.
 
 
 class ScheduleStore:
@@ -147,45 +116,6 @@ class ScheduleStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
-            # Apply additive column migrations; ignore "duplicate column" errors
-            # so we don't fail on fresh DBs where _SCHEMA already created them.
-            for stmt in _MIGRATIONS:
-                try:
-                    self._conn.execute(stmt)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column" not in str(e).lower():
-                        raise
-            row = self._conn.execute(
-                "SELECT name FROM schedule_config WHERE name = ?",
-                (_DEFAULT_SCHEDULE.name,),
-            ).fetchone()
-            if not row:
-                self._conn.execute(
-                    "INSERT INTO schedule_config "
-                    "(name, enabled, kind, interval_minutes, daily_hhmm, day_of_week) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        _DEFAULT_SCHEDULE.name,
-                        1 if _DEFAULT_SCHEDULE.enabled else 0,
-                        _DEFAULT_SCHEDULE.kind,
-                        _DEFAULT_SCHEDULE.interval_minutes,
-                        _DEFAULT_SCHEDULE.daily_hhmm,
-                        _DEFAULT_SCHEDULE.day_of_week,
-                    ),
-                )
-            rules_row = self._conn.execute(
-                "SELECT id FROM auto_queue_rules WHERE id = 1"
-            ).fetchone()
-            if not rules_row:
-                self._conn.execute(
-                    "INSERT INTO auto_queue_rules (id, payload_json, updated_at) "
-                    "VALUES (1, ?, ?)",
-                    (json.dumps(AutoQueueRules().to_dict()), time.time()),
-                )
 
     def close(self) -> None:
         with self._lock:
@@ -279,9 +209,17 @@ class ScheduleStore:
             return AutoQueueRules()
 
     def set_rules(self, rules: AutoQueueRules) -> AutoQueueRules:
+        # Upsert: auto_queue_rules is no longer seeded at boot (init_schema
+        # removed; get_rules() defaults when absent), so an UPDATE-only would
+        # silently no-op the first time a user saves rules. INSERT the id=1
+        # row if missing, otherwise replace its payload.
         with self._lock:
             self._conn.execute(
-                "UPDATE auto_queue_rules SET payload_json=?, updated_at=? WHERE id=1",
+                "INSERT INTO auto_queue_rules (id, payload_json, updated_at) "
+                "VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "  payload_json=excluded.payload_json, "
+                "  updated_at=excluded.updated_at",
                 (json.dumps(rules.to_dict()), time.time()),
             )
         return rules

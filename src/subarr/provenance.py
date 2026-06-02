@@ -67,23 +67,8 @@ class LedgerEntry:
         }
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS subs_generated (
-    id                           INTEGER PRIMARY KEY AUTOINCREMENT,
-    canonical_path               TEXT NOT NULL,
-    series_id                    INTEGER,
-    sonarr_episode_id            INTEGER,
-    radarr_movie_id              INTEGER,
-    scan_id                      TEXT,
-    source                       TEXT NOT NULL,
-    subgen_version               TEXT,
-    queued_at                    REAL NOT NULL,
-    completed_at                 REAL,
-    bazarr_scan_triggered_at     REAL
-);
-CREATE INDEX IF NOT EXISTS idx_subs_generated_path ON subs_generated (canonical_path);
-CREATE INDEX IF NOT EXISTS idx_subs_generated_pending ON subs_generated (completed_at) WHERE completed_at IS NULL;
-"""
+# Schema (subs_generated + indexes) is owned by migrations/001_baseline.sql.
+# run_migrations() runs at boot before this store — no per-store init_schema().
 
 
 class ProvenanceStore:
@@ -97,10 +82,6 @@ class ProvenanceStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
 
     def close(self) -> None:
         with self._lock:

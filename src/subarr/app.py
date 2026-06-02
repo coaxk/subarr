@@ -85,8 +85,9 @@ async def lifespan(app_: FastAPI):
     app_.state.subgen_restart_detected_at = None
     app_.state.subgen_restart_from = None
     app_.state.subgen_restart_to = None
+    # All schema is owned by migrations (run_migrations above, before any
+    # store is constructed). Stores no longer self-create tables.
     app_.state.scans = ScanStore(settings.db_path)
-    app_.state.scans.init_schema()
     # Anonymous error-class log for telemetry (schema via migration 006).
     app_.state.errors = ErrorStore(settings.db_path)
     app_.state.runner = ScanRunner(
@@ -101,7 +102,6 @@ async def lifespan(app_: FastAPI):
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
-    app_.state.provenance.init_schema()
     app_.state.watcher = CompletionWatcher(
         provenance=app_.state.provenance,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -115,26 +115,21 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
-    app_.state.schedule.init_schema()
     app_.state.ollama = OllamaClient()
     # v1.1-O Layer 4: user audio-language verifications (manual review queue).
     from .audio_lang_store import AudioLangStore
     app_.state.audio_lang = AudioLangStore(settings.db_path)
-    app_.state.audio_lang.init_schema()
     # v1.1 ARCH: coverage cache + background refresh (kills 60-90s page loads).
     from .coverage_cache import CoverageCache, background_refresh_loop
     app_.state.coverage_cache = CoverageCache(settings.db_path)
-    app_.state.coverage_cache.init_schema()
+    app_.state.coverage_cache.load()  # warm in-memory mirror; table via migrations
     # v1.1 ARCH: dashboard cache (30s refresh, in-memory only).
     from .dashboard_cache import DashboardCache, background_refresh_loop as dash_refresh_loop
     app_.state.dashboard_cache = DashboardCache()
     app_.state.enrichment = EnrichmentStore(settings.db_path)
-    app_.state.enrichment.init_schema()
     app_.state.probe_store = ProbeStore(settings.db_path)
-    app_.state.probe_store.init_schema()
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
     app_.state.pending = PendingStore(settings.db_path)
-    app_.state.pending.init_schema()
     app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
