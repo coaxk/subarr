@@ -230,30 +230,38 @@ def test_runner_still_aborts_on_real_error(db_path: Path, tmp_migrations: Path):
     assert runner.applied_versions() == [1]  # version 2 NOT recorded
 
 
-def test_bundled_migrations_idempotent_on_init_schema_db(subarr_env, tmp_path: Path):
-    """Truest transitional test: build a DB exactly as the legacy
-    init_schema path does (all stores), then run the bundled migrations.
-    Migration 008's ADD COLUMNs hit columns init_schema already created —
-    the runner must tolerate them and finish clean."""
-    from subarr.audio_lang_store import AudioLangStore
-    from subarr.coverage_cache import CoverageCache
-    from subarr.enrichment import EnrichmentStore
-    from subarr.pending_store import PendingStore
-    from subarr.probe_store import ProbeStore
-    from subarr.provenance import ProvenanceStore
-    from subarr.scan_store import ScanStore
-    from subarr.schedule_store import ScheduleStore
-
+def test_bundled_migrations_idempotent_on_init_schema_db(tmp_path: Path):
+    """Transitional DB: one a prior (now-removed) init_schema already
+    extended, so the 008 tables/columns exist BEFORE 008 runs. The runner
+    must tolerate the duplicate columns and finish clean. Built via raw SQL
+    that mirrors the legacy init_schema result for the tables 008 touches."""
     db = tmp_path / "transitional.db"
-    for store in (
-        ScanStore(db), ProvenanceStore(db), ScheduleStore(db), AudioLangStore(db),
-        CoverageCache(db), EnrichmentStore(db), ProbeStore(db), PendingStore(db),
-    ):
-        store.init_schema()
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE lang_enrichment (
+            canonical_path TEXT PRIMARY KEY, title TEXT NOT NULL, raw_response TEXT,
+            iso_code TEXT, model TEXT, inferred_at REAL NOT NULL, error TEXT,
+            confidence REAL, reasoning TEXT);
+        CREATE TABLE media_probe (
+            canonical_path TEXT PRIMARY KEY, mtime REAL NOT NULL, size INTEGER NOT NULL,
+            duration_s REAL, audio_json TEXT NOT NULL, sub_json TEXT NOT NULL,
+            probed_at REAL NOT NULL, source TEXT NOT NULL DEFAULT 'ffprobe');
+        CREATE TABLE audio_lang_verifications (
+            canonical_path TEXT PRIMARY KEY, lang_code TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'user', confidence REAL NOT NULL DEFAULT 1.0,
+            verified_at REAL NOT NULL, verified_by TEXT, evidence TEXT);
+        CREATE TABLE coverage_snapshot (
+            id INTEGER PRIMARY KEY CHECK (id = 1), generated_at REAL NOT NULL,
+            items_json TEXT NOT NULL, totals_json TEXT NOT NULL, sources_json TEXT NOT NULL,
+            build_duration_s REAL, item_count INTEGER);
+        """
+    )
+    conn.close()
 
-    # Now run the real bundled migrations on this init_schema-built DB.
-    applied = run_migrations(db)  # must NOT raise on duplicate columns/tables
-    # 008 must be among those applied (older ones were never recorded here).
+    # Run the real bundled migrations. 008's ADD COLUMNs hit columns that
+    # already exist → duplicate-column → must be tolerated, not aborted.
+    applied = run_migrations(db)
     assert 8 in [m.version for m in applied]
 
 

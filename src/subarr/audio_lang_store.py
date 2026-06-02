@@ -33,35 +33,14 @@ from pathlib import Path
 from typing import Any
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS audio_lang_verifications (
-    canonical_path  TEXT PRIMARY KEY,
-    lang_code       TEXT NOT NULL,
-    source          TEXT NOT NULL DEFAULT 'user',
-    confidence      REAL NOT NULL DEFAULT 1.0,
-    verified_at     REAL NOT NULL,
-    verified_by     TEXT,
-    evidence        TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_audio_lang_verifications_lang
-    ON audio_lang_verifications(lang_code);
-
--- #226: series-level intent. When the user says "every Cheers episode
--- is English", we record that fact ONCE here rather than spamming the
--- per-file table with a row for every episode. Future episodes added
--- to the library inherit the intent automatically on first lookup.
--- canonical_path series_prefix MUST end with '/' to disambiguate
--- "TV/Cheers/" from "TV/Cheers Reboot/".
-CREATE TABLE IF NOT EXISTS series_lang_intent (
-    series_prefix   TEXT PRIMARY KEY,
-    lang_code       TEXT NOT NULL,
-    source          TEXT NOT NULL DEFAULT 'user',
-    confidence      REAL NOT NULL DEFAULT 1.0,
-    declared_at     REAL NOT NULL,
-    declared_by     TEXT,
-    note            TEXT
-);
-"""
+# Schema (audio_lang_verifications + idx, series_lang_intent) is owned by
+# migrations/008_init_schema_parity.sql. run_migrations() runs at boot
+# before this store — no per-store init_schema().
+#
+# #226 note: series_lang_intent records series-level intent ONCE ("every
+# Cheers episode is English") instead of spamming the per-file table.
+# series_prefix MUST end with '/' to disambiguate "TV/Cheers/" from
+# "TV/Cheers Reboot/".
 
 
 @dataclass
@@ -94,10 +73,6 @@ class AudioLangStore:
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
 
     def upsert(self, *, canonical_path: str, lang_code: str,
                source: str = "user", confidence: float = 1.0,

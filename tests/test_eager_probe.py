@@ -60,10 +60,12 @@ def test_eager_probe_targets_skips_non_file_paths():
 
 @pytest.fixture
 def walker(subarr_env, tmp_path):
+    from subarr.migrate import run_migrations
     from subarr.probe_store import ProbeStore
     from subarr.probe_walker import ProbeWalker
-    store = ProbeStore(tmp_path / "probe.db")
-    store.init_schema()
+    db = tmp_path / "probe.db"
+    run_migrations(db)  # schema is migration-owned now (no init_schema)
+    store = ProbeStore(db)
     return ProbeWalker(store), store
 
 
@@ -201,8 +203,10 @@ def test_refresh_fires_eager_probe_for_unprobed(subarr_env, tmp_path, monkeypatc
                 status = "done"
             return _S()
 
-    cache = CoverageCache(tmp_path / "cov.db")
-    cache.init_schema()
+    from subarr.migrate import run_migrations
+    db = tmp_path / "cov.db"
+    run_migrations(db)
+    cache = CoverageCache(db)
     asyncio.run(cache.refresh(
         bundle=None, probe_store=None, audio_lang_store=None,
         probe_walker=FakeWalker(),
@@ -215,8 +219,10 @@ def test_refresh_no_walker_does_not_crash(subarr_env, tmp_path, monkeypatch):
     _patch_build(monkeypatch, [
         {"canonical_path": "TV/A/a.mkv", "verification_state": "unprobed", "media_type": "episode"},
     ])
-    cache = CoverageCache(tmp_path / "cov.db")
-    cache.init_schema()
+    from subarr.migrate import run_migrations
+    db = tmp_path / "cov.db"
+    run_migrations(db)
+    cache = CoverageCache(db)
     # No probe_walker passed — back-compat path, must just store + return.
     snap = asyncio.run(cache.refresh(bundle=None, probe_store=None, audio_lang_store=None))
     assert snap.item_count == 1

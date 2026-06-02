@@ -21,35 +21,11 @@ from pathlib import Path
 from .media_probe import AudioStream, ProbeResult, SubtitleStream
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS media_probe (
-    canonical_path  TEXT PRIMARY KEY,
-    mtime           REAL NOT NULL,
-    size            INTEGER NOT NULL,
-    duration_s      REAL,
-    audio_json      TEXT NOT NULL,
-    sub_json        TEXT NOT NULL,
-    probed_at       REAL NOT NULL,
-    source          TEXT NOT NULL DEFAULT 'ffprobe'
-);
--- Probe failures (also created by migration 007). Lets the coverage
--- probe-gate distinguish "couldn't analyze" from "not yet probed".
-CREATE TABLE IF NOT EXISTS probe_failures (
-    canonical_path  TEXT PRIMARY KEY,
-    error           TEXT NOT NULL,
-    failed_at       REAL NOT NULL,
-    attempts        INTEGER NOT NULL DEFAULT 1
-);
-"""
-
-# v1.1-A migration: add `source` column to track whether the row came from
-# our own ffprobe or from Sonarr/Radarr's pre-computed mediaInfo. Cheap to
-# add with DEFAULT; older rows get 'ffprobe' which is what they actually
-# were. New 'arr_mediainfo' rows are upgradable to 'ffprobe' on next walk
-# (richer data wins).
-_MIGRATE_SOURCE_COL = """
-ALTER TABLE media_probe ADD COLUMN source TEXT NOT NULL DEFAULT 'ffprobe'
-"""
+# Schema (media_probe incl. the v1.1-A `source` column, and probe_failures)
+# is owned by migrations/001_baseline.sql + 007_probe_failures.sql +
+# 008_init_schema_parity.sql. run_migrations() runs at boot before this
+# store — no per-store init_schema(). `source` distinguishes our own
+# ffprobe rows from Sonarr/Radarr pre-computed mediaInfo ('arr_mediainfo').
 
 
 class ProbeStore:
@@ -58,16 +34,6 @@ class ProbeStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
-            # Best-effort migration for pre-v1.1-A DBs. ALTER fails harmlessly
-            # if the column already exists (SQLite raises OperationalError).
-            try:
-                self._conn.execute(_MIGRATE_SOURCE_COL)
-            except sqlite3.OperationalError:
-                pass
 
     def close(self) -> None:
         with self._lock:

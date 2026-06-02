@@ -33,17 +33,11 @@ from .paths import VIDEO_EXTS
 log = logging.getLogger(__name__)
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS coverage_snapshot (
-    id              INTEGER PRIMARY KEY CHECK (id = 1),
-    generated_at    REAL NOT NULL,
-    items_json      TEXT NOT NULL,
-    totals_json     TEXT NOT NULL,
-    sources_json    TEXT NOT NULL,
-    build_duration_s REAL,
-    item_count      INTEGER
-);
-"""
+# Schema (coverage_snapshot, single-row) is owned by
+# migrations/008_init_schema_parity.sql. run_migrations() runs at boot
+# before this cache is constructed, so the table always exists. This cache
+# keeps a load() method (not init_schema) purely to warm its in-memory
+# mirror from the persisted snapshot on boot.
 
 
 # Cap the eager-probe fan-out per build. A fresh library can have
@@ -133,11 +127,10 @@ class CoverageCache:
         self._refresh_lock = asyncio.Lock()
         self._refreshing = False
 
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
-        # Warm the in-memory mirror from disk so the first request after
-        # boot returns immediately (no cold start).
+    def load(self) -> None:
+        """Warm the in-memory mirror from the persisted snapshot so the
+        first request after boot returns immediately (no cold start). The
+        coverage_snapshot table itself is created by migrations."""
         self._load_from_db()
 
     def _load_from_db(self) -> None:

@@ -88,18 +88,9 @@ class Scan:
         }
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS scans (
-    id            TEXT PRIMARY KEY,
-    created_at    REAL NOT NULL,
-    status        TEXT NOT NULL,
-    reverse       INTEGER NOT NULL DEFAULT 0,
-    current_index INTEGER NOT NULL DEFAULT 0,
-    paths_json    TEXT NOT NULL,
-    results_json  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC);
-"""
+# Schema (scans table + index) is owned by migrations/001_baseline.sql.
+# run_migrations() runs at boot before this store is constructed, so the
+# table always exists — no per-store init_schema().
 
 
 class ScanStore:
@@ -112,10 +103,6 @@ class ScanStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
 
     def close(self) -> None:
         with self._lock:

@@ -68,30 +68,12 @@ _LANG_SCHEMA = {
 _ISO_RE = re.compile(r"^[a-z]{2,3}$")
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS lang_enrichment (
-    canonical_path  TEXT PRIMARY KEY,
-    title           TEXT NOT NULL,
-    raw_response    TEXT,
-    iso_code        TEXT,
-    model           TEXT,
-    inferred_at     REAL NOT NULL,
-    error           TEXT,
-    -- #156: structured-output additions. confidence is 0.0-1.0; reasoning
-    -- is the one-sentence model explanation. Both nullable so legacy rows
-    -- from the free-text era stay valid until they cycle through eviction.
-    confidence      REAL,
-    reasoning       TEXT
-);
--- #156: add columns if upgrading from the v1.1 free-text schema.
--- ALTER TABLE … IF NOT EXISTS doesn't exist in SQLite; we tolerate the
--- "duplicate column" error at runtime via init_schema's try/except.
-"""
-
-_SCHEMA_MIGRATIONS = [
-    "ALTER TABLE lang_enrichment ADD COLUMN confidence REAL",
-    "ALTER TABLE lang_enrichment ADD COLUMN reasoning TEXT",
-]
+# Schema (lang_enrichment incl. the #156 confidence/reasoning columns) is
+# owned by migrations/001_baseline.sql + 008_init_schema_parity.sql.
+# run_migrations() runs at boot before this store — no per-store
+# init_schema(). confidence is 0.0-1.0; reasoning is the model's
+# one-sentence explanation. Both nullable so legacy free-text rows stay
+# valid until they cycle through eviction.
 
 
 @dataclass
@@ -127,19 +109,6 @@ class EnrichmentStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
-            # #156: idempotent column additions for installs that came in
-            # before structured JSON. SQLite has no IF NOT EXISTS for
-            # ALTER ADD COLUMN; the per-statement try/except is the
-            # idiomatic pattern.
-            for stmt in _SCHEMA_MIGRATIONS:
-                try:
-                    self._conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass  # already exists
 
     def close(self) -> None:
         with self._lock:

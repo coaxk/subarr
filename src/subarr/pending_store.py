@@ -77,26 +77,9 @@ class PendingWalk:
         }
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS pending_walks (
-    id                TEXT PRIMARY KEY,
-    created_at        REAL NOT NULL,
-    status            TEXT NOT NULL,
-    considered        INTEGER NOT NULL DEFAULT 0,
-    decisions_total   INTEGER NOT NULL DEFAULT 0,
-    approved_count    INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS pending_decisions (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    walk_id      TEXT NOT NULL,
-    item_json    TEXT NOT NULL,
-    approved     INTEGER,
-    scan_id      TEXT,
-    FOREIGN KEY (walk_id) REFERENCES pending_walks(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_pending_decisions_walk ON pending_decisions (walk_id);
-CREATE INDEX IF NOT EXISTS idx_pending_walks_status ON pending_walks (status);
-"""
+# Schema (pending_walks + pending_decisions + indexes) is owned by
+# migrations/001_baseline.sql. run_migrations() runs at boot before this
+# store — no per-store init_schema().
 
 
 class PendingStore:
@@ -106,10 +89,6 @@ class PendingStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._lock = threading.Lock()
-
-    def init_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(_SCHEMA)
 
     def close(self) -> None:
         with self._lock:

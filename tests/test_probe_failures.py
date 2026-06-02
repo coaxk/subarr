@@ -8,15 +8,13 @@ from __future__ import annotations
 
 
 def _store(tmp_path):
-    # Mirror the app: run migrations, then the store's init_schema (which
-    # still backfills the media_probe.source column until init_schema removal).
+    # Mirror the app: migrations own the schema; the store no longer
+    # self-creates tables (init_schema removed).
     from subarr.migrate import run_migrations
     from subarr.probe_store import ProbeStore
     db = tmp_path / "p.db"
     run_migrations(db)
-    s = ProbeStore(db)
-    s.init_schema()
-    return s
+    return ProbeStore(db)
 
 
 def test_record_failure_and_failed_paths(tmp_path):

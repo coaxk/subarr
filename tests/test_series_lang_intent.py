@@ -6,10 +6,11 @@ import pytest
 
 @pytest.fixture
 def store(tmp_path):
+    from subarr.migrate import run_migrations
     from subarr.audio_lang_store import AudioLangStore
-    s = AudioLangStore(tmp_path / "audio_lang.db")
-    s.init_schema()
-    yield s
+    db = tmp_path / "audio_lang.db"
+    run_migrations(db)  # schema is migration-owned now (no init_schema)
+    yield AudioLangStore(db)
 
 
 def test_get_returns_per_file_verification_when_present(store):
