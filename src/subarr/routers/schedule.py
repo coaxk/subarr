@@ -8,9 +8,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from dataclasses import fields as _dc_fields
+
 from ..auto_queue import evaluate
-from ..coverage_engine import build_coverage
+from ..coverage_engine import CoverageItem, build_coverage
 from ..schedule_store import AutoQueueRules
+
+# Constructor fields of CoverageItem — used to rebuild items from the
+# cached coverage snapshot (stored as dicts) without a fresh 60-90s build.
+_COVERAGE_ITEM_FIELDS = {f.name for f in _dc_fields(CoverageItem)}
 
 router = APIRouter(prefix="/api", tags=["schedule"])
 log = logging.getLogger(__name__)
@@ -133,11 +139,29 @@ async def reject_pending(walk_id: str, req: ApproveRequest, request: Request) ->
 
 @router.post("/schedule/preview")
 async def preview(request: Request) -> dict[str, Any]:
-    """Dry-run: pull coverage + evaluate current rules WITHOUT enqueueing.
-    Lets the UI show 'what would be auto-queued right now?'."""
+    """Dry-run: evaluate current rules against the latest coverage WITHOUT
+    enqueueing. Lets the UI show 'what would be auto-queued right now?'.
+
+    Reads the background-refreshed coverage snapshot (sub-second) and
+    reconstructs CoverageItem objects from it, rather than triggering a
+    fresh 60-90s build on every click. Falls back to a synchronous build
+    only when the cache hasn't warmed yet (first boot)."""
     bundle = request.app.state.integrations
     rules = request.app.state.schedule.get_rules()
-    report = await build_coverage(bundle, use_tautulli=True)
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    snap = cov_cache.get_cached() if cov_cache is not None else None
+    if snap is not None:
+        items = [
+            CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS})
+            for d in snap.items
+        ]
+
+        class _Report:
+            pass
+        report = _Report()
+        report.items = items
+    else:
+        report = await build_coverage(bundle, use_tautulli=True)
     decisions = evaluate(report.items, rules)
     queue = [d.to_dict() for d in decisions if d.action == "queue"]
     skip_sample = [d.to_dict() for d in decisions if d.action == "skip"][:20]
