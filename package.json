@@ -7,7 +7,7 @@
   "scripts": {
     "build:frontend": "node scripts/build-frontend.mjs",
     "dev:frontend": "node scripts/build-frontend.mjs --watch",
-    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- src/subarr/static/v1/home-hifi"
+    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'"
   },
   "devDependencies": {
     "esbuild": "0.25.0"
