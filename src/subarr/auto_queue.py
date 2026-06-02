@@ -82,6 +82,13 @@ def evaluate(
         if _is_in_flight(item, in_flight):
             decisions.append(Decision(item, "skip", "already in flight (scan submitted, awaiting subgen completion)"))
             continue
+        # Probe-gate: never auto-queue a row subarr hasn't verified by
+        # probing the file. An un-probed/probe-failed row can't be trusted
+        # as a real gap (it may already have an embedded sub subgen would
+        # skip) — hold it until the probe runs.
+        if getattr(item, "verification_state", "verified") != "verified":
+            decisions.append(Decision(item, "skip", "unverified — not probed yet"))
+            continue
         skip_reason = _filter_reason(item, rules)
         if skip_reason:
             decisions.append(Decision(item, "skip", skip_reason))
