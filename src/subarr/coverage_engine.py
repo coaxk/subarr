@@ -332,6 +332,26 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     return langs
 
 
+def _episode_file_canonical(
+    sonarr_episode_id: int | None,
+    ep_file_paths: dict[int, str],
+    sonarr_eps_by_id: dict[int, dict],
+) -> str | None:
+    """Resolve a wanted episode's actual file to a canonical path via the
+    prefetched Sonarr maps (sonarrEpisodeId → episodeFileId → episodeFile
+    .path → strip ARR prefix). Returns None when Sonarr has no file for the
+    episode (not yet downloaded) — callers must treat that as pending, not
+    fabricate a path."""
+    if sonarr_episode_id is None:
+        return None
+    ep = sonarr_eps_by_id.get(sonarr_episode_id) or {}
+    ep_file_id = ep.get("episodeFileId")
+    abs_path = ep_file_paths.get(ep_file_id) if ep_file_id else None
+    if not abs_path:
+        return None
+    return _strip_arr_prefix(abs_path) or abs_path
+
+
 def _stale_for_episode(
     *, sonarr_episode_id: int | None,
     ep_file_paths: dict[int, str],
@@ -352,14 +372,11 @@ def _stale_for_episode(
     file path (episode not yet downloaded, or pre-Sonarr-v3 cluster)."""
     if sonarr_episode_id is None or not series_srt_paths:
         return _match_episode_srt_pattern(series_srt_paths, episode_number) if not missing_subs else (False, [])
-    ep = sonarr_eps_by_id.get(sonarr_episode_id) or {}
-    ep_file_id = ep.get("episodeFileId")
-    abs_path = ep_file_paths.get(ep_file_id) if ep_file_id else None
-    if not abs_path:
+    file_canonical = _episode_file_canonical(sonarr_episode_id, ep_file_paths, sonarr_eps_by_id)
+    if not file_canonical:
         # No file on disk yet → can't be stale; fall back to pattern only
         # if Bazarr's view might be wrong (rare).
         return _match_episode_srt_pattern(series_srt_paths, episode_number)
-    file_canonical = _strip_arr_prefix(abs_path) or abs_path
     sidecars = _sidecars_for_file(series_srt_paths, file_canonical)
     if not sidecars:
         # [2026-05-30] Basename-stem match failed (common when the
@@ -997,6 +1014,15 @@ async def build_coverage(
         # v1.1-B: Sonarr knows this episode has no file yet.
         if item.bazarr_episode_id and item.bazarr_episode_id in sonarr_missing_ids:
             item.pending_download = True
+        # Folder-row fix: attach the actual episode-file path Sonarr already
+        # resolved. canonical_path stays the series folder (the probe-match
+        # search prefix); file_canonical_path is the real file so the row
+        # isn't a dead folder-path and eager-probe can target it. Only set
+        # when Sonarr has a file — fileless episodes stay pending_download.
+        if not item.file_canonical_path:
+            item.file_canonical_path = _episode_file_canonical(
+                item.bazarr_episode_id, ep_file_paths, sonarr_eps_by_id,
+            )
         _attach_probe_episode(item, probe_by_series_prefix,
                               tautulli_hints=activity.get("audio_lang_hints") or {},
                               user_verifications=user_verifications,

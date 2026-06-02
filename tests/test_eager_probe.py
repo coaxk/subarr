@@ -226,3 +226,16 @@ def test_refresh_no_walker_does_not_crash(subarr_env, tmp_path, monkeypatch):
     # No probe_walker passed — back-compat path, must just store + return.
     snap = asyncio.run(cache.refresh(bundle=None, probe_store=None, audio_lang_store=None))
     assert snap.item_count == 1
+
+
+def test_eager_probe_targets_prefers_file_canonical_path():
+    """Folder-row fix: when the Sonarr episode-file path is propagated onto
+    file_canonical_path, eager-probe must target THAT (a real video file),
+    not the folder-level canonical_path (which the file-only guard skips)."""
+    from subarr.coverage_cache import eager_probe_targets
+    items = [
+        {"canonical_path": "TV/Klovn", "file_canonical_path": "TV/Klovn/Season 1/S01E01.mkv",
+         "verification_state": "unprobed"},
+        {"canonical_path": "TV/ILied", "verification_state": "unprobed"},  # folder only → skipped
+    ]
+    assert eager_probe_targets(items) == ["TV/Klovn/Season 1/S01E01.mkv"]
