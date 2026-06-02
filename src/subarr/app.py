@@ -10,6 +10,20 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files that must be revalidated before reuse. The v1 HTML
+    references bundles by a fixed name with no cache-bust, so without this
+    browsers heuristic-cache the bundles and serve STALE UI after every
+    update. `no-cache` forces an ETag revalidation each load — cheap 304s
+    when unchanged, fresh bundle the instant it changes. ETag/Last-Modified
+    are still sent by the base class, so this stays bandwidth-efficient."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
 from . import __version__
 from .completion_watcher import CompletionWatcher
 from .config import settings
@@ -383,7 +397,7 @@ def health() -> dict:
 
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+    app.mount("/static", RevalidatingStaticFiles(directory=_STATIC_DIR), name="static")
 
     from fastapi.responses import RedirectResponse
     from fastapi import Request
