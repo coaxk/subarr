@@ -318,7 +318,7 @@ npm install && npm run build:frontend       # SPA bundles
 
 - [Bazarr](https://github.com/morpheus65535/bazarr), the librarian. Subarr reads its wanted list and writes back its scan-disk trigger.
 - [McCloudS/subgen](https://github.com/McCloudS/subgen), the worker. Subarr drives it via the patches in [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
-- [subsyncarr](https://github.com/McCloudS/subsyncarr), the synchroniser. Recommended companion for sync issues subarr does not tackle.
+- [subsyncarr](https://github.com/johnpc/subsyncarr), the synchroniser. Recommended companion for sync issues subarr does not tackle.
 
 ## License
 
