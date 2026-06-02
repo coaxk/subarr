@@ -2259,7 +2259,7 @@ function CoverageBucket({ kind, rows }) {
         {meta.blurb}
       </div>
       {open && (
-        <div style={{ marginTop: 8, maxHeight: 240, overflow: 'auto' }}>
+        <div style={{ marginTop: 8, maxHeight: '55vh', overflow: 'auto' }}>
           {rows.map(r => (
             <div key={r.id} style={{
               display: 'flex', gap: 10, padding: '4px 0',
@@ -2540,14 +2540,17 @@ export function CoveragePage() {
         monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
       />
 
-      {/* Table */}
+      {/* Table — grows to fit its rows; the PAGE (main-canvas) scrolls
+          rather than squeezing the table into a sliver. The column header
+          is position:sticky so it stays pinned while the page scrolls. */}
       <div className="panel" style={{
-        flex: 1, minHeight: 0,
+        flexShrink: 0,
+        minHeight: 240,
         padding: 0,
         display: 'flex', flexDirection: 'column',
-        overflow: 'hidden',
+        overflow: 'visible',
       }}>
-        <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+        <div style={{ position: 'relative' }}>
           <CoverageHeader allSelected={selectedCount > 0 && selectedCount === rows.length} />
           {isInitialLoad && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
