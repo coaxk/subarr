@@ -8,7 +8,7 @@
 
 import { Wordmark, Glyph, StatusDot } from './atoms.jsx';
 
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect } = React;
 
 // hrefs are subarr server routes; the route layer in app.py maps each
 // path to its rendered static HTML under /static/v1/.
@@ -27,83 +27,92 @@ const TOP_SECTIONS = [
 // Pulls from the four "small" endpoints (all cached or cheap) every
 // 10s so SubRail badges reflect reality. Returns an object keyed by
 // subrail item id; missing keys render as no badge.
-export function useLiveChromeCounts(intervalMs = 10000) {
-  const [counts, setCounts] = useState({});
+// #5/#6 perf: a SINGLE shared poller feeds every consumer. TopBar and
+// SubRail both render on every page; previously each ran its own 10s loop
+// over five endpoints (10 requests / 10s for identical data). The
+// module-level singleton runs ONE loop, ref-counted to the live
+// subscribers, and only notifies (re-renders) them when a value actually
+// changes — so a stable 10s tick causes zero re-renders.
+function _shallowEqualCounts(a, b) {
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  return ak.every((k) => a[k] === b[k]);
+}
 
-  const tick = useCallback(async () => {
+async function _fetchChromeCounts() {
+  const [dash, health, queue, schedule, review] = await Promise.all([
+    fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/schedule', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  const next = {};
+  if (dash?.stages) {
+    const wanted = dash.stages.find((s) => s.id === 'wanted' || s.id === 'bazarr-wanted');
+    if (wanted) next.coverage = wanted.count;
+  }
+  if (queue) next.queue = (queue.queued_count || 0) + (queue.processing_count || 0);
+  if (schedule?.schedules) next.rules = schedule.schedules.filter((s) => s.enabled).length;
+  if (health) {
+    const ints = health.integrations || [];
+    const online = ints.filter((i) => i.online).length;
+    const total = ints.length + (health.subgen ? 1 : 0);
+    next.health = `${online + (health.subgen?.reachable ? 1 : 0)}/${total}`;
+  }
+  if (dash?.next_run?.countdown_s != null) {
+    const s = dash.next_run.countdown_s;
+    if (s < 60) next.schedule = `${s}s`;
+    else if (s < 3600) next.schedule = `${Math.floor(s/60)}m`;
+    else next.schedule = `${Math.floor(s/3600)}h ${String(Math.floor((s%3600)/60)).padStart(2,'0')}m`;
+  } else if (dash?.next_run?.enabled === false) {
+    next.schedule = 'off';
+  }
+  if (next.health) next.config_integrations = next.health;
+  if (review?.count != null) next.review = review.count;
+  return next;
+}
+
+const _chromeCounts = (() => {
+  const subscribers = new Set();
+  let latest = {};
+  let timer = null;
+  let running = false;
+
+  async function tick(intervalMs) {
     try {
-      const [dash, health, queue, schedule, review] = await Promise.all([
-        fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/schedule', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-      ]);
-
-      const next = {};
-
-      // Operations / Coverage — count of open gaps from the dashboard
-      // stages block when present, else null (better than the old 612).
-      if (dash?.stages) {
-        const wanted = dash.stages.find((s) => s.id === 'wanted' || s.id === 'bazarr-wanted');
-        if (wanted) next.coverage = wanted.count;
+      const next = await _fetchChromeCounts();
+      if (!_shallowEqualCounts(next, latest)) {
+        latest = next;
+        subscribers.forEach((fn) => fn(latest));
       }
-
-      // Operations / Queue — sum of queued + processing
-      if (queue) {
-        const total = (queue.queued_count || 0) + (queue.processing_count || 0);
-        next.queue = total;
-      }
-
-      // Operations / Rules — count of enabled schedules from /api/schedule
-      if (schedule?.schedules) {
-        next.rules = schedule.schedules.filter((s) => s.enabled).length;
-      }
-
-      // Overview / Health — N/M online integrations
-      if (health) {
-        const ints = health.integrations || [];
-        const online = ints.filter((i) => i.online).length;
-        const total = ints.length + (health.subgen ? 1 : 0);
-        const onlineWithSubgen = online + (health.subgen?.reachable ? 1 : 0);
-        next.health = `${onlineWithSubgen}/${total}`;
-      }
-
-      // Overview / Schedule — countdown to next run
-      if (dash?.next_run?.countdown_s != null) {
-        const s = dash.next_run.countdown_s;
-        if (s < 60) next.schedule = `${s}s`;
-        else if (s < 3600) next.schedule = `${Math.floor(s/60)}m`;
-        else next.schedule = `${Math.floor(s/3600)}h ${String(Math.floor((s%3600)/60)).padStart(2,'0')}m`;
-      } else if (dash?.next_run?.enabled === false) {
-        next.schedule = 'off';
-      }
-
-      // Config / Integrations — same N/M as health
-      if (next.health) next.config_integrations = next.health;
-
-      // Operations / Review — outstanding audio-language verifications
-      if (review?.count != null) next.review = review.count;
-
-      setCounts(next);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.debug('chrome counts fetch failed:', e);
+    } finally {
+      if (running) timer = setTimeout(() => tick(intervalMs), intervalMs);
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    let cancelled = false;
-    let timer = null;
-    async function loop() {
-      if (cancelled) return;
-      await tick();
-      if (!cancelled) timer = setTimeout(loop, intervalMs);
-    }
-    loop();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [tick, intervalMs]);
+  return {
+    subscribe(fn, intervalMs) {
+      subscribers.add(fn);
+      if (Object.keys(latest).length) fn(latest);  // hydrate from last result
+      if (!running) { running = true; tick(intervalMs); }
+      return () => {
+        subscribers.delete(fn);
+        if (subscribers.size === 0) {
+          running = false;
+          if (timer) { clearTimeout(timer); timer = null; }
+        }
+      };
+    },
+  };
+})();
 
+export function useLiveChromeCounts(intervalMs = 10000) {
+  const [counts, setCounts] = useState(() => ({}));
+  useEffect(() => _chromeCounts.subscribe(setCounts, intervalMs), [intervalMs]);
   return counts;
 }
 
