@@ -63,14 +63,32 @@ def test_due_disabled_never_fires():
 
 
 def _item(score=300, lang="Korean", monitored=True, has_disk=False, tags=None,
-          ep_id=1, canonical="TV/X/S01E01.mkv", title="X"):
+          ep_id=1, canonical="TV/X/S01E01.mkv", title="X",
+          verification_state="verified"):
     from subarr.coverage_engine import CoverageItem
     return CoverageItem(
         media_type="episode", title=title, episode_number="1x1",
         original_language=lang, monitored=monitored, tags=tags or [],
         canonical_path=canonical, has_sub_on_disk=has_disk,
         bazarr_episode_id=ep_id, score=score,
+        verification_state=verification_state,
     )
+
+
+def test_evaluate_skips_unverified_rows():
+    """Probe-gate: auto-queue must never act on a row subarr hasn't probed,
+    regardless of score — that's how un-probed files end up skipped by subgen."""
+    from subarr.auto_queue import evaluate
+    from subarr.schedule_store import AutoQueueRules, MODE_AUTO_RULES
+    items = [
+        _item(score=2000, verification_state="unprobed"),
+        _item(score=2000, ep_id=2, verification_state="probe_failed"),
+    ]
+    rules = AutoQueueRules(mode=MODE_AUTO_RULES, min_score=0,
+                           deny_languages=[], require_monitored=False)
+    decisions = evaluate(items, rules)
+    assert all(d.action == "skip" for d in decisions)
+    assert all("unverified" in d.reason for d in decisions)
 
 
 def test_evaluate_dashboard_mode_skips_everything():

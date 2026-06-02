@@ -225,6 +225,13 @@ def _apply_filters_and_pack(
         kept = []
         emb_dropped = stale_dropped = eng_audio_dropped = pending_dropped = wanted_lang_dropped = 0
         for it in items:
+            # Probe-gate: unverified rows are STICKY — no hide/lang filter
+            # may drop them. They stay visible (bucketed by the frontend)
+            # until the probe runs, so nothing the user hasn't seen can
+            # silently disappear. Once verified, the normal filters apply.
+            if it.get("verification_state", "verified") != "verified":
+                kept.append(it)
+                continue
             if hide_pending_download and it.get("pending_download"):
                 pending_dropped += 1
                 continue
@@ -265,6 +272,16 @@ def _apply_filters_and_pack(
         body["totals"]["suppressed_by_wanted_langs"] = wanted_lang_dropped
         body["totals"]["episodes"] = sum(1 for i in kept if i["media_type"] == "episode")
         body["totals"]["movies"] = sum(1 for i in kept if i["media_type"] == "movie")
+    # Probe-gate bucket counts (always, over the items actually returned).
+    # The frontend renders verified rows as the gap list and the rest in
+    # sticky "Analyzing" / "Couldn't analyze" sections.
+    vstates = [it.get("verification_state", "verified") for it in body.get("items", [])]
+    body.setdefault("totals", {})
+    body["totals"]["verification"] = {
+        "verified": sum(1 for v in vstates if v == "verified"),
+        "unprobed": sum(1 for v in vstates if v == "unprobed"),
+        "probe_failed": sum(1 for v in vstates if v == "probe_failed"),
+    }
     body.setdefault("cached", True)
     if body.get("cached") and "generated_at" in body:
         body["cache_age_s"] = round(now - body["generated_at"], 1)
