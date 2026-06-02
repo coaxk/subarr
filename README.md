@@ -263,6 +263,13 @@ The Settings panel shows the current vs latest version per product with release 
 
 ## Architecture
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
+  <img alt="subarr sits between your stack's inputs and subgen: Bazarr's wanted-list, Sonarr/Radarr file paths, library files on disk, and Tautulli/Plex hints feed into subarr — scheduler, probe-gate (ffprobe), coverage, queue — which coordinates transcription out to subgen (Whisper), the written .srt, and a Plex library refresh." src="docs/architecture.png" width="850">
+</picture>
+
+**How it runs.** subarr is a long-running service with its own scheduler — it reads Bazarr's wanted list and walks your library on a cadence you set (and on demand from the UI). You don't wire it into Sonarr/Radarr as a custom script or trigger it manually; it just runs beside them.
+
 | Layer | Detail |
 |---|---|
 | Backend | Python 3.12 + FastAPI + httpx. Async throughout. |
