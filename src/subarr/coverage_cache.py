@@ -71,7 +71,10 @@ def eager_probe_targets(items: list[dict[str, Any]], cap: int = _EAGER_PROBE_CAP
     for it in items:
         if it.get("verification_state") != "unprobed":
             continue
-        c = it.get("canonical_path")
+        # Prefer the resolved episode/movie FILE path over canonical_path
+        # (which for episodes is the series FOLDER — un-probeable). The
+        # folder-row fix propagates file_canonical_path from Sonarr.
+        c = it.get("file_canonical_path") or it.get("canonical_path")
         if not c or c in seen:
             continue
         # Must point at an actual video file, not a directory.

@@ -67,3 +67,19 @@ def test_verification_state_in_to_dict():
     from subarr.coverage_engine import CoverageItem
     d = CoverageItem(media_type="episode", title="X").to_dict()
     assert d["verification_state"] == "unprobed"
+
+
+# ── folder-row fix: propagate Sonarr episodeFile path onto the row ──────
+
+def test_episode_file_canonical_resolves_from_sonarr(subarr_env):
+    from subarr.coverage_engine import _episode_file_canonical
+    eps = {9001: {"id": 9001, "episodeFileId": 555}}
+    paths = {555: "/data/Media/TV/Klovn/Season 1/Klovn.S01E01.mkv"}  # ARR_PATH_PREFIX=/data/Media/
+    assert _episode_file_canonical(9001, paths, eps) == "TV/Klovn/Season 1/Klovn.S01E01.mkv"
+
+
+def test_episode_file_canonical_none_when_fileless(subarr_env):
+    from subarr.coverage_engine import _episode_file_canonical
+    assert _episode_file_canonical(9001, {}, {9001: {"id": 9001}}) is None  # no episodeFileId
+    assert _episode_file_canonical(9001, {}, {9001: {"id": 9001, "episodeFileId": 5}}) is None  # id but no path
+    assert _episode_file_canonical(None, {}, {}) is None
