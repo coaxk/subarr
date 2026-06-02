@@ -223,7 +223,21 @@ async def lifespan(app_: FastAPI):
             # session anyway. Anything completed_at >= cutoff is "real done".
             cutoff = detected_at
             completed = provenance.completed_paths_since(detected_at - 86400)
-            n = scans.mark_orphaned_before(cutoff, completed_paths=completed)
+            # Evidence: if subgen is reachable and still holds these items in
+            # its queue, it was a blip, not a real restart — don't orphan
+            # them. A genuine restart leaves subgen's queue empty.
+            import os as _os
+            live_basenames: set[str] = set()
+            try:
+                q = await app_.state.subgen.queue()
+                for t in (q.get("processing") or []) + (q.get("queued") or []):
+                    if isinstance(t, dict) and t.get("path"):
+                        live_basenames.add(_os.path.basename(t["path"]))
+            except Exception as e:
+                log.debug("orphan reconcile: subgen queue fetch failed: %s", e)
+            n = scans.mark_orphaned_before(
+                cutoff, completed_paths=completed, live_basenames=live_basenames,
+            )
             log.warning(
                 "subgen restart reconciliation: %d in-flight scan_store "
                 "entries marked ORPHANED (provenance confirms %d completed "

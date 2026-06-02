@@ -34,6 +34,12 @@ log = logging.getLogger(__name__)
 # Faster polls add noise; slower ones leave orphans in flight longer.
 DEFAULT_INTERVAL_S = 30
 
+# A single missed probe is a transient blip (DNS hiccup, brief network
+# stall), NOT a restart. Require this many consecutive unreachable probes
+# before treating an unreachable→reachable transition as a same-version
+# bounce. Prevents false "subgen restarted / lost on restart" alarms.
+_BOUNCE_MIN_UNREACHABLE = 2
+
 
 class SubgenWatchdog:
     """Owns the periodic re-probe loop. Lifecycle: start() / stop()."""
@@ -62,17 +68,17 @@ class SubgenWatchdog:
         self.last_restart_at: float | None = None
         self.last_restart_from: dict[str, Any] | None = None
         self.last_restart_to: dict[str, Any] | None = None
+        # Consecutive unreachable probes. Detects same-version container
+        # bounces (docker restart with unchanged patch_rev) while ignoring
+        # single transient blips — see _BOUNCE_MIN_UNREACHABLE. (A real
+        # restart is confirmed evidence-side in mark_orphaned_before, which
+        # won't orphan items still present in subgen's live queue.)
+        self._consecutive_unreachable = 0
 
     @property
     def _subgen(self):
         """Current subgen client (resolved live for onboarding reload)."""
         return self._subgen_provider()
-        # Detects same-version container bounces: subgen briefly going
-        # unreachable then becoming reachable again, even if patch_rev
-        # stayed the same. Without this flag, restarting subgen-next
-        # via `docker restart subgen-next` would slip past detection
-        # (patch_rev unchanged) and orphans would stay invisible.
-        self._was_unreachable_since_last_reach = False
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -124,7 +130,7 @@ class SubgenWatchdog:
         #       `docker restart subgen-next` with the same image)
         if not new.reachable:
             log.debug("subgen watchdog: not reachable on probe; keeping old caps")
-            self._was_unreachable_since_last_reach = True
+            self._consecutive_unreachable += 1
             return
 
         if old is None or not getattr(old, "reachable", False):
@@ -132,7 +138,7 @@ class SubgenWatchdog:
             # one but don't fire restart (this is initial reachability,
             # not a transition from one-running-version to another).
             self._set_caps(new)
-            self._was_unreachable_since_last_reach = False
+            self._consecutive_unreachable = 0
             log.info("subgen watchdog: subgen reached %s; caps adopted",
                      new.subarr_subgen_patch_rev or new.version)
             return
@@ -140,8 +146,11 @@ class SubgenWatchdog:
         old_identity = self._identity(old)
         new_identity = self._identity(new)
         identity_changed = old_identity != new_identity
-        observed_bounce = self._was_unreachable_since_last_reach
-        self._was_unreachable_since_last_reach = False
+        # Only a SUSTAINED outage (>= threshold consecutive unreachable
+        # probes) counts as a bounce. A single transient blip is ignored,
+        # so we don't falsely declare a restart + orphan a healthy queue.
+        observed_bounce = self._consecutive_unreachable >= _BOUNCE_MIN_UNREACHABLE
+        self._consecutive_unreachable = 0
 
         if not identity_changed and not observed_bounce:
             # Same subgen still running, never lost reachability. Keep
