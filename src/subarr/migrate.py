@@ -181,7 +181,26 @@ class MigrationRunner:
         conn.execute("BEGIN IMMEDIATE")
         try:
             for stmt in statements:
-                conn.execute(stmt)
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    # ADD COLUMN is not idempotent and SQLite has no
+                    # "ADD COLUMN IF NOT EXISTS". On a TRANSITIONAL DB — one
+                    # a prior init_schema() already extended — a parity
+                    # migration's ADD COLUMN raises "duplicate column name".
+                    # Treat ONLY that as a no-op for this statement so the
+                    # migration still completes + records. A duplicate-column
+                    # error does not abort the SQLite transaction, so the
+                    # remaining statements + the version INSERT still commit.
+                    # Any OTHER OperationalError re-raises → rollback + abort
+                    # (the atomic contract is preserved).
+                    if "duplicate column name" in str(e).lower():
+                        log.info(
+                            "migration %s: column already present, skipping: %s",
+                            m.name, stmt.split("\n", 1)[0][:80],
+                        )
+                        continue
+                    raise
             conn.execute(
                 "INSERT INTO schema_versions (version, name, applied_at) "
                 "VALUES (?, ?, ?)",
