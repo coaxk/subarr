@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator
 
 from .config import settings
 from .media_probe import ProbeError, parse_ffprobe_json, probe
-from .paths import VIDEO_EXTS, fs_to_canonical
+from .paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
 from .probe_store import ProbeStore
 
 log = logging.getLogger(__name__)
@@ -160,23 +160,7 @@ class ProbeWalker:
                         state.cached_hits += 1
                         state.processed += 1
                         return
-                    try:
-                        result = await probe(p)
-                        result.canonical_path = canonical
-                        self._store.upsert(
-                            canonical_path=canonical,
-                            mtime=st.st_mtime, size=st.st_size,
-                            result=result,
-                        )
-                        state.probed += 1
-                    except ProbeError as e:
-                        state.errors.append({"path": canonical, "error": str(e)})
-                        self._store.record_failure(canonical, str(e))
-                    except Exception as e:
-                        state.errors.append({"path": canonical, "error": repr(e)})
-                        self._store.record_failure(canonical, repr(e))
-                    finally:
-                        state.processed += 1
+                    await self._probe_and_record(state, canonical, p, st)
 
             await asyncio.gather(*(_one(p) for p in video_files))
             state.status = "done"
@@ -191,6 +175,115 @@ class ProbeWalker:
             raise
         except Exception as e:
             log.exception("probe walk %s failed: %s", state.id, e)
+            state.status = "error"
+            state.errors.append({"error": repr(e)})
+            state.finished_at = time.time()
+
+    async def _probe_and_record(self, state: WalkState, canonical: str,
+                                p: Path, st: Any) -> None:
+        """Probe one resolved file and upsert on success / record_failure on
+        error. Caller holds the concurrency sem and has done the cached
+        check. Always bumps state.processed. Shared by the root walk and the
+        targeted eager-probe walk so both treat failures identically."""
+        try:
+            result = await probe(p)
+            result.canonical_path = canonical
+            self._store.upsert(
+                canonical_path=canonical,
+                mtime=st.st_mtime, size=st.st_size,
+                result=result,
+            )
+            state.probed += 1
+        except ProbeError as e:
+            state.errors.append({"path": canonical, "error": str(e)})
+            self._store.record_failure(canonical, str(e))
+        except Exception as e:
+            state.errors.append({"path": canonical, "error": repr(e)})
+            self._store.record_failure(canonical, repr(e))
+        finally:
+            state.processed += 1
+
+    # ------------------------------------------------------------------
+    # Targeted eager-probe (PR-C). Probes a specific list of canonical
+    # paths rather than rglob-ing a root. Drives the probe-gate: after a
+    # coverage build, the unprobed (Analyzing) rows' files are probed here
+    # so they flip to verified on the next build — regardless of whether
+    # the user configured probe_roots that happen to cover them.
+    # ------------------------------------------------------------------
+    _EAGER_LABEL = "__eager__"
+
+    async def probe_paths(self, canonical_paths: list[str]) -> WalkState:
+        """Probe a specific set of canonical paths. Skips files already
+        cached (mtime/size match) and records failures. Deduped: if an
+        eager walk is already running, the existing WalkState is returned
+        instead of starting a parallel one (so back-to-back coverage
+        refreshes don't stack identical probe passes)."""
+        for existing in self._walks.values():
+            if existing.root == self._EAGER_LABEL and existing.status == "running":
+                log.info(
+                    "probe_paths: eager walk %s already running (%d/%d) — reusing",
+                    existing.id, existing.processed, existing.total_files,
+                )
+                return existing
+
+        # Dedupe + drop blanks while preserving order.
+        seen: set[str] = set()
+        paths: list[str] = []
+        for c in canonical_paths:
+            if c and c not in seen:
+                seen.add(c)
+                paths.append(c)
+
+        walk_id = uuid.uuid4().hex[:16]
+        state = WalkState(walk_id, self._EAGER_LABEL)
+        self._walks[walk_id] = state
+        task = asyncio.create_task(
+            self._run_targeted(state, paths), name=f"probe-eager-{walk_id}"
+        )
+        self._tasks[walk_id] = task
+        task.add_done_callback(lambda t, wid=walk_id: self._tasks.pop(wid, None))
+        return state
+
+    async def _run_targeted(self, state: WalkState, canonical_paths: list[str]) -> None:
+        try:
+            state.total_files = len(canonical_paths)
+            log.info("eager probe %s: %d wanted files", state.id, state.total_files)
+            sem = asyncio.Semaphore(WALK_CONCURRENCY)
+
+            async def _one(canonical: str):
+                async with sem:
+                    try:
+                        p = canonical_to_fs(canonical)
+                    except PathOutsideRootError:
+                        state.errors.append({"path": canonical, "error": "outside media root"})
+                        state.processed += 1
+                        return
+                    try:
+                        st = p.stat()
+                    except OSError as e:
+                        state.errors.append({"path": canonical, "error": f"stat: {e}"})
+                        state.processed += 1
+                        return
+                    cached = self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
+                    if cached is not None:
+                        state.cached_hits += 1
+                        state.processed += 1
+                        return
+                    await self._probe_and_record(state, canonical, p, st)
+
+            await asyncio.gather(*(_one(c) for c in canonical_paths))
+            state.status = "done"
+            state.finished_at = time.time()
+            log.info(
+                "eager probe %s done: %d files, %d cached, %d probed, %d errors",
+                state.id, state.total_files, state.cached_hits, state.probed, len(state.errors),
+            )
+        except asyncio.CancelledError:
+            state.status = "cancelled"
+            state.finished_at = time.time()
+            raise
+        except Exception as e:
+            log.exception("eager probe %s failed: %s", state.id, e)
             state.status = "error"
             state.errors.append({"error": repr(e)})
             state.finished_at = time.time()

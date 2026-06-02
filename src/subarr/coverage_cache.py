@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .paths import VIDEO_EXTS
+
 log = logging.getLogger(__name__)
 
 
@@ -42,6 +44,50 @@ CREATE TABLE IF NOT EXISTS coverage_snapshot (
     item_count      INTEGER
 );
 """
+
+
+# Cap the eager-probe fan-out per build. A fresh library can have
+# thousands of unprobed rows; probing all at once would hammer ffprobe.
+# We probe up to this many per build — the rest drain over subsequent
+# builds (each build re-derives the still-unprobed set). 4-wide at the
+# walker means this is a few minutes of ffprobe, comfortably inside the
+# 5-min refresh cadence.
+_EAGER_PROBE_CAP = 400
+
+
+def eager_probe_targets(items: list[dict[str, Any]], cap: int = _EAGER_PROBE_CAP) -> list[str]:
+    """Canonical paths of rows the probe-gate is hiding because they're
+    unprobed — i.e. the 'Analyzing' bucket. These are exactly the files we
+    must probe to turn them into real gaps (or confirm they're covered).
+
+    Excludes:
+    - "probe_failed" rows: those already tried and errored, so re-probing
+      every build would be a tight failing loop. They surface in the
+      "Couldn't analyze" bucket for manual attention instead.
+    - Rows whose canonical_path is NOT a video file — i.e. a show/series
+      folder, which happens when the coverage engine couldn't resolve an
+      episode file at build time. Probing a folder always errors ("not a
+      file") and would manufacture false "couldn't analyze" rows. (The
+      underlying "why is a wanted row pointing at a folder?" is a
+      coverage-engine resolution gap, handled separately — eager-probe
+      just must not act on un-probeable paths.)
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for it in items:
+        if it.get("verification_state") != "unprobed":
+            continue
+        c = it.get("canonical_path")
+        if not c or c in seen:
+            continue
+        # Must point at an actual video file, not a directory.
+        if Path(c).suffix.lower() not in VIDEO_EXTS:
+            continue
+        seen.add(c)
+        out.append(c)
+        if len(out) >= cap:
+            break
+    return out
 
 
 @dataclass
@@ -154,11 +200,20 @@ class CoverageCache:
         return snap
 
     async def refresh(self, bundle, probe_store, audio_lang_store,
-                       use_tautulli: bool = True) -> CachedSnapshot:
+                       use_tautulli: bool = True, probe_walker=None) -> CachedSnapshot:
         """Run build_coverage and store the result. Uses an asyncio.Lock
         so a parallel refresh waits for the in-flight one instead of
         duplicating the expensive build. Notifications dispatched after
-        store so SSE consumers update."""
+        store so SSE consumers update.
+
+        When `probe_walker` is supplied (PR-C), the build's unprobed rows
+        are eager-probed: their files are queued for a targeted ffprobe so
+        they flip to verified on a later build. This is what keeps the gap
+        list from being silently empty when the user's probe_roots don't
+        cover every wanted file. Fire-and-forget — kicking the walker is
+        cheap (it backgrounds the actual probing); the next refresh picks
+        up the results.
+        """
         async with self._refresh_lock:
             self._refreshing = True
             started = time.time()
@@ -179,9 +234,23 @@ class CoverageCache:
                 )
                 log.info("coverage cache refreshed in %.1fs (%d items)",
                          duration, snap.item_count)
+                if probe_walker is not None:
+                    await self._kick_eager_probe(probe_walker, body["items"])
                 return snap
             finally:
                 self._refreshing = False
+
+    async def _kick_eager_probe(self, probe_walker, items: list[dict[str, Any]]) -> None:
+        """Queue a targeted probe of the build's unprobed rows. Never lets a
+        probe-walker hiccup break the refresh — eager-probe is best-effort."""
+        try:
+            targets = eager_probe_targets(items)
+            if not targets:
+                return
+            log.info("eager-probe: queueing %d unprobed wanted files", len(targets))
+            await probe_walker.probe_paths(targets)
+        except Exception as e:
+            log.warning("eager-probe kick failed (non-fatal): %s", e)
 
 
 # Background scheduler — fires refresh on a fixed interval. Started by
@@ -198,12 +267,17 @@ async def background_refresh_loop(
     audio_lang_store=None,
     interval_s: int = DEFAULT_INTERVAL_S,
     bundle_provider=None,
+    probe_walker=None,
 ) -> None:
     """Sleep, refresh, repeat. Exits on cancellation.
 
     The integration bundle is resolved per-refresh via bundle_provider
     (falling back to a directly-passed bundle) so onboarding live-reload
     can swap clients on app.state without restarting this loop.
+
+    `probe_walker` (PR-C) enables eager-probe of unprobed wanted files on
+    every refresh, so the probe-gate's gap list populates regardless of
+    the user's probe_roots config.
     """
     get_bundle = bundle_provider or (lambda: bundle)
     # Initial refresh on boot if nothing cached yet — fills the snapshot
@@ -212,13 +286,15 @@ async def background_refresh_loop(
     if cache.get_cached() is None:
         log.info("coverage cache: no snapshot found; warming on boot")
         try:
-            await cache.refresh(get_bundle(), probe_store, audio_lang_store)
+            await cache.refresh(get_bundle(), probe_store, audio_lang_store,
+                                probe_walker=probe_walker)
         except Exception as e:
             log.warning("coverage cache: initial warm failed: %s", e)
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await cache.refresh(get_bundle(), probe_store, audio_lang_store)
+            await cache.refresh(get_bundle(), probe_store, audio_lang_store,
+                                probe_walker=probe_walker)
         except asyncio.CancelledError:
             raise
         except Exception as e:

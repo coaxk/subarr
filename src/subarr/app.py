@@ -160,6 +160,9 @@ async def lifespan(app_: FastAPI):
             bundle_provider=lambda: app_.state.integrations,
             probe_store=app_.state.probe_store,
             audio_lang_store=app_.state.audio_lang,
+            # PR-C: eager-probe unprobed wanted files each refresh so the
+            # probe-gate's gap list populates regardless of probe_roots.
+            probe_walker=app_.state.probe_walker,
         )
     )
     # Dashboard cache background refresh — passes a build closure that
