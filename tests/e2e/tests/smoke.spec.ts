@@ -193,7 +193,9 @@ test.describe('Settings page (wired to /api/integrations/health + telemetry + up
     );
     await page.getByRole('button', { name: /^Telemetry$/ }).click();
     await telemetryReq;
-    await expect(page.getByText(/Install ID/i)).toBeVisible({ timeout: 5000 });
+    // Exact match: /Install ID/i also matches the helper text "random
+    // per-install identifier", tripping strict mode on two elements.
+    await expect(page.getByText('Install ID', { exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   test('switching to Updates view fetches /api/updates', async ({ page }) => {
