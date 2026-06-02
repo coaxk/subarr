@@ -5,7 +5,7 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
 [![status](https://img.shields.io/badge/status-v1.0-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-266_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-335_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -18,6 +18,7 @@ Subarr decides what subtitles are actually missing across your library, which pr
 ## In one breath
 
 - **See your whole library's subtitle coverage at a glance.** Per-language gap view across Sonarr + Radarr + Bazarr, with audio language we trust.
+- **We verify before we call it a gap.** A row only becomes an actionable gap once subarr has actually probed the file — so it never queues something that already has an embedded sub subgen would skip. Un-probed files wait in a visible "Analyzing" bucket, not silently dropped or falsely surfaced.
 - **Calibrated audio language detection.** Three Whisper chunks across the file, conservative voting, confidence-gated. Cheap to skip files Whisper would hallucinate on.
 - **Don't burn GPU on content nobody watches.** Scheduled walks with backpressure. Tautulli playback signal influences priority.
 - **Provenance ledger.** Which provider gave you which sub, when, why. Survives re-search runs.
@@ -91,9 +92,9 @@ Subarr's value compounds with: multi-language libraries, three or more Bazarr pr
 | Surface | Function |
 |---|---|
 | Dashboard | Live column-as-stage pipeline (discovered → probing → bazarr-wanted → transcribing → written-back), GPU widget, integration health, next scheduled run, recent activity |
-| Coverage | Flat, dense gap-list table. Score-gradient sort. Reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). Bulk select + apply rule + queue |
+| Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue |
 | Library | Tree across all series and movies. Audio / sub / runtime columns with probe-state indicators |
-| Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row requeue, remove, cancel. Promote / demote / reorder / pause are roadmap (need subgen v4.9 queue-mutation endpoints) |
+| Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row and **bulk** requeue / remove / cancel (multi-select across every section). Promote / demote / reorder / pause are roadmap (need subgen v4.9 queue-mutation endpoints) |
 | Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, Layer 3 Whisper detection inline |
 | Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification |
 | Settings | Per-language Whisper kwargs, integrations health, system actions, telemetry transparency panel showing the exact JSON last sent |
@@ -106,6 +107,46 @@ Subarr does not require ollama. With it, you get two extras:
 - **Vision pre-filter.** A vision-capable model classifies Tautulli thumbnails as dialog-heavy / music-heavy / visual-only. Suppresses transcribe submissions where Whisper would hallucinate.
 
 Vision and text models are separate (`OLLAMA_MODEL` and `OLLAMA_VISION_MODEL`). Default vision model is `qwen2.5vl:7b`. Subarr auto-detects any installed model from `qwen2.5vl`, `qwen2-vl`, `llama3.2-vision`, `llava`, `bakllava`, `minicpm-v`, `moondream`. Without a vision-capable model the pre-filter is cleanly disabled, not silently broken. Settings shows the active state.
+
+## Screens
+
+Real library, real foreign-language content — nothing staged.
+
+**Dashboard** — live pipeline (discovered → probing → bazarr-wanted → transcribing → written-back), GPU, integration health, next scheduled run, recent activity.
+
+![Dashboard](docs/screenshots/01-dashboard.png)
+
+**Coverage** — the scored gap list with the probe-gate: verified gaps in the table, un-probed files held in "Analyzing", every explainer panel inline.
+
+![Coverage](docs/screenshots/02-coverage.png)
+
+**Queue** — a real frontend for subgen: Processing / Queued / Lost-on-restart / Issues, with per-row and bulk requeue · remove · cancel.
+
+![Queue](docs/screenshots/03-queue.png)
+
+**Library** — every series and movie with audio / sub / runtime + probe-state.
+
+![Library](docs/screenshots/04-library.png)
+
+**Review** — manual audio-language verification with an audio player, multi-track support, and inline Whisper detection.
+
+![Review](docs/screenshots/05-review.png)
+
+**Rules** — auto-queue policy with score thresholds and language filters, plus a live "what would queue right now?" preview.
+
+![Rules](docs/screenshots/06-rules.png)
+
+**Settings — Integrations** — live online / version / badges per service.
+
+![Settings — integrations](docs/screenshots/07-settings-integrations.png)
+
+**Settings — Telemetry** — full transparency: install ID, opt-out, and the exact JSON last sent.
+
+![Settings — telemetry](docs/screenshots/08-settings-telemetry.png)
+
+**Logs** — structured, filterable runtime logs.
+
+![Logs](docs/screenshots/09-logs.png)
 
 ## How calibrated audio detection works
 
@@ -151,7 +192,8 @@ Transparent before you install.
 - No built-in multi-user auth. Basic-auth env vars exist as a single-admin fallback. Run behind a reverse proxy (Authelia / Caddy / Traefik) for anything serious.
 - Queue reorder / promote / demote / pause are not in v1.0, they need subgen patch v4.9 to land first. Requeue / remove / cancel ship today.
 - Auto-update is intentionally absent. Update notifications appear in the UI; you run the upgrade.
-- Plex integration goes through Tautulli for activity signal, not Plex directly. Tautulli is the bridge.
+- Plex activity signal goes through Tautulli (the bridge). Reading a show's *selected* audio language straight from Plex metadata is an opt-in extra (`PLEX_AUDIO_HINTS=1`), off by default.
+- Multi-episode disc images (a single `.iso` holding a whole season) can't be probed per-episode, so those rows stay in "Analyzing" rather than becoming verified gaps. Standard per-episode files are unaffected.
 - SQLite only. No Postgres backend in v1.0.
 - Single-host. Workers / multi-host are an explicit non-goal until users ask.
 - Jellyfin / Emby are not yet supported.
