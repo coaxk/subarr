@@ -1906,7 +1906,14 @@ function CheckBox({ checked, indeterminate }) {
   );
 }
 
-function CoverageRow({ r, onClick, onQueue, queuing }) {
+// #7 perf: memoized so unrelated CoveragePage re-renders (pending-review
+// poll, queue/probe state) don't re-render every row. Relies on STABLE
+// props: onClick=toggleRow + onQueue=handleRowQueue (both useCallback),
+// and r identity stable across those re-renders (the rows memo only
+// rebuilds on data/selection change). The row passes r.id to onClick so
+// the parent's handler stays referentially stable (the documented trap:
+// an inline `() => toggleRow(r.id)` per row would defeat the memo).
+function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
   return (
     <div className="cov-row" style={{
       display: 'flex', alignItems: 'center', gap: 10,
@@ -1917,7 +1924,7 @@ function CoverageRow({ r, onClick, onQueue, queuing }) {
       cursor: 'pointer',
       transition: 'background var(--dur-fast) var(--ease-out)',
     }}
-    onClick={onClick}>
+    onClick={() => onClick && onClick(r.id)}>
       <div style={{ width: COL.check, flex: `0 0 ${COL.check}px` }}>
         <CheckBox checked={r.sel} />
       </div>
@@ -2002,6 +2009,9 @@ function CoverageRow({ r, onClick, onQueue, queuing }) {
 }
 
 // ─── Selection action bar ────────────────────────────────────────
+const CoverageRow = React.memo(CoverageRowImpl);
+
+
 function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   if (!n) return null;
   const queuing = queueState?.busy;
@@ -2180,7 +2190,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
           <div key={`ep-${r.id}`} style={{ paddingLeft: 44 }}>
             <CoverageRow
               r={r}
-              onClick={() => toggleRow(r.id)}
+              onClick={toggleRow}
               onQueue={onQueue}
               queuing={rowQueuing.has(r.id)}
             />
@@ -2206,7 +2216,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
         <div key={`mov-${r.id}`} style={{ paddingLeft: 22 }}>
           <CoverageRow
             r={r}
-            onClick={() => toggleRow(r.id)}
+            onClick={toggleRow}
             onQueue={onQueue}
             queuing={rowQueuing.has(r.id)}
           />
@@ -2632,7 +2642,7 @@ export function CoveragePage() {
             <CoverageRow
               key={r.id}
               r={r}
-              onClick={() => toggleRow(r.id)}
+              onClick={toggleRow}
               onQueue={handleRowQueue}
               queuing={rowQueuing.has(r.id)}
             />
