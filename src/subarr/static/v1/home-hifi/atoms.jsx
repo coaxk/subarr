@@ -43,7 +43,14 @@ export function ProbeMark({ size = 20, color }) {
 }
 
 // ─── Sparkline ───────────────────────────────────────────────────
-export function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4 }) {
+export function Sparkline({ data, width = 80, height = 22, color, fill, stroke = 1.4, responsive = false }) {
+  // responsive: scale to the container's width (height stays fixed) via
+  // viewBox. Used by the GPU util graph so it fills its flexible widget.
+  // Default-off keeps every existing fixed-width caller (stage tiles, GPU
+  // stats) pixel-identical.
+  const svgProps = responsive
+    ? { width: '100%', height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none' }
+    : { width, height };
   // Empty data → render an empty svg without path elements. Otherwise
   // the d attribute becomes a malformed string and Chromium logs
   // 'Expected moveto path command' to the console (caught by the
@@ -51,7 +58,7 @@ export function Sparkline({ data, width = 80, height = 22, color, fill, stroke =
   // wire sparkline history in v1.1.
   const c = color || 'var(--violet-500)';
   if (!data || data.length === 0) {
-    return <svg width={width} height={height} style={{ display: 'block' }} />;
+    return <svg {...svgProps} style={{ display: 'block' }} />;
   }
   const max = Math.max(...data, 1);
   const min = Math.min(...data, 0);
@@ -65,7 +72,7 @@ export function Sparkline({ data, width = 80, height = 22, color, fill, stroke =
   const d = points.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
   const areaD = fill ? d + ` L ${width} ${height} L 0 ${height} Z` : null;
   return (
-    <svg width={width} height={height} style={{ display: 'block' }}>
+    <svg {...svgProps} style={{ display: 'block' }}>
       {areaD && <path d={areaD} fill={fill} opacity="0.18" />}
       <path d={d} fill="none" stroke={c} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" />
     </svg>

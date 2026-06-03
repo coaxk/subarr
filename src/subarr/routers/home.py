@@ -151,22 +151,45 @@ async def _stages_block(state) -> list[dict[str, Any]]:
     })
 
     # 4. scanning: subgen processing count (from /queue if available).
-    scanning_count, live, top, top_meta = 0, False, "", ""
+    scanning_count, active_count, queued_count, live, top, top_meta, progress_pct = 0, 0, 0, False, "", "", None
     try:
         caps = getattr(state, "subgen_caps", None)
         if caps and caps.has_queue:
             q = await state.subgen.queue()
             processing = q.get("processing") or []
-            scanning_count = len(processing) + len(q.get("queued") or [])
+            active_count = len(processing)            # #97: in-flight (may be >1)
+            queued_count = len(q.get("queued") or [])  # #97: remaining in queue
+            scanning_count = active_count + queued_count
             live = bool(processing)
             if processing:
                 top = processing[0].get("path", "")
                 top_meta = "subgen · in flight"
+                # #97: live progress of the CURRENT job. Reuse the queue
+                # endpoint's matcher (don't reinvent the log parsing) and
+                # only read subgen's logs when something is actually
+                # transcribing — idle dashboards cost nothing extra.
+                docker_ops = getattr(state, "docker", None)
+                if docker_ops is not None:
+                    try:
+                        from .queue import match_progress
+                        pm = await docker_ops.recent_progress(tail=80)
+                        prog = match_progress(top, pm)
+                        if prog and prog.get("pct") is not None:
+                            progress_pct = int(prog["pct"])
+                            eta = prog.get("eta")
+                            top_meta = (f"subgen · {progress_pct}%"
+                                        + (f" · ETA {eta}" if eta and eta != "?" else ""))
+                    except Exception as e:
+                        log.debug("stages: scanning progress error: %s", e)
     except Exception as e:
         log.debug("stages: scanning error: %s", e)
     stages.append({
         "id": "scanning", "label": "transcribing",
-        "count": scanning_count, "delta": 0, "spark": [],
+        "count": scanning_count,        # total — kept for the chrome-counts poller
+        "active": active_count,          # #97: currently transcribing/translating
+        "queued": queued_count,          # #97: remaining in queue
+        "progress": progress_pct,        # #97: live % of the current job (None when idle)
+        "delta": 0, "spark": [],
         "top": top, "topMeta": top_meta, "live": live,
     })
 

@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 _DEFAULT_HISTORY_WINDOW_S = 24 * 3600
 
 
-def _match_progress(processing_path: str, progress_map: dict[str, dict]) -> dict | None:
+def match_progress(processing_path: str, progress_map: dict[str, dict]) -> dict | None:
     """Find a progress entry whose bracket-name is a prefix of the
     processing task's basename. Subgen left-truncates names ≥ ~38 chars
     by replacing the tail with '..', so we compare against the bare
@@ -193,7 +193,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     progress_map = await docker_ops.recent_progress(tail=80)
     if progress_map and isinstance(live.get("processing"), list):
         for task in live["processing"]:
-            prog = _match_progress(task.get("path", ""), progress_map)
+            prog = match_progress(task.get("path", ""), progress_map)
             if prog is not None:
                 task["progress"] = prog
 
