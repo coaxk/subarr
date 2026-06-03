@@ -5,6 +5,28 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.0.2] - 2026-06-03
+
+### Fixed
+- Coverage refresh no longer freezes the UI. A quadratic loop in the
+  bazarr-blind synthetic-rows pass (O(series × episodes)) blocked the event
+  loop for 15–20s mid-refresh on large libraries; it's now O(episodes) (#93).
+- Multi-episode disc images (`.iso`) no longer sit stuck in the "Analyzing"
+  bucket forever. They're disqualified to a distinct `unsupported` state and
+  surfaced in "Couldn't analyze" instead (#96, #62).
+
+### Changed
+- Dashboard polish (#97–#100): the transcribing card now shows active vs
+  queued with a **live per-job progress bar**; the top panels are reordered
+  (transcribing · bazarr-wanted · discovered · written-back · probing); the
+  GPU widget gains a utilisation graph + a VRAM bar; recent activity is
+  tightened (no inner scroll).
+
+### Added
+- Header "update available" pill + live running-version label (#78).
+- Architecture data-flow diagram + a "how it runs" note in the README (#91),
+  and a full subgen surface-audit reference doc (#85).
+
 ## [1.0.0] - 2026-06-02
 
 First public release.
