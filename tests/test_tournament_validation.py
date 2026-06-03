@@ -66,3 +66,58 @@ def test_signals_surface_on_scorecard():
     assert "silence_text_ratio" in sc.signals
     assert "repeated_line_ratio" in sc.signals
     assert "canned_phrase_hits" in sc.signals
+
+
+# Real, accurate, speech-aligned transcript of RAPID film dialogue: short cue
+# durations push CPS over the readability ceiling, but the text is correct and
+# the QE discriminators are all clean. (Lifted from the Tier-B 2026-06-04 run:
+# Air (2023) @1000s — every preset produced exactly this and the judge scored
+# it 0.00, masking the QE signals.)
+FAST_CLEAN = (
+    "1\n00:00:00,000 --> 00:00:00,740\nYou know what I do here.\n\n"
+    "2\n00:00:01,900 --> 00:00:03,040\nYou're losing, Sonny.\n\n"
+    "3\n00:00:03,060 --> 00:00:05,560\nJust because you lose doesn't mean it wasn't a good bet.\n\n"
+    "4\n00:00:05,940 --> 00:00:07,480\nThat perfect result is nonsense.\n\n"
+    "5\n00:00:07,720 --> 00:00:08,350\nIt is not nonsense.\n"
+)
+FAST_RANGES = [(0.0, 8.5)]
+
+
+def test_accurate_fast_dialogue_is_not_floored_by_readability():
+    """Tier-B bug (2026-06-04): an accurate, speech-aligned transcript of fast
+    dialogue scored ~0 purely because high CPS tripped the readability linter.
+    Readability is the SECONDARY judge (#65 research) — a transcript with no
+    hallucination, looping, or canned text must score as a GOOD result even
+    when its cues flash fast. It must not be floored."""
+    t = _t()
+    sc = t.run_tournament([
+        t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
+    ]).scorecards[0]
+    assert not sc.disqualified
+    # QE signals are clean — this is genuinely good output.
+    assert sc.signals["repeated_line_ratio"] == 0.0
+    assert sc.signals["canned_phrase_hits"] == 0
+    assert sc.signals["silence_text_ratio"] < 0.2
+    # ...so it must NOT be floored by readability alone.
+    assert sc.composite > 50, f"good fast-dialogue floored to {sc.composite}"
+
+
+def test_readability_is_secondary_to_qe():
+    """A QE-clean transcript with POOR readability (fast CPS) must outrank a
+    perfectly-readable transcript that is actually a hallucination over
+    silence. Pins the re-architecture: QE drives the score, readability is a
+    capped secondary penalty — not the dominant base that can floor everything."""
+    t = _t()
+    # well-timed, low-CPS cues (great readability) but canned text stamped over
+    # a clip that is almost entirely silent — the classic hallucination.
+    readable_halluc = (
+        "1\n00:00:00,000 --> 00:00:02,000\nThank you for watching.\n\n"
+        "2\n00:00:02,000 --> 00:00:04,000\nPlease subscribe to the channel.\n\n"
+        "3\n00:00:04,000 --> 00:00:06,000\nSubtitles by amara.org\n"
+    )
+    res = t.run_tournament([
+        # readable hallucination listed FIRST so a naive tie resolves to it.
+        t.Entrant(label="readable_halluc", srt_text=readable_halluc, speech_ranges=[(0.0, 0.5)]),
+        t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
+    ])
+    assert res.winner_label == "fast_clean"

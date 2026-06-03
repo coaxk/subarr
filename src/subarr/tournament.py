@@ -36,8 +36,17 @@ from .transcript_signals import (
 # --- v1 proposed rubric (TUNABLE) ---------------------------------------
 CRITICAL_PENALTY = 2.0   # weight of a 'critical' readability issue
 WARN_PENALTY = 1.0       # weight of a 'warn' readability issue
-QUALITY_WEIGHT = 0.85    # quality (readability − QE penalties) vs speed
+QUALITY_WEIGHT = 0.85    # quality (100 − QE − readability penalties) vs speed
 SPEED_WEIGHT = 0.15
+
+# Readability is the SECONDARY judge (#65 research: QE signals are the real
+# discriminators; readability is advisory). It can shave at most
+# READABILITY_CAP points off an otherwise-good transcript — never floor it.
+# Tier-B 2026-06-04 showed the old "readability IS the base" rubric scored
+# accurate, speech-aligned transcripts of rapid dialogue at ~0 (high CPS trips
+# the linter), masking the QE signals that decide a tournament.
+READABILITY_K = 25.0     # readability penalty = load_per_cue × K …
+READABILITY_CAP = 20.0   # … capped here so readability stays secondary
 
 # QE (reference-free) penalties — the real discriminators (#65 research). A
 # quality score starts from readability (0-100) and these subtract from it, so
@@ -81,15 +90,21 @@ class TournamentResult:
     winner_label: str | None
 
 
-def _readability_score(report: ReadabilityReport) -> float:
-    """0-100. Penalise issues PER CUE so a config that produces more (or
-    longer) cues isn't unfairly punished — entrants share a source but
-    segment it differently, so absolute issue counts aren't comparable."""
+def _readability_load(report: ReadabilityReport) -> float:
+    """Issue load PER CUE so a config that produces more (or longer) cues
+    isn't unfairly punished — entrants share a source but segment it
+    differently, so absolute issue counts aren't comparable."""
     critical = sum(1 for i in report.issues if i.severity == "critical")
     warn = sum(1 for i in report.issues if i.severity == "warn")
     cues = max(report.cue_count, 1)
-    load_per_cue = (critical * CRITICAL_PENALTY + warn * WARN_PENALTY) / cues
-    return max(0.0, 100.0 - load_per_cue * 100.0)
+    return (critical * CRITICAL_PENALTY + warn * WARN_PENALTY) / cues
+
+
+def _readability_score(report: ReadabilityReport) -> float:
+    """0-100, for display on the scorecard. NOTE: this is informational only —
+    the composite uses a CAPPED readability *penalty* (see score_entrant), not
+    this score as its base. Kept so the UI can still show a readability grade."""
+    return max(0.0, 100.0 - _readability_load(report) * 100.0)
 
 
 def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scorecard:
@@ -104,9 +119,12 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     report = analyze_srt(entrant.srt_text)
     r_score = _readability_score(report)
 
-    # Reference-free QE signals (#65): the real discriminators. Subtract them
-    # from the readability base so a hallucinating/looping entrant can't win
-    # on "readable" fabricated text.
+    # QE-PRIMARY scoring (#65 research). Quality starts at 100 and the
+    # reference-free QE signals — the real discriminators — subtract from it,
+    # so a hallucinating/looping/canned entrant tanks regardless of how
+    # "readable" its fabricated text is. Readability contributes only a CAPPED
+    # secondary penalty, so an accurate transcript of fast dialogue (high CPS)
+    # stays a high score instead of being floored.
     sil = silence_text_ratio(cues, entrant.speech_ranges)
     rep = repeated_line_ratio(cues)
     canned = canned_phrase_hits(cues)
@@ -115,7 +133,8 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
         + rep * REPEAT_PENALTY
         + min(canned, CANNED_CAP) * CANNED_PENALTY
     )
-    quality = max(0.0, r_score - qe_penalty)
+    readability_penalty = min(_readability_load(report) * READABILITY_K, READABILITY_CAP)
+    quality = max(0.0, 100.0 - qe_penalty - readability_penalty)
     signals = {
         "silence_text_ratio": round(sil, 4),
         "repeated_line_ratio": round(rep, 4),
