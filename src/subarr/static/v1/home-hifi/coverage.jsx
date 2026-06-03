@@ -1098,7 +1098,7 @@ function BatchReviewModal() {
     return `${m}:${String(sec).padStart(2, '0')}`;
   };
   const sampleUrl = posData && cur && posData.positions && posData.positions[activeSampleIdx] != null
-    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(cur.file_canonical_path || cur.canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=5&track=${track}`
+    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(cur.file_canonical_path || cur.canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=12&track=${track}`
     : null;
 
   return (
@@ -1174,6 +1174,12 @@ function BatchReviewModal() {
                   </>
                 )}
                 <span style={{ flex: 1 }} />
+                {posData && posData.method === 'vad' && (
+                  <span title="Clips picked by detecting actual speech (silero VAD), not just non-silence"
+                    style={{ fontSize: 'var(--text-2xs)', color: 'var(--violet)', whiteSpace: 'nowrap', marginRight: 6 }}>
+                    🎙 speech-detected
+                  </span>
+                )}
                 {posData && <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
                   {fmtT(posData.duration_s)}
                 </span>}
@@ -1585,7 +1591,7 @@ export function AudioReviewModal() {
     return `${m}:${String(sec).padStart(2, '0')}`;
   };
   const sampleUrl = posData && posData.positions && posData.positions[activeSampleIdx] != null
-    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(row._canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=5&track=${track}`
+    ? `/api/audio-lang/sample?canonical_path=${encodeURIComponent(row._canonical_path)}&start=${posData.positions[activeSampleIdx]}&duration=12&track=${track}`
     : null;
   return (
     <div onClick={close} style={{
@@ -1643,6 +1649,12 @@ export function AudioReviewModal() {
               </>
             )}
             <span style={{ flex: 1 }} />
+            {posData && posData.method === 'vad' && (
+              <span title="Clips picked by detecting actual speech (silero VAD), not just non-silence"
+                style={{ fontSize: 'var(--text-2xs)', color: 'var(--violet)', whiteSpace: 'nowrap', marginRight: 6 }}>
+                🎙 speech-detected
+              </span>
+            )}
             {posData && (
               <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
                 runtime {fmtT(posData.duration_s)}
@@ -1654,7 +1666,7 @@ export function AudioReviewModal() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
               <span className="spinner-ring" />
               <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-                Scanning audio for non-silent regions… (one-time per file)
+                Analyzing audio for speech… (one-time per file)
               </span>
             </div>
           )}
