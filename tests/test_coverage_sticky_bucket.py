@@ -49,5 +49,5 @@ def test_verification_bucket_counts_exposed():
     )
     # no filters: all three kept; counts reflect them
     assert out["totals"]["verification"] == {
-        "verified": 1, "unprobed": 1, "probe_failed": 1,
+        "verified": 1, "unprobed": 1, "probe_failed": 1, "unsupported": 0,
     }

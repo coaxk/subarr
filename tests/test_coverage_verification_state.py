@@ -22,6 +22,29 @@ def _probe(path):
     return ProbeResult(canonical_path=path)
 
 
+def test_disqualify_unsupported_iso_and_disc_images():
+    # #96/#62: a multi-episode .iso (resolved file) is disqualified to
+    # "unsupported" so it leaves "Analyzing"; real video files and
+    # folder-only rows are untouched, and already-verified rows are left alone.
+    from subarr.coverage_engine import CoverageItem, _disqualify_unsupported
+    iso = CoverageItem(media_type="episode", title="Klovn", canonical_path="TV/Klovn",
+                       episode_number="1x3", file_canonical_path="TV/Klovn/Klovn Season 1.iso")
+    mkv = CoverageItem(media_type="episode", title="Show", canonical_path="TV/Show",
+                       episode_number="1x1", file_canonical_path="TV/Show/S01E01.mkv")
+    folder = CoverageItem(media_type="episode", title="Folder", canonical_path="TV/Folder",
+                          episode_number="1x1")  # no resolved file → folder-only
+    verified_iso = CoverageItem(media_type="episode", title="V", canonical_path="TV/V",
+                                episode_number="1x1", file_canonical_path="TV/V/x.iso")
+    verified_iso.verification_state = "verified"
+
+    _disqualify_unsupported([iso, mkv, folder, verified_iso])
+
+    assert iso.verification_state == "unsupported"        # disc image → disqualified
+    assert mkv.verification_state == "unprobed"           # real video → untouched
+    assert folder.verification_state == "unprobed"        # resolution gap → separate concern
+    assert verified_iso.verification_state == "verified"  # never downgrade a verified row
+
+
 def test_episode_verified_on_probe_match():
     from subarr.coverage_engine import _attach_probe_episode
     item = _ep("1x3")
