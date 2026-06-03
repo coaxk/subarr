@@ -13,6 +13,10 @@ with the most speech.
 """
 from __future__ import annotations
 
+import hashlib
+
+import pytest
+
 
 def _vad():
     from subarr import vad
@@ -116,3 +120,42 @@ def test_probs_to_ranges_all_speech_is_single_range():
     ranges = vad._probs_to_ranges([0.9, 0.9, 0.9], window_s=0.032, threshold=0.5)
     assert len(ranges) == 1
     assert abs(ranges[0][0] - 0.0) < 1e-6 and abs(ranges[0][1] - 0.096) < 1e-6
+
+
+# --- pull_model: pinned download + checksum verify + atomic write -------
+
+def test_pull_model_downloads_and_verifies(tmp_path, monkeypatch):
+    vad = _vad()
+    target = tmp_path / "silero_vad.onnx"
+    monkeypatch.setenv("SUBARR_VAD_MODEL_PATH", str(target))
+    payload = b"FAKE_ONNX_BYTES"
+    monkeypatch.setattr(vad, "MODEL_SHA256", hashlib.sha256(payload).hexdigest())
+    res = vad.pull_model(_fetch=lambda url: payload)
+    assert res["status"] == "downloaded"
+    assert target.is_file()
+    assert target.read_bytes() == payload
+
+
+def test_pull_model_idempotent_when_present(tmp_path, monkeypatch):
+    vad = _vad()
+    target = tmp_path / "silero_vad.onnx"
+    monkeypatch.setenv("SUBARR_VAD_MODEL_PATH", str(target))
+    payload = b"FAKE"
+    monkeypatch.setattr(vad, "MODEL_SHA256", hashlib.sha256(payload).hexdigest())
+    vad.pull_model(_fetch=lambda url: payload)
+
+    def _boom(url):
+        raise AssertionError("must not refetch when the verified model exists")
+
+    res = vad.pull_model(_fetch=_boom)
+    assert res["status"] == "present"
+
+
+def test_pull_model_rejects_checksum_mismatch(tmp_path, monkeypatch):
+    vad = _vad()
+    target = tmp_path / "silero_vad.onnx"
+    monkeypatch.setenv("SUBARR_VAD_MODEL_PATH", str(target))
+    monkeypatch.setattr(vad, "MODEL_SHA256", "deadbeef")
+    with pytest.raises(ValueError):
+        vad.pull_model(_fetch=lambda url: b"corrupted-or-tampered")
+    assert not target.is_file()   # nothing persisted on a bad checksum

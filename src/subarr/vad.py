@@ -20,6 +20,7 @@ existing silencedetect behaviour — never a hard failure.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -31,6 +32,13 @@ Range = tuple[float, float]
 
 # silero model is pulled on opt-in; path overridable for tests / bake-in.
 _MODEL_ENV = "SUBARR_VAD_MODEL_PATH"
+
+# Pinned official silero v5 ONNX model. URL is a fixed tag (never a moving
+# branch) and the download is verified against MODEL_SHA256 before it's
+# written — a tampered/corrupted file is rejected, never persisted. The hash
+# is pinned at integration time (live fetch → compute → bake the constant).
+MODEL_URL = "https://github.com/snakers4/silero-vad/raw/v5.1.1/src/silero_vad/data/silero_vad.onnx"
+MODEL_SHA256 = "2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f"
 
 
 def select_speech_window(
@@ -95,6 +103,48 @@ def _model_path() -> str | None:
     """The model path if it exists on disk, else None."""
     p = model_target_path()
     return str(p) if p.is_file() else None
+
+
+def runtime_present() -> bool:
+    """True iff onnxruntime is importable (baked into the image). Distinct
+    from vad_available(), which ALSO requires the model to be pulled."""
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _default_fetch(url: str) -> bytes:
+    import httpx
+
+    r = httpx.get(url, follow_redirects=True, timeout=60.0)
+    r.raise_for_status()
+    return r.content
+
+
+def pull_model(force: bool = False, *, _fetch=None) -> dict:
+    """Download the pinned silero model, verify its SHA256, and write it
+    atomically to `model_target_path()`. Idempotent: a present, checksum-good
+    model is left untouched. Fails closed if the hash isn't pinned, and never
+    persists a file whose checksum doesn't match. `_fetch` is injectable for
+    tests."""
+    if not MODEL_SHA256:
+        raise RuntimeError("silero model checksum is not pinned; refusing to pull")
+    target = model_target_path()
+    if target.is_file() and not force:
+        h = hashlib.sha256(target.read_bytes()).hexdigest()
+        if h == MODEL_SHA256:
+            return {"status": "present", "path": str(target)}
+    data = (_fetch or _default_fetch)(MODEL_URL)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != MODEL_SHA256:
+        raise ValueError(f"silero model checksum mismatch: got {digest}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)   # atomic on POSIX
+    return {"status": "downloaded", "path": str(target), "sha256": digest}
 
 
 def vad_available() -> bool:
