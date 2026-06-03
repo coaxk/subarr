@@ -20,6 +20,7 @@ const STEPS = [
   { id: 'subgen',   label: 'subgen',        group: 'integrations', service: 'subgen' },
   { id: 'ollama',   label: 'Ollama',        group: 'integrations', service: 'ollama', optional: true },
   { id: 'gpu',      label: 'GPU check',     group: 'review' },
+  { id: 'speech',   label: 'Speech detection', group: 'review' },
   { id: 'walk',     label: 'First walk',    group: 'review' },
 ];
 
@@ -589,6 +590,101 @@ function StepGpu({ gpuInfo }) {
 }
 
 
+// #111 — speech-aware audio (silero VAD) opt-in. Recommended-checked; on
+// download we pull the ~2MB model. Self-contained (own status/pull state);
+// skipping just leaves the silencedetect fallback in place.
+function StepSpeech() {
+  const [status, setStatus] = useState(null);
+  const [pull, setPull] = useState(null);   // null | {running} | {error} | {done}
+
+  const refetch = async () => {
+    try {
+      const r = await fetch('/api/vad/status', { credentials: 'same-origin' });
+      setStatus(r.ok ? await r.json() : { error: `HTTP ${r.status}` });
+    } catch (e) { setStatus({ error: e.message }); }
+  };
+  useEffect(() => { refetch(); }, []);
+
+  const setEnabled = async (on) => {
+    setStatus((s) => ({ ...(s || {}), enabled: on }));
+    try {
+      await fetch('/api/vad/config', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: on }),
+      });
+    } catch {}
+  };
+
+  const download = async () => {
+    setPull({ running: true });
+    try {
+      const r = await fetch('/api/vad/pull-model', { method: 'POST', credentials: 'same-origin' });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setPull({ error: d.detail || `HTTP ${r.status}` }); return; }
+      setPull({ done: true });
+      await refetch();
+    } catch (e) { setPull({ error: e.message }); }
+  };
+
+  const enabled = status ? status.enabled !== false : true;
+  const runtimeMissing = status && status.runtime_present === false;
+  const modelPresent = status && status.model_present;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
+        Speech detection
+      </h1>
+      <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.6 }}>
+        Subarr can use silero voice-activity detection to pick audio-review clips that land on
+        actual dialogue — instead of music, action, or silence. <strong>Recommended.</strong> It's
+        a ~2&nbsp;MB model; skip it and subarr falls back to silence detection.
+      </p>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: runtimeMissing ? 'default' : 'pointer' }}>
+        <input type="checkbox" checked={enabled} disabled={runtimeMissing}
+          onChange={(e) => setEnabled(e.target.checked)} />
+        <span style={{ fontWeight: 600 }}>Enable speech-aware audio (recommended)</span>
+      </label>
+
+      {runtimeMissing && (
+        <div style={{ padding: '12px 14px', background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+          The speech-detection runtime isn't included in this build — subarr will use silence detection.
+        </div>
+      )}
+
+      {!runtimeMissing && enabled && !modelPresent && !pull?.done && (
+        <div style={{ padding: '14px 16px', background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.30)', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+            Download the speech model now to turn it on (~2&nbsp;MB, one-time).
+          </div>
+          <button className="btn sm" disabled={pull?.running} onClick={download}>
+            {pull?.running ? 'Downloading…' : 'Download model'}
+          </button>
+        </div>
+      )}
+
+      {(modelPresent || pull?.done) && enabled && !runtimeMissing && (
+        <div style={{ padding: '12px 14px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.32)', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <StatusDot kind="ok" size="lg" />
+          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>Speech model ready — review clips will land on dialogue.</span>
+        </div>
+      )}
+
+      {pull?.error && (
+        <div style={{ fontSize: 'var(--text-sm)', color: '#ef4444' }}>
+          Download failed: {pull.error}. You can retry later from Settings — subarr will use silence detection meanwhile.
+        </div>
+      )}
+
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+        You can change this any time in Settings → System → Speech-aware audio.
+      </p>
+    </div>
+  );
+}
+
+
 function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
   // #146: keep probe_roots in component state because the parent stores it
   // as an array; we render it as a comma-separated string for editing and
@@ -824,6 +920,7 @@ export function OnboardingPage() {
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
+    if (step.id === 'speech')  return <StepSpeech />;
     if (step.id === 'walk')    return <StepWalk progress={state.progress} setField={setField} walkResult={walkResult} onStart={onStartWalk} isStarting={busy} />;
     return null;
   };

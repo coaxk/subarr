@@ -47,8 +47,9 @@ STEP_TAUTULLI = 5
 STEP_SUBGEN = 6
 STEP_OLLAMA = 7
 STEP_GPU = 8
-STEP_FIRST_WALK = 9
-STEP_DONE = 10
+STEP_SPEECH = 9        # #111 — speech-aware audio (silero VAD) opt-in
+STEP_FIRST_WALK = 10
+STEP_DONE = 11
 
 # Maximum step value the API accepts. STEP_DONE marks completion.
 MAX_STEP = STEP_DONE
