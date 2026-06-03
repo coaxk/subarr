@@ -74,14 +74,27 @@ def normalize_speech_ranges(
     return [(s, e) for s, e in merged if e - s >= min_speech]
 
 
-def _model_path() -> str | None:
-    """Resolve the silero ONNX model: explicit env override, else the
-    on-demand cache under the config dir. Returns None if not present."""
+def model_target_path() -> Path:
+    """Canonical read/write location for the pulled silero model. Both the
+    resolver and the pull endpoint use this so they never disagree.
+
+    Defaults beside the DB (the persisted /data volume) so the model
+    survives restarts/redeploys; overridable via SUBARR_VAD_MODEL_PATH (full
+    file path) or SUBARR_VAD_DIR (containing dir)."""
     override = os.environ.get(_MODEL_ENV)
-    if override and Path(override).is_file():
-        return override
-    default = Path(os.environ.get("SUBARR_CONFIG_DIR", "/config")) / "vad" / "silero_vad.onnx"
-    return str(default) if default.is_file() else None
+    if override:
+        return Path(override)
+    base = os.environ.get("SUBARR_VAD_DIR")
+    if not base:
+        db = os.environ.get("SUBARR_DB_PATH", "/data/subarr.db")
+        base = str(Path(db).parent / "vad")
+    return Path(base) / "silero_vad.onnx"
+
+
+def _model_path() -> str | None:
+    """The model path if it exists on disk, else None."""
+    p = model_target_path()
+    return str(p) if p.is_file() else None
 
 
 def vad_available() -> bool:

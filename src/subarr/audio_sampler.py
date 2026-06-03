@@ -31,10 +31,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator
 
+from . import vad
+
 log = logging.getLogger(__name__)
 
 _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 _FFPROBE = shutil.which("ffprobe") or "ffprobe"
+
+# #110: review-clip length. silencedetect-era default was 5s, but the VAD
+# research found <10s clips are too short to reliably hear dialogue; ~12s
+# lands several words while staying snappy to stream.
+_REVIEW_SAMPLE_LEN = 12.0
+
+
+def _vad_enabled() -> bool:
+    """User master switch (#111). Read at call time via the config module so a
+    live settings reload is honoured (provider pattern). Default on."""
+    from . import config
+    return bool(getattr(config.settings, "vad_enabled", False))
 
 _SILENCE_START_RE = re.compile(r"silence_start:\s*([\d.]+)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*([\d.]+)")
@@ -47,6 +61,7 @@ class DialogPositions:
     silence_ranges: list[tuple[float, float]]   # debug / UI reasoning
     detected_at: float       # epoch
     audio_tracks: int        # count of audio streams in file
+    method: str = "silencedetect"   # "vad" (silero speech) | "silencedetect"
 
 
 # In-memory cache keyed by (canonical_path, track) so repeat opens are
@@ -199,15 +214,35 @@ async def find_dialog_positions(path: str, track: int = 0, n: int = 3,
     if use_cache and key in _position_cache:
         return _position_cache[key]
     duration, audio_count = await _ffprobe_duration_and_tracks(path)
-    silence = await _silencedetect(path, track=track) if duration > 0 else []
-    # #210: silencedetect only scanned the first scan_window_s. Cap the
-    # range we hand to the picker so it doesn't treat the unscanned tail
-    # as one giant non-silent block and bias all samples there.
-    scanned = min(duration, 1200.0) if duration > 0 else 0.0
-    non_silent = _non_silent_ranges(scanned, silence)
-    positions = _pick_positions(non_silent, n=n)
-    # Fallback: if silencedetect found nothing usable (e.g. very short
-    # file or all-music), just spread N points across the runtime.
+    method = "silencedetect"
+    silence: list[tuple[float, float]] = []
+    positions: list[float] = []
+
+    # #111: prefer real SPEECH detection (silero VAD) over silencedetect.
+    # silencedetect's non-silent regions include music/SFX, so the picker
+    # often lands on dialogue-free audio. VAD is opt-in; when it's absent
+    # or fails we fall straight through to the silencedetect path below.
+    speech = None
+    if duration > 0 and _vad_enabled() and vad.vad_available():
+        try:
+            speech = await asyncio.to_thread(vad.detect_speech_ranges, path, track)
+        except Exception:
+            log.warning("VAD pass errored for %s; using silencedetect", path, exc_info=True)
+            speech = None
+    if speech:
+        method = "vad"
+        positions = _pick_positions(speech, n=n, sample_len=_REVIEW_SAMPLE_LEN)
+    else:
+        silence = await _silencedetect(path, track=track) if duration > 0 else []
+        # #210: silencedetect only scanned the first scan_window_s. Cap the
+        # range we hand to the picker so it doesn't treat the unscanned tail
+        # as one giant non-silent block and bias all samples there.
+        scanned = min(duration, 1200.0) if duration > 0 else 0.0
+        non_silent = _non_silent_ranges(scanned, silence)
+        positions = _pick_positions(non_silent, n=n, sample_len=_REVIEW_SAMPLE_LEN)
+
+    # Fallback: if neither path found anything usable (e.g. very short file
+    # or all-music), just spread N points across the runtime.
     if not positions and duration > 5:
         step = duration / (n + 1)
         positions = [round(step * (i + 1), 2) for i in range(n)]
@@ -217,6 +252,7 @@ async def find_dialog_positions(path: str, track: int = 0, n: int = 3,
         silence_ranges=[(round(s, 2), round(e, 2)) for s, e in silence[:20]],
         detected_at=time.time(),
         audio_tracks=audio_count,
+        method=method,
     )
     if use_cache:
         if len(_position_cache) >= _CACHE_CAP:

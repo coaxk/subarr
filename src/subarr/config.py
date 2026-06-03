@@ -86,6 +86,14 @@ class Settings:
     # PLEX_AUDIO_HINTS=1 to enable.
     plex_audio_hints: bool
 
+    # #111: speech-aware audio analysis via silero VAD. The onnxruntime+numpy
+    # runtime ships in the image; the ~2MB model is pulled on opt-in. Master
+    # switch (default on, "recommended"): even when on, the VAD path only runs
+    # once the model is present (vad.vad_available()), so a fresh install never
+    # surprise-downloads — it falls back to silencedetect until the user pulls
+    # the model from onboarding. Set SUBARR_VAD_ENABLED=0 to hard-disable.
+    vad_enabled: bool
+
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
     bazarr_api_key: str
@@ -176,6 +184,8 @@ def load() -> Settings:
         plex_audio_hints=os.environ.get(
             "PLEX_AUDIO_HINTS", "0"
         ).strip().lower() in ("1", "true", "yes", "on"),
+        vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by
         # the empty api_key, not by clearing the URL.
