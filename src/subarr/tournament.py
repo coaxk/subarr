@@ -33,6 +33,7 @@ from .transcript_signals import (
     canned_phrase_hits,
     repeated_line_ratio,
     silence_text_ratio,
+    uncovered_speech_ratio,
 )
 
 # --- v1 proposed rubric (TUNABLE) ---------------------------------------
@@ -59,6 +60,10 @@ SILENCE_TEXT_PENALTY = 100.0   # × fraction of text over silence (hallucination
 REPEAT_PENALTY = 100.0         # × fraction of duplicate lines (looping)
 CANNED_PENALTY = 40.0          # × canned-phrase cues (capped)
 CANNED_CAP = 3
+# Base-camp completeness: speech with no subtitle (dropped dialogue). Weighted
+# below the catastrophic-failure tier (silence/repeat = 100) but high enough to
+# stop an incomplete sub from winning — an incomplete sub is a journey defect.
+COVERAGE_PENALTY = 50.0        # × fraction of speech left unsubtitled
 
 # CONSENSUS judge (#65) — the cross-config pseudo-reference. The per-entrant
 # judges above score each output in isolation, so they miss a fluent, well-formed
@@ -147,10 +152,17 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     sil = silence_text_ratio(cues, entrant.speech_ranges)
     rep = repeated_line_ratio(cues)
     canned = canned_phrase_hits(cues)
+    # Base-camp COMPLETENESS (#65): speech left without a subtitle = dropped
+    # dialogue = an incomplete sub. The complement of silence_text_ratio, and
+    # the fix for the terseness artifact (Tier-B 2026-06-04: the judge rewarded
+    # short outputs that omit dialogue; chrF-vs-pro-reference showed those are
+    # LESS faithful). Only fires when VAD speech_ranges are supplied.
+    uncov = uncovered_speech_ratio(cues, entrant.speech_ranges)
     qe_penalty = (
         sil * SILENCE_TEXT_PENALTY
         + rep * REPEAT_PENALTY
         + min(canned, CANNED_CAP) * CANNED_PENALTY
+        + uncov * COVERAGE_PENALTY
     )
     readability_penalty = min(_readability_load(report) * READABILITY_K, READABILITY_CAP)
     quality = max(0.0, 100.0 - qe_penalty - readability_penalty)
@@ -158,6 +170,7 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
         "silence_text_ratio": round(sil, 4),
         "repeated_line_ratio": round(rep, 4),
         "canned_phrase_hits": canned,
+        "uncovered_speech_ratio": round(uncov, 4),
     }
 
     if entrant.gen_time_s and fastest_time_s and entrant.gen_time_s > 0:

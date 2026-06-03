@@ -121,3 +121,22 @@ def test_readability_is_secondary_to_qe():
         t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
     ])
     assert res.winner_label == "fast_clean"
+
+
+def test_incomplete_sub_penalised_for_uncovered_speech():
+    """Base-camp completeness (#65, Judd's 'cover the dialogue first'): a clean
+    but TRUNCATED sub that leaves most of the speech unsubtitled must score
+    lower than one that covers the whole clip. This is what kills the terseness
+    artifact — dropping dialogue is a defect even when what's written is clean.
+    Scored at the entrant level so consensus isn't involved."""
+    t = _t()
+    ranges = [(0.0, 6.0)]
+    complete = t.score_entrant(t.Entrant(label="complete", speech_ranges=ranges, srt_text=(
+        "1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n\n"
+        "2\n00:00:02,000 --> 00:00:04,000\nI am meeting a friend downtown.\n\n"
+        "3\n00:00:04,000 --> 00:00:06,000\nWe will be back before midnight.\n")))
+    truncated = t.score_entrant(t.Entrant(label="truncated", speech_ranges=ranges, srt_text=(
+        "1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n")))
+    assert truncated.signals["uncovered_speech_ratio"] > 0.5
+    assert complete.signals["uncovered_speech_ratio"] < 0.1
+    assert complete.composite > truncated.composite

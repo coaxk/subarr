@@ -64,6 +64,33 @@ def silence_text_ratio(cues, speech_ranges) -> float:
     return outside / total if total > 0 else 0.0
 
 
+def uncovered_speech_ratio(cues, speech_ranges) -> float:
+    """Fraction of total SPEECH time that has NO cue overlapping it — i.e.
+    detected dialogue left WITHOUT a subtitle (an incomplete sub). The base-camp
+    complement of silence_text_ratio: that flags text over silence
+    (hallucination), this flags silence-of-text over speech (dropped dialogue).
+    A terse/truncated output that omits cues scores high here. 0.0 when there's
+    no speech data (don't penalize on missing VAD)."""
+    if not speech_ranges:
+        return 0.0
+    total = 0.0
+    covered = 0.0
+    spans = [(c.start_ms / 1000.0, c.end_ms / 1000.0) for c in cues]
+    for s, e in speech_ranges:
+        dur = e - s
+        if dur <= 0:
+            continue
+        total += dur
+        for cs, ce in spans:
+            lo = max(s, cs)
+            hi = min(e, ce)
+            if hi > lo:
+                covered += hi - lo
+    if total <= 0:
+        return 0.0
+    return max(0.0, (total - min(covered, total)) / total)
+
+
 def repeated_line_ratio(cues) -> float:
     """Fraction of cue lines that are duplicates of an earlier line. A stuck
     decoder repeats the same phrase; varied dialogue scores near 0."""
