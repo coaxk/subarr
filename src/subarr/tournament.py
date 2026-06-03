@@ -23,7 +23,9 @@ contributor later.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Any
 
 from .subtitle_readability import ReadabilityReport, analyze_srt, parse_srt
@@ -58,6 +60,18 @@ REPEAT_PENALTY = 100.0         # × fraction of duplicate lines (looping)
 CANNED_PENALTY = 40.0          # × canned-phrase cues (capped)
 CANNED_CAP = 3
 
+# CONSENSUS judge (#65) — the cross-config pseudo-reference. The per-entrant
+# judges above score each output in isolation, so they miss a fluent, well-formed
+# but DIVERGENT output (a unique mistranslation, or a hallucinated end-card no
+# other config produced). With ≥2 entrants on the SAME clip, agreement across
+# them stands in for ground truth: build a majority content-word vocabulary, then
+# score each entrant on precision (only says agreed things — low = divergence/
+# hallucination) and recall (covers the agreed content — low = dropout/loop
+# collapse). The penalty subtracts from the composite by (1 − f1). No ground
+# truth required; robust to translation wording/timing variance (content-word
+# sets, not cue alignment).
+CONSENSUS_PENALTY = 40.0   # × (1 − consensus F1)
+
 
 @dataclass
 class Entrant:
@@ -81,6 +95,7 @@ class Scorecard:
     gen_time_s: float | None
     readability: dict[str, Any] | None   # the #92 report.to_dict()
     signals: dict[str, Any] | None = None  # QE signals (silence/repeat/canned)
+    consensus: dict[str, Any] | None = None  # vs-majority precision/recall/f1
     notes: str = ""
 
 
@@ -88,6 +103,10 @@ class Scorecard:
 class TournamentResult:
     scorecards: list[Scorecard]           # ranked best-first
     winner_label: str | None
+    # mean pairwise content-word agreement across entrants (0-1). Low → the
+    # configs disagree about what was said → flag the clip for human review.
+    # None when fewer than 2 scorable entrants (no consensus possible).
+    clip_agreement: float | None = None
 
 
 def _readability_load(report: ReadabilityReport) -> float:
@@ -154,12 +173,80 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     )
 
 
+_WORD = re.compile(r"[0-9a-z]+")
+
+
+def _content_tokens(srt_text: str) -> set[str]:
+    """Lower-cased word set from a candidate's cue text. Word SETS (not counts)
+    so a looped phrase doesn't inflate agreement — the repeat judge owns looping;
+    consensus is about WHICH words are agreed, not how often."""
+    return {w for cue in parse_srt(srt_text) for w in _WORD.findall(cue.text.lower())}
+
+
+def consensus_scores(
+    label_to_srt: dict[str, str],
+) -> tuple[dict[str, dict[str, float]], float | None]:
+    """Cross-config consensus (#65). Build a majority content-word vocabulary
+    (words present in > half the entrants), then score each entrant's precision
+    (its words that are agreed), recall (agreed words it covers), and F1 against
+    it. Also return clip-level agreement = mean pairwise Jaccard of the vocabs.
+
+    Needs ≥2 entrants; returns ({}, None) otherwise (no consensus possible)."""
+    if len(label_to_srt) < 2:
+        return {}, None
+    vocabs = {label: _content_tokens(srt) for label, srt in label_to_srt.items()}
+    n = len(vocabs)
+    threshold = n // 2 + 1            # strict majority; for n=2 → both must agree
+    doc_freq: dict[str, int] = {}
+    for v in vocabs.values():
+        for tok in v:
+            doc_freq[tok] = doc_freq.get(tok, 0) + 1
+    consensus_vocab = {tok for tok, c in doc_freq.items() if c >= threshold}
+
+    reports: dict[str, dict[str, float]] = {}
+    for label, v in vocabs.items():
+        agreed = len(v & consensus_vocab)
+        precision = agreed / len(v) if v else 0.0
+        recall = agreed / len(consensus_vocab) if consensus_vocab else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+        reports[label] = {
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+        }
+
+    # clip agreement: mean pairwise Jaccard of the vocabs (how much the configs
+    # say the same things at all).
+    pair_sims = []
+    for a, b in combinations(vocabs.values(), 2):
+        union = a | b
+        pair_sims.append(len(a & b) / len(union) if union else 0.0)
+    clip_agreement = round(sum(pair_sims) / len(pair_sims), 4) if pair_sims else None
+    return reports, clip_agreement
+
+
 def run_tournament(entrants: list[Entrant]) -> TournamentResult:
     if not entrants:
         return TournamentResult(scorecards=[], winner_label=None)
     times = [e.gen_time_s for e in entrants if e.gen_time_s]
     fastest = min(times) if times else None
     cards = [score_entrant(e, fastest_time_s=fastest) for e in entrants]
+
+    # CONSENSUS pass (#65): the cross-config pseudo-reference. Only scorable
+    # (non-disqualified) entrants form the consensus; the divergence penalty
+    # then subtracts from each composite by (1 − F1).
+    by_label = {e.label: e for e in entrants}
+    scorable = {c.entrant_label: by_label[c.entrant_label].srt_text
+                for c in cards if not c.disqualified}
+    reports, clip_agreement = consensus_scores(scorable)
+    for c in cards:
+        rep = reports.get(c.entrant_label)
+        if rep is None:
+            continue
+        c.consensus = rep
+        penalty = (1.0 - rep["f1"]) * CONSENSUS_PENALTY
+        c.composite = round(max(0.0, c.composite - penalty), 2)
+
     # Disqualified always last; otherwise composite desc, faster breaks ties.
     cards.sort(key=lambda c: (
         c.disqualified,
@@ -167,4 +254,6 @@ def run_tournament(entrants: list[Entrant]) -> TournamentResult:
         c.gen_time_s if c.gen_time_s is not None else float("inf"),
     ))
     winner = next((c.entrant_label for c in cards if not c.disqualified), None)
-    return TournamentResult(scorecards=cards, winner_label=winner)
+    return TournamentResult(
+        scorecards=cards, winner_label=winner, clip_agreement=clip_agreement,
+    )
