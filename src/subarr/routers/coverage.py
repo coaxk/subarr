@@ -285,6 +285,7 @@ def _apply_filters_and_pack(
         "verified": sum(1 for v in vstates if v == "verified"),
         "unprobed": sum(1 for v in vstates if v == "unprobed"),
         "probe_failed": sum(1 for v in vstates if v == "probe_failed"),
+        "unsupported": sum(1 for v in vstates if v == "unsupported"),
     }
     body.setdefault("cached", True)
     if body.get("cached") and "generated_at" in body:

@@ -13,6 +13,14 @@ from .config import settings
 
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts"}
 
+# Disc-image / archive containers we can't per-episode probe or transcribe.
+# A multi-episode .iso resolves (via Sonarr's episodeFile) to ONE disc path
+# for every episode it contains — ffprobe can't yield per-episode audio and
+# subgen can't transcribe it per-episode, so such rows can never become real
+# gaps. They're disqualified from coverage ("unsupported") rather than left
+# stuck in "Analyzing" forever (#96/#62).
+UNSUPPORTED_EXTS = {".iso", ".img", ".nrg", ".mdf", ".bin"}
+
 
 class PathOutsideRootError(ValueError):
     """The requested path escapes media_root via .. or symlinks."""

@@ -2365,7 +2365,10 @@ export function CoveragePage() {
     [allRows],
   );
   const failedRows = useMemo(
-    () => (allRows || []).filter(r => r.vstate === 'probe_failed'),
+    // #96/#62: 'unsupported' (disc images / multi-ep .iso) join 'probe_failed'
+    // in the "Couldn't analyze" bucket — disqualified from gaps AND out of
+    // "Analyzing", but still visible (no silent hole) and clearly non-actionable.
+    () => (allRows || []).filter(r => r.vstate === 'probe_failed' || r.vstate === 'unsupported'),
     [allRows],
   );
 

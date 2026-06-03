@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
+from .paths import UNSUPPORTED_EXTS
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -100,6 +101,9 @@ class CoverageItem:
     #   verified     — a probe matched this row (audio/embedded data resolved)
     #   probe_failed — the file is in probe_failures (couldn't analyze)
     #   unprobed     — no probe + no failure yet (not analyzed)
+    #   unsupported  — the resolved file is a disc image / non-video container
+    #                  (e.g. a multi-episode .iso) that can't be per-episode
+    #                  probed or transcribed — disqualified, not "Analyzing".
     # Only `verified` rows are presented as confident, actionable gaps; the
     # rest are bucketed and held until the probe runs.
     verification_state: str = "unprobed"
@@ -837,6 +841,24 @@ def _score(
 # ───────────────────────────── main entrypoint ──────────────────────────────
 
 
+def _disqualify_unsupported(items: list[CoverageItem]) -> None:
+    """#96/#62: mark disc-image / non-video containers (e.g. a multi-episode
+    .iso, which resolves via Sonarr's episodeFile to one disc path for every
+    episode it holds) as 'unsupported' — ffprobe can't give per-episode audio
+    and subgen can't transcribe it per-episode, so it can never become a real
+    gap. This drops it OUT of the "Analyzing" bucket (where it would sit
+    forever, since the probe walker skips non-video extensions) instead of
+    presenting it as actionable. Folders / unresolved files are a SEPARATE
+    resolution gap and intentionally untouched. Already-verified rows are left
+    alone. Mutates in place."""
+    for it in items:
+        if it.verification_state == "verified":
+            continue
+        cand = it.file_canonical_path or it.canonical_path or ""
+        if cand and Path(cand).suffix.lower() in UNSUPPORTED_EXTS:
+            it.verification_state = "unsupported"
+
+
 async def build_coverage(
     bundle: IntegrationBundle,
     *,
@@ -1111,6 +1133,7 @@ async def build_coverage(
             plex_hints=plex_audio_hints,
         )
 
+    _disqualify_unsupported(items)
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 
