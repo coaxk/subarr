@@ -1193,6 +1193,16 @@ async def _add_bazarr_blind_synthetic_rows(
         it.file_canonical_path for it in items if it.file_canonical_path
     }
 
+    # #93 perf: pre-group episodes by series id ONCE. The previous inner
+    # loop scanned ALL of sonarr_eps_by_id for every foreign series — an
+    # O(series × all-episodes) nested loop that, on a large foreign library
+    # (~668 series × thousands of episodes), blocked the event loop for
+    # 15-20s mid-refresh (the coverage-refresh freeze). Grouping makes it
+    # O(episodes); behaviour is identical (same eps matched per series).
+    eps_by_series_id: dict[Any, list[tuple[int, dict]]] = {}
+    for _eid, _ep in sonarr_eps_by_id.items():
+        eps_by_series_id.setdefault(_ep.get("seriesId"), []).append((_eid, _ep))
+
     synthetic_added = 0
     for s in foreign_series:
         sid = s.get("id")
@@ -1205,9 +1215,7 @@ async def _add_bazarr_blind_synthetic_rows(
         srt_paths = series_srt_index.get(series_canonical or "", [])
         # Iterate this series's episodes. We already collected sonarr_eps_by_id
         # for the wanted_series_ids set + foreign extras above.
-        for ep_id, ep in sonarr_eps_by_id.items():
-            if ep.get("seriesId") != sid:
-                continue
+        for ep_id, ep in eps_by_series_id.get(sid, []):
             if not ep.get("hasFile"):
                 continue
             ep_file_id = ep.get("episodeFileId")
