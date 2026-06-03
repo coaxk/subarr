@@ -217,6 +217,10 @@ const STAGE_TIPS = {
 };
 function StageTile({ s }) {
   const href = STAGE_HREF[s.id] || '/coverage';
+  // #97: transcribing tile renders an active-vs-queued split when the
+  // payload carries the new fields (the scanning stage). txTotal drives
+  // the gradient activity bar.
+  const isTranscribing = s.active != null;
   return (
     <a className="stage-tile" href={href} title={STAGE_TIPS[s.id] || s.label} style={{
       flex: 1, minWidth: 0,
@@ -241,20 +245,46 @@ function StageTile({ s }) {
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-        <span className="display num" style={{
-          fontSize: 'var(--text-display-xl)', lineHeight: 1,
-          fontWeight: 500,
-          color: 'var(--fg-0)',
-          letterSpacing: '-0.01em',
-        }}>{s.count.toLocaleString('en-US')}</span>
-        <span style={{ paddingBottom: 2 }}>
-          <Delta value={s.delta} />
-        </span>
-        <div style={{ marginLeft: 'auto' }}>
-          <Sparkline data={s.spark} width={68} height={22} fill="var(--violet-500)" />
+      {isTranscribing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <span className="display num" style={{
+              fontSize: 'var(--text-display-xl)', lineHeight: 1,
+              fontWeight: 500, color: 'var(--fg-0)', letterSpacing: '-0.01em',
+            }}>{s.active || 0}</span>
+            <span style={{ paddingBottom: 4, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>active</span>
+            <div style={{ marginLeft: 'auto', textAlign: 'right', lineHeight: 1.15 }}>
+              <div className="num" style={{ fontSize: 'var(--text-lg)', color: 'var(--fg-1)', fontWeight: 500 }}>{s.queued || 0}</div>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>queued</div>
+            </div>
+          </div>
+          {/* #97: live progress of the CURRENT job (subgen %), not x-of-y.
+              null while idle / before the first % line — bar sits at 0. */}
+          <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+            <div style={{
+              width: `${s.progress != null ? Math.max(0, Math.min(100, s.progress)) : 0}%`,
+              height: '100%',
+              background: 'linear-gradient(90deg, var(--violet-500), var(--cyan-400))',
+              transition: 'width var(--dur-med, 240ms) var(--ease-out)',
+            }} />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+          <span className="display num" style={{
+            fontSize: 'var(--text-display-xl)', lineHeight: 1,
+            fontWeight: 500,
+            color: 'var(--fg-0)',
+            letterSpacing: '-0.01em',
+          }}>{s.count.toLocaleString('en-US')}</span>
+          <span style={{ paddingBottom: 2 }}>
+            <Delta value={s.delta} />
+          </span>
+          <div style={{ marginLeft: 'auto' }}>
+            <Sparkline data={s.spark} width={68} height={22} fill="var(--violet-500)" />
+          </div>
+        </div>
+      )}
 
       <div style={{ height: 1, background: 'var(--bg-3)' }} />
 
@@ -280,10 +310,21 @@ function StageTile({ s }) {
   );
 }
 
+// #98: fixed left→right panel order — transcribing, bazarr-wanted,
+// discovered, written-back, probing. Backend may emit either id variant
+// (e.g. 'scanning'/'transcribing', 'wanted'/'bazarr-wanted'), so map both.
+const STAGE_ORDER = {
+  scanning: 0, transcribing: 0,
+  wanted: 1, 'bazarr-wanted': 1,
+  discovered: 2,
+  written: 3, 'written-back': 3,
+  probing: 4,
+};
 export function StagesRow({ data }) {
   // data is the array from /api/home/dashboard's `stages` block.
   // Render nothing (skeleton) until live data arrives — no more demo fallback.
-  const stages = (data && data.length) ? data : [];
+  const stages = ((data && data.length) ? [...data] : [])
+    .sort((a, b) => (STAGE_ORDER[a.id] ?? 99) - (STAGE_ORDER[b.id] ?? 99));
   if (!stages.length) {
     return (
       <div style={{ display: 'flex', gap: 12 }}>
@@ -314,10 +355,17 @@ function GpuWidget({ data }) {
   // emit util_history yet, so it stays hidden rather than animating
   // fabricated noise next to live numbers. Wired the moment the payload
   // carries history.
-  const spark = useMemo(
-    () => (data && Array.isArray(data.util_history) ? data.util_history : []),
-    [data],
-  );
+  // #99: accumulate util history client-side. The backend doesn't emit
+  // util_history; the dashboard polls every 5s, so we keep a rolling
+  // 60-sample buffer — a REAL utilisation graph over time, not fabricated
+  // noise. (Falls back to data.util_history if the backend ever sends it.)
+  const [utilHist, setUtilHist] = useState(() =>
+    (data && Array.isArray(data.util_history)) ? data.util_history.slice(-60) : []);
+  React.useEffect(() => {
+    if (!data || data.util_pct == null) return;
+    setUtilHist((h) => [...h.slice(-59), Math.round(data.util_pct)]);
+  }, [data]);
+  const spark = utilHist;
   const util = data ? Math.round(data.util_pct) : 67;
   const vramUsedGB = data ? (data.vram_used_mb / 1024) : 8.4;
   const vramTotalGB = data ? (data.vram_total_mb / 1024) : 12;
@@ -355,11 +403,12 @@ function GpuWidget({ data }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(60px, 0.85fr) minmax(112px, 1.4fr) minmax(56px, 0.85fr) minmax(72px, 1fr)', gap: 14, alignItems: 'end' }}>
-        <GpuStat label="util" value={`${util}%`} bar={util / 100}
-                 tip="GPU compute utilization. 100% = fully loaded. Whisper transcription typically runs at 80-100%." />
+        <GpuStat label="util" value={`${util}%`}
+                 sub={busy ? 'busy' : 'idle'}
+                 tip="GPU compute utilization. 100% = fully loaded. Whisper transcription typically runs at 80-100%. Graphed over time below." />
         <GpuStat label="vram"
                  value={`${vramUsedGB.toFixed(1)} / ${vramTotalGB.toFixed(0)} GB`}
-                 sub={`${Math.round((vramUsedGB / vramTotalGB) * 100)}%`}
+                 bar={Math.min(vramUsedGB / vramTotalGB, 1)}
                  tip="VRAM (GPU memory) in use vs total. Whisper large-v3 needs ~5GB, Ollama models 2-8GB depending on size. If both are loaded simultaneously you can OOM — subarr can unload Ollama before transcribe." />
         <GpuStat label="temp" value={`${tempC}°C`}
                  sub={tempC < 75 ? 'safe' : (tempC < 85 ? 'warm' : 'hot')}
@@ -368,12 +417,28 @@ function GpuWidget({ data }) {
                  tip="Current power draw vs configured limit. Sustained near-limit = card is working hard." />
       </div>
 
-      {spark.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Sparkline data={spark} width={180} height={20} fill="var(--cyan-500)" color="var(--cyan-500)" />
-          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>util · last 60s</span>
+      {/* #99: util graph fills the widget's bottom space. Responsive width
+          (scales to the flexible widget); height fixed. Real client-side
+          history — shows a placeholder until the first couple of samples. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span className="label">util · over time</span>
+          {spark.length >= 2 && (
+            <span className="num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              ~{Math.max(1, Math.round(spark.length * 5 / 60))}m
+            </span>
+          )}
         </div>
-      )}
+        {spark.length >= 2 ? (
+          <Sparkline data={spark} width={520} height={44} responsive
+                     fill="var(--violet-500)" color="var(--violet-500)" />
+        ) : (
+          <div style={{ height: 44, display: 'flex', alignItems: 'center',
+            color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
+            collecting utilisation…
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -667,7 +732,12 @@ function ActivityCard({ data }) {
   // back to demo ACTIVITY.
   const allRows = (data && data.length) ? data : ACTIVITY;
   const [filter, setFilter] = useState('all');
-  const rows = allRows.filter((ACTIVITY_FILTERS.find((f) => f.id === filter) || ACTIVITY_FILTERS[0]).test);
+  // #100: cap to a handful + no inner scroll. "View full activity" already
+  // covers the expanded view, and a shorter card rolls the bottom of the
+  // page up, tightening the empty space beside the next-run card.
+  const rows = allRows
+    .filter((ACTIVITY_FILTERS.find((f) => f.id === filter) || ACTIVITY_FILTERS[0]).test)
+    .slice(0, 7);
 
   return (
     <div style={{
@@ -702,7 +772,7 @@ function ActivityCard({ data }) {
         </div>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>showing {rows.length}</span>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div>
         {rows.length === 0 ? (
           <div style={{ padding: '24px 16px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
             {allRows.length === 0
