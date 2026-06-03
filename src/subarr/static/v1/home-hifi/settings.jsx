@@ -1172,6 +1172,114 @@ function OllamaVisionCard() {
 }
 
 
+// #111 speech-aware audio (silero VAD). Polls /api/vad/status; the enable
+// toggle persists via /api/vad/config (#112 config layer), and the ~2MB
+// model is pulled on demand via /api/vad/pull-model. When off or
+// undownloaded, clip selection falls back to ffmpeg silence detection.
+function SpeechAudioCard() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [pull, setPull] = useState(null);   // null | {running} | {error} | {done}
+
+  const refetch = async () => {
+    try {
+      const r = await fetch('/api/vad/status', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setStatus(await r.json());
+    } catch (e) { setStatus({ error: e.message }); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { refetch(); }, []);
+
+  const toggle = async () => {
+    if (!status || status.env_controlled || busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch('/api/vad/config', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !status.enabled }),
+      });
+      if (r.ok) setStatus(await r.json());
+    } finally { setBusy(false); }
+  };
+
+  const download = async () => {
+    setPull({ running: true });
+    try {
+      const r = await fetch('/api/vad/pull-model', { method: 'POST', credentials: 'same-origin' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setPull({ error: d.detail || `HTTP ${r.status}` });
+        return;
+      }
+      setPull({ done: true });
+      await refetch();
+    } catch (e) { setPull({ error: e.message }); }
+  };
+
+  const muted = { fontSize: 'var(--text-sm)', color: 'var(--fg-2)' };
+  if (loading) return <SectionCard label="Speech-aware audio"><div style={muted}>Checking…</div></SectionCard>;
+  if (!status || status.error) return <SectionCard label="Speech-aware audio"><div style={muted}>Could not query: {status?.error || 'unknown'}</div></SectionCard>;
+  if (!status.runtime_present) return <SectionCard label="Speech-aware audio"><div style={muted}>The speech-detection runtime isn't included in this build.</div></SectionCard>;
+
+  const active = status.available;
+  const chipFg = active || status.model_present ? '#22c55e' : '#f59e0b';
+  const chipBg = active ? 'rgba(34,197,94,0.10)' : 'rgba(245,158,11,0.10)';
+  const chipBorder = active ? 'rgba(34,197,94,0.30)' : 'rgba(245,158,11,0.30)';
+  const label = !status.enabled ? 'Disabled'
+    : active ? 'Active — picking clips by detecting speech'
+    : 'Enabled — model not downloaded yet';
+
+  return (
+    <SectionCard label="Speech-aware audio" action={<button className="btn sm" onClick={refetch}>Refresh</button>}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+        background: chipBg, border: `1px solid ${chipBorder}`, borderRadius: 'var(--radius-md)' }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: chipFg }} />
+        <span style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-0)', fontWeight: 600 }}>{label}</span>
+      </div>
+
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+        Uses silero voice-activity detection to pick audio-review clips that land on actual
+        dialogue (not music or silence). When off or undownloaded, subarr falls back to
+        silence detection.
+      </div>
+
+      <Row label="Enabled"
+        hint={status.env_controlled ? 'Locked by SUBARR_VAD_ENABLED (env wins)' : 'Persists across restarts'}
+        control={<Toggle on={status.enabled} busy={busy || status.env_controlled} onToggle={toggle} />} />
+      <Row label="Model" value={status.model_present ? 'downloaded (~2 MB)' : 'not downloaded'}
+        hint={status.model_path || 'silero VAD ONNX model'} />
+
+      {!status.model_present && !pull?.running && (
+        <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.20)', borderRadius: 'var(--radius-md)',
+          display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+            Download the ~2 MB speech model to turn this on. Until then, clip selection uses
+            silence detection.
+          </div>
+          <button className="btn sm" onClick={download}>Download model</button>
+        </div>
+      )}
+      {status.model_present && !pull?.running && (
+        <div><button className="btn sm" onClick={download}>Re-download model</button></div>
+      )}
+      {pull?.running && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+          background: 'var(--bg-2)', borderRadius: 'var(--radius-md)' }}>
+          <span className="spinner-ring" />
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>Downloading speech model…</span>
+        </div>
+      )}
+      {pull?.error && <div style={{ padding: 10, color: '#ef4444', fontSize: 'var(--text-sm)' }}>Download failed: {pull.error}</div>}
+      {pull?.done && <div style={{ padding: 10, color: '#22c55e', fontSize: 'var(--text-sm)' }}>Model ready — speech detection active.</div>}
+    </SectionCard>
+  );
+}
+
+
 function IntegrationPanel({ rail, refetchHealth }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -1415,6 +1523,8 @@ function SystemPanel() {
             {busy === 'Unload' ? 'Unloading…' : 'Unload'}
           </button>} />
       </SectionCard>
+
+      <SpeechAudioCard />
 
       <SectionCard label="Onboarding">
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
