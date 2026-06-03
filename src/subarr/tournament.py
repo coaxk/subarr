@@ -27,13 +27,27 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .subtitle_readability import ReadabilityReport, analyze_srt, parse_srt
+from .transcript_signals import (
+    canned_phrase_hits,
+    repeated_line_ratio,
+    silence_text_ratio,
+)
 
 # --- v1 proposed rubric (TUNABLE) ---------------------------------------
 CRITICAL_PENALTY = 2.0   # weight of a 'critical' readability issue
 WARN_PENALTY = 1.0       # weight of a 'warn' readability issue
-READABILITY_WEIGHT = 0.85
+QUALITY_WEIGHT = 0.85    # quality (readability − QE penalties) vs speed
 SPEED_WEIGHT = 0.15
-# QE_WEIGHT reserved for #94; renormalise READABILITY/SPEED when it's added.
+
+# QE (reference-free) penalties — the real discriminators (#65 research). A
+# quality score starts from readability (0-100) and these subtract from it, so
+# a hallucinating/looping entrant tanks regardless of how "readable" its
+# fabricated text is. Tuned so a fully-hallucinated or fully-looping output
+# drops to ~0.
+SILENCE_TEXT_PENALTY = 100.0   # × fraction of text over silence (hallucination)
+REPEAT_PENALTY = 100.0         # × fraction of duplicate lines (looping)
+CANNED_PENALTY = 40.0          # × canned-phrase cues (capped)
+CANNED_CAP = 3
 
 
 @dataclass
@@ -42,6 +56,10 @@ class Entrant:
     srt_text: str               # candidate output for the shared source
     gen_time_s: float | None = None
     config: dict[str, Any] = field(default_factory=dict)
+    # silero speech ranges (s) for the SOURCE audio (#111). Shared across
+    # entrants of one tournament (same source); enables the text-over-silence
+    # hallucination judge. None → that judge is skipped (no penalty).
+    speech_ranges: list[tuple[float, float]] | None = None
 
 
 @dataclass
@@ -53,6 +71,7 @@ class Scorecard:
     cue_count: int
     gen_time_s: float | None
     readability: dict[str, Any] | None   # the #92 report.to_dict()
+    signals: dict[str, Any] | None = None  # QE signals (silence/repeat/canned)
     notes: str = ""
 
 
@@ -74,24 +93,45 @@ def _readability_score(report: ReadabilityReport) -> float:
 
 
 def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scorecard:
-    if not parse_srt(entrant.srt_text):
+    cues = parse_srt(entrant.srt_text)
+    if not cues:
         return Scorecard(
             entrant_label=entrant.label, disqualified=True, composite=0.0,
             readability_score=0.0, cue_count=0, gen_time_s=entrant.gen_time_s,
-            readability=None, notes="no parseable subtitle cues (disqualified)",
+            readability=None, signals=None,
+            notes="no parseable subtitle cues (disqualified)",
         )
     report = analyze_srt(entrant.srt_text)
     r_score = _readability_score(report)
+
+    # Reference-free QE signals (#65): the real discriminators. Subtract them
+    # from the readability base so a hallucinating/looping entrant can't win
+    # on "readable" fabricated text.
+    sil = silence_text_ratio(cues, entrant.speech_ranges)
+    rep = repeated_line_ratio(cues)
+    canned = canned_phrase_hits(cues)
+    qe_penalty = (
+        sil * SILENCE_TEXT_PENALTY
+        + rep * REPEAT_PENALTY
+        + min(canned, CANNED_CAP) * CANNED_PENALTY
+    )
+    quality = max(0.0, r_score - qe_penalty)
+    signals = {
+        "silence_text_ratio": round(sil, 4),
+        "repeated_line_ratio": round(rep, 4),
+        "canned_phrase_hits": canned,
+    }
+
     if entrant.gen_time_s and fastest_time_s and entrant.gen_time_s > 0:
         speed_score = min(100.0, (fastest_time_s / entrant.gen_time_s) * 100.0)
-        composite = r_score * READABILITY_WEIGHT + speed_score * SPEED_WEIGHT
+        composite = quality * QUALITY_WEIGHT + speed_score * SPEED_WEIGHT
     else:
-        composite = r_score
+        composite = quality
     return Scorecard(
         entrant_label=entrant.label, disqualified=False,
         composite=round(composite, 2), readability_score=round(r_score, 2),
         cue_count=report.cue_count, gen_time_s=entrant.gen_time_s,
-        readability=report.to_dict(),
+        readability=report.to_dict(), signals=signals,
     )
 
 
