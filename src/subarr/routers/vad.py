@@ -11,17 +11,24 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from .. import config, vad
+from .. import config, config_store, vad
 
 router = APIRouter(prefix="/api/vad", tags=["vad"])
 log = logging.getLogger(__name__)
 
 
+class VadConfig(BaseModel):
+    enabled: bool
+
+
 @router.get("/status")
 def status() -> dict:
     """What the onboarding/settings UI needs to render the toggle: is it
-    switched on, is the runtime baked in, and has the model been pulled."""
+    switched on, is the runtime baked in, and has the model been pulled.
+    `env_controlled` = an explicit SUBARR_VAD_ENABLED pins it (operator
+    authoritative) → the UI renders the toggle as locked."""
     model = vad._model_path()
     return {
         "enabled": bool(getattr(config.settings, "vad_enabled", False)),
@@ -29,7 +36,20 @@ def status() -> dict:
         "model_present": model is not None,
         "available": vad.vad_available(),
         "model_path": model,
+        "env_controlled": config.env_is_set("vad_enabled"),
     }
+
+
+@router.post("/config")
+def set_config(body: VadConfig) -> dict:
+    """Persist the enable/disable choice (survives restart via #112) and patch
+    the running Settings so it takes effect immediately. If the operator pinned
+    SUBARR_VAD_ENABLED, env stays authoritative live (we still persist the
+    preference, but env wins on reload)."""
+    config_store.save_override("vad_enabled", body.enabled)
+    if not config.env_is_set("vad_enabled"):
+        object.__setattr__(config.settings, "vad_enabled", body.enabled)
+    return status()
 
 
 @router.post("/pull-model")

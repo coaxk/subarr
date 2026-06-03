@@ -21,3 +21,19 @@ def test_vad_status_reports_runtime_and_model(app_with_stub):
 def test_vad_pull_model_503_without_runtime(app_with_stub):
     r = app_with_stub.post("/api/vad/pull-model")
     assert r.status_code == 503
+
+
+def test_vad_config_toggle_persists_and_reflects(app_with_stub, tmp_path, monkeypatch):
+    from subarr import config, config_store as cs
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.delenv("SUBARR_VAD_ENABLED", raising=False)
+    prior = config.settings.vad_enabled
+    try:
+        r = app_with_stub.post("/api/vad/config", json={"enabled": False})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["enabled"] is False
+        assert body["env_controlled"] is False
+        assert cs.load_overrides().get("vad_enabled") is False   # persisted
+    finally:
+        object.__setattr__(config.settings, "vad_enabled", prior)
