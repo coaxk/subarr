@@ -1220,7 +1220,7 @@ function BatchReviewModal() {
               <button className="btn ghost" onClick={skip} disabled={saving} style={{ flex: 1 }}>
                 Skip →
               </button>
-              <button className="btn" onClick={confirmAndNext} disabled={saving}
+              <button data-testid="review-confirm" className="btn" onClick={confirmAndNext} disabled={saving}
                 style={{ flex: 2, background: 'var(--violet-500)', color: '#fff' }}>
                 {saving ? 'Saving…' : `Confirm ${picked} → Next`}
               </button>
@@ -1742,7 +1742,7 @@ export function AudioReviewModal() {
             the per-chunk breakdown + aggregate vote and auto-prefill
             the language selector below. Calibrated confidence: 3/3 high
             prob = trust; 2/3 with mid prob = surface the disagreement. */}
-        <div style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div data-testid="detection-evidence" style={{ background: 'var(--bg-1)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', fontWeight: 600 }}>
               🤖 Ask Whisper (Layer 3)
@@ -1856,7 +1856,7 @@ export function AudioReviewModal() {
             </span>
           )}
           <button className="btn ghost" onClick={close} disabled={saving}>cancel</button>
-          <button className="btn" onClick={() => save(selected)} disabled={saving}
+          <button data-testid="review-confirm" className="btn" onClick={() => save(selected)} disabled={saving}
             style={{ background: 'var(--violet-500)', color: '#fff' }}>
             {saving ? 'Saving…' : `Confirm ${selected}`}
           </button>
@@ -1927,7 +1927,11 @@ function CheckBox({ checked, indeterminate }) {
 // an inline `() => toggleRow(r.id)` per row would defeat the memo).
 function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
   return (
-    <div className="cov-row" style={{
+    <div className="cov-row"
+      data-testid="coverage-row"
+      data-reason={r.reason}
+      data-vstate={r.vstate}
+      style={{
       display: 'flex', alignItems: 'center', gap: 10,
       padding: '0 12px',
       height: 34,
@@ -2008,6 +2012,7 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
           </button>
         )}
         <button
+          data-testid="coverage-row-queue"
           className="btn ghost"
           onClick={(e) => { e.stopPropagation(); onQueue && onQueue(r); }}
           disabled={queuing}
