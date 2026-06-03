@@ -45,7 +45,7 @@ from .routers import (
     enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
     onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
     queue, scan, schedule as r_schedule, sidecar as r_sidecar,
-    telemetry as r_telemetry, updates as r_updates,
+    telemetry as r_telemetry, updates as r_updates, vad as r_vad,
 )
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
@@ -381,6 +381,7 @@ app.include_router(r_telemetry.router)
 app.include_router(r_home.router)
 app.include_router(r_onboarding.router)
 app.include_router(r_sidecar.router)
+app.include_router(r_vad.router)
 
 
 @app.get("/api/health")

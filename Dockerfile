@@ -15,7 +15,12 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir .
+# #111: bake the speech-aware audio (silero VAD) runtime — onnxruntime + numpy
+# (~65MB, NO torch). The ~2MB silero model is NOT baked; it's pulled on opt-in
+# from onboarding to /config so the image stays model-free and the user makes
+# the explicit choice. Without the model present, subarr falls back to the
+# ffmpeg silencedetect picker, so this extra is inert until enabled.
+RUN pip install --no-cache-dir ".[vad]"
 
 EXPOSE 9922
 

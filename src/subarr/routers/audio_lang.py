@@ -361,6 +361,10 @@ async def sample_positions(
         "audio_tracks": result.audio_tracks,
         "positions": result.positions,
         "silence_count": len(result.silence_ranges),
+        # #111: how positions were found — "vad" (silero speech detection) or
+        # "silencedetect" (fallback). UI shows provenance so the user knows
+        # the clips were picked by detecting actual dialogue.
+        "method": result.method,
     }
 
 

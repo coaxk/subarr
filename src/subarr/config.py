@@ -5,9 +5,12 @@ the subgen container (URL, container name, compose path).
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def _env_or(name: str, default: str) -> str:
@@ -86,6 +89,14 @@ class Settings:
     # PLEX_AUDIO_HINTS=1 to enable.
     plex_audio_hints: bool
 
+    # #111: speech-aware audio analysis via silero VAD. The onnxruntime+numpy
+    # runtime ships in the image; the ~2MB model is pulled on opt-in. Master
+    # switch (default on, "recommended"): even when on, the VAD path only runs
+    # once the model is present (vad.vad_available()), so a fresh install never
+    # surprise-downloads — it falls back to silencedetect until the user pulls
+    # the model from onboarding. Set SUBARR_VAD_ENABLED=0 to hard-disable.
+    vad_enabled: bool
+
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
     bazarr_api_key: str
@@ -153,7 +164,7 @@ def load() -> Settings:
     # Helper applied where empty is semantically meaningless. Bare .get() kept
     # for fields where empty IS the intended off-signal (API keys, telemetry,
     # auth, optional docker discovery).
-    return Settings(
+    _s = Settings(
         media_root=Path(_env_or("SUBARR_MEDIA_ROOT", "/media/library")),
         subgen_compose_path=Path(
             _env_or("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")
@@ -176,6 +187,8 @@ def load() -> Settings:
         plex_audio_hints=os.environ.get(
             "PLEX_AUDIO_HINTS", "0"
         ).strip().lower() in ("1", "true", "yes", "on"),
+        vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by
         # the empty api_key, not by clearing the URL.
@@ -215,9 +228,8 @@ def load() -> Settings:
         auth_user=os.environ.get("SUBARR_USER", ""),
         auth_pass=os.environ.get("SUBARR_PASS", ""),
     )
-
-
-settings = load()
+    _apply_persisted_overrides(_s)
+    return _s
 
 
 # ─── Onboarding clobber guard support ───────────────────────────────
@@ -240,6 +252,12 @@ FIELD_ENV_VARS: dict[str, str] = {
     "subgen_url": "SUBGEN_URL",
     "ollama_url": "OLLAMA_URL",
     "ollama_model": "OLLAMA_MODEL",
+    # #111/#112: UI-settable toggles. Listed here so env_is_set() lets an
+    # explicit env var override a persisted UI choice (env > file > default).
+    "vad_enabled": "SUBARR_VAD_ENABLED",
+    "plex_audio_hints": "PLEX_AUDIO_HINTS",
+    "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
+    "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
 }
 
 
@@ -252,3 +270,44 @@ def env_is_set(settings_attr: str) -> bool:
         return False
     raw = os.environ.get(name)
     return raw is not None and raw.strip() != ""
+
+
+def _coerce_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+# #112: per-field coercion for persisted overrides (JSON → typed). Only
+# fields listed here can be set from the UI persistence layer; everything
+# else in an override file is ignored (defensive — the file never widens the
+# config surface beyond what we intend to be user-settable).
+_FIELD_COERCE = {
+    "vad_enabled": _coerce_bool,
+    "plex_audio_hints": _coerce_bool,
+    "sonarr_propagate_audio_lang": _coerce_bool,
+    "plex_partial_scan_enabled": _coerce_bool,
+    "ollama_model": str,
+    "ollama_url": str,
+    "ollama_vision_model": str,
+}
+
+
+def _apply_persisted_overrides(s: Settings) -> None:
+    """Overlay persisted UI overrides onto Settings, BELOW env (env wins).
+    Frozen dataclass → object.__setattr__. Fail-soft per field so one bad
+    value can't break config load."""
+    from . import config_store
+    for field, raw in config_store.load_overrides().items():
+        coerce = _FIELD_COERCE.get(field)
+        if coerce is None:
+            continue                 # not a UI-settable field; ignore
+        if env_is_set(field):
+            continue                 # operator's env is authoritative
+        try:
+            object.__setattr__(s, field, coerce(raw))
+        except Exception:
+            log.warning("override %s=%r failed to apply", field, raw, exc_info=True)
+
+
+settings = load()

@@ -28,6 +28,16 @@ dev = [
     "httpx>=0.27,<1.0",
     "ruff>=0.3,<1.0",
 ]
+# #111: speech-aware audio (silero VAD). onnxruntime + numpy only — NOT the
+# `silero-vad` pip package, which drags in PyTorch (~800MB) even in onnx mode
+# (its read_audio/get_speech_timestamps need torch tensors). We run the ONNX
+# model directly via onnxruntime + numpy (~65MB total, no torch). The base
+# install stays ML-free; the Docker image bakes this extra in so the runtime
+# is present and only the ~2MB model is pulled on opt-in.
+vad = [
+    "onnxruntime>=1.16,<2.0",
+    "numpy>=1.24,<3.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
