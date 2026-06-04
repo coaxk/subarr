@@ -35,6 +35,7 @@ from .transcript_signals import (
     silence_text_ratio,
     uncovered_speech_ratio,
 )
+from . import qe as _qe
 
 # --- v1 proposed rubric (TUNABLE) ---------------------------------------
 CRITICAL_PENALTY = 2.0   # weight of a 'critical' readability issue
@@ -77,6 +78,16 @@ COVERAGE_PENALTY = 50.0        # × fraction of speech left unsubtitled
 # sets, not cue alignment).
 CONSENSUS_PENALTY = 40.0   # × (1 − consensus F1)
 
+# QE/ADEQUACY (#123, the summit) — reference-free LaBSE cosine(source, hyp).
+# Validated rho=0.727 vs true accuracy (vs the structural quality's ~0.41), so
+# when a source-language transcript is available it is the DOMINANT term: the
+# composite's quality becomes mostly the QE adequacy, with the structural
+# quality (which still gates hallucination/looping/dropout) as support.
+# Gated: only blends when Entrant.source_text is set AND the embedder is
+# available; otherwise composite is unchanged (structural-only). TUNABLE —
+# calibrate the blend against the chrF rig.
+QE_BLEND = 0.70   # weight of QE adequacy in quality_total when QE is present
+
 
 @dataclass
 class Entrant:
@@ -88,6 +99,9 @@ class Entrant:
     # entrants of one tournament (same source); enables the text-over-silence
     # hallucination judge. None → that judge is skipped (no penalty).
     speech_ranges: list[tuple[float, float]] | None = None
+    # #123: source-language transcript of the SAME audio (one extra subgen
+    # transcribe pass). Enables the QE/adequacy judge. None → QE skipped.
+    source_text: str | None = None
 
 
 @dataclass
@@ -101,6 +115,7 @@ class Scorecard:
     readability: dict[str, Any] | None   # the #92 report.to_dict()
     signals: dict[str, Any] | None = None  # QE signals (silence/repeat/canned)
     consensus: dict[str, Any] | None = None  # vs-majority precision/recall/f1
+    qe_adequacy: float | None = None       # #123: LaBSE cosine(source, hyp); None if unavailable
     notes: str = ""
 
 
@@ -166,23 +181,38 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     )
     readability_penalty = min(_readability_load(report) * READABILITY_K, READABILITY_CAP)
     quality = max(0.0, 100.0 - qe_penalty - readability_penalty)
+
+    # #123 QE/ADEQUACY (the summit): reference-free LaBSE cosine(source, hyp).
+    # When a source transcript is present (and the embedder is available), blend
+    # it in as the DOMINANT term — it's the validated accuracy signal (rho=0.727)
+    # the structural judge can't see. Structural quality stays as the failure-mode
+    # gate. None → composite is structural-only (unchanged behaviour).
+    qadq = None
+    if entrant.source_text:
+        hyp = " ".join(c.text for c in cues)
+        qadq = _qe.qe_adequacy(entrant.source_text, hyp)
+    quality_total = (
+        quality if qadq is None
+        else (qadq * 100.0) * QE_BLEND + quality * (1.0 - QE_BLEND)
+    )
     signals = {
         "silence_text_ratio": round(sil, 4),
         "repeated_line_ratio": round(rep, 4),
         "canned_phrase_hits": canned,
         "uncovered_speech_ratio": round(uncov, 4),
+        "qe_adequacy": round(qadq, 4) if qadq is not None else None,
     }
 
     if entrant.gen_time_s and fastest_time_s and entrant.gen_time_s > 0:
         speed_score = min(100.0, (fastest_time_s / entrant.gen_time_s) * 100.0)
-        composite = quality * QUALITY_WEIGHT + speed_score * SPEED_WEIGHT
+        composite = quality_total * QUALITY_WEIGHT + speed_score * SPEED_WEIGHT
     else:
-        composite = quality
+        composite = quality_total
     return Scorecard(
         entrant_label=entrant.label, disqualified=False,
         composite=round(composite, 2), readability_score=round(r_score, 2),
         cue_count=report.cue_count, gen_time_s=entrant.gen_time_s,
-        readability=report.to_dict(), signals=signals,
+        readability=report.to_dict(), signals=signals, qe_adequacy=qadq,
     )
 
 

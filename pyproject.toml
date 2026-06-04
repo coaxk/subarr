@@ -38,6 +38,14 @@ vad = [
     "onnxruntime>=1.16,<2.0",
     "numpy>=1.24,<3.0",
 ]
+# #123: QE/adequacy judge (the tournament summit). LaBSE cross-lingual
+# embeddings via sentence-transformers; validated rho=0.727 vs true accuracy.
+# DELIBERATELY NOT baked into the image (unlike [vad]) — sentence-transformers
+# pulls torch (~2GB). Pure opt-in for now; an onnx-lean LaBSE backend (drop the
+# torch weight, bakeable like silero) is the tracked follow-up optimization.
+qe = [
+    "sentence-transformers>=2.2,<6.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
