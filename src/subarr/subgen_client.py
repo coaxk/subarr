@@ -362,35 +362,51 @@ class SubgenClient:
             body = {"_raw": r.text[:500]}
         return r.status_code, body
 
-    async def asr(self, path: str, *, task: str = "transcribe",
+    async def asr(self, path: str | None = None, *, local_file: str | None = None,
+                  task: str = "transcribe",
                   language: str | None = None, kwargs: dict[str, Any] | None = None,
                   initial_prompt: str | None = None,
                   timeout_s: float = 7200.0) -> str:
-        """v4.10+ arena channel: path-input ASR that BLOCKS until done and
-        returns the subtitle TEXT over HTTP — no upload, no shared scratch.
+        """v4.10+ arena channel: ASR that BLOCKS until done and returns the
+        subtitle TEXT over HTTP. Two input modes:
 
-        `path` is a subgen-visible path (the file subgen can already read off
-        the shared media mount). `task` is transcribe|translate; `kwargs` is a
-        per-request Whisper override (folded into subgen's dedup hash so two
-        configs don't collide). Gate on capabilities.asr_arena before calling.
+          - `path`: a subgen-visible path (subgen reads it off the shared media
+            mount — no upload). Good for whole files.
+          - `local_file`: UPLOAD a local file (multipart). Used for the
+            tuning-lab's short auto-sampled clip, so it works with no shared
+            writable mount and the upload stays tiny.
 
-        Returns the raw subtitle text (SRT by default; '' if the model produced
-        nothing). Raises SubgenUnavailable on transport failure or a structured
-        error payload, ValueError on a bad task.
+        `task` is transcribe|translate; `kwargs` is a per-request Whisper
+        override (folded into subgen's dedup hash so configs don't collide).
+        Gate on capabilities.asr_arena before calling.
+
+        Returns the raw subtitle text ('' if nothing produced). Raises
+        SubgenUnavailable on transport failure or a structured error payload,
+        ValueError on a bad task or missing input.
         """
         if task not in ("transcribe", "translate"):
             raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
-        params: dict[str, Any] = {"task": task, "path": path}
+        if not path and not local_file:
+            raise ValueError("asr() needs either path= or local_file=")
+        params: dict[str, Any] = {"task": task}
+        if path:
+            params["path"] = path
         if language:
             params["language"] = language
         if initial_prompt:
             params["initial_prompt"] = initial_prompt
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
+        files = None
+        if local_file:
+            import os
+            with open(local_file, "rb") as fh:
+                content = fh.read()
+            files = {"audio_file": (os.path.basename(local_file), content, "application/octet-stream")}
         # /asr blocks for the whole transcription — needs a wide read timeout.
         asr_timeout = httpx.Timeout(connect=3.0, read=timeout_s, write=10.0, pool=3.0)
         try:
-            r = await self._client.post("/asr", params=params, timeout=asr_timeout)
+            r = await self._client.post("/asr", params=params, files=files, timeout=asr_timeout)
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /asr failed: {e}") from e
         # Success streams text/plain (the subtitle); errors return a JSON dict.

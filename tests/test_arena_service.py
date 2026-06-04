@@ -38,8 +38,14 @@ class FakeRunner:
         if not self._supported:
             raise ArenaUnsupported("needs v4.10")
 
-    async def run(self, media_path, *, task, kwargs):
+    async def prepare(self, media_path):
+        return [(0.0, 3.0)]
+
+    async def run(self, *, task, kwargs):
         return self._outputs.pop(0) if self._outputs else None
+
+    async def cleanup(self):
+        pass
 
 
 def _service(store, outputs, supported=True) -> ArenaService:

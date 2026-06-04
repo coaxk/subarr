@@ -1,22 +1,18 @@
 """#131 — tuning-lab arena orchestrator.
 
-The arena drives a config sweep against the LIVE subgen model and ranks the
-outputs with the validated tournament judge. These tests prove the
-ORCHESTRATION logic (preflight gate, source-transcribe once, per-variant
-translate, judging, bad-variant survival) against a fake runner — plus the
-real `AsrRunner` against a mocked subgen transport.
+Proves the ORCHESTRATION logic against a fake runner: preflight gate, sample-
+once (prepare), source-transcribe, per-variant translate on the sample,
+judging, bad-variant survival, cleanup — plus the real `AsrRunner` (sampler
+injected) over a mocked subgen transport in /asr upload mode.
 """
 from __future__ import annotations
+
+import json
 
 import httpx
 import pytest
 
-from subarr.arena import (
-    ArenaUnsupported,
-    AsrRunner,
-    ConfigVariant,
-    run_arena,
-)
+from subarr.arena import ArenaUnsupported, AsrRunner, ConfigVariant, run_arena
 from subarr.subgen_client import SubgenCapabilities, SubgenClient
 
 
@@ -25,25 +21,32 @@ def _srt(line: str) -> str:
 
 
 class FakeRunner:
-    """Records run() calls; returns a preset SRT per task/label sequence.
-
-    `outputs` is consumed in call order: first call is the source transcribe,
-    then one per variant. A value of None simulates 'no subtitle produced'.
-    """
-    def __init__(self, outputs: list[str | None], supported: bool = True):
+    """Records run() calls; returns a preset SRT per call. First run() is the
+    source transcribe, then one per variant. None = 'no subtitle produced'."""
+    def __init__(self, outputs, supported=True, ranges=None):
         self._outputs = list(outputs)
         self._supported = supported
-        self.calls: list[dict] = []
+        self._ranges = ranges if ranges is not None else [(0.0, 3.0)]
+        self.calls = []
         self.preflighted = False
+        self.prepared = None
+        self.cleaned = False
 
     async def preflight(self):
         self.preflighted = True
         if not self._supported:
             raise ArenaUnsupported("nope")
 
-    async def run(self, media_path, *, task, kwargs):
-        self.calls.append({"media_path": media_path, "task": task, "kwargs": kwargs})
+    async def prepare(self, media_path):
+        self.prepared = media_path
+        return self._ranges
+
+    async def run(self, *, task, kwargs):
+        self.calls.append({"task": task, "kwargs": kwargs})
         return self._outputs.pop(0) if self._outputs else None
+
+    async def cleanup(self):
+        self.cleaned = True
 
 
 @pytest.mark.asyncio
@@ -55,7 +58,7 @@ async def test_preflight_gate_blocks_unsupported_subgen():
 
 
 @pytest.mark.asyncio
-async def test_source_transcribed_once_then_each_variant_translated():
+async def test_samples_once_then_source_then_each_variant():
     runner = FakeRunner([
         _srt("the reactor is overheating"),   # source transcribe
         _srt("reactor overheating now"),       # variant noisy
@@ -66,29 +69,40 @@ async def test_source_transcribed_once_then_each_variant_translated():
 
     res = await run_arena("/media/clip.mkv", variants, runner=runner)
 
-    # source transcribed first (sequential), then variants fired concurrently
-    # — so assert call CONTENT, not call order (gather doesn't guarantee it).
-    assert runner.calls[0] == {"media_path": "/media/clip.mkv", "task": "transcribe", "kwargs": {}}
+    assert runner.prepared == "/media/clip.mkv"     # sampled the file once
+    assert runner.cleaned is True                    # temp clip cleaned up
+    assert runner.calls[0] == {"task": "transcribe", "kwargs": {}}
     variant_calls = runner.calls[1:]
     assert all(c["task"] == "translate" for c in variant_calls)
     assert {frozenset(c["kwargs"].items()) for c in variant_calls} == {
         frozenset({"vad_filter": True}.items()), frozenset({"beam_size": 5}.items()),
     }
-    # source transcript extracted to plain text for QE
     assert res.source_text == "the reactor is overheating"
     assert {o.label for o in res.outcomes} == {"noisy", "clean"}
     assert res.tournament is not None
 
 
 @pytest.mark.asyncio
-async def test_variant_with_no_subtitle_is_dropped_from_judging():
-    runner = FakeRunner([
-        _srt("source line"),     # source
-        _srt("a translated line"),  # good
-        None,                    # broken → no sub
-    ])
-    variants = [ConfigVariant("good", {}), ConfigVariant("broken", {})]
+async def test_clip_speech_ranges_reach_the_judge():
+    # prepare() returns ranges that cover the whole cue; the silence judge
+    # should then see full coverage (no uncovered speech) — proves ranges flow.
+    seen = {}
 
+    def judge(candidates, *, speech_ranges=None, source_text=None, **kw):
+        seen["ranges"] = speech_ranges
+        from subarr.tournament import run_tournament
+        from subarr.tournament_harness import judge_candidates
+        return judge_candidates(candidates, speech_ranges=speech_ranges, source_text=source_text)
+
+    runner = FakeRunner([_srt("hi"), _srt("hi there")], ranges=[(1.0, 9.0)])
+    await run_arena("/m.mkv", [ConfigVariant("a", {})], runner=runner, judge=judge)
+    assert seen["ranges"] == [(1.0, 9.0)]
+
+
+@pytest.mark.asyncio
+async def test_variant_with_no_subtitle_is_dropped_from_judging():
+    runner = FakeRunner([_srt("source line"), _srt("a translated line"), None])
+    variants = [ConfigVariant("good", {}), ConfigVariant("broken", {})]
     res = await run_arena("/media/clip.mkv", variants, runner=runner)
 
     broken = next(o for o in res.outcomes if o.label == "broken")
@@ -100,10 +114,10 @@ async def test_variant_with_no_subtitle_is_dropped_from_judging():
 @pytest.mark.asyncio
 async def test_one_variant_raising_does_not_sink_the_sweep():
     class FlakyRunner(FakeRunner):
-        async def run(self, media_path, *, task, kwargs):
+        async def run(self, *, task, kwargs):
             if kwargs.get("boom"):
                 raise RuntimeError("subgen exploded")
-            return await super().run(media_path, task=task, kwargs=kwargs)
+            return await super().run(task=task, kwargs=kwargs)
 
     runner = FlakyRunner([_srt("src"), _srt("ok line")])
     variants = [ConfigVariant("boom", {"boom": True}), ConfigVariant("ok", {})]
@@ -112,6 +126,7 @@ async def test_one_variant_raising_does_not_sink_the_sweep():
     boom = next(o for o in res.outcomes if o.label == "boom")
     assert "subgen exploded" in boom.error
     assert {sc.entrant_label for sc in res.tournament.scorecards} == {"ok"}
+    assert runner.cleaned is True  # cleanup runs even when a variant errors
 
 
 @pytest.mark.asyncio
@@ -120,7 +135,7 @@ async def test_empty_variants_rejected():
         await run_arena("/x.mkv", [], runner=FakeRunner([]))
 
 
-# ── AsrRunner over a real mocked transport ─────────────────────────────────
+# ── AsrRunner (sampler injected) over a mocked transport ────────────────────
 
 def _client(handler) -> SubgenClient:
     c = SubgenClient(base_url="http://fake:9000")
@@ -128,37 +143,44 @@ def _client(handler) -> SubgenClient:
     return c
 
 
+def _caps(asr_arena):
+    return SubgenCapabilities(reachable=True, version="x", has_queue=True,
+                              has_batch=True, is_subarr_subgen=True, asr_arena=asr_arena)
+
+
 @pytest.mark.asyncio
 async def test_asr_runner_preflight_requires_asr_arena():
-    caps = SubgenCapabilities(reachable=True, version="x", has_queue=True,
-                              has_batch=True, is_subarr_subgen=True, asr_arena=False)
-    runner = AsrRunner(_client(lambda r: httpx.Response(200)), capabilities=caps)
+    runner = AsrRunner(_client(lambda r: httpx.Response(200)), capabilities=_caps(False))
     with pytest.raises(ArenaUnsupported):
         await runner.preflight()
 
 
 @pytest.mark.asyncio
-async def test_asr_runner_maps_path_and_forwards_task_kwargs():
+async def test_asr_runner_samples_then_uploads_clip(tmp_path):
+    clip = tmp_path / "sample.wav"
+    clip.write_bytes(b"RIFFfakeaudio")
     seen = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["path"] = request.url.path
-        seen["params"] = dict(request.url.params)
-        return httpx.Response(200, text=_srt("translated"),
-                              headers={"content-type": "text/plain"})
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["path"] = req.url.path
+        seen["params"] = dict(req.url.params)
+        seen["uploaded"] = b"audio_file" in req.content  # multipart field present
+        return httpx.Response(200, text=_srt("translated"), headers={"content-type": "text/plain"})
 
-    caps = SubgenCapabilities(reachable=True, version="x", has_queue=True,
-                              has_batch=True, is_subarr_subgen=True, asr_arena=True)
-    runner = AsrRunner(_client(handler), capabilities=caps, source_language="ko",
-                       to_subgen_path=lambda p: "/media/" + p.strip("/"))
+    runner = AsrRunner(_client(handler), capabilities=_caps(True), source_language="ko",
+                       to_fs_path=lambda p: p, sampler=lambda fs: (str(clip), [(0.0, 2.0)]))
 
     await runner.preflight()
-    out = await runner.run("TV/Show/ep.mkv", task="translate", kwargs={"beam_size": 5})
+    ranges = await runner.prepare("TV/Show/ep.mkv")
+    assert ranges == [(0.0, 2.0)]
 
+    out = await runner.run(task="translate", kwargs={"beam_size": 5})
     assert out == _srt("translated")
     assert seen["path"] == "/asr"
+    assert seen["uploaded"] is True
+    assert "path" not in seen["params"]            # upload mode → no path param
     assert seen["params"]["task"] == "translate"
-    assert seen["params"]["path"] == "/media/TV/Show/ep.mkv"
     assert seen["params"]["language"] == "ko"
-    import json
     assert json.loads(seen["params"]["kwargs"]) == {"beam_size": 5}
+
+    await runner.cleanup()

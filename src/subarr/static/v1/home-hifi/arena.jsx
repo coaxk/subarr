@@ -195,9 +195,10 @@ function WhatThisIs() {
         ))}
       </div>
       <div style={expectStyle}>
-        <b style={{ color: 'var(--fg-1)' }}>What to expect:</b> every recipe is a full transcription pass on your GPU, plus one
-        pass to transcribe the source for comparison. So comparing three recipes means four passes — a sweep usually takes a few
-        minutes. Progress shows live below, you can leave the page and come back, and nothing is written to your library.
+        <b style={{ color: 'var(--fg-1)' }}>What to expect:</b> you just pick a file — subarr automatically cuts a short
+        representative sample (mixing dialogue, a speech→silence edge, and a quiet/music stretch, because that quiet bit is
+        exactly where bad settings start inventing lines). Recipes run on that sample, so a sweep takes a couple of minutes,
+        not an hour. Progress shows live; you can leave and come back; nothing is written to your library.
       </div>
     </Collapsible>
   );
@@ -265,6 +266,7 @@ function SweepForm({ onRun, disabled, gate }) {
           <input value={mediaPath} onChange={(e) => setMediaPath(e.target.value)} placeholder="Pick a file from your library…" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
           <button onClick={() => setPicking(true)} style={ghostBtnStyle}>Browse…</button>
         </div>
+        <Hint>Pick any file — even a full episode. subarr samples a short representative clip from it automatically; you don't need to trim anything.</Hint>
       </div>
 
       {/* spoken language */}
@@ -401,14 +403,36 @@ function SweepDetail({ run }) {
       })()}
       {scorecards.length > 0 ? (
         <>
-          {winner && (
-            <div style={winnerBoxStyle}>
-              <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--fg-0)' }}>★ Winner: {winner}</div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>Make it your default by adding this to your subgen config:</div>
-              <code style={winnerCode}>SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}</code>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 6 }}>A one-click “adopt winner” is coming — for now, copy and paste.</div>
-            </div>
-          )}
+          {(() => {
+            const agreement = run.result?.clip_agreement;
+            const conf = agreement == null ? null : agreement >= 0.7 ? 'high' : agreement >= 0.6 ? 'moderate' : 'low';
+            const confColor = conf === 'high' ? 'var(--success-500)' : conf === 'moderate' ? 'var(--warn-500)' : 'var(--error-500)';
+            const avoid = scorecards.filter((s) => s.disqualified).map((s) => s.entrant_label);
+            return (
+              <div style={guidanceBoxStyle}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--fg-0)' }}>Guidance for this clip</div>
+                {winner && (
+                  <>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+                      <b style={{ color: 'var(--success-500)' }}>Top pick:</b> {winner} — rated best on this clip. To try it as your default:
+                    </div>
+                    <code style={winnerCode}>SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}</code>
+                  </>
+                )}
+                {avoid.length > 0 && (
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 6 }}>
+                    <b style={{ color: 'var(--error-500)' }}>Avoid:</b> {avoid.join(', ')} — unusable output here (looped / hallucinated / no subtitle).
+                  </div>
+                )}
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 8, lineHeight: 1.55 }}>
+                  {conf && <><b style={{ color: confColor }}>Confidence: {conf}</b> (the recipes agreed {(agreement * 100).toFixed(0)}% on what was said). </>}
+                  This is <b>one clip</b> — a guide, not a verdict. Top picks can flip between clips; the judge is strong at catching
+                  failures (loops, hallucination, dropout) but only a rough guide to which is most <i>accurate</i>. Run a few files
+                  before committing a default. One-click adopt is coming.
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-base)' }}>
               <thead>
@@ -460,8 +484,8 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
     return (
       <SectionCard label="Sweeps">
         <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-base)', lineHeight: 1.6 }}>
-          No sweeps yet. Queue one above and it’ll appear here with live status — and the ★ winner once the judge has ranked it.
-          Sweeps keep running in the background, so you can queue several and come back.
+          No sweeps yet. Queue one above and it’ll appear here with live status — and guidance (a top pick, what to avoid, and a
+          confidence read) once the judge has ranked it. Sweeps keep running in the background, so you can queue several and come back.
         </div>
       </SectionCard>
     );
@@ -483,7 +507,7 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   ) : (
                     <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>{r.recipe_count} recipe{r.recipe_count === 1 ? '' : 's'}</span>
                   )}
-                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`winner: ${r.winner}`}>★ {r.winner}</span>}
+                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`top pick on this clip: ${r.winner}`}>top: {r.winner}</span>}
                   <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
                 </button>
                 <button onClick={() => onDelete(r.id)} title="remove sweep" style={{ ...iconBtnStyle, border: 'none', background: 'transparent', marginRight: 8 }}>
@@ -593,7 +617,7 @@ const iconBtnStyle = { background: 'var(--bg-2)', color: 'var(--fg-2)', border: 
 const crumbStyle = { background: 'transparent', border: 'none', color: 'var(--violet-400)', cursor: 'pointer', fontSize: 'var(--text-sm)', padding: 0 };
 const codeName = { color: 'var(--violet-400)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' };
 const gateNoticeStyle = { background: 'rgba(245,158,11,0.10)', border: '1px solid var(--warn-500)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', fontSize: 'var(--text-base)', color: 'var(--fg-1)' };
-const winnerBoxStyle = { background: 'rgba(52,211,153,0.08)', border: '1px solid var(--success-500)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14 };
+const guidanceBoxStyle = { background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14 };
 const winnerCode = { display: 'block', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', background: 'var(--bg-0)', border: 'var(--border)', padding: '8px 10px', borderRadius: 'var(--radius-lg)', overflowX: 'auto', color: 'var(--fg-1)' };
 const sweepRow = { display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 14px', color: 'var(--fg-1)' };
 const progRow = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-base)' };

@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .paths import canonical_to_subgen_batch
+from .paths import canonical_to_fs
 from .subtitle_readability import parse_srt
 from .tournament import TournamentResult
 from .tournament_harness import judge_candidates
@@ -60,24 +60,33 @@ class ArenaResult:
 
 
 class CandidateRunner(Protocol):
-    """Seam: produce a subtitle for `media_path` under a given task + kwargs.
-    Returns the raw SRT text, or None if the model produced nothing."""
+    """Seam for the arena. `prepare()` does one-time setup (auto-sampling) and
+    returns the speech ranges the judge should use; `run()` produces one
+    subtitle under a task+kwargs on the prepared sample; `cleanup()` releases
+    any temp artifacts."""
     async def preflight(self) -> None: ...
-    async def run(self, media_path: str, *, task: str, kwargs: dict[str, Any]) -> str | None: ...
+    async def prepare(self, media_path: str) -> list[tuple[float, float]] | None: ...
+    async def run(self, *, task: str, kwargs: dict[str, Any]) -> str | None: ...
+    async def cleanup(self) -> None: ...
 
 
 class AsrRunner:
-    """Production runner over subgen's v4.10 `/asr` path-input channel.
+    """Production runner over subgen's v4.10 `/asr` channel.
 
-    No upload (subgen reads the shared media mount), no shared scratch (the
-    sub returns over HTTP). Gate is enforced in `preflight()`.
+    `prepare()` auto-samples the file into a short strata clip (speech +
+    boundary + silence — see arena_sampler) and every recipe is run on THAT
+    clip via `/asr` upload mode: no whole-episode passes, no shared mount, and
+    the clip's VAD ranges drive the judge's silence/coverage signals. Gate is
+    enforced in `preflight()`.
     """
     def __init__(self, subgen, *, capabilities=None, source_language: str | None = None,
-                 to_subgen_path=canonical_to_subgen_batch):
+                 to_fs_path=canonical_to_fs, sampler=None):
         self._subgen = subgen
         self._caps = capabilities
         self._source_language = source_language
-        self._to_subgen_path = to_subgen_path
+        self._to_fs_path = to_fs_path
+        self._sampler = sampler  # injected for tests; default resolved lazily
+        self._clip: str | None = None
 
     async def preflight(self) -> None:
         caps = self._caps if self._caps is not None else await self._subgen.probe_capabilities()
@@ -88,12 +97,33 @@ class AsrRunner:
                 "kwargs + HTTP return)"
             )
 
-    async def run(self, media_path: str, *, task: str, kwargs: dict[str, Any]) -> str | None:
-        subgen_path = self._to_subgen_path(media_path)
+    async def prepare(self, media_path: str) -> list[tuple[float, float]] | None:
+        sampler = self._sampler
+        if sampler is None:
+            from .arena_sampler import build_sample as sampler
+        fs_path = str(self._to_fs_path(media_path))
+        # ffmpeg/VAD are blocking CPU work — keep the event loop free.
+        import asyncio
+        self._clip, ranges = await asyncio.to_thread(sampler, fs_path)
+        return ranges
+
+    async def run(self, *, task: str, kwargs: dict[str, Any]) -> str | None:
+        if not self._clip:
+            raise RuntimeError("AsrRunner.run() called before prepare()")
         srt = await self._subgen.asr(
-            subgen_path, task=task, language=self._source_language, kwargs=kwargs or None,
+            local_file=self._clip, task=task,
+            language=self._source_language, kwargs=kwargs or None,
         )
         return srt or None
+
+    async def cleanup(self) -> None:
+        if self._clip:
+            import os
+            try:
+                os.remove(self._clip)
+            except OSError:
+                pass
+            self._clip = None
 
 
 def _srt_to_text(srt_text: str) -> str:
@@ -107,7 +137,6 @@ async def run_arena(
     variants: list[ConfigVariant],
     *,
     runner: CandidateRunner,
-    speech_ranges: list[tuple[float, float]] | None = None,
     judge=judge_candidates,
     on_source=None,
     on_variant=None,
@@ -122,35 +151,39 @@ async def run_arena(
         raise ValueError("run_arena needs at least one config variant")
 
     await runner.preflight()
+    try:
+        # 0. Auto-sample the file into a short strata clip; its VAD speech
+        # ranges drive the judge's silence/coverage signals.
+        speech_ranges = await runner.prepare(media_path)
 
-    # 1. Source transcript (once) — task=transcribe, default config.
-    source_srt = await runner.run(media_path, task="transcribe", kwargs={})
-    source_text = _srt_to_text(source_srt) if source_srt else None
-    if on_source is not None:
-        on_source(source_text)
+        # 1. Source transcript (once) — task=transcribe, default config.
+        source_srt = await runner.run(task="transcribe", kwargs={})
+        source_text = _srt_to_text(source_srt) if source_srt else None
+        if on_source is not None:
+            on_source(source_text)
 
-    # 2. Candidates — one translate per variant, SEQUENTIALLY (await each
-    # before starting the next). subgen's /asr is a blocking one-at-a-time
-    # call, and its single worker serializes the GPU work anyway, so firing
-    # them concurrently gains nothing — it only risks the later requests
-    # waiting in subgen's queue past the client read-timeout (which judged
-    # sweeps early with partial results). Sequential = the sweep finishes only
-    # when every recipe is truly done. on_variant fires after each for live
-    # per-recipe progress.
-    outcomes: list[VariantOutcome] = []
-    candidates: dict[str, str] = {}
-    for v in variants:
-        try:
-            srt = await runner.run(media_path, task="translate", kwargs=v.kwargs)
-            outcome = VariantOutcome(v.label, srt, None if srt else "no subtitle produced")
-        except Exception as e:  # one bad variant must not sink the whole sweep
-            outcome = VariantOutcome(v.label, None, error=str(e))
-        outcomes.append(outcome)
-        if outcome.srt_text:
-            candidates[v.label] = outcome.srt_text
-        if on_variant is not None:
-            on_variant(outcome)
+        # 2. Candidates — one translate per variant, SEQUENTIALLY (await each
+        # before the next). subgen's /asr is a blocking one-at-a-time call and
+        # its single worker serializes the GPU anyway, so concurrency only
+        # risks later requests waiting past the client timeout (which judged
+        # sweeps early with partial results). Sequential = the sweep finishes
+        # only when every recipe is truly done. on_variant fires per recipe.
+        outcomes: list[VariantOutcome] = []
+        candidates: dict[str, str] = {}
+        for v in variants:
+            try:
+                srt = await runner.run(task="translate", kwargs=v.kwargs)
+                outcome = VariantOutcome(v.label, srt, None if srt else "no subtitle produced")
+            except Exception as e:  # one bad variant must not sink the whole sweep
+                outcome = VariantOutcome(v.label, None, error=str(e))
+            outcomes.append(outcome)
+            if outcome.srt_text:
+                candidates[v.label] = outcome.srt_text
+            if on_variant is not None:
+                on_variant(outcome)
 
-    # 3. Judge.
-    result = judge(candidates, speech_ranges=speech_ranges, source_text=source_text)
-    return ArenaResult(source_text=source_text, outcomes=outcomes, tournament=result)
+        # 3. Judge — the clip's VAD ranges make the silence/coverage signals fire.
+        result = judge(candidates, speech_ranges=speech_ranges, source_text=source_text)
+        return ArenaResult(source_text=source_text, outcomes=outcomes, tournament=result)
+    finally:
+        await runner.cleanup()
