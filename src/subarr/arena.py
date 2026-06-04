@@ -77,6 +77,8 @@ class ArenaResult:
     confidence: str | None            # high | moderate | low
     consistency: float | None         # fraction of clips the winner also topped
     agreement_mean: float | None      # mean clip_agreement across clips
+    tie: bool = False                 # top recipes within noise → no real winner
+    explanation: str | None = None    # optional plain-language read (local ollama)
 
 
 def _confidence(consistency: float | None, agreement_mean: float | None, n_clips: int) -> str:
@@ -125,6 +127,12 @@ def _aggregate(per_clip: list[ClipResult], variants: list[ConfigVariant]):
     rows.sort(key=lambda r: r.mean_composite, reverse=True)
     winner = rows[0].label if rows and rows[0].mean_composite > 0 else None
 
+    # Tie: top two scoring recipes within noise → no recipe meaningfully beat
+    # another (typical on easy audio where sane configs converge). Computed
+    # here so the row, guidance, and explainer all agree.
+    scored = [r for r in rows if r.clips_scored > 0]
+    tie = len(scored) >= 2 and (scored[0].mean_composite - scored[1].mean_composite) < 2.0
+
     clip_winners = [c.winner for c in per_clip if c.winner]
     consistency = (sum(1 for w in clip_winners if w == winner) / len(clip_winners)
                    if winner and clip_winners else None)
@@ -132,7 +140,7 @@ def _aggregate(per_clip: list[ClipResult], variants: list[ConfigVariant]):
     agreement_mean = round(sum(agrs) / len(agrs), 3) if agrs else None
     confidence = _confidence(consistency, agreement_mean, len(per_clip))
     return (rows, winner, confidence,
-            round(consistency, 2) if consistency is not None else None, agreement_mean)
+            round(consistency, 2) if consistency is not None else None, agreement_mean, tie)
 
 
 class CandidateRunner(Protocol):
@@ -246,11 +254,11 @@ async def run_arena(
         outcomes = [VariantOutcome(v.label, "" if produced[v.label] else None,
                                    None if produced[v.label] else "no subtitle produced on any clip")
                     for v in variants]
-        rows, winner, confidence, consistency, agreement_mean = _aggregate(per_clip, variants)
+        rows, winner, confidence, consistency, agreement_mean, tie = _aggregate(per_clip, variants)
         return ArenaResult(
             outcomes=outcomes, aggregate=rows, per_clip=per_clip,
             winner=winner, confidence=confidence,
-            consistency=consistency, agreement_mean=agreement_mean,
+            consistency=consistency, agreement_mean=agreement_mean, tie=tie,
         )
     finally:
         await runner.cleanup()

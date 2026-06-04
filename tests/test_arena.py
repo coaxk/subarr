@@ -42,12 +42,13 @@ def test_aggregate_winner_is_best_mean_composite():
         _clip("speech", "a", 0.8, {"a": 80, "b": 50}),
         _clip("silence", "a", 0.75, {"a": 70, "b": 40}),
     ]
-    rows, winner, conf, consistency, agr = _aggregate(per_clip, variants)
+    rows, winner, conf, consistency, agr, tie = _aggregate(per_clip, variants)
     assert winner == "a"
     assert rows[0].label == "a" and rows[0].mean_composite == 75.0
     assert rows[0].clips_won == 2
     assert consistency == 1.0            # 'a' topped both clips
     assert conf == "high"                # consistent + agreement >= 0.7
+    assert tie is False                  # 75 vs 45 — clear gap
 
 
 def test_flipping_winner_lowers_confidence():
@@ -56,11 +57,21 @@ def test_flipping_winner_lowers_confidence():
         _clip("speech", "a", 0.55, {"a": 80, "b": 60}),
         _clip("silence", "b", 0.55, {"a": 40, "b": 95}),  # b wins here
     ]
-    rows, winner, conf, consistency, agr = _aggregate(per_clip, variants)
+    rows, winner, conf, consistency, agr, tie = _aggregate(per_clip, variants)
     # b has higher mean (77.5 vs 60) → overall winner, but only topped 1/2 clips
     assert winner == "b"
     assert consistency == 0.5
     assert conf == "low"                 # flips + weak agreement
+
+
+def test_aggregate_flags_a_tie_when_scores_converge():
+    variants = [ConfigVariant("a", {}), ConfigVariant("b", {})]
+    per_clip = [
+        _clip("speech", "a", 1.0, {"a": 43.6, "b": 43.6}),
+        _clip("silence", "a", 1.0, {"a": 43.6, "b": 43.6}),
+    ]
+    rows, winner, conf, consistency, agr, tie = _aggregate(per_clip, variants)
+    assert tie is True                   # identical output → no real winner
 
 
 def test_confidence_thresholds():
@@ -221,3 +232,42 @@ async def test_asr_runner_samples_clips_then_uploads_each(tmp_path):
     assert json.loads(seen[-1]["params"]["kwargs"]) == {"beam_size": 5}
 
     await runner.cleanup()
+
+
+# ── ollama explainer (best-effort) ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_explain_graceful_without_ollama():
+    from subarr.arena_explain import explain
+    assert await explain({"aggregate": [], "per_clip": []}, "/x.mkv", None) is None
+
+
+@pytest.mark.asyncio
+async def test_explain_uses_ollama_when_configured():
+    from subarr.arena_explain import explain
+
+    class FakeOllama:
+        def is_configured(self):
+            return True
+        async def generate(self, prompt, *, system=None, **kw):
+            assert "43.6" in prompt and "TIE" in prompt   # result data reached the prompt
+            return "  This clip is easy — settings don't matter here.  "
+
+    out = await explain(
+        {"aggregate": [{"label": "a", "mean_composite": 43.6, "clips_won": 2, "disqualified_in": 0}],
+         "per_clip": [{"kind": "speech"}, {"kind": "silence"}], "tie": True, "agreement_mean": 1.0},
+        "/m.mkv", FakeOllama())
+    assert out == "This clip is easy — settings don't matter here."
+
+
+@pytest.mark.asyncio
+async def test_explain_swallows_ollama_errors():
+    from subarr.arena_explain import explain
+
+    class BoomOllama:
+        def is_configured(self):
+            return True
+        async def generate(self, prompt, *, system=None, **kw):
+            raise RuntimeError("ollama down")
+
+    assert await explain({"aggregate": [], "per_clip": []}, "/m.mkv", BoomOllama()) is None

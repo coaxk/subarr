@@ -55,6 +55,7 @@ class ArenaRun:
             "steps_total": prog.get("total", 0),
             "winner": res.get("winner"),
             "confidence": res.get("confidence"),
+            "tie": res.get("tie", False),
             "error": self.error,
             "created_at": self.created_at,
         }

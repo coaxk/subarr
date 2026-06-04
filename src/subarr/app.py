@@ -47,6 +47,7 @@ from .routers import (
     queue, scan, schedule as r_schedule, sidecar as r_sidecar,
     telemetry as r_telemetry, updates as r_updates, vad as r_vad,
 )
+from . import arena_explain as _arena_explain
 from .arena import AsrRunner
 from .arena_service import ArenaService
 from .arena_store import ArenaStore
@@ -119,6 +120,10 @@ async def lifespan(app_: FastAPI):
             capabilities=getattr(app_.state, "subgen_caps", None),
             source_language=run.source_language,
         ),
+        # ollama EXPLAINS the result in plain language (not scoring). Resolved
+        # live so an onboarding ollama-config swap is picked up without restart.
+        explainer=lambda result, media_path: _arena_explain.explain(
+            result, media_path, getattr(app_.state, "ollama", None)),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()

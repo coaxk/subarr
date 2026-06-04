@@ -416,9 +416,7 @@ function SweepDetail({ run }) {
         const avoid = rows.filter((r) => r.disqualified_in > 0 || r.clips_scored === 0).map((r) => r.label);
         const nclips = (res.per_clip || []).length;
         const wonRow = rows.find((r) => r.label === winner);
-        // Tie: top two within noise → no recipe meaningfully beat another here.
-        const scored = rows.filter((r) => r.clips_scored > 0);
-        const tie = scored.length >= 2 && (scored[0].mean_composite - scored[1].mean_composite) < 2.0;
+        const tie = !!res.tie;   // computed in the backend so row + guidance + explainer all agree
         return (
           <>
             <div style={guidanceBoxStyle}>
@@ -426,6 +424,11 @@ function SweepDetail({ run }) {
                 <span style={{ fontWeight: 700, color: 'var(--fg-0)' }}>Guidance</span>
                 {res.confidence && !tie && <ConfChip conf={res.confidence} />}
               </div>
+              {res.explanation && (
+                <div style={explainStyle}>
+                  <span style={{ marginRight: 6 }}>💡</span>{res.explanation}
+                </div>
+              )}
               {tie ? (
                 <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
                   These recipes performed <b>about the same</b> on this clip (within noise) — no clear advantage either way.
@@ -545,8 +548,9 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   ) : (
                     <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>{r.recipe_count} recipe{r.recipe_count === 1 ? '' : 's'}</span>
                   )}
-                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`top pick: ${r.winner}`}>top: {r.winner}</span>}
-                  {r.status === 'done' && r.confidence && <ConfChip conf={r.confidence} />}
+                  {r.status === 'done' && r.tie && <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }} title="recipes performed about the same">≈ tie</span>}
+                  {r.winner && !r.tie && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`top pick: ${r.winner}`}>top: {r.winner}</span>}
+                  {r.status === 'done' && r.confidence && !r.tie && <ConfChip conf={r.confidence} />}
                   <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
                 </button>
                 <button onClick={() => onDelete(r.id)} title="remove sweep" style={{ ...iconBtnStyle, border: 'none', background: 'transparent', marginRight: 8 }}>
@@ -657,6 +661,7 @@ const crumbStyle = { background: 'transparent', border: 'none', color: 'var(--vi
 const codeName = { color: 'var(--violet-400)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' };
 const gateNoticeStyle = { background: 'rgba(245,158,11,0.10)', border: '1px solid var(--warn-500)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', fontSize: 'var(--text-base)', color: 'var(--fg-1)' };
 const guidanceBoxStyle = { background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14 };
+const explainStyle = { background: 'rgba(139,92,246,0.10)', border: '1px solid var(--violet-500)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', marginBottom: 10, fontSize: 'var(--text-sm)', color: 'var(--fg-1)', lineHeight: 1.55 };
 const winnerCode = { display: 'block', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', background: 'var(--bg-0)', border: 'var(--border)', padding: '8px 10px', borderRadius: 'var(--radius-lg)', overflowX: 'auto', color: 'var(--fg-1)' };
 const sweepRow = { display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 14px', color: 'var(--fg-1)' };
 const progRow = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-base)' };

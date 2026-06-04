@@ -28,9 +28,11 @@ __all__ = ["ArenaRun", "ArenaStore", "ArenaService"]
 
 
 class ArenaService:
-    def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner]):
+    def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner],
+                 explainer=None):
         self._store = store
         self._build_runner = build_runner
+        self._explainer = explainer  # async (result_dict, media_path) -> str|None
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
@@ -119,7 +121,13 @@ class ArenaService:
                                      on_clip=on_clip, on_step=on_step)
             for c in per_clip["clips"]:
                 c["status"] = "done"
-            run.result = asdict(result)
+            serialized = asdict(result)
+            if self._explainer is not None:
+                try:
+                    serialized["explanation"] = await self._explainer(serialized, run.media_path)
+                except Exception:  # explanation is a nicety — never fail the sweep
+                    serialized["explanation"] = None
+            run.result = serialized
             run.status = "done"
             self._store.save(run)
             self._emit(run_id, {"event": "done", "data": run.to_dict()})
