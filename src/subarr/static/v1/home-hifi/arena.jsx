@@ -257,7 +257,7 @@ function SweepForm({ onRun, disabled, gate }) {
       {/* recipes */}
       <div style={fieldStyle}>
         <span style={lblStyle}>Recipes to compare</span>
-        <Hint>Choose the curated recipes you want to trial. Add your own at the bottom to test a specific tweak.</Hint>
+        <Hint>Choose the curated recipes you want to trial — each one runs separately and competes against the others. Add your own at the bottom to test a specific tweak.</Hint>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, marginTop: 10 }}>
           {CURATED.map((c) => {
             const on = selected.has(c.id);
@@ -311,6 +311,12 @@ function SweepForm({ onRun, disabled, gate }) {
       )}
 
       <div style={{ borderTop: 'var(--border)', paddingTop: 16, marginTop: 2 }}>
+        {total > 0 && (
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginBottom: 10, lineHeight: 1.5 }}>
+            This runs <b>{total}</b> recipe{total === 1 ? '' : 's'} separately (plus <b>1</b> pass to transcribe the source),
+            so <b>{total + 1}</b> transcription{total + 1 === 1 ? '' : 's'} in total. You’ll get one ranked result per recipe.
+          </div>
+        )}
         <button onClick={submit} disabled={!ready || disabled} style={{ ...primaryBtnStyle, opacity: (!ready || disabled) ? 0.5 : 1, cursor: (!ready || disabled) ? 'not-allowed' : 'pointer' }}>
           {disabled ? 'Sweep running…' : `Run sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
         </button>
