@@ -5,6 +5,44 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.1.0] - 2026-06-04
+
+### Added
+- **Speech-aware audio (silero VAD).** The audio-review player now lands its
+  clip on actual dialogue instead of a fixed 5-second window that hit silence
+  or intro music most of the time. silero voice-activity detection picks a
+  ~12s speech window; a "🎙 speech-detected" badge shows when it's active.
+  Opt-in: a "Speech detection" onboarding step and a Settings → System
+  "Speech-aware audio" card enable it and pull a ~2 MB model. When off or
+  undownloaded it falls back cleanly to the previous silencedetect behaviour.
+  The runtime (onnxruntime, no PyTorch) ships in the image; only the model is
+  pulled on demand. (#110, #111)
+- **Config-persistence layer.** UI settings now survive a container restart,
+  with precedence env > persisted-file > built-in default (env stays
+  authoritative). (#112)
+- **Deterministic subtitle readability linter** (CPS/CPL/line-count/duration/
+  overlap), used as a capped secondary signal in the tournament rubric.
+  (#92, #108)
+- **Whisper-tuning tournament — judging engine + reference-free QE judges**
+  (hallucination / looping / canned-phrase / coverage / cross-config
+  consensus) + a Tier-B validation harness. Internal foundation this release,
+  validated against professional-reference accuracy; surfaces as a user-facing
+  tuning lab in v1.2. See `docs/research/tournament-validation.md`.
+  (#65, #120, #121, #122)
+- **Throttled library-backfill selection core** (opt-in foundation for draining
+  the coverage-gap backlog at a target queue depth). (#116)
+- `data-testid` capture hooks across the UI for scripted capture / future e2e.
+  (#81)
+
+### Changed
+- Audio-review clips are now ~12s (was 5s) — long enough to reliably hear
+  dialogue. (#110)
+
+### Notes
+- New image dependency: the speech-detection runtime (onnxruntime + numpy,
+  ~65 MB, no PyTorch) is baked into the image; it's inert until you opt in and
+  pull the model.
+
 ## [1.0.2] - 2026-06-03
 
 ### Fixed
