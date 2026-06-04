@@ -49,6 +49,7 @@ from .routers import (
 )
 from .arena import AsrRunner
 from .arena_service import ArenaService
+from .arena_store import ArenaStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
@@ -101,10 +102,18 @@ async def lifespan(app_: FastAPI):
         # Best-effort anonymous error-class recording for telemetry.
         error_recorder=lambda cls: app_.state.errors.record(cls),
     )
-    # #131 tuning-lab arena. build_runner resolves subgen + caps LIVE (closure
+    # #131 tuning-lab arena. Sweeps persist (SQLite) so history survives a
+    # restart and feeds the federated tournament (#124). Reconcile any run that
+    # was mid-flight when the process last died → error, so the UI never shows a
+    # forever-spinning sweep. build_runner resolves subgen + caps LIVE (closure
     # over app_.state) so an onboarding client-swap or a subgen upgrade picked
     # up by the watchdog is reflected on the next run without a restart.
+    app_.state.arena_store = ArenaStore(settings.db_path)
+    _orphaned = app_.state.arena_store.reconcile_interrupted()
+    if _orphaned:
+        log.info("arena: marked %d interrupted sweep(s) as errored on boot", _orphaned)
     app_.state.arena = ArenaService(
+        app_.state.arena_store,
         build_runner=lambda run: AsrRunner(
             app_.state.subgen,
             capabilities=getattr(app_.state, "subgen_caps", None),

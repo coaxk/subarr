@@ -6,11 +6,23 @@ here by a fake CandidateRunner so the lifecycle is tested without subgen.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
+import subarr
 from subarr.arena import ArenaUnsupported, ConfigVariant
 from subarr.arena_service import ArenaRun, ArenaService
+from subarr.arena_store import ArenaStore
+
+_ARENA_SQL = (Path(subarr.__file__).parent / "migrations" / "009_arena_runs.sql").read_text()
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)  # apply just this migration's schema
+    return s
 
 
 def _srt(line: str) -> str:
@@ -30,52 +42,70 @@ class FakeRunner:
         return self._outputs.pop(0) if self._outputs else None
 
 
-def _service(outputs, supported=True) -> ArenaService:
-    return ArenaService(build_runner=lambda run: FakeRunner(outputs, supported))
+def _service(store, outputs, supported=True) -> ArenaService:
+    return ArenaService(store, build_runner=lambda run: FakeRunner(outputs, supported))
 
 
-def test_create_returns_pending_run():
-    svc = _service([])
+def test_create_persists_pending_run(store):
+    svc = _service(store, [])
     run = svc.create("/media/clip.mkv",
                      [ConfigVariant("a", {"beam_size": 5})], source_language="ko")
     assert run.status == "pending"
-    assert run.id and svc.get(run.id) is run
-    d = run.to_dict()
-    assert d["media_path"] == "/media/clip.mkv"
-    assert d["variants"] == [{"label": "a", "kwargs": {"beam_size": 5}}]
-    assert d["source_language"] == "ko"
+    persisted = svc.get(run.id)              # read back from SQLite
+    assert persisted is not None and persisted.id == run.id
+    assert persisted.media_path == "/media/clip.mkv"
+    assert persisted.variants == [{"label": "a", "kwargs": {"beam_size": 5}}]
+    assert persisted.source_language == "ko"
 
 
 @pytest.mark.asyncio
-async def test_run_completes_and_records_result():
-    svc = _service([_srt("source line"), _srt("cand a"), _srt("cand b")])
+async def test_run_completes_and_persists_result(store):
+    svc = _service(store, [_srt("source line"), _srt("cand a"), _srt("cand b")])
     run = svc.create("/m.mkv", [ConfigVariant("a", {}), ConfigVariant("b", {})])
     svc.start(run)
     await svc._tasks[run.id]
 
-    assert run.status == "done"
-    assert run.source_text == "source line"
-    assert [o["label"] for o in run.outcomes] == ["a", "b"]
-    assert all(o["ok"] for o in run.outcomes)
-    assert run.result is not None
-    assert "scorecards" in run.result and "winner_label" in run.result
+    persisted = svc.get(run.id)              # the persisted truth, not the in-mem object
+    assert persisted.status == "done"
+    assert persisted.source_text == "source line"
+    assert {o["label"] for o in persisted.outcomes} == {"a", "b"}
+    assert all(o["ok"] for o in persisted.outcomes)
+    assert persisted.result is not None
+    assert "scorecards" in persisted.result and "winner_label" in persisted.result
 
 
 @pytest.mark.asyncio
-async def test_preflight_failure_marks_error():
-    svc = _service([], supported=False)
+async def test_survives_a_fresh_service_on_the_same_store(store):
+    """Simulates a restart: a new ArenaService over the same store still sees
+    the finished sweep — this is what makes history survive a restart + feed
+    the federated tournament."""
+    svc = _service(store, [_srt("src"), _srt("a")])
     run = svc.create("/m.mkv", [ConfigVariant("a", {})])
     svc.start(run)
     await svc._tasks[run.id]
 
-    assert run.status == "error"
-    assert "v4.10" in run.error
-    assert run.result is None
+    fresh = ArenaService(store, build_runner=lambda r: None)
+    again = fresh.get(run.id)
+    assert again is not None and again.status == "done"
+    assert [r.id for r in fresh.list()] == [run.id]
 
 
 @pytest.mark.asyncio
-async def test_events_streamed_to_subscriber():
-    svc = _service([_srt("src"), _srt("a"), None])
+async def test_preflight_failure_persists_error(store):
+    svc = _service(store, [], supported=False)
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    svc.start(run)
+    await svc._tasks[run.id]
+
+    persisted = svc.get(run.id)
+    assert persisted.status == "error"
+    assert "v4.10" in persisted.error
+    assert persisted.result is None
+
+
+@pytest.mark.asyncio
+async def test_events_streamed_to_subscriber(store):
+    svc = _service(store, [_srt("src"), _srt("a"), None])
     run = svc.create("/m.mkv", [ConfigVariant("a", {}), ConfigVariant("b", {})])
 
     events: list[dict] = []
@@ -97,14 +127,24 @@ async def test_events_streamed_to_subscriber():
     assert kinds[-1] == "done"
 
 
-def test_list_is_newest_first_with_summaries():
-    svc = _service([])
+def test_list_is_newest_first_with_summaries(store):
+    svc = _service(store, [])
     a = svc.create("/a.mkv", [ConfigVariant("x", {})])
-    a.created_at = 100.0
+    a.created_at = 100.0; store.save(a)
     b = svc.create("/b.mkv", [ConfigVariant("y", {}), ConfigVariant("z", {})])
-    b.created_at = 200.0
+    b.created_at = 200.0; store.save(b)
     listed = svc.list()
     assert [r.id for r in listed] == [b.id, a.id]  # newest first
     s = b.summary()
     assert s["recipe_count"] == 2 and s["status"] == "pending" and "winner" in s
     assert "result" not in s  # summaries stay light (no scorecards)
+
+
+def test_reconcile_marks_interrupted_runs_errored(store):
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    run.status = "running"; store.save(run)   # pretend it was mid-flight at crash
+    n = store.reconcile_interrupted()
+    assert n == 1
+    after = svc.get(run.id)
+    assert after.status == "error" and "interrupted" in after.error
