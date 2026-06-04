@@ -222,13 +222,14 @@ function SweepForm({ onRun, disabled, gate }) {
   const total = chosen.length + custom.length;
   const ready = mediaPath.trim() && total >= 1 && !dupLabel && !badCustom;
 
-  const submit = () => {
+  const submit = async () => {
     if (!ready) return;
     const variants = [
       ...chosen.map((c) => ({ label: c.label, kwargs: c.kwargs })),
       ...custom.map((c, i) => ({ label: c.label.trim(), kwargs: customParsed[i].value })),
     ];
-    onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+    const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+    if (ok) setMediaPath('');  // keep recipe picks; clear the file so the next one is two clicks away
   };
 
   return (
@@ -317,8 +318,8 @@ function SweepForm({ onRun, disabled, gate }) {
             so <b>{total + 1}</b> transcription{total + 1 === 1 ? '' : 's'} in total. You’ll get one ranked result per recipe.
           </div>
         )}
-        <button onClick={submit} disabled={!ready || disabled} style={{ ...primaryBtnStyle, opacity: (!ready || disabled) ? 0.5 : 1, cursor: (!ready || disabled) ? 'not-allowed' : 'pointer' }}>
-          {disabled ? 'Sweep running…' : `Run sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
+        <button onClick={submit} disabled={!ready} style={{ ...primaryBtnStyle, opacity: !ready ? 0.5 : 1, cursor: !ready ? 'not-allowed' : 'pointer' }}>
+          {`Queue sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
         </button>
       </div>
     </SectionCard>
@@ -333,42 +334,30 @@ const COL_HELP = {
   Lines: 'How many subtitle lines it produced.',
 };
 
-function ResultPanel({ run }) {
-  if (!run) {
-    return (
-      <SectionCard label="Results">
-        <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-base)', lineHeight: 1.6 }}>
-          Nothing run yet. Set up a sweep above and press <b>Run sweep</b>. When it finishes you’ll get a ranked table here —
-          the <b>★ winner</b> is the recipe the judge rated best. Copy its settings into your subgen config to make it your default.
-        </div>
-      </SectionCard>
-    );
-  }
+// One sweep's detail: live progress, winner, and the ranked table. Takes the
+// full run object (fetched per-id); null while its detail is loading.
+function SweepDetail({ run }) {
+  if (!run) return <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', padding: '4px 0' }}>Loading…</div>;
   const scorecards = run.result?.scorecards || [];
   const winner = run.result?.winner_label;
   const winnerKwargs = (run.variants || []).find((v) => v.label === winner)?.kwargs;
 
   return (
-    <SectionCard label="Results" action={<StatusPill status={run.status} />}>
-      {run.error && <div style={{ color: 'var(--error-500)', marginBottom: 12 }}>Error: {run.error}</div>}
-
+    <div>
+      {run.error && <div style={{ color: 'var(--error-500)', marginBottom: 10 }}>Error: {run.error}</div>}
       {run.status === 'running' && (
-        <div style={{ marginBottom: 14, fontSize: 'var(--text-base)', color: 'var(--fg-2)' }}>
-          <div>Source transcript: {run.source_text != null ? '✓ ready' : 'transcribing…'}</div>
-          <div style={{ marginTop: 4 }}>Recipes: {run.outcomes.length} of {run.variants.length} done</div>
-          <div style={{ marginTop: 4, color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>Each recipe is a full transcription pass — hang tight.</div>
+        <div style={{ marginBottom: 12, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+          Source: {run.source_text != null ? '✓ ready' : 'transcribing…'} · Recipes {run.outcomes.length} of {run.variants.length} done
+          <span style={{ color: 'var(--fg-3)' }}> — each is a full transcription pass on the GPU.</span>
         </div>
       )}
-
       {scorecards.length > 0 ? (
         <>
           {winner && (
             <div style={winnerBoxStyle}>
               <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--fg-0)' }}>★ Winner: {winner}</div>
-              <div style={{ fontSize: 'var(--text-base)', color: 'var(--fg-2)' }}>Make it your default by adding this to your subgen config:</div>
-              <code style={{ display: 'block', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', background: 'var(--bg-0)', border: 'var(--border)', padding: '8px 10px', borderRadius: 'var(--radius-lg)', overflowX: 'auto', color: 'var(--fg-1)' }}>
-                SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}
-              </code>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>Make it your default by adding this to your subgen config:</div>
+              <code style={winnerCode}>SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}</code>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 6 }}>A one-click “adopt winner” is coming — for now, copy and paste.</div>
             </div>
           )}
@@ -405,21 +394,56 @@ function ResultPanel({ run }) {
           </div>
         </>
       ) : run.status === 'done' ? (
-        <div style={{ color: 'var(--fg-2)' }}>No usable results — every recipe was rejected or produced no subtitle. Try a clip with clearer dialogue, or set the spoken language.</div>
+        <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>No usable results — every recipe was rejected or produced no subtitle. Try a clip with clearer dialogue, or set the spoken language.</div>
       ) : null}
+    </div>
+  );
+}
 
-      {run.status === 'done' && run.source_text == null && (
-        <div style={{ marginTop: 10, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>No source transcript was produced, so faithfulness was skipped — ranking used readability and clean-output checks only.</div>
-      )}
+// The sweeps queue/history — survives navigation (loaded from the backend).
+function SweepList({ runs, detail, expandedId, onToggle }) {
+  const basename = (p) => (p || '').split('/').pop() || p;
+  if (!runs.length) {
+    return (
+      <SectionCard label="Sweeps">
+        <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-base)', lineHeight: 1.6 }}>
+          No sweeps yet. Queue one above and it’ll appear here with live status — and the ★ winner once the judge has ranked it.
+          Sweeps keep running in the background, so you can queue several and come back.
+        </div>
+      </SectionCard>
+    );
+  }
+  return (
+    <SectionCard label="Sweeps">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {runs.map((r) => {
+          const open = expandedId === r.id;
+          return (
+            <div key={r.id} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-2)' }}>
+              <button onClick={() => onToggle(r.id)} style={sweepRow}>
+                <StatusPill status={r.status} />
+                <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
+                <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>
+                  {r.status === 'running' ? `${r.done_count}/${r.recipe_count}` : `${r.recipe_count} recipe${r.recipe_count === 1 ? '' : 's'}`}
+                </span>
+                {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`winner: ${r.winner}`}>★ {r.winner}</span>}
+                <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
+              </button>
+              {open && <div style={{ padding: '0 14px 12px' }}><SweepDetail run={detail[r.id]} /></div>}
+            </div>
+          );
+        })}
+      </div>
     </SectionCard>
   );
 }
 
 export function ArenaPage() {
-  const [run, setRun] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [runs, setRuns] = useState([]);
+  const [detail, setDetail] = useState({});
+  const [expandedId, setExpandedId] = useState(null);
   const [gate, setGate] = useState(null);
-  const esRef = useRef(null);
+  const [notice, setNotice] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -431,35 +455,41 @@ export function ArenaPage() {
     return () => { alive = false; };
   }, []);
 
-  const closeStream = useCallback(() => { if (esRef.current) { esRef.current.close(); esRef.current = null; } }, []);
-  const refresh = useCallback((id) => {
-    fetch(`/api/arena/${id}`).then((r) => r.json()).then((d) => { setRun(d); if (d.status === 'done' || d.status === 'error') { setBusy(false); closeStream(); } }).catch(() => {});
-  }, [closeStream]);
+  const loadRuns = useCallback(() => fetch('/api/arena/runs').then((r) => r.json()).then((d) => setRuns(d.runs || [])).catch(() => {}), []);
+  const loadDetail = useCallback((id) => fetch(`/api/arena/${id}`).then((r) => r.json()).then((d) => setDetail((prev) => ({ ...prev, [id]: d }))).catch(() => {}), []);
+
+  // Load the sweeps list on mount — this is what makes the page survive
+  // navigation (state lives in the backend, not just this component).
+  useEffect(() => { loadRuns(); }, [loadRuns]);
+
+  // Poll while anything is pending/running (house usePoller pattern); also
+  // refresh the open sweep's detail so its table fills in live.
+  useEffect(() => {
+    const active = runs.some((r) => r.status === 'pending' || r.status === 'running');
+    if (!active) return;
+    const t = setInterval(() => { loadRuns(); if (expandedId) loadDetail(expandedId); }, 2500);
+    return () => clearInterval(t);
+  }, [runs, expandedId, loadRuns, loadDetail]);
+
+  const onToggle = useCallback((id) => {
+    setExpandedId((prev) => { const next = prev === id ? null : id; if (next) loadDetail(next); return next; });
+  }, [loadDetail]);
 
   const onRun = useCallback(async (body) => {
-    setBusy(true); setRun(null);
+    setNotice(null);
     try {
       const r = await fetch('/api/arena/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await r.json();
       if (!r.ok) {
-        const detail = data?.detail;
-        setRun({ status: 'error', error: typeof detail === 'string' ? detail : (detail?.reason || 'request failed'), variants: body.variants, outcomes: [] });
-        setBusy(false); return;
+        const d = data?.detail;
+        setNotice(typeof d === 'string' ? d : (d?.reason || 'Could not queue the sweep.'));
+        return false;
       }
-      setRun(data);
-      closeStream();
-      const es = new EventSource(`/api/arena/${data.id}/events`);
-      esRef.current = es;
-      const onEvt = () => refresh(data.id);
-      ['start', 'source', 'variant', 'done', 'error'].forEach((ev) => es.addEventListener(ev, onEvt));
-      es.onerror = () => { es.close(); };
-    } catch (e) {
-      setRun({ status: 'error', error: String(e), variants: body.variants, outcomes: [] });
-      setBusy(false);
-    }
-  }, [closeStream, refresh]);
-
-  useEffect(() => closeStream, [closeStream]);
+      await loadRuns();
+      setExpandedId(data.id); loadDetail(data.id);   // auto-expand the new sweep
+      return true;
+    } catch (e) { setNotice(String(e)); return false; }
+  }, [loadRuns, loadDetail]);
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -472,8 +502,9 @@ export function ArenaPage() {
       </div>
       <WhatThisIs />
       <KnobReference />
-      <SweepForm onRun={onRun} disabled={busy} gate={gate} />
-      <ResultPanel run={run} />
+      <SweepForm onRun={onRun} gate={gate} />
+      {notice && <div style={gateNoticeStyle}>{notice}</div>}
+      <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} />
     </main>
   );
 }
@@ -494,6 +525,8 @@ const crumbStyle = { background: 'transparent', border: 'none', color: 'var(--vi
 const codeName = { color: 'var(--violet-400)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' };
 const gateNoticeStyle = { background: 'rgba(245,158,11,0.10)', border: '1px solid var(--warn-500)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', fontSize: 'var(--text-base)', color: 'var(--fg-1)' };
 const winnerBoxStyle = { background: 'rgba(52,211,153,0.08)', border: '1px solid var(--success-500)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14 };
+const winnerCode = { display: 'block', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', background: 'var(--bg-0)', border: 'var(--border)', padding: '8px 10px', borderRadius: 'var(--radius-lg)', overflowX: 'auto', color: 'var(--fg-1)' };
+const sweepRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 14px', color: 'var(--fg-1)' };
 const modalBackdrop = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalCard = { background: 'var(--bg-1)', border: 'var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: 18, width: 'min(640px, 92vw)', boxShadow: 'var(--shadow-modal)' };
 const pickRow = { display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderBottom: 'var(--border)', color: 'var(--fg-1)', padding: '10px 12px', cursor: 'pointer', fontSize: 'var(--text-base)' };

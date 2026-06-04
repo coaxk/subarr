@@ -66,12 +66,14 @@ async def test_source_transcribed_once_then_each_variant_translated():
 
     res = await run_arena("/media/clip.mkv", variants, runner=runner)
 
-    tasks = [c["task"] for c in runner.calls]
-    assert tasks == ["transcribe", "translate", "translate"]
-    # source call carries no per-request kwargs; variants carry their own
-    assert runner.calls[0]["kwargs"] == {}
-    assert runner.calls[1]["kwargs"] == {"vad_filter": True}
-    assert runner.calls[2]["kwargs"] == {"beam_size": 5}
+    # source transcribed first (sequential), then variants fired concurrently
+    # — so assert call CONTENT, not call order (gather doesn't guarantee it).
+    assert runner.calls[0] == {"media_path": "/media/clip.mkv", "task": "transcribe", "kwargs": {}}
+    variant_calls = runner.calls[1:]
+    assert all(c["task"] == "translate" for c in variant_calls)
+    assert {frozenset(c["kwargs"].items()) for c in variant_calls} == {
+        frozenset({"vad_filter": True}.items()), frozenset({"beam_size": 5}.items()),
+    }
     # source transcript extracted to plain text for QE
     assert res.source_text == "the reactor is overheating"
     assert {o.label for o in res.outcomes} == {"noisy", "clean"}

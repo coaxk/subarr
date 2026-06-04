@@ -13,6 +13,7 @@ tuning lab needs; surfacing the winning SRT text is a later UI nicety.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -31,9 +32,24 @@ class ArenaRun:
     outcomes: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None     # serialized TournamentResult
     error: str | None = None
+    created_at: float = 0.0                   # epoch seconds; for newest-first ordering
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def summary(self) -> dict[str, Any]:
+        """Lightweight shape for the sweeps list — no heavy scorecards. The
+        full detail (with the ranked table) is fetched per-run via /{id}."""
+        return {
+            "id": self.id,
+            "media_path": self.media_path,
+            "status": self.status,
+            "recipe_count": len(self.variants),
+            "done_count": len(self.outcomes),
+            "winner": (self.result or {}).get("winner_label"),
+            "error": self.error,
+            "created_at": self.created_at,
+        }
 
 
 class ArenaService:
@@ -51,6 +67,7 @@ class ArenaService:
             media_path=media_path,
             variants=[{"label": v.label, "kwargs": v.kwargs} for v in variants],
             source_language=source_language,
+            created_at=time.time(),
         )
         self._runs[run.id] = run
         return run
@@ -59,7 +76,7 @@ class ArenaService:
         return self._runs.get(run_id)
 
     def list(self) -> list[ArenaRun]:
-        return list(self._runs.values())
+        return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self, run: ArenaRun) -> None:

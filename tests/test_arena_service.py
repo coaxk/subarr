@@ -95,3 +95,16 @@ async def test_events_streamed_to_subscriber():
     assert "source" in kinds
     assert kinds.count("variant") == 2
     assert kinds[-1] == "done"
+
+
+def test_list_is_newest_first_with_summaries():
+    svc = _service([])
+    a = svc.create("/a.mkv", [ConfigVariant("x", {})])
+    a.created_at = 100.0
+    b = svc.create("/b.mkv", [ConfigVariant("y", {}), ConfigVariant("z", {})])
+    b.created_at = 200.0
+    listed = svc.list()
+    assert [r.id for r in listed] == [b.id, a.id]  # newest first
+    s = b.summary()
+    assert s["recipe_count"] == 2 and s["status"] == "pending" and "winner" in s
+    assert "result" not in s  # summaries stay light (no scorecards)

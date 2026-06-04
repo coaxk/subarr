@@ -77,7 +77,9 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
 
 @router.get("/runs")
 async def list_arena_runs(request: Request) -> dict:
-    return {"runs": [r.to_dict() for r in request.app.state.arena.list()]}
+    # Lightweight summaries (no scorecards), newest-first — the sweeps list.
+    # Full detail (ranked table) is fetched per-run via GET /api/arena/{id}.
+    return {"runs": [r.summary() for r in request.app.state.arena.list()]}
 
 
 @router.get("/{run_id}")
