@@ -182,6 +182,8 @@ function normalizeRow(item, idx) {
     audio_label_notes: item.audio_label_notes || [],
     audio_verified: (item.audio_label_notes || []).some(n =>
       typeof n === 'string' && n.toLowerCase().startsWith('user-confirmed')),
+    // How the audio language was determined (badge tier): user|whisper|plex|ffprobe|null
+    audio_source: item.audio_source || null,
     now_playing: !!item.now_playing,
     just_imported: !!item.just_imported,
     airing_soon: !!item.airing_soon,
@@ -591,15 +593,24 @@ function HeaderCell({ children, w, right, center, tip }) {
 // audio-language confidence state. Click handler hoisted by parent to
 // open the review modal.
 function AudioLabelChip({ r, onClick }) {
-  let kind = null;       // 'verified' | 'suspect' | 'unknown'
-  if (r.audio_verified) kind = 'verified';
+  // Trust-tiered: how do we know this row's audio language? A tick for the
+  // verified tiers (colour = source), a muted marker for the file-tag-only
+  // case, and the existing warn/unknown states. Tooltip explains each.
+  let kind = null;
+  if (r.audio_verified || r.audio_source === 'user') kind = 'user';
+  else if (r.audio_source === 'whisper') kind = 'whisper';
+  else if (r.audio_source === 'plex') kind = 'plex';
   else if (r.audio_label_suspect) kind = 'suspect';
   else if (r.audio_label_unknown) kind = 'unknown';
+  else if (r.audio_source === 'ffprobe') kind = 'ffprobe';
   if (!kind) return null;
   const cfg = {
-    verified: { ch: '✓', bg: 'rgba(34,211,161,0.18)', fg: '#22d3a1', label: 'User-verified' },
-    suspect:  { ch: '⚠', bg: 'rgba(245,158,11,0.18)', fg: '#f59e0b', label: 'Audio label suspect' },
-    unknown:  { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata' },
+    user:    { ch: '✓', bg: 'rgba(34,211,161,0.18)',  fg: '#22d3a1', label: 'You verified this audio language' },
+    whisper: { ch: '✓', bg: 'rgba(34,211,238,0.16)',  fg: '#22d3ee', label: 'System-verified by Whisper (multi-chunk language detection)' },
+    plex:    { ch: '✓', bg: 'rgba(139,92,246,0.16)',  fg: '#a78bfa', label: 'From your Plex audio-track pick' },
+    ffprobe: { ch: '~', bg: 'rgba(148,163,184,0.12)', fg: '#94a3b8', label: "From the file's metadata tag only — unverified (tags are often wrong on retags)" },
+    suspect: { ch: '⚠', bg: 'rgba(245,158,11,0.18)', fg: '#f59e0b', label: 'Audio label looks wrong (foreign title tagged as English)' },
+    unknown: { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata on the file' },
   }[kind];
   const evidence = (r.audio_label_notes || []).join('\n• ');
   const tip = `${cfg.label}${evidence ? '\n\n• ' + evidence : ''}\n\nClick to verify/correct.`;
