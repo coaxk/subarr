@@ -317,6 +317,9 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
         }}>
         <span />
         <span
+          data-testid="library-row-checkbox"
+          data-row-kind={entry.is_dir ? 'dir' : 'file'}
+          data-path={entry.path}
           onClick={(e) => {
             e.stopPropagation();
             // #211: clicks on an inherited-checked node are no-ops —
@@ -479,7 +482,7 @@ function SelectionBar({ selectedPaths, onClear, onQueue, queueState }) {
   // scrolling all the way to the bottom of the column to see it, which
   // defeats the purpose on a 1700-show library.
   return (
-    <div style={{
+    <div data-testid="library-selection-bar" style={{
       position: 'fixed', bottom: 18, left: 200, right: 24,
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '12px 18px',
@@ -506,7 +509,7 @@ function SelectionBar({ selectedPaths, onClear, onQueue, queueState }) {
       )}
       <span style={{ flex: 1 }} />
       <button className="btn ghost" onClick={onClear} disabled={busy}>Clear</button>
-      <button className="btn primary" onClick={onQueue} disabled={busy}>
+      <button data-testid="library-queue-submit" className="btn primary" onClick={onQueue} disabled={busy}>
         {busy ? `Queueing ${queueState.done}/${queueState.total}…` : `Send ${n} to queue`}
       </button>
     </div>

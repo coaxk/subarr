@@ -105,7 +105,7 @@ function QueueRow({ item, kind, canCancel, onCancel, busy }) {
     : null;
 
   return (
-    <div style={{
+    <div data-testid="queue-row" data-queue-kind={kind} style={{
       display: 'flex', flexDirection: 'column',
       // Row body indented further than the section header (which uses
       // row-cozy = 16px horizontal) so rows read as children of their
@@ -160,7 +160,7 @@ function QueueRow({ item, kind, canCancel, onCancel, busy }) {
       {/* Row 2 (processing only): progress bar + numbers */}
       {kind === 'processing' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ flex: 1 }}>
+          <div data-testid="queue-progress" style={{ flex: 1 }}>
             <ProgressBar pct={pct} />
           </div>
           <span className="num mono" style={{

@@ -99,7 +99,7 @@ function EpisodeRow({ item, selected, onToggle, onOpen }) {
   };
   const path = item.file_canonical_path || item.canonical_path;
   return (
-    <div role="row" style={{
+    <div role="row" data-testid="review-row" style={{
       display: 'grid',
       gridTemplateColumns: '40px 14px 80px 1fr 70px 70px 22px',
       alignItems: 'center', gap: 10,
@@ -128,6 +128,7 @@ function EpisodeRow({ item, selected, onToggle, onOpen }) {
         {item.original_language || '—'}
       </span>
       <button onClick={() => onOpen(detail)}
+        data-testid="review-listen"
         aria-label={`Listen to ${item.title} ${item.episode_number}`}
         title="Listen + verify individually"
         className="btn ghost sm"

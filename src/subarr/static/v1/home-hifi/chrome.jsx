@@ -201,7 +201,7 @@ export function TopBar({ section = 'overview' }) {
         {TOP_SECTIONS.map(s => {
           const active = s.id === section;
           return (
-            <a key={s.id} href={s.href} style={{
+            <a key={s.id} href={s.href} data-testid={`nav-${s.id}`} style={{
               position: 'relative',
               padding: '0 16px',
               height: '100%',
@@ -440,7 +440,7 @@ function RailItem({ item }) {
   // bug instead of surfacing it as a broken link the next time someone
   // adds an item without one.
   return (
-    <a href={item.href} style={{
+    <a href={item.href} data-testid={`rail-${item.id}`} style={{
       position: 'relative',
       display: 'flex', alignItems: 'center', gap: 8,
       padding: '6px 16px 6px 14px',

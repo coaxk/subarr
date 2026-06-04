@@ -327,7 +327,7 @@ export function StagesRow({ data }) {
     .sort((a, b) => (STAGE_ORDER[a.id] ?? 99) - (STAGE_ORDER[b.id] ?? 99));
   if (!stages.length) {
     return (
-      <div style={{ display: 'flex', gap: 12 }}>
+      <div data-testid="dashboard-stages" style={{ display: 'flex', gap: 12 }}>
         {[0,1,2,3,4].map(i => (
           <div key={i} style={{
             flex: 1, height: 92, background: 'var(--bg-1)',
@@ -339,7 +339,7 @@ export function StagesRow({ data }) {
     );
   }
   return (
-    <div style={{ display: 'flex', gap: 12 }}>
+    <div data-testid="dashboard-stages" style={{ display: 'flex', gap: 12 }}>
       {stages.map(s => <StageTile key={s.id} s={s} />)}
     </div>
   );
@@ -375,7 +375,7 @@ function GpuWidget({ data }) {
   const gpuName = data ? data.name : 'NVIDIA RTX 4070';
   const busy = util > 5;
   return (
-    <div style={{
+    <div data-testid="dashboard-gpu" style={{
       background: 'var(--bg-1)',
       border: 'var(--border)',
       borderRadius: 'var(--radius-lg)',
