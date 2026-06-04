@@ -79,6 +79,16 @@ class SubgenCapabilities:
     # run variant-by-variant without a subgen restart per variant. Vanilla /
     # ≤v4.7 → False (they silently ignore the unknown query param anyway).
     per_request_kwargs: bool = False
+    # v4.9 capability: POST /batch accepts a per-request `task` (transcribe|
+    # translate) query param that overrides the global TRANSCRIBE_OR_TRANSLATE
+    # for that batch only. The tuning-lab arena gates on this to drive a
+    # source-transcribe AND candidate-translate through one path-based channel.
+    per_request_task: bool = False
+    # v4.10 capability: POST /asr accepts ?path= (read audio from a subgen-
+    # visible path — no upload) + ?kwargs= (per-request override, folded into
+    # the dedup hash) and returns the sub over HTTP. The tuning-lab arena gates
+    # on this — it's the no-shared-scratch channel (vs /batch's disk output).
+    asr_arena: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -96,6 +106,8 @@ class SubgenCapabilities:
             "queue_cancel": self.queue_cancel,
             "robust_language_detection": self.robust_language_detection,
             "per_request_kwargs": self.per_request_kwargs,
+            "per_request_task": self.per_request_task,
+            "asr_arena": self.asr_arena,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -106,7 +118,7 @@ class SubgenCapabilities:
             has_queue=False, has_batch=False, is_subarr_subgen=False,
             audio_language_override=False, queue_cancel=False,
             robust_language_detection=False, per_request_kwargs=False,
-            subarr_subgen_patch_rev=None,
+            per_request_task=False, asr_arena=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -229,6 +241,8 @@ class SubgenClient:
         queue_cancel = False
         robust_language_detection = False
         per_request_kwargs = False
+        per_request_task = False
+        asr_arena = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -255,6 +269,10 @@ class SubgenClient:
                             per_request_kwargs = bool(
                                 caps_block.get("per_request_kwargs")
                             )
+                            per_request_task = bool(
+                                caps_block.get("per_request_task")
+                            )
+                            asr_arena = bool(caps_block.get("asr_arena"))
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -275,6 +293,8 @@ class SubgenClient:
             queue_cancel=queue_cancel,
             robust_language_detection=robust_language_detection,
             per_request_kwargs=per_request_kwargs,
+            per_request_task=per_request_task,
+            asr_arena=asr_arena,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(
@@ -290,7 +310,8 @@ class SubgenClient:
     async def batch(self, directory: str, reverse: bool = False,
                     force_language: str | None = None,
                     audio_language_override: str | None = None,
-                    kwargs: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+                    kwargs: dict[str, Any] | None = None,
+                    task: str | None = None) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
         Returns (status_code, body). Caller distinguishes:
@@ -312,7 +333,16 @@ class SubgenClient:
         a subgen restart per variant. Empty/None → omitted entirely (keeps
         the request backward-compatible; ≤v4.7 silently ignore it). Gate on
         capabilities.per_request_kwargs before relying on the override.
+
+        task (v4.9+): per-request 'transcribe' or 'translate' that overrides
+        the global TRANSCRIBE_OR_TRANSLATE for THIS scan only. Lets the arena
+        drive a source-transcribe and a candidate-translate over one channel.
+        None → omitted (subgen keeps its global). Gate on
+        capabilities.per_request_task before relying on it. Raises ValueError
+        on any other value (fail loud rather than silently send junk).
         """
+        if task is not None and task not in ("transcribe", "translate"):
+            raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
         params: dict[str, Any] = {"directory": directory, "reverse": str(reverse).lower()}
         if force_language:
             params["forceLanguage"] = force_language
@@ -320,6 +350,8 @@ class SubgenClient:
             params["audio_language_override"] = audio_language_override
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
+        if task:
+            params["task"] = task
         try:
             r = await self._client.post("/batch", params=params)
         except httpx.HTTPError as e:
@@ -329,3 +361,43 @@ class SubgenClient:
         except ValueError:
             body = {"_raw": r.text[:500]}
         return r.status_code, body
+
+    async def asr(self, path: str, *, task: str = "transcribe",
+                  language: str | None = None, kwargs: dict[str, Any] | None = None,
+                  initial_prompt: str | None = None,
+                  timeout_s: float = 900.0) -> str:
+        """v4.10+ arena channel: path-input ASR that BLOCKS until done and
+        returns the subtitle TEXT over HTTP — no upload, no shared scratch.
+
+        `path` is a subgen-visible path (the file subgen can already read off
+        the shared media mount). `task` is transcribe|translate; `kwargs` is a
+        per-request Whisper override (folded into subgen's dedup hash so two
+        configs don't collide). Gate on capabilities.asr_arena before calling.
+
+        Returns the raw subtitle text (SRT by default; '' if the model produced
+        nothing). Raises SubgenUnavailable on transport failure or a structured
+        error payload, ValueError on a bad task.
+        """
+        if task not in ("transcribe", "translate"):
+            raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
+        params: dict[str, Any] = {"task": task, "path": path}
+        if language:
+            params["language"] = language
+        if initial_prompt:
+            params["initial_prompt"] = initial_prompt
+        if kwargs:
+            params["kwargs"] = json.dumps(kwargs)
+        # /asr blocks for the whole transcription — needs a wide read timeout.
+        asr_timeout = httpx.Timeout(connect=3.0, read=timeout_s, write=10.0, pool=3.0)
+        try:
+            r = await self._client.post("/asr", params=params, timeout=asr_timeout)
+        except httpx.HTTPError as e:
+            raise SubgenUnavailable(f"subgen /asr failed: {e}") from e
+        # Success streams text/plain (the subtitle); errors return a JSON dict.
+        if "application/json" in r.headers.get("content-type", ""):
+            try:
+                body = r.json()
+            except ValueError:
+                body = {"message": r.text[:200]}
+            raise SubgenUnavailable(f"subgen /asr error: {body.get('message', body)}")
+        return r.text
