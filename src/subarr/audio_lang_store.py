@@ -138,6 +138,17 @@ class AudioLangStore:
             ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def get_all_sources_as_lookup(self) -> dict[str, str]:
+        """Return {canonical_path: source} for all per-file verifications, so
+        Coverage can show HOW each audio language was determined (user /
+        whisper-robust / auto-high-conf). Mirrors get_all_as_lookup()'s
+        fast-path semantics (no series-intent expansion)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, source FROM audio_lang_verifications"
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def delete(self, canonical_path: str) -> bool:
         with self._lock:
             cur = self._conn.execute(

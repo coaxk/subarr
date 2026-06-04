@@ -94,6 +94,13 @@ class CoverageItem:
     # Bazarr's next sync hasn't fired yet) instead of the stale "mislabeled"
     # label that no longer reflects reality.
     audio_verified: bool = False
+    # How the audio language was determined, for the UI confidence badge:
+    #   "user"    — you verified it (highest trust)
+    #   "whisper" — Whisper multi-chunk robust detect
+    #   "plex"    — your Plex / Tautulli audio-track pick
+    #   "ffprobe" — the file's metadata tag only (lowest trust — wrong on retags)
+    #   None      — no confident source (suspect / unknown / no audio)
+    audio_source: str | None = None
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
@@ -139,6 +146,7 @@ class CoverageItem:
             "audio_label_notes": self.audio_label_notes,
             "bazarr_blind": self.bazarr_blind,
             "audio_verified": self.audio_verified,
+            "audio_source": self.audio_source,
             "score": self.score,
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
@@ -709,6 +717,7 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_suspect = False
         item.audio_label_unknown = False
         item.audio_verified = True
+        item.audio_source = "user"   # refined to whisper/auto in the post-pass
         return
     title_lc = (item.title or "").strip().lower()
     if tautulli_hints and title_lc in tautulli_hints:
@@ -720,6 +729,7 @@ def _classify_audio_label(item: CoverageItem,
         )
         item.audio_label_suspect = False
         item.audio_label_unknown = False
+        item.audio_source = "plex"
         return
     # Layer 2.6 (#12): the user's persisted per-show audio pick, read
     # directly from Plex metadata (selected audio stream). Below Tautulli-
@@ -734,6 +744,7 @@ def _classify_audio_label(item: CoverageItem,
         )
         item.audio_label_suspect = False
         item.audio_label_unknown = False
+        item.audio_source = "plex"
         return
     langs = [(l or "").lower() for l in (item.audio_langs or [])]
     only_und = bool(langs) and all(l in ("", "und") for l in langs)
@@ -755,6 +766,30 @@ def _classify_audio_label(item: CoverageItem,
                 f"originalLanguage={item.original_language!r} but audio tags "
                 f"are all English ({non_und}) — likely encoder default"
             )
+    # No higher-trust source fired (user/Plex returned early; suspect/unknown
+    # set their flags) and we have a usable tag → the language came from the
+    # file's ffprobe metadata only. Lowest trust — the UI badge shows it muted.
+    if (item.audio_source is None and not item.audio_label_unknown
+            and not item.audio_label_suspect
+            and any(l not in ("", "und") for l in langs)):
+        item.audio_source = "ffprobe"
+
+
+def _refine_audio_sources(items: list, verification_sources: dict) -> None:
+    """Post-pass: _classify set audio_source='user' for any store-verified hit;
+    refine it to the ACTUAL verification source so the UI badge distinguishes
+    user-verified from machine-detected (Whisper) audio. In place."""
+    def _map(raw: str) -> str:
+        r = raw.lower()
+        if r.startswith("series_intent"):
+            return "user"                  # inherited from a user's series declaration
+        if "whisper" in r or "auto" in r:
+            return "whisper"               # machine multi-chunk detect
+        return "user"
+    for it in items:
+        s = verification_sources.get(it.file_canonical_path)
+        if s:
+            it.audio_source = _map(s)
 
 
 def _score(
@@ -956,6 +991,11 @@ async def build_coverage(
     user_verifications: dict[str, str] = (
         audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
     )
+    # Per-file verification SOURCE (user / whisper-robust / auto-high-conf),
+    # used by the post-pass to refine audio_source for the UI confidence badge.
+    verification_sources: dict[str, str] = (
+        audio_lang_store.get_all_sources_as_lookup() if audio_lang_store else {}
+    )
 
     items: list[CoverageItem] = []
 
@@ -1134,6 +1174,7 @@ async def build_coverage(
         )
 
     _disqualify_unsupported(items)
+    _refine_audio_sources(items, verification_sources)
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 
