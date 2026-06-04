@@ -113,6 +113,11 @@ class ArenaStore:
             ).fetchall()
         return [_row_to_run(r) for r in rows]
 
+    def delete(self, run_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM arena_runs WHERE id = ?", (run_id,))
+            return (cur.rowcount or 0) > 0
+
     def reconcile_interrupted(self) -> int:
         """A run that was pending/running when the process died can never
         finish — its asyncio task is gone. Mark such rows as errored on boot

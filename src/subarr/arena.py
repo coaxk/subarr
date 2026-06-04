@@ -25,7 +25,6 @@ filesystem machinery here at all.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import asyncio
 from typing import Any, Protocol
 
 from .paths import canonical_to_subgen_batch
@@ -130,23 +129,27 @@ async def run_arena(
     if on_source is not None:
         on_source(source_text)
 
-    # 2. Candidates — one translate per variant with its own kwargs, fired
-    # CONCURRENTLY so they all land in subgen's queue at once (subgen's single
-    # worker still processes them serially, so no GPU contention — but the user
-    # sees a populated queue and live per-recipe progress). gather preserves
-    # order, so the candidates dict + outcomes stay deterministic.
-    async def _one(v: ConfigVariant) -> VariantOutcome:
+    # 2. Candidates — one translate per variant, SEQUENTIALLY (await each
+    # before starting the next). subgen's /asr is a blocking one-at-a-time
+    # call, and its single worker serializes the GPU work anyway, so firing
+    # them concurrently gains nothing — it only risks the later requests
+    # waiting in subgen's queue past the client read-timeout (which judged
+    # sweeps early with partial results). Sequential = the sweep finishes only
+    # when every recipe is truly done. on_variant fires after each for live
+    # per-recipe progress.
+    outcomes: list[VariantOutcome] = []
+    candidates: dict[str, str] = {}
+    for v in variants:
         try:
             srt = await runner.run(media_path, task="translate", kwargs=v.kwargs)
             outcome = VariantOutcome(v.label, srt, None if srt else "no subtitle produced")
         except Exception as e:  # one bad variant must not sink the whole sweep
             outcome = VariantOutcome(v.label, None, error=str(e))
+        outcomes.append(outcome)
+        if outcome.srt_text:
+            candidates[v.label] = outcome.srt_text
         if on_variant is not None:
             on_variant(outcome)
-        return outcome
-
-    outcomes: list[VariantOutcome] = await asyncio.gather(*[_one(v) for v in variants])
-    candidates: dict[str, str] = {o.label: o.srt_text for o in outcomes if o.srt_text}
 
     # 3. Judge.
     result = judge(candidates, speech_ranges=speech_ranges, source_text=source_text)

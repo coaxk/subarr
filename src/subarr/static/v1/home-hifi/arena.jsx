@@ -70,12 +70,17 @@ function StatusPill({ status }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}><StatusDot kind={s.kind} pulse={status === 'running'} />{s.text}</span>;
 }
 
-// Collapsible card matching SectionCard styling, default-open.
-function Collapsible({ label, defaultOpen = true, children }) {
-  const [open, setOpen] = useState(defaultOpen);
+// Collapsible card matching SectionCard styling. Remembers its open/closed
+// state across navigation via localStorage (keyed by `id`).
+function Collapsible({ label, id, defaultOpen = true, children }) {
+  const key = `arena.collapse.${id}`;
+  const [open, setOpen] = useState(() => {
+    try { const v = localStorage.getItem(key); return v == null ? defaultOpen : v === '1'; } catch (e) { return defaultOpen; }
+  });
+  const toggle = () => setOpen((o) => { const n = !o; try { localStorage.setItem(key, n ? '1' : '0'); } catch (e) {} return n; });
   return (
     <section style={cardStyle}>
-      <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
+      <button onClick={toggle} aria-expanded={open}
               style={{ display: 'flex', alignItems: 'center', width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
         <span className="label">{label}</span>
         <span style={{ flex: 1 }} />
@@ -83,6 +88,23 @@ function Collapsible({ label, defaultOpen = true, children }) {
       </button>
       {open && <div style={{ marginTop: 14 }}>{children}</div>}
     </section>
+  );
+}
+
+// A row of segments, one per recipe — green = done, pulsing = running, grey =
+// pending. The compact live-progress indicator in the sweeps list.
+function ProgressSegments({ done, total, running }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 3, flex: 'none' }} title={`${done} of ${total} done`}>
+      {Array.from({ length: total }, (_, i) => {
+        const state = i < done ? 'done' : (running && i === done ? 'run' : 'pend');
+        return <span key={i} style={{
+          width: 16, height: 6, borderRadius: 3,
+          background: state === 'done' ? 'var(--success-500)' : state === 'run' ? 'var(--violet-500)' : 'var(--bg-4)',
+          animation: state === 'run' ? 'pulse 1.6s ease-out infinite' : undefined,
+        }} />;
+      })}
+    </span>
   );
 }
 
@@ -156,7 +178,7 @@ function WhatThisIs() {
     ['3', 'The judge ranks them', "subarr's tournament judge scores each result (invented lines, repetition, readability, and how faithful it is to the source) and crowns a winner."],
   ];
   return (
-    <Collapsible label="What this is" defaultOpen>
+    <Collapsible label="What this is" id="what" defaultOpen>
       <p style={{ margin: '0 0 14px', color: 'var(--fg-1)', lineHeight: 1.6, fontSize: 'var(--text-base)' }}>
         Stop guessing which Whisper settings give the best subtitles for tricky content. Pick one file,
         choose a few recipes to compare, and let the judge tell you which one actually wins — objectively,
@@ -184,7 +206,7 @@ function WhatThisIs() {
 // ── cheat-sheet ──────────────────────────────────────────────────────────────
 function KnobReference() {
   return (
-    <Collapsible label="What the settings mean" defaultOpen>
+    <Collapsible label="What the settings mean" id="settings" defaultOpen>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {KNOBS.map(([name, type, desc]) => (
           <div key={name} style={{ fontSize: 'var(--text-base)', lineHeight: 1.5 }}>
@@ -345,12 +367,38 @@ function SweepDetail({ run }) {
   return (
     <div>
       {run.error && <div style={{ color: 'var(--error-500)', marginBottom: 10 }}>Error: {run.error}</div>}
-      {run.status === 'running' && (
-        <div style={{ marginBottom: 12, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-          Source: {run.source_text != null ? '✓ ready' : 'transcribing…'} · Recipes {run.outcomes.length} of {run.variants.length} done
-          <span style={{ color: 'var(--fg-3)' }}> — each is a full transcription pass on the GPU.</span>
-        </div>
-      )}
+      {run.status === 'running' && (() => {
+        const done = {};
+        (run.outcomes || []).forEach((o) => { done[o.label] = o; });
+        const sourceReady = run.source_text != null;
+        let runningTaken = false;
+        const dot = (color, pulse) => ({ width: 9, height: 9, borderRadius: '50%', background: color, flex: 'none', animation: pulse ? 'pulse 1.6s ease-out infinite' : undefined });
+        return (
+          <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={progRow}>
+              <span style={dot(sourceReady ? 'var(--success-500)' : 'var(--violet-500)', !sourceReady)} />
+              <span style={{ color: 'var(--fg-1)' }}>Source transcript</span>
+              <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{sourceReady ? 'ready' : 'transcribing…'}</span>
+            </div>
+            {(run.variants || []).map((v) => {
+              const o = done[v.label];
+              let state, txt;
+              if (o) { state = o.ok ? 'done' : 'fail'; txt = o.ok ? 'done' : 'failed'; }
+              else if (sourceReady && !runningTaken) { state = 'run'; runningTaken = true; txt = 'transcribing…'; }
+              else { state = 'pend'; txt = 'queued'; }
+              const color = state === 'done' ? 'var(--success-500)' : state === 'fail' ? 'var(--error-500)' : state === 'run' ? 'var(--violet-500)' : 'var(--bg-4)';
+              return (
+                <div key={v.label} style={progRow}>
+                  <span style={dot(color, state === 'run')} />
+                  <span style={{ color: 'var(--fg-1)' }}>{v.label}</span>
+                  <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{txt}</span>
+                </div>
+              );
+            })}
+            <div style={{ marginTop: 4, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Recipes run one at a time — each is a full transcription pass on the GPU.</div>
+          </div>
+        );
+      })()}
       {scorecards.length > 0 ? (
         <>
           {winner && (
@@ -400,9 +448,14 @@ function SweepDetail({ run }) {
   );
 }
 
-// The sweeps queue/history — survives navigation (loaded from the backend).
-function SweepList({ runs, detail, expandedId, onToggle }) {
+// The sweeps queue/history — backend-backed, so it survives navigation AND
+// restart. `loaded` distinguishes "still fetching" from "genuinely empty" so
+// we never flash "no sweeps" over data that's about to arrive.
+function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
   const basename = (p) => (p || '').split('/').pop() || p;
+  if (!loaded) {
+    return <SectionCard label="Sweeps"><div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-base)' }}>Loading sweeps…</div></SectionCard>;
+  }
   if (!runs.length) {
     return (
       <SectionCard label="Sweeps">
@@ -418,17 +471,25 @@ function SweepList({ runs, detail, expandedId, onToggle }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {runs.map((r) => {
           const open = expandedId === r.id;
+          const active = r.status === 'running' || r.status === 'pending';
           return (
             <div key={r.id} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-2)' }}>
-              <button onClick={() => onToggle(r.id)} style={sweepRow}>
-                <StatusPill status={r.status} />
-                <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
-                <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>
-                  {r.status === 'running' ? `${r.done_count}/${r.recipe_count}` : `${r.recipe_count} recipe${r.recipe_count === 1 ? '' : 's'}`}
-                </span>
-                {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`winner: ${r.winner}`}>★ {r.winner}</span>}
-                <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <button onClick={() => onToggle(r.id)} style={sweepRow}>
+                  <StatusPill status={r.status} />
+                  <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
+                  {active ? (
+                    <ProgressSegments done={r.done_count} total={r.recipe_count} running={r.status === 'running'} />
+                  ) : (
+                    <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>{r.recipe_count} recipe{r.recipe_count === 1 ? '' : 's'}</span>
+                  )}
+                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`winner: ${r.winner}`}>★ {r.winner}</span>}
+                  <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
+                </button>
+                <button onClick={() => onDelete(r.id)} title="remove sweep" style={{ ...iconBtnStyle, border: 'none', background: 'transparent', marginRight: 8 }}>
+                  <Glyph char={ICONS.close || '×'} size={13} />
+                </button>
+              </div>
               {open && <div style={{ padding: '0 14px 12px' }}><SweepDetail run={detail[r.id]} /></div>}
             </div>
           );
@@ -444,6 +505,7 @@ export function ArenaPage() {
   const [expandedId, setExpandedId] = useState(null);
   const [gate, setGate] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -455,7 +517,7 @@ export function ArenaPage() {
     return () => { alive = false; };
   }, []);
 
-  const loadRuns = useCallback(() => fetch('/api/arena/runs').then((r) => r.json()).then((d) => setRuns(d.runs || [])).catch(() => {}), []);
+  const loadRuns = useCallback(() => fetch('/api/arena/runs').then((r) => r.json()).then((d) => { setRuns(d.runs || []); setLoaded(true); }).catch(() => {}), []);
   const loadDetail = useCallback((id) => fetch(`/api/arena/${id}`).then((r) => r.json()).then((d) => setDetail((prev) => ({ ...prev, [id]: d }))).catch(() => {}), []);
 
   // Load the sweeps list on mount — this is what makes the page survive
@@ -474,6 +536,13 @@ export function ArenaPage() {
   const onToggle = useCallback((id) => {
     setExpandedId((prev) => { const next = prev === id ? null : id; if (next) loadDetail(next); return next; });
   }, [loadDetail]);
+
+  const onDelete = useCallback((id) => {
+    fetch(`/api/arena/${id}`, { method: 'DELETE' }).then(() => {
+      setExpandedId((prev) => (prev === id ? null : prev));
+      loadRuns();
+    }).catch(() => {});
+  }, [loadRuns]);
 
   const onRun = useCallback(async (body) => {
     setNotice(null);
@@ -504,7 +573,7 @@ export function ArenaPage() {
       <KnobReference />
       <SweepForm onRun={onRun} gate={gate} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
-      <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} />
+      <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
     </main>
   );
 }
@@ -526,7 +595,8 @@ const codeName = { color: 'var(--violet-400)', fontFamily: 'var(--font-mono)', f
 const gateNoticeStyle = { background: 'rgba(245,158,11,0.10)', border: '1px solid var(--warn-500)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', fontSize: 'var(--text-base)', color: 'var(--fg-1)' };
 const winnerBoxStyle = { background: 'rgba(52,211,153,0.08)', border: '1px solid var(--success-500)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', marginBottom: 14 };
 const winnerCode = { display: 'block', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', background: 'var(--bg-0)', border: 'var(--border)', padding: '8px 10px', borderRadius: 'var(--radius-lg)', overflowX: 'auto', color: 'var(--fg-1)' };
-const sweepRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 14px', color: 'var(--fg-1)' };
+const sweepRow = { display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 14px', color: 'var(--fg-1)' };
+const progRow = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-base)' };
 const modalBackdrop = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalCard = { background: 'var(--bg-1)', border: 'var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: 18, width: 'min(640px, 92vw)', boxShadow: 'var(--shadow-modal)' };
 const pickRow = { display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderBottom: 'var(--border)', color: 'var(--fg-1)', padding: '10px 12px', cursor: 'pointer', fontSize: 'var(--text-base)' };

@@ -53,6 +53,9 @@ class ArenaService:
     def list(self) -> list[ArenaRun]:
         return self._store.list()
 
+    def delete(self, run_id: str) -> bool:
+        return self._store.delete(run_id)
+
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self, run: ArenaRun) -> None:
         self._tasks[run.id] = asyncio.create_task(self._run(run), name=f"arena-{run.id}")

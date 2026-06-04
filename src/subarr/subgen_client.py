@@ -365,7 +365,7 @@ class SubgenClient:
     async def asr(self, path: str, *, task: str = "transcribe",
                   language: str | None = None, kwargs: dict[str, Any] | None = None,
                   initial_prompt: str | None = None,
-                  timeout_s: float = 900.0) -> str:
+                  timeout_s: float = 7200.0) -> str:
         """v4.10+ arena channel: path-input ASR that BLOCKS until done and
         returns the subtitle TEXT over HTTP — no upload, no shared scratch.
 

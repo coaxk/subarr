@@ -90,6 +90,13 @@ async def get_arena_run(run_id: str, request: Request) -> dict:
     return run.to_dict()
 
 
+@router.delete("/{run_id}", status_code=204)
+async def delete_arena_run(run_id: str, request: Request):
+    if not request.app.state.arena.delete(run_id):
+        raise HTTPException(404, detail="arena run not found")
+    return None
+
+
 @router.get("/{run_id}/events")
 async def arena_events(run_id: str, request: Request) -> StreamingResponse:
     svc = request.app.state.arena

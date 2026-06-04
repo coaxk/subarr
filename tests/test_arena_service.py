@@ -148,3 +148,12 @@ def test_reconcile_marks_interrupted_runs_errored(store):
     assert n == 1
     after = svc.get(run.id)
     assert after.status == "error" and "interrupted" in after.error
+
+
+def test_delete_removes_run(store):
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    assert svc.get(run.id) is not None
+    assert svc.delete(run.id) is True
+    assert svc.get(run.id) is None
+    assert svc.delete("nope") is False
