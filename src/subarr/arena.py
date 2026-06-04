@@ -109,8 +109,15 @@ async def run_arena(
     runner: CandidateRunner,
     speech_ranges: list[tuple[float, float]] | None = None,
     judge=judge_candidates,
+    on_source=None,
+    on_variant=None,
 ) -> ArenaResult:
-    """Run one config sweep and return the ranked result. See module docstring."""
+    """Run one config sweep and return the ranked result. See module docstring.
+
+    `on_source(text)` fires once the source transcript is ready; `on_variant(
+    outcome)` fires after each variant completes. Both are optional sync hooks
+    the run service uses to push live SSE progress without blocking the sweep.
+    """
     if not variants:
         raise ValueError("run_arena needs at least one config variant")
 
@@ -119,6 +126,8 @@ async def run_arena(
     # 1. Source transcript (once) — task=transcribe, default config.
     source_srt = await runner.run(media_path, task="transcribe", kwargs={})
     source_text = _srt_to_text(source_srt) if source_srt else None
+    if on_source is not None:
+        on_source(source_text)
 
     # 2. Candidates — one translate per variant with its own kwargs.
     outcomes: list[VariantOutcome] = []
@@ -126,12 +135,14 @@ async def run_arena(
     for v in variants:
         try:
             srt = await runner.run(media_path, task="translate", kwargs=v.kwargs)
+            outcome = VariantOutcome(v.label, srt, None if srt else "no subtitle produced")
         except Exception as e:  # one bad variant must not sink the whole sweep
-            outcomes.append(VariantOutcome(v.label, None, error=str(e)))
-            continue
-        outcomes.append(VariantOutcome(v.label, srt, None if srt else "no subtitle produced"))
-        if srt:
-            candidates[v.label] = srt
+            outcome = VariantOutcome(v.label, None, error=str(e))
+        outcomes.append(outcome)
+        if outcome.srt_text:
+            candidates[v.label] = outcome.srt_text
+        if on_variant is not None:
+            on_variant(outcome)
 
     # 3. Judge.
     result = judge(candidates, speech_ranges=speech_ranges, source_text=source_text)
