@@ -153,6 +153,7 @@ function railItems(section, counts) {
       // (Previous /coverage#review hack auto-opened batch modal; replaced
       // 2026-05-31 with the standalone /review page.)
       { id: 'review',   label: 'Review',   count: counts.review,   href: '/review' },
+      { id: 'arena',    label: 'Tuning Lab', count: null,          href: '/arena' },
       { id: 'activity', label: 'Activity', count: null,            href: '/file-modal' },
       { id: 'logs',     label: 'Logs',     count: null,            href: '/logs' },
       { id: 'rules',    label: 'Rules',    count: counts.rules,    href: '/rules' },
