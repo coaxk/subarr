@@ -66,6 +66,26 @@ async def test_capability_absent_defaults_false():
 
 
 @pytest.mark.asyncio
+async def test_asr_arena_capability_detected_from_queue_block():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/status":
+            return httpx.Response(200, json={"version": "Subgen 2026.05.3 (docker)"})
+        if request.url.path == "/queue":
+            return httpx.Response(200, json={
+                "queued": [], "processing": [],
+                "capabilities": {"asr_arena": True},
+            })
+        return httpx.Response(404)
+
+    c = _make_client(httpx.MockTransport(handler))
+    caps = await c.probe_capabilities()
+    await c.aclose()
+
+    assert caps.asr_arena is True
+    assert caps.to_dict()["asr_arena"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("task", ["transcribe", "translate"])
 async def test_batch_forwards_valid_task(task):
     seen: dict = {}
