@@ -37,7 +37,7 @@ from .probe_walker import ProbeWalker
 from .provenance import ProvenanceStore
 from .onboarding import OnboardingStore
 from .routers import (
-    admin, arbiter as r_arbiter, arr_mediainfo as r_arr_mediainfo,
+    admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
     audio_lang as r_audio_lang,
     bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
     discovery as r_discovery, household as r_household,
@@ -47,6 +47,8 @@ from .routers import (
     queue, scan, schedule as r_schedule, sidecar as r_sidecar,
     telemetry as r_telemetry, updates as r_updates, vad as r_vad,
 )
+from .arena import AsrRunner
+from .arena_service import ArenaService
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
@@ -98,6 +100,16 @@ async def lifespan(app_: FastAPI):
         subgen_provider=lambda: app_.state.subgen,
         # Best-effort anonymous error-class recording for telemetry.
         error_recorder=lambda cls: app_.state.errors.record(cls),
+    )
+    # #131 tuning-lab arena. build_runner resolves subgen + caps LIVE (closure
+    # over app_.state) so an onboarding client-swap or a subgen upgrade picked
+    # up by the watchdog is reflected on the next run without a restart.
+    app_.state.arena = ArenaService(
+        build_runner=lambda run: AsrRunner(
+            app_.state.subgen,
+            capabilities=getattr(app_.state, "subgen_caps", None),
+            source_language=run.source_language,
+        ),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
@@ -382,6 +394,7 @@ app.include_router(r_home.router)
 app.include_router(r_onboarding.router)
 app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
+app.include_router(r_arena.router)
 
 
 @app.get("/api/health")
