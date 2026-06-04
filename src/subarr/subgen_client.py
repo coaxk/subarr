@@ -11,6 +11,7 @@ surfaces on the result. See SubgenCapabilities below.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -72,6 +73,12 @@ class SubgenCapabilities:
     # ground-truth funnel gates on this — without it the funnel falls
     # back to single-chunk detect_language (less reliable).
     robust_language_detection: bool = False
+    # v4.8 capability: POST /batch accepts a per-request `kwargs` JSON query
+    # param that overrides global + per-language SUBGEN_KWARGS for THIS scan
+    # only. The tuning-lab / arena gates on this — it lets one config sweep
+    # run variant-by-variant without a subgen restart per variant. Vanilla /
+    # ≤v4.7 → False (they silently ignore the unknown query param anyway).
+    per_request_kwargs: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -88,6 +95,7 @@ class SubgenCapabilities:
             "audio_language_override": self.audio_language_override,
             "queue_cancel": self.queue_cancel,
             "robust_language_detection": self.robust_language_detection,
+            "per_request_kwargs": self.per_request_kwargs,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -97,7 +105,8 @@ class SubgenCapabilities:
             reachable=False, version=None,
             has_queue=False, has_batch=False, is_subarr_subgen=False,
             audio_language_override=False, queue_cancel=False,
-            robust_language_detection=False, subarr_subgen_patch_rev=None,
+            robust_language_detection=False, per_request_kwargs=False,
+            subarr_subgen_patch_rev=None,
         )
 
 
@@ -219,6 +228,7 @@ class SubgenClient:
         audio_language_override = False
         queue_cancel = False
         robust_language_detection = False
+        per_request_kwargs = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -242,6 +252,9 @@ class SubgenClient:
                             robust_language_detection = bool(
                                 caps_block.get("robust_language_detection")
                             )
+                            per_request_kwargs = bool(
+                                caps_block.get("per_request_kwargs")
+                            )
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -261,6 +274,7 @@ class SubgenClient:
             audio_language_override=audio_language_override,
             queue_cancel=queue_cancel,
             robust_language_detection=robust_language_detection,
+            per_request_kwargs=per_request_kwargs,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(
@@ -275,7 +289,8 @@ class SubgenClient:
 
     async def batch(self, directory: str, reverse: bool = False,
                     force_language: str | None = None,
-                    audio_language_override: str | None = None) -> tuple[int, dict[str, Any]]:
+                    audio_language_override: str | None = None,
+                    kwargs: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
         Returns (status_code, body). Caller distinguishes:
@@ -290,12 +305,21 @@ class SubgenClient:
           * subgen advertised audio_language_override=True via /queue, AND
           * subarr has a user verification for this file in audio_lang_store
         Vanilla / v4.2 subgens will silently ignore the unknown query param.
+
+        kwargs (v4.8+): per-request Whisper kwargs that override global +
+        per-language SUBGEN_KWARGS for THIS scan only — serialized to a JSON
+        query param. Used by the tuning-lab / arena to sweep configs without
+        a subgen restart per variant. Empty/None → omitted entirely (keeps
+        the request backward-compatible; ≤v4.7 silently ignore it). Gate on
+        capabilities.per_request_kwargs before relying on the override.
         """
         params: dict[str, Any] = {"directory": directory, "reverse": str(reverse).lower()}
         if force_language:
             params["forceLanguage"] = force_language
         if audio_language_override:
             params["audio_language_override"] = audio_language_override
+        if kwargs:
+            params["kwargs"] = json.dumps(kwargs)
         try:
             r = await self._client.post("/batch", params=params)
         except httpx.HTTPError as e:
