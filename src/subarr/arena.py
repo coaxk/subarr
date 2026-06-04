@@ -1,35 +1,33 @@
-"""#131 — tuning-lab arena orchestrator.
+"""#131 — tuning-lab arena orchestrator (multi-clip, aggregated).
 
-Drives a config sweep against the LIVE subgen model and ranks the outputs
-with the validated tournament judge (`tournament_harness.judge_candidates`).
+Implements the validated Tier-B methodology exactly: a config is only
+trustworthy if it wins ACROSS SEPARATE clips, not on one. So per sweep we:
 
-The flow, per run:
-  1. Preflight — the runner checks the connected subgen can actually do this.
-  2. Source transcript ONCE (`task="transcribe"`) → extract plain text. This
-     is the shared source the QE/adequacy judge (#123) scores each candidate
-     translation against.
-  3. Candidates — for each config variant, run `task="translate"` with that
-     variant's per-request `kwargs`.
-  4. Judge — feed `{label → srt}` + source text + VAD speech ranges to
-     `judge_candidates` → a ranked `TournamentResult`.
+  1. Preflight — runner checks the connected subgen can do this.
+  2. Auto-sample the file into N SEPARATE strata clips (dense-speech +
+     speech→silence boundary + a silence/music stretch). The silence stratum
+     is essential — on clean dialogue every config near-ties; they only
+     separate on hallucination-bait.
+  3. For EACH clip independently: source-transcribe once, run every recipe,
+     judge with `judge_candidates` (the clip's VAD ranges drive the silence/
+     coverage signals).
+  4. AGGREGATE across clips: mean composite per recipe, cross-clip winner
+     consistency, and mean `clip_agreement` → a confidence read. The honest
+     output is "top pick + what to avoid + how much to trust it", NOT a
+     trophy (single-clip winners are noise; the judge is a failure-mode
+     detector, only a rough accuracy ranker — ρ~0.46).
 
-Everything subgen-facing is behind ONE injected seam, `CandidateRunner`, so
-the orchestration logic is unit-testable without a real subgen.
-
-The production runner is `AsrRunner` — it drives subgen's v4.10 `/asr` path-
-input channel: subgen reads the media off the shared mount (no upload) and
-returns the subtitle over HTTP (no shared writable scratch, no library
-pollution, no output-isolation problem). That's why there's no scratch-dir /
-filesystem machinery here at all.
+subgen is behind ONE injected seam, `CandidateRunner`. The production runner
+`AsrRunner` cuts the clips, then runs every recipe on each via subgen's v4.10
+`/asr` UPLOAD mode (short clip → tiny upload, no shared mount).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 from .paths import canonical_to_fs
 from .subtitle_readability import parse_srt
-from .tournament import TournamentResult
 from .tournament_harness import judge_candidates
 
 
@@ -48,87 +46,154 @@ class ConfigVariant:
 @dataclass
 class VariantOutcome:
     label: str
-    srt_text: str | None
+    srt_text: str | None       # "" if it produced a sub on some clip; None if never
     error: str | None = None
 
 
 @dataclass
+class ClipResult:
+    kind: str                  # speech | boundary | silence | fallback
+    winner: str | None
+    agreement: float | None    # clip_agreement (cross-config vocab overlap)
+    scorecards: list[dict]     # serialized Scorecard per recipe
+
+
+@dataclass
+class AggregateRow:
+    label: str
+    mean_composite: float
+    mean_qe: float | None
+    clips_won: int             # clips this recipe topped
+    clips_scored: int          # clips it produced a usable sub on
+    disqualified_in: int       # clips it was disqualified on
+
+
+@dataclass
 class ArenaResult:
-    source_text: str | None
-    outcomes: list[VariantOutcome]
-    tournament: TournamentResult
+    outcomes: list[VariantOutcome]    # per-recipe produced-or-not (live progress)
+    aggregate: list[AggregateRow]     # ranked best-first by mean composite
+    per_clip: list[ClipResult]
+    winner: str | None                # top mean composite (or None)
+    confidence: str | None            # high | moderate | low
+    consistency: float | None         # fraction of clips the winner also topped
+    agreement_mean: float | None      # mean clip_agreement across clips
+
+
+def _confidence(consistency: float | None, agreement_mean: float | None, n_clips: int) -> str:
+    """Calibrated against Tier-B: trust needs the winner to hold across clips
+    AND decent cross-config agreement (European ~0.75–0.81 trust; CJK ~0.57–
+    0.64 flag). One clip can never be 'high'."""
+    if n_clips < 2 or consistency is None:
+        return "low"
+    agr = agreement_mean if agreement_mean is not None else 0.0
+    if consistency >= 0.67 and agr >= 0.70:
+        return "high"
+    if consistency >= 0.50 and agr >= 0.60:
+        return "moderate"
+    return "low"
+
+
+def _aggregate(per_clip: list[ClipResult], variants: list[ConfigVariant]):
+    """Cross-clip aggregation → (ranked rows, winner, confidence, consistency,
+    agreement_mean). A recipe with no sub on a clip scores 0 there (a config
+    that silently drops out is worse, not absent)."""
+    rows: list[AggregateRow] = []
+    for v in variants:
+        comps: list[float] = []
+        qes: list[float] = []
+        won = scored = dq = 0
+        for c in per_clip:
+            sc = next((s for s in c.scorecards if s.get("entrant_label") == v.label), None)
+            if sc is None:
+                comps.append(0.0)
+                continue
+            comps.append(sc.get("composite") or 0.0)
+            if sc.get("qe_adequacy") is not None:
+                qes.append(sc["qe_adequacy"])
+            if sc.get("disqualified"):
+                dq += 1
+            else:
+                scored += 1
+            if c.winner == v.label:
+                won += 1
+        rows.append(AggregateRow(
+            label=v.label,
+            mean_composite=round(sum(comps) / len(comps), 2) if comps else 0.0,
+            mean_qe=round(sum(qes) / len(qes), 4) if qes else None,
+            clips_won=won, clips_scored=scored, disqualified_in=dq,
+        ))
+    rows.sort(key=lambda r: r.mean_composite, reverse=True)
+    winner = rows[0].label if rows and rows[0].mean_composite > 0 else None
+
+    clip_winners = [c.winner for c in per_clip if c.winner]
+    consistency = (sum(1 for w in clip_winners if w == winner) / len(clip_winners)
+                   if winner and clip_winners else None)
+    agrs = [c.agreement for c in per_clip if c.agreement is not None]
+    agreement_mean = round(sum(agrs) / len(agrs), 3) if agrs else None
+    confidence = _confidence(consistency, agreement_mean, len(per_clip))
+    return (rows, winner, confidence,
+            round(consistency, 2) if consistency is not None else None, agreement_mean)
 
 
 class CandidateRunner(Protocol):
-    """Seam for the arena. `prepare()` does one-time setup (auto-sampling) and
-    returns the speech ranges the judge should use; `run()` produces one
-    subtitle under a task+kwargs on the prepared sample; `cleanup()` releases
-    any temp artifacts."""
+    """Seam. `prepare()` auto-samples → returns one descriptor per clip
+    ({kind, ranges}); `run(clip_idx, ...)` produces a subtitle for that clip;
+    `cleanup()` releases temp clips."""
     async def preflight(self) -> None: ...
-    async def prepare(self, media_path: str) -> list[tuple[float, float]] | None: ...
-    async def run(self, *, task: str, kwargs: dict[str, Any]) -> str | None: ...
+    async def prepare(self, media_path: str) -> list[dict]: ...
+    async def run(self, clip_idx: int, *, task: str, kwargs: dict[str, Any]) -> str | None: ...
     async def cleanup(self) -> None: ...
 
 
 class AsrRunner:
-    """Production runner over subgen's v4.10 `/asr` channel.
-
-    `prepare()` auto-samples the file into a short strata clip (speech +
-    boundary + silence — see arena_sampler) and every recipe is run on THAT
-    clip via `/asr` upload mode: no whole-episode passes, no shared mount, and
-    the clip's VAD ranges drive the judge's silence/coverage signals. Gate is
-    enforced in `preflight()`.
-    """
+    """Production runner: auto-samples N strata clips, runs each recipe on each
+    clip via subgen's v4.10 `/asr` UPLOAD mode (no shared mount). Gate enforced
+    in `preflight()`."""
     def __init__(self, subgen, *, capabilities=None, source_language: str | None = None,
                  to_fs_path=canonical_to_fs, sampler=None):
         self._subgen = subgen
         self._caps = capabilities
         self._source_language = source_language
         self._to_fs_path = to_fs_path
-        self._sampler = sampler  # injected for tests; default resolved lazily
-        self._clip: str | None = None
+        self._sampler = sampler
+        self._clips: list[dict] = []  # [{path, kind, ranges}]
 
     async def preflight(self) -> None:
         caps = self._caps if self._caps is not None else await self._subgen.probe_capabilities()
         if not getattr(caps, "asr_arena", False):
             raise ArenaUnsupported(
                 "tuning-lab arena needs subarr-subgen >=v4.10 — /asr must "
-                "advertise capabilities.asr_arena (path-input + per-request "
-                "kwargs + HTTP return)"
+                "advertise capabilities.asr_arena (per-request kwargs + HTTP return)"
             )
 
-    async def prepare(self, media_path: str) -> list[tuple[float, float]] | None:
+    async def prepare(self, media_path: str) -> list[dict]:
         sampler = self._sampler
         if sampler is None:
-            from .arena_sampler import build_sample as sampler
+            from .arena_sampler import build_samples as sampler
         fs_path = str(self._to_fs_path(media_path))
-        # ffmpeg/VAD are blocking CPU work — keep the event loop free.
         import asyncio
-        self._clip, ranges = await asyncio.to_thread(sampler, fs_path)
-        return ranges
+        self._clips = await asyncio.to_thread(sampler, fs_path)
+        return [{"kind": c["kind"], "ranges": c["ranges"]} for c in self._clips]
 
-    async def run(self, *, task: str, kwargs: dict[str, Any]) -> str | None:
-        if not self._clip:
-            raise RuntimeError("AsrRunner.run() called before prepare()")
+    async def run(self, clip_idx: int, *, task: str, kwargs: dict[str, Any]) -> str | None:
+        clip = self._clips[clip_idx]
         srt = await self._subgen.asr(
-            local_file=self._clip, task=task,
+            local_file=clip["path"], task=task,
             language=self._source_language, kwargs=kwargs or None,
         )
         return srt or None
 
     async def cleanup(self) -> None:
-        if self._clip:
-            import os
+        import os
+        for c in self._clips:
             try:
-                os.remove(self._clip)
+                os.remove(c["path"])
             except OSError:
                 pass
-            self._clip = None
+        self._clips = []
 
 
 def _srt_to_text(srt_text: str) -> str:
-    """Join cue text the same way the tournament derives its QE hypothesis,
-    so the source transcript and the candidate hyps are extracted identically."""
     return " ".join(c.text for c in parse_srt(srt_text))
 
 
@@ -138,52 +203,54 @@ async def run_arena(
     *,
     runner: CandidateRunner,
     judge=judge_candidates,
-    on_source=None,
-    on_variant=None,
+    on_clip=None,    # on_clip(idx, kind, total) — a clip's passes are starting
+    on_step=None,    # on_step() — one transcription (source or recipe) finished
 ) -> ArenaResult:
-    """Run one config sweep and return the ranked result. See module docstring.
-
-    `on_source(text)` fires once the source transcript is ready; `on_variant(
-    outcome)` fires after each variant completes. Both are optional sync hooks
-    the run service uses to push live SSE progress without blocking the sweep.
-    """
+    """Run one multi-clip sweep and return the aggregated result."""
     if not variants:
         raise ValueError("run_arena needs at least one config variant")
 
     await runner.preflight()
     try:
-        # 0. Auto-sample the file into a short strata clip; its VAD speech
-        # ranges drive the judge's silence/coverage signals.
-        speech_ranges = await runner.prepare(media_path)
+        clips = await runner.prepare(media_path)
+        per_clip: list[ClipResult] = []
+        produced = {v.label: False for v in variants}
 
-        # 1. Source transcript (once) — task=transcribe, default config.
-        source_srt = await runner.run(task="transcribe", kwargs={})
-        source_text = _srt_to_text(source_srt) if source_srt else None
-        if on_source is not None:
-            on_source(source_text)
+        for ci, clip in enumerate(clips):
+            if on_clip is not None:
+                on_clip(ci, clip.get("kind", "?"), len(clips))
+            source_srt = await runner.run(ci, task="transcribe", kwargs={})
+            source_text = _srt_to_text(source_srt) if source_srt else None
+            if on_step is not None:
+                on_step()
 
-        # 2. Candidates — one translate per variant, SEQUENTIALLY (await each
-        # before the next). subgen's /asr is a blocking one-at-a-time call and
-        # its single worker serializes the GPU anyway, so concurrency only
-        # risks later requests waiting past the client timeout (which judged
-        # sweeps early with partial results). Sequential = the sweep finishes
-        # only when every recipe is truly done. on_variant fires per recipe.
-        outcomes: list[VariantOutcome] = []
-        candidates: dict[str, str] = {}
-        for v in variants:
-            try:
-                srt = await runner.run(task="translate", kwargs=v.kwargs)
-                outcome = VariantOutcome(v.label, srt, None if srt else "no subtitle produced")
-            except Exception as e:  # one bad variant must not sink the whole sweep
-                outcome = VariantOutcome(v.label, None, error=str(e))
-            outcomes.append(outcome)
-            if outcome.srt_text:
-                candidates[v.label] = outcome.srt_text
-            if on_variant is not None:
-                on_variant(outcome)
+            candidates: dict[str, str] = {}
+            for v in variants:
+                try:
+                    srt = await runner.run(ci, task="translate", kwargs=v.kwargs)
+                except Exception:  # one bad recipe on one clip must not sink the sweep
+                    srt = None
+                if srt:
+                    candidates[v.label] = srt
+                    produced[v.label] = True
+                if on_step is not None:
+                    on_step()
 
-        # 3. Judge — the clip's VAD ranges make the silence/coverage signals fire.
-        result = judge(candidates, speech_ranges=speech_ranges, source_text=source_text)
-        return ArenaResult(source_text=source_text, outcomes=outcomes, tournament=result)
+            res = judge(candidates, speech_ranges=clip.get("ranges"), source_text=source_text)
+            per_clip.append(ClipResult(
+                kind=clip.get("kind", "?"), winner=res.winner_label,
+                agreement=res.clip_agreement,
+                scorecards=[asdict(sc) for sc in res.scorecards],
+            ))
+
+        outcomes = [VariantOutcome(v.label, "" if produced[v.label] else None,
+                                   None if produced[v.label] else "no subtitle produced on any clip")
+                    for v in variants]
+        rows, winner, confidence, consistency, agreement_mean = _aggregate(per_clip, variants)
+        return ArenaResult(
+            outcomes=outcomes, aggregate=rows, per_clip=per_clip,
+            winner=winner, confidence=confidence,
+            consistency=consistency, agreement_mean=agreement_mean,
+        )
     finally:
         await runner.cleanup()

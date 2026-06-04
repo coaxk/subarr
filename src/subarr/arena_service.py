@@ -91,27 +91,35 @@ class ArenaService:
     async def _run(self, run: ArenaRun) -> None:
         run_id = run.id
         run.status = "running"
+        run.outcomes = {"clips": [], "done": 0, "total": 0}  # progress scaffold
         self._store.save(run)
         self._emit(run_id, {"event": "start",
                             "data": {"id": run.id, "variants": [v["label"] for v in run.variants]}})
         try:
             runner = self._build_runner(run)
             variants = [ConfigVariant(v["label"], v["kwargs"]) for v in run.variants]
+            per_clip = run.outcomes  # alias the progress dict
 
-            def on_source(text: str | None) -> None:
-                run.source_text = text
+            def on_clip(idx: int, kind: str, total: int) -> None:
+                if not per_clip["clips"]:
+                    per_clip["clips"] = [{"kind": None, "status": "pending"} for _ in range(total)]
+                    per_clip["total"] = total * (len(variants) + 1)  # +1 source per clip
+                for j in range(idx):
+                    per_clip["clips"][j]["status"] = "done"
+                per_clip["clips"][idx] = {"kind": kind, "status": "running"}
                 self._store.save(run)
-                self._emit(run_id, {"event": "source", "data": {"has_text": bool(text)}})
+                self._emit(run_id, {"event": "clip", "data": {"idx": idx, "kind": kind, "total": total}})
 
-            def on_variant(outcome) -> None:
-                run.outcomes.append({"label": outcome.label, "ok": outcome.srt_text is not None,
-                                     "error": outcome.error})
+            def on_step() -> None:
+                per_clip["done"] += 1
                 self._store.save(run)
-                self._emit(run_id, {"event": "variant", "data": {"label": outcome.label}})
+                self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
 
             result = await run_arena(run.media_path, variants, runner=runner,
-                                     on_source=on_source, on_variant=on_variant)
-            run.result = asdict(result.tournament)
+                                     on_clip=on_clip, on_step=on_step)
+            for c in per_clip["clips"]:
+                c["status"] = "done"
+            run.result = asdict(result)
             run.status = "done"
             self._store.save(run)
             self._emit(run_id, {"event": "done", "data": run.to_dict()})

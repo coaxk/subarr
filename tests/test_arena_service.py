@@ -39,9 +39,9 @@ class FakeRunner:
             raise ArenaUnsupported("needs v4.10")
 
     async def prepare(self, media_path):
-        return [(0.0, 3.0)]
+        return [{"kind": "speech", "ranges": [(0.0, 3.0)]}]   # one clip
 
-    async def run(self, *, task, kwargs):
+    async def run(self, clip_idx, *, task, kwargs):
         return self._outputs.pop(0) if self._outputs else None
 
     async def cleanup(self):
@@ -73,11 +73,10 @@ async def test_run_completes_and_persists_result(store):
 
     persisted = svc.get(run.id)              # the persisted truth, not the in-mem object
     assert persisted.status == "done"
-    assert persisted.source_text == "source line"
-    assert {o["label"] for o in persisted.outcomes} == {"a", "b"}
-    assert all(o["ok"] for o in persisted.outcomes)
+    # outcomes is now the progress scaffold (1 clip × (source + 2 recipes) = 3 steps)
+    assert persisted.outcomes["done"] == 3 and persisted.outcomes["total"] == 3
     assert persisted.result is not None
-    assert "scorecards" in persisted.result and "winner_label" in persisted.result
+    assert "aggregate" in persisted.result and "winner" in persisted.result and "per_clip" in persisted.result
 
 
 @pytest.mark.asyncio
@@ -128,8 +127,8 @@ async def test_events_streamed_to_subscriber(store):
 
     kinds = [e["event"] for e in events]
     assert kinds[0] == "start"
-    assert "source" in kinds
-    assert kinds.count("variant") == 2
+    assert "clip" in kinds
+    assert kinds.count("step") == 3       # 1 clip × (source + 2 recipes)
     assert kinds[-1] == "done"
 
 

@@ -352,120 +352,153 @@ function SweepForm({ onRun, disabled, gate }) {
 
 // ── results ──────────────────────────────────────────────────────────────────
 const COL_HELP = {
-  Overall: 'The judge’s overall score, 0–100. Higher is better. This decides the winner.',
-  Faithfulness: 'How close the meaning is to the source (0–1, higher is closer). Blank if the optional accuracy model isn’t installed — ranking then uses readability and clean-output checks only.',
-  Readability: 'How cleanly it reads: timing, line length, lines per second. 0–100.',
-  Lines: 'How many subtitle lines it produced.',
+  'Mean score': "The recipe's average overall score across all clips (0–100). Higher is better — this decides the top pick.",
+  Faithfulness: 'Average meaning-match to the source across clips (0–1). Blank if the optional accuracy model isn’t installed.',
+  'Clips won': 'How many strata clips this recipe topped. Winning ACROSS clips is what makes a pick trustworthy; winning one is luck.',
+  Issues: 'Clips where this recipe produced unusable output (loops / hallucination / no subtitle).',
 };
 
-// One sweep's detail: live progress, winner, and the ranked table. Takes the
-// full run object (fetched per-id); null while its detail is loading.
+const CONF = {
+  high: { color: 'var(--success-500)', text: 'high' },
+  moderate: { color: 'var(--warn-500)', text: 'moderate' },
+  low: { color: 'var(--error-500)', text: 'low' },
+};
+
+function ConfChip({ conf }) {
+  const c = CONF[conf] || CONF.low;
+  return <span style={{ fontSize: 'var(--text-xs)', color: c.color, border: `1px solid ${c.color}`, borderRadius: 'var(--radius-pill)', padding: '1px 8px', flex: 'none' }}>{c.text} confidence</span>;
+}
+
+// Live progress: each strata clip is judged separately, so show the clips.
+function ClipProgress({ prog }) {
+  const clips = prog.clips || [];
+  const dot = (status) => ({
+    width: 9, height: 9, borderRadius: '50%', flex: 'none',
+    background: status === 'done' ? 'var(--success-500)' : status === 'running' ? 'var(--violet-500)' : 'var(--bg-4)',
+    animation: status === 'running' ? 'pulse 1.6s ease-out infinite' : undefined,
+  });
+  return (
+    <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {clips.length === 0 && <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>Sampling the file…</div>}
+      {clips.map((c, i) => (
+        <div key={i} style={progRow}>
+          <span style={dot(c.status)} />
+          <span style={{ color: 'var(--fg-1)' }}>{c.kind ? `${c.kind} clip` : `clip ${i + 1}`}</span>
+          <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{c.status}</span>
+        </div>
+      ))}
+      {prog.total > 0 && (
+        <div style={{ marginTop: 4, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+          {prog.done} of {prog.total} transcriptions — each clip is judged on its own, then results are combined.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One sweep's detail: live clip progress, then the AGGREGATED guidance + table
+// + per-clip breakdown. Takes the full run object; null while loading.
 function SweepDetail({ run }) {
   if (!run) return <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', padding: '4px 0' }}>Loading…</div>;
-  const scorecards = run.result?.scorecards || [];
-  const winner = run.result?.winner_label;
-  const winnerKwargs = (run.variants || []).find((v) => v.label === winner)?.kwargs;
+  const prog = run.outcomes && !Array.isArray(run.outcomes) ? run.outcomes : {};
+  const res = run.result;
+  const kwById = Object.fromEntries((run.variants || []).map((v) => [v.label, v.kwargs]));
 
   return (
     <div>
       {run.error && <div style={{ color: 'var(--error-500)', marginBottom: 10 }}>Error: {run.error}</div>}
-      {run.status === 'running' && (() => {
-        const done = {};
-        (run.outcomes || []).forEach((o) => { done[o.label] = o; });
-        const sourceReady = run.source_text != null;
-        let runningTaken = false;
-        const dot = (color, pulse) => ({ width: 9, height: 9, borderRadius: '50%', background: color, flex: 'none', animation: pulse ? 'pulse 1.6s ease-out infinite' : undefined });
+      {run.status === 'running' && <ClipProgress prog={prog} />}
+
+      {res && (res.aggregate || []).length > 0 ? (() => {
+        const rows = res.aggregate;
+        const winner = res.winner;
+        const winnerKwargs = kwById[winner];
+        const avoid = rows.filter((r) => r.disqualified_in > 0 || r.clips_scored === 0).map((r) => r.label);
+        const nclips = (res.per_clip || []).length;
+        const wonRow = rows.find((r) => r.label === winner);
+        // Tie: top two within noise → no recipe meaningfully beat another here.
+        const scored = rows.filter((r) => r.clips_scored > 0);
+        const tie = scored.length >= 2 && (scored[0].mean_composite - scored[1].mean_composite) < 2.0;
         return (
-          <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={progRow}>
-              <span style={dot(sourceReady ? 'var(--success-500)' : 'var(--violet-500)', !sourceReady)} />
-              <span style={{ color: 'var(--fg-1)' }}>Source transcript</span>
-              <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{sourceReady ? 'ready' : 'transcribing…'}</span>
-            </div>
-            {(run.variants || []).map((v) => {
-              const o = done[v.label];
-              let state, txt;
-              if (o) { state = o.ok ? 'done' : 'fail'; txt = o.ok ? 'done' : 'failed'; }
-              else if (sourceReady && !runningTaken) { state = 'run'; runningTaken = true; txt = 'transcribing…'; }
-              else { state = 'pend'; txt = 'queued'; }
-              const color = state === 'done' ? 'var(--success-500)' : state === 'fail' ? 'var(--error-500)' : state === 'run' ? 'var(--violet-500)' : 'var(--bg-4)';
-              return (
-                <div key={v.label} style={progRow}>
-                  <span style={dot(color, state === 'run')} />
-                  <span style={{ color: 'var(--fg-1)' }}>{v.label}</span>
-                  <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{txt}</span>
-                </div>
-              );
-            })}
-            <div style={{ marginTop: 4, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Recipes run one at a time — each is a full transcription pass on the GPU.</div>
-          </div>
-        );
-      })()}
-      {scorecards.length > 0 ? (
-        <>
-          {(() => {
-            const agreement = run.result?.clip_agreement;
-            const conf = agreement == null ? null : agreement >= 0.7 ? 'high' : agreement >= 0.6 ? 'moderate' : 'low';
-            const confColor = conf === 'high' ? 'var(--success-500)' : conf === 'moderate' ? 'var(--warn-500)' : 'var(--error-500)';
-            const avoid = scorecards.filter((s) => s.disqualified).map((s) => s.entrant_label);
-            return (
-              <div style={guidanceBoxStyle}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--fg-0)' }}>Guidance for this clip</div>
-                {winner && (
-                  <>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-                      <b style={{ color: 'var(--success-500)' }}>Top pick:</b> {winner} — rated best on this clip. To try it as your default:
-                    </div>
-                    <code style={winnerCode}>SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}</code>
-                  </>
-                )}
-                {avoid.length > 0 && (
-                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 6 }}>
-                    <b style={{ color: 'var(--error-500)' }}>Avoid:</b> {avoid.join(', ')} — unusable output here (looped / hallucinated / no subtitle).
-                  </div>
-                )}
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 8, lineHeight: 1.55 }}>
-                  {conf && <><b style={{ color: confColor }}>Confidence: {conf}</b> (the recipes agreed {(agreement * 100).toFixed(0)}% on what was said). </>}
-                  This is <b>one clip</b> — a guide, not a verdict. Top picks can flip between clips; the judge is strong at catching
-                  failures (loops, hallucination, dropout) but only a rough guide to which is most <i>accurate</i>. Run a few files
-                  before committing a default. One-click adopt is coming.
-                </div>
+          <>
+            <div style={guidanceBoxStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, color: 'var(--fg-0)' }}>Guidance</span>
+                {res.confidence && !tie && <ConfChip conf={res.confidence} />}
               </div>
-            );
-          })()}
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-base)' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--fg-3)' }}>
-                  <th style={thStyle}>#</th><th style={thStyle}>Recipe</th>
-                  {['Overall', 'Faithfulness', 'Readability', 'Lines'].map((c) => <th key={c} style={thStyle} title={COL_HELP[c]}>{c}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {scorecards.map((sc, i) => {
-                  const isWin = sc.entrant_label === winner;
-                  return (
-                    <tr key={sc.entrant_label} style={{ borderTop: 'var(--border)', background: isWin ? 'rgba(52,211,153,0.08)' : undefined }}>
-                      <td style={tdStyle}>{i + 1}</td>
-                      <td style={{ ...tdStyle, fontWeight: isWin ? 700 : 500, color: 'var(--fg-0)' }}>
-                        {isWin && <span title="winner" style={{ marginRight: 6 }}>★</span>}{sc.entrant_label}
-                        {sc.disqualified && <span title="produced unusable output" style={{ color: 'var(--error-500)', marginLeft: 6, fontSize: 'var(--text-xs)' }}>unusable</span>}
-                      </td>
-                      <td style={tdStyle}>{sc.composite?.toFixed(1)}</td>
-                      <td style={tdStyle}>{sc.qe_adequacy != null ? sc.qe_adequacy.toFixed(3) : '—'}</td>
-                      <td style={tdStyle}>{sc.readability_score?.toFixed(0)}</td>
-                      <td style={tdStyle}>{sc.cue_count}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 8, lineHeight: 1.5 }}>
-            Hover a column heading for what it means. Ranked best-first by Overall; faithfulness counts heavily when the accuracy model is available.
-          </div>
-        </>
-      ) : run.status === 'done' ? (
+              {tie ? (
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+                  These recipes performed <b>about the same</b> on this clip (within noise) — no clear advantage either way.
+                  That usually means the audio is easy enough that settings don't matter much here. To actually separate
+                  recipes, try a <b>harder clip</b> (foreign-language, noisy, or with a long music/quiet stretch) — that's where
+                  weaker settings start to hallucinate or loop.
+                </div>
+              ) : winner ? (
+                <>
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+                    <b style={{ color: 'var(--success-500)' }}>Top pick:</b> {winner}
+                    {wonRow && <> — best average across the clips (won {wonRow.clips_won} of {nclips}).</>} To try it as your default:
+                  </div>
+                  <code style={winnerCode}>SUBGEN_KWARGS={JSON.stringify(winnerKwargs || {})}</code>
+                </>
+              ) : (
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>No clear pick — nothing produced usable output. Try a different clip or set the spoken language.</div>
+              )}
+              {avoid.length > 0 && (
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginTop: 6 }}>
+                  <b style={{ color: 'var(--error-500)' }}>Avoid:</b> {avoid.join(', ')} — unusable on at least one clip (loops / hallucination / no subtitle).
+                </div>
+              )}
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginTop: 8, lineHeight: 1.55 }}>
+                {res.confidence === 'low'
+                  ? 'Low confidence: the top pick didn’t hold across the clips (or the recipes disagreed on what was said). Treat it as a hint and run a few more files.'
+                  : `Based on ${nclips} strata clip${nclips === 1 ? '' : 's'} (dialogue + a quiet stretch). The judge is strong at catching failures (loops, hallucination, dropout) and a rough guide to accuracy — a config that wins across clips is the safe bet. One-click adopt is coming.`}
+                {res.agreement_mean != null && <> Recipes agreed {(res.agreement_mean * 100).toFixed(0)}% on what was said.</>}
+              </div>
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-base)' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--fg-3)' }}>
+                    <th style={thStyle}>#</th><th style={thStyle}>Recipe</th>
+                    {['Mean score', 'Faithfulness', 'Clips won', 'Issues'].map((c) => <th key={c} style={thStyle} title={COL_HELP[c]}>{c}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => {
+                    const isWin = r.label === winner;
+                    return (
+                      <tr key={r.label} style={{ borderTop: 'var(--border)', background: isWin ? 'rgba(52,211,153,0.08)' : undefined }}>
+                        <td style={tdStyle}>{i + 1}</td>
+                        <td style={{ ...tdStyle, fontWeight: isWin ? 700 : 500, color: 'var(--fg-0)' }}>
+                          {isWin && <span title="top pick" style={{ marginRight: 6 }}>★</span>}{r.label}
+                        </td>
+                        <td style={tdStyle}>{r.mean_composite?.toFixed(1)}</td>
+                        <td style={tdStyle}>{r.mean_qe != null ? r.mean_qe.toFixed(3) : '—'}</td>
+                        <td style={tdStyle}>{r.clips_won}/{nclips}</td>
+                        <td style={tdStyle}>{r.disqualified_in > 0 ? <span style={{ color: 'var(--error-500)' }}>{r.disqualified_in}</span> : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* per-clip breakdown — did the winner hold, or flip? */}
+            <div style={{ marginTop: 10, fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+              <div style={{ marginBottom: 4, fontWeight: 600, color: 'var(--fg-2)' }}>Per-clip winners</div>
+              {(res.per_clip || []).map((c, i) => (
+                <span key={i} style={{ marginRight: 12 }}>
+                  {c.kind}: <b style={{ color: c.winner === winner ? 'var(--success-500)' : 'var(--fg-1)' }}>{c.winner || '—'}</b>
+                  {c.agreement != null && <span style={{ color: 'var(--fg-3)' }}> ({(c.agreement * 100).toFixed(0)}%)</span>}
+                </span>
+              ))}
+              <div style={{ marginTop: 6 }}>Hover a column heading for what it means.</div>
+            </div>
+          </>
+        );
+      })() : run.status === 'done' ? (
         <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>No usable results — every recipe was rejected or produced no subtitle. Try a clip with clearer dialogue, or set the spoken language.</div>
       ) : null}
     </div>
@@ -503,11 +536,17 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   <StatusPill status={r.status} />
                   <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
                   {active ? (
-                    <ProgressSegments done={r.done_count} total={r.recipe_count} running={r.status === 'running'} />
+                    <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 70, height: 6, borderRadius: 3, background: 'var(--bg-4)', overflow: 'hidden' }}>
+                        <span style={{ display: 'block', height: '100%', width: `${r.steps_total ? Math.round((r.steps_done / r.steps_total) * 100) : 0}%`, background: 'var(--violet-500)' }} />
+                      </span>
+                      <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{r.steps_done}/{r.steps_total || '…'}</span>
+                    </span>
                   ) : (
                     <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', flex: 'none' }}>{r.recipe_count} recipe{r.recipe_count === 1 ? '' : 's'}</span>
                   )}
-                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`top pick on this clip: ${r.winner}`}>top: {r.winner}</span>}
+                  {r.winner && <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-sm)', flex: 'none', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`top pick: ${r.winner}`}>top: {r.winner}</span>}
+                  {r.status === 'done' && r.confidence && <ConfChip conf={r.confidence} />}
                   <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
                 </button>
                 <button onClick={() => onDelete(r.id)} title="remove sweep" style={{ ...iconBtnStyle, border: 'none', background: 'transparent', marginRight: 8 }}>

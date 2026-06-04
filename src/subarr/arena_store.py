@@ -42,14 +42,19 @@ class ArenaRun:
 
     def summary(self) -> dict[str, Any]:
         """Lightweight shape for the sweeps list — no heavy scorecards. Full
-        detail (the ranked table) is fetched per-run via /{id}."""
+        detail (aggregate + per-clip) is fetched per-run via /{id}."""
+        prog = self.outcomes if isinstance(self.outcomes, dict) else {}
+        res = self.result or {}
         return {
             "id": self.id,
             "media_path": self.media_path,
             "status": self.status,
             "recipe_count": len(self.variants),
-            "done_count": len(self.outcomes),
-            "winner": (self.result or {}).get("winner_label"),
+            "clips_total": len(prog.get("clips", [])),
+            "steps_done": prog.get("done", 0),
+            "steps_total": prog.get("total", 0),
+            "winner": res.get("winner"),
+            "confidence": res.get("confidence"),
             "error": self.error,
             "created_at": self.created_at,
         }

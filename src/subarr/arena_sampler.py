@@ -29,7 +29,7 @@ from . import vad
 
 log = logging.getLogger(__name__)
 
-WINDOW_S = 25.0          # length of each strata window
+WINDOW_S = 30.0          # length of each strata window (matches Tier-B: all clips were 30s)
 MAX_WINDOWS = 3          # speech + boundary + silence
 _MIN_SILENCE_GAP = 6.0   # only treat a gap this long as a "silence" strata
 
@@ -95,34 +95,39 @@ def _duration_s(path: str) -> float:
     return float(out)
 
 
-def build_sample(fs_path: str, *, out_dir: str | None = None) -> tuple[str, list[tuple[float, float]]]:
-    """VAD `fs_path`, assemble the strata sample → a 16 kHz mono wav. Returns
-    (clip_path, clip_speech_ranges). Caller owns the clip file (delete when done).
+def _cut_clip(fs_path: str, start: float, length: float, out_path: str) -> None:
+    """Extract one window → 16 kHz mono wav (audio-only keeps the upload tiny)."""
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-ss", str(start), "-i", fs_path, "-t", str(length),
+           "-map", "0:a:0", "-ar", "16000", "-ac", "1", out_path]
+    subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
 
-    `clip_speech_ranges` are computed on the ASSEMBLED clip (its own timeline),
-    so the tournament's silence/coverage judges line up with the concatenated
-    audio.
+
+def build_samples(fs_path: str, *, out_dir: str | None = None) -> list[dict]:
+    """VAD `fs_path` and cut each strata window into its OWN 30s clip.
+
+    Returns a list of {path, kind, ranges} — one SEPARATE clip per stratum
+    (dense-speech / boundary / silence). The arena judges each clip
+    independently and aggregates: this is the validated Tier-B methodology —
+    a config is only trustworthy if it wins ACROSS separate clips, not on one.
+    Caller owns the clip files (delete each when done).
+
+    `ranges` are computed on each cut clip (its own timeline) so the
+    tournament's silence/coverage judges line up with that clip's audio.
     """
     raw = vad.detect_speech_ranges(fs_path)
     ranges = vad.normalize_speech_ranges(raw) if raw else []
     duration = _duration_s(fs_path)
     windows = select_windows(ranges, duration)
-    log.info("arena sampler: %s → %d strata windows (%s)", Path(fs_path).name,
+    log.info("arena sampler: %s → %d separate strata clips (%s)", Path(fs_path).name,
              len(windows), ", ".join(w["kind"] for w in windows))
 
-    fd_dir = out_dir or tempfile.gettempdir()
-    clip_path = str(Path(fd_dir) / f"arena-sample-{abs(hash((fs_path, duration))) % 10**8}.wav")
-
-    # One ffmpeg pass: atrim each window from the source audio, reset PTS,
-    # concat → 16 kHz mono wav. Audio-only keeps the upload tiny.
-    parts, labels = [], []
+    base = Path(out_dir or tempfile.gettempdir())
+    key = abs(hash((fs_path, duration))) % 10**8
+    clips: list[dict] = []
     for i, w in enumerate(windows):
-        parts.append(f"[0:a]atrim=start={w['start']}:end={w['start'] + w['len']},asetpts=PTS-STARTPTS[a{i}]")
-        labels.append(f"[a{i}]")
-    filt = ";".join(parts) + f";{''.join(labels)}concat=n={len(windows)}:v=0:a=1[out]"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", fs_path,
-           "-filter_complex", filt, "-map", "[out]", "-ar", "16000", "-ac", "1", clip_path]
-    subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
-
-    clip_ranges = vad.detect_speech_ranges(clip_path) or []
-    return clip_path, clip_ranges
+        clip_path = str(base / f"arena-sample-{key}-{i}-{w['kind']}.wav")
+        _cut_clip(fs_path, w["start"], w["len"], clip_path)
+        clip_ranges = vad.detect_speech_ranges(clip_path) or []
+        clips.append({"path": clip_path, "kind": w["kind"], "ranges": clip_ranges})
+    return clips
