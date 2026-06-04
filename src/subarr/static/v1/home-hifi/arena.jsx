@@ -256,7 +256,7 @@ export function ArenaPage() {
       .then((r) => r.json())
       .then((d) => {
         if (!alive) return;
-        const ok = !!d?.subgen?.capabilities?.asr_arena;
+        const ok = !!d?.subgen?.asr_arena;
         setGate(ok ? { ok: true } : {
           ok: false,
           reason: 'This subgen build does not support the tuning lab (needs subarr-subgen ≥ v4.10).',
