@@ -26,13 +26,18 @@ def judge_candidates(
     candidates: dict[str, str],
     speech_ranges: list[tuple[float, float]] | None = None,
     gen_times: dict[str, float] | None = None,
+    source_text: str | None = None,
 ) -> TournamentResult:
-    """Rank candidate SRTs (label → srt_text) with the validated judge."""
+    """Rank candidate SRTs (label → srt_text) with the validated judge.
+
+    `source_text` is the SHARED source-language transcript of the clip (same
+    audio for every entrant); when given, the QE/adequacy judge (#123) fires."""
     gen_times = gen_times or {}
     entrants = [
         Entrant(
             label=label, srt_text=srt,
             speech_ranges=speech_ranges, gen_time_s=gen_times.get(label),
+            source_text=source_text,
         )
         for label, srt in candidates.items()
     ]
