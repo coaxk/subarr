@@ -68,6 +68,20 @@ def test_no_whisper_verification_is_dormant():
     assert it.audio_source == "ffprobe" and it.audio_label_whisper_mismatch is False
 
 
+def test_user_verification_disagreeing_with_tag_flags_mismatch():
+    # #90 (C): a user-confirm that contradicts the file tag flags a mismatch too.
+    it = _item(audio_langs=["eng"], file_canonical_path="TV/Show/ep.mkv")
+    _classify_audio_label(it, user_verifications={"TV/Show/ep.mkv": "fra"})
+    assert it.audio_source == "user" and it.audio_label_whisper_mismatch is True
+
+
+def test_user_verification_agreeing_with_tag_no_mismatch():
+    # 'fre' tag normalizes to 'fr' → agrees with the confirm → no mismatch.
+    it = _item(audio_langs=["fre"], file_canonical_path="TV/Show/ep.mkv")
+    _classify_audio_label(it, user_verifications={"TV/Show/ep.mkv": "fr"})
+    assert it.audio_source == "user" and it.audio_label_whisper_mismatch is False
+
+
 def test_no_audio_metadata_has_no_source():
     it = _item(audio_langs=["und"])
     _classify_audio_label(it)

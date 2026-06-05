@@ -721,9 +721,17 @@ def _classify_audio_label(item: CoverageItem,
     # Layer 0 (absolute): user verification beats everything.
     file_path = item.file_canonical_path
     if user_verifications and file_path and file_path in user_verifications:
+        from .langs import normalize_lang
         confirmed = user_verifications[file_path]
+        prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
         item.audio_langs = [confirmed]
-        item.audio_label_notes.append(f"user-confirmed: {confirmed!r}")
+        note = f"user-confirmed: {confirmed!r}"
+        # #90 (C): a verification that disagrees with the file's tag is a
+        # mismatch too ("you said X, tag said Y") — show the same dot.
+        if prior and normalize_lang(confirmed) not in {normalize_lang(l) for l in prior}:
+            note += f" — tags claimed {prior}"
+            item.audio_label_whisper_mismatch = True
+        item.audio_label_notes.append(note)
         item.audio_label_suspect = False
         item.audio_label_unknown = False
         item.audio_verified = True

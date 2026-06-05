@@ -1579,7 +1579,8 @@ export function AudioReviewModal() {
       setWhisperRunning(false);
     }
   };
-  const save = async (langCode) => {
+  const save = async (langCode, opts = {}) => {
+    const { source = 'user', confidence = 1.0, evidence } = opts;
     setSaving(true);
     setError(null);
     try {
@@ -1590,9 +1591,9 @@ export function AudioReviewModal() {
         body: JSON.stringify({
           canonical_path: row._canonical_path,
           lang_code: langCode,
-          source: 'user',
-          confidence: 1.0,
-          evidence: { notes: row.audio_label_notes || [], track },
+          source,
+          confidence,
+          evidence: evidence || { notes: row.audio_label_notes || [], track },
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1850,6 +1851,22 @@ export function AudioReviewModal() {
                         ? 'Chunks disagree or low probability — listen above and confirm manually.'
                         : 'Whisper returned no signal — listen above and pick from the list.')}
                 </div>
+                {/* #90 (B): accept the machine detection AS whisper-verified
+                    (distinct from Confirm below, which stores it as YOUR call).
+                    Stores source=whisper → cyan badge + tag-mismatch flag. */}
+                {agg.language && agg.language !== 'und' && agg.n_total > 0 && (
+                  <button className="btn sm"
+                    onClick={() => save(agg.language, {
+                      source: 'whisper',
+                      confidence: agg.n_total ? +(agg.n_agreeing / agg.n_total).toFixed(2) : 0,
+                      evidence: whisperResult,
+                    })}
+                    disabled={saving}
+                    title="Store this as the Whisper-verified audio language (machine detection). Renders the Whisper badge and flags a tag mismatch — distinct from Confirm, which records it as your own verification."
+                    style={{ alignSelf: 'flex-start', background: 'rgba(34,211,238,0.18)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.35)' }}>
+                    {saving ? 'Saving…' : `✓ Accept as Whisper-verified (${agg.language})`}
+                  </button>
+                )}
               </>
             );
           })()}
