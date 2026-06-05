@@ -11,6 +11,7 @@
 // the app — this is the marquee feature, not a bolt-on.
 
 import { SectionCard, StatusDot, Glyph, ICONS, LangTag } from './atoms.jsx';
+import { fetchBrowse } from './library.jsx';  // #145: reuse Library's cached, rollup-skipping browse
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -139,11 +140,15 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
   const [picked, setPicked] = useState(() => new Set());
   const togglePick = (p) => setPicked((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; });
 
+  const scrollRef = React.useRef(null);
+
   useEffect(() => {
     let alive = true;
     setLoading(true); setErr(null);
-    fetch('/api/browse?path=' + encodeURIComponent(path), { credentials: 'same-origin' })
-      .then((r) => r.json()).then((d) => { if (alive) setEntries(d.entries || []); })
+    // #145: Library's cached browse — skips the 10s+ recursive rollup at
+    // root and serves revisited folders instantly from browseCache.
+    fetchBrowse(path)
+      .then((d) => { if (alive) setEntries(d.entries || []); })
       .catch((e) => { if (alive) setErr(String(e)); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [path]);
@@ -151,6 +156,23 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
   const parts = path ? path.split('/') : [];
   const dirs = (entries || []).filter((e) => e.is_dir);
   const files = (entries || []).filter((e) => !e.is_dir && VIDEO_RE.test(e.name));
+
+  // #145/#137: A–Z ladder — jump to the first folder/file starting with a
+  // letter. Only worth showing once a level has enough entries to scroll.
+  const ordered = [...dirs, ...files];
+  const presentLetters = new Set(ordered.map((e) => (e.name[0] || '').toUpperCase()).filter((c) => c >= 'A' && c <= 'Z'));
+  const showLadder = ordered.length > 20;
+  const jumpTo = (letter) => {
+    const el = scrollRef.current && scrollRef.current.querySelector(`[data-letter="${letter}"]`);
+    if (el) el.scrollIntoView({ block: 'start' });
+  };
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const firstLetterSeen = new Set();
+  const letterAttr = (name) => {
+    const c = (name[0] || '').toUpperCase();
+    if (c >= 'A' && c <= 'Z' && !firstLetterSeen.has(c)) { firstLetterSeen.add(c); return c; }
+    return undefined;
+  };
 
   return (
     <div style={modalBackdrop} onClick={onClose}>
@@ -168,28 +190,42 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
             </span>
           ))}
         </div>
-        <div style={{ minHeight: 220, maxHeight: 420, overflow: 'auto', border: 'var(--border)', borderRadius: 'var(--radius-lg)' }}>
-          {loading ? <div style={pickRowMuted}>Loading…</div>
-            : err ? <div style={{ ...pickRowMuted, color: 'var(--error-500)' }}>Couldn’t browse: {err}</div>
-            : (dirs.length === 0 && files.length === 0) ? <div style={pickRowMuted}>No folders or video files here.</div>
-            : (<>
-                {dirs.map((e) => (
-                  <button key={e.path} onClick={() => setPath(e.path)} style={pickRow}>
-                    <span style={{ marginRight: 8 }}>📁</span>{e.name}
-                    {e.video_count ? <span style={{ color: 'var(--fg-3)', marginLeft: 8, fontSize: 'var(--text-xs)' }}>{e.video_count} video{e.video_count === 1 ? '' : 's'}</span> : null}
-                  </button>
-                ))}
-                {files.map((e) => (
-                  <div key={e.path} style={{ display: 'flex', alignItems: 'center' }}>
-                    <input type="checkbox" checked={picked.has(e.path)} onChange={() => togglePick(e.path)}
-                           onClick={(ev) => ev.stopPropagation()} title="Add to bulk batch"
-                           style={{ margin: '0 0 0 12px', flex: 'none', cursor: 'pointer', accentColor: 'var(--violet-500)' }} />
-                    <button onClick={() => onPick(e.path)} style={{ ...pickRow, color: 'var(--fg-0)', flex: 1 }}>
-                      <span style={{ marginRight: 8 }}>🎬</span>{e.name}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <div ref={scrollRef} style={{ flex: 1, minWidth: 0, minHeight: 220, maxHeight: 420, overflow: 'auto', border: 'var(--border)', borderRadius: 'var(--radius-lg)' }}>
+            {loading ? <div style={pickRowMuted}>Loading…</div>
+              : err ? <div style={{ ...pickRowMuted, color: 'var(--error-500)' }}>Couldn’t browse: {err}</div>
+              : (dirs.length === 0 && files.length === 0) ? <div style={pickRowMuted}>No folders or video files here.</div>
+              : (<>
+                  {dirs.map((e) => (
+                    <button key={e.path} data-letter={letterAttr(e.name)} onClick={() => setPath(e.path)} style={pickRow}>
+                      <span style={{ marginRight: 8 }}>📁</span>{e.name}
+                      {e.video_count ? <span style={{ color: 'var(--fg-3)', marginLeft: 8, fontSize: 'var(--text-xs)' }}>{e.video_count} video{e.video_count === 1 ? '' : 's'}</span> : null}
                     </button>
-                  </div>
-                ))}
-              </>)}
+                  ))}
+                  {files.map((e) => (
+                    <div key={e.path} data-letter={letterAttr(e.name)} style={{ display: 'flex', alignItems: 'center' }}>
+                      <input type="checkbox" checked={picked.has(e.path)} onChange={() => togglePick(e.path)}
+                             onClick={(ev) => ev.stopPropagation()} title="Add to bulk batch"
+                             style={{ margin: '0 0 0 12px', flex: 'none', cursor: 'pointer', accentColor: 'var(--violet-500)' }} />
+                      <button onClick={() => onPick(e.path)} style={{ ...pickRow, color: 'var(--fg-0)', flex: 1 }}>
+                        <span style={{ marginRight: 8 }}>🎬</span>{e.name}
+                      </button>
+                    </div>
+                  ))}
+                </>)}
+          </div>
+          {showLadder && (
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0, fontSize: 9, color: 'var(--fg-3)', userSelect: 'none', flex: 'none', width: 14 }}>
+              {ALPHABET.map((c) => {
+                const has = presentLetters.has(c);
+                return (
+                  <span key={c} onClick={has ? () => jumpTo(c) : undefined}
+                        style={{ textAlign: 'center', lineHeight: '1.15', cursor: has ? 'pointer' : 'default',
+                                 color: has ? 'var(--fg-2)' : 'var(--fg-4, #555)', fontWeight: has ? 600 : 400 }}>{c}</span>
+                );
+              })}
+            </div>
+          )}
         </div>
         {picked.size > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>

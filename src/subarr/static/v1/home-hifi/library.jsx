@@ -106,9 +106,9 @@ function AlphabetRail({ containerRef }) {
 // ─── Browse hook (per-path cache) ────────────────────────────────
 // We cache the response for each visited path so re-expanding a node
 // is instant; user-driven refresh forces a fresh fetch.
-const browseCache = new Map();
+export const browseCache = new Map();
 
-async function fetchBrowse(path, { fresh = false } = {}) {
+export async function fetchBrowse(path, { fresh = false } = {}) {
   const key = path || '';
   if (!fresh && browseCache.has(key)) return browseCache.get(key);
   // Skip recursive rollup at the root (TV/Movies have thousands of
