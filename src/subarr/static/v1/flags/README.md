@@ -1,6 +1,6 @@
 # Flag assets
 
-SVG flags (4x3) from [flag-icons](https://github.com/lipis/flag-icons) by Panayiotis Lipiridis, **MIT licensed**.
+Circular SVG flags from [circle-flags](https://github.com/HatScripts/circle-flags) by HatScripts, **MIT licensed**. Tiny (~1-3KB each) and built for small display — full-detail rectangular sets embed coats of arms that bloat to 100KB+ and are invisible at icon size.
 
 Used purely as **decoration** in language tags (`LangTag` in `home-hifi/atoms.jsx`).
 A flag is not a geography claim — languages are not countries; the tag's tooltip
