@@ -221,7 +221,9 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
         recipes = [{"label": rec["label"], "files": rec["files"], "wins": rec["wins"],
                     "mean_composite": round(rec["_sum"] / rec["files"], 2) if rec["files"] else 0.0}
                    for rec in b["_rec"].values()]
-        recipes.sort(key=lambda x: (x["wins"], x["mean_composite"]), reverse=True)
+        # Rank by mean composite (the quality metric) — files-won is shown as
+        # supporting info but is noisy with few files. (#26 ranking note)
+        recipes.sort(key=lambda x: (x["mean_composite"], x["wins"]), reverse=True)
         out.append({"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes})
     out.sort(key=lambda x: (x["files"], x["sweeps"]), reverse=True)
     return out
