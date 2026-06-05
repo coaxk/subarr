@@ -89,6 +89,14 @@ class SubgenCapabilities:
     # the dedup hash) and returns the sub over HTTP. The tuning-lab arena gates
     # on this — it's the no-shared-scratch channel (vs /batch's disk output).
     asr_arena: bool = False
+    # v4.13 capability (#79): subgen's RUNTIME IGNORE_FORCED_SUBTITLES value.
+    # When True, subgen TRANSCRIBES files whose only English embedded sub is a
+    # forced track (forced subs cover foreign dialogue only — not a full
+    # transcript); when False (vanilla, or the knob off) subgen STILL SKIPS
+    # them. NOTE this is the live on/off value, not merely "supported" —
+    # subarr's coverage gates the forced-only-EN partial gap on it so users
+    # only see an actionable gap the connected subgen will actually fill.
+    ignore_forced_subtitles: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -108,6 +116,7 @@ class SubgenCapabilities:
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "asr_arena": self.asr_arena,
+            "ignore_forced_subtitles": self.ignore_forced_subtitles,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -118,7 +127,8 @@ class SubgenCapabilities:
             has_queue=False, has_batch=False, is_subarr_subgen=False,
             audio_language_override=False, queue_cancel=False,
             robust_language_detection=False, per_request_kwargs=False,
-            per_request_task=False, asr_arena=False, subarr_subgen_patch_rev=None,
+            per_request_task=False, asr_arena=False,
+            ignore_forced_subtitles=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -243,6 +253,7 @@ class SubgenClient:
         per_request_kwargs = False
         per_request_task = False
         asr_arena = False
+        ignore_forced_subtitles = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -273,6 +284,9 @@ class SubgenClient:
                                 caps_block.get("per_request_task")
                             )
                             asr_arena = bool(caps_block.get("asr_arena"))
+                            ignore_forced_subtitles = bool(
+                                caps_block.get("ignore_forced_subtitles")
+                            )
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -295,6 +309,7 @@ class SubgenClient:
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             asr_arena=asr_arena,
+            ignore_forced_subtitles=ignore_forced_subtitles,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(

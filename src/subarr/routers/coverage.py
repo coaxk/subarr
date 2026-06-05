@@ -174,6 +174,7 @@ async def get_coverage(
         snap = await cov_cache.refresh(
             bundle, probe_store, audio_lang_store, use_tautulli=tautulli,
             probe_walker=getattr(request.app.state, "probe_walker", None),
+            caps_provider=lambda: getattr(request.app.state, "subgen_caps", None),
         )
         body = {
             "generated_at": snap.generated_at,
@@ -195,6 +196,7 @@ async def get_coverage(
     report: CoverageReport = await build_coverage(
         bundle, use_tautulli=tautulli, probe_store=probe_store,
         audio_lang_store=audio_lang_store,
+        subgen_caps=getattr(request.app.state, "subgen_caps", None),
     )
     body = report.to_dict()
     return _apply_filters_and_pack(

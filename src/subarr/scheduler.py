@@ -115,6 +115,7 @@ class Scheduler:
         pending_store: PendingStore | None = None,
         tick_s: int = TICK_S,
         bundle_provider=None,
+        caps_provider=None,
     ):
         self._schedule = schedule_store
         # Resolve the integration bundle live so onboarding live-reload can
@@ -122,6 +123,11 @@ class Scheduler:
         # Backward compatible: a directly-passed bundle becomes a constant
         # provider.
         self._bundle_provider = bundle_provider or (lambda: bundle)
+        # #79: resolve subgen caps live so the coverage_walk's forced-only-EN
+        # gate tracks the runtime IGNORE_FORCED_SUBTITLES value. Backward
+        # compatible — no provider → caps None → forced-only rows treated as
+        # non-actionable (the safe default).
+        self._caps_provider = caps_provider or (lambda: None)
         self._scan_store = scan_store
         self._runner = runner
         self._provenance = provenance
@@ -323,6 +329,7 @@ class Scheduler:
             probe_store = getattr(self._probe_walker, "_store", None) if self._probe_walker else None
             report = await build_coverage(
                 self._bundle, use_tautulli=True, probe_store=probe_store,
+                subgen_caps=self._caps_provider(),
             )
         except Exception as e:
             log.exception("coverage_walk: build_coverage failed: %s", e)

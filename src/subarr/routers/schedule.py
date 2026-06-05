@@ -161,7 +161,10 @@ async def preview(request: Request) -> dict[str, Any]:
         report = _Report()
         report.items = items
     else:
-        report = await build_coverage(bundle, use_tautulli=True)
+        report = await build_coverage(
+            bundle, use_tautulli=True,
+            subgen_caps=getattr(request.app.state, "subgen_caps", None),
+        )
     decisions = evaluate(report.items, rules)
     queue = [d.to_dict() for d in decisions if d.action == "queue"]
     skip_sample = [d.to_dict() for d in decisions if d.action == "skip"][:20]

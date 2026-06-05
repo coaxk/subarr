@@ -411,6 +411,7 @@ async def pending_review(request: Request) -> dict[str, Any]:
         report = await build_coverage(
             bundle, use_tautulli=True, probe_store=probe_store,
             audio_lang_store=audio_lang_store,
+            subgen_caps=getattr(request.app.state, "subgen_caps", None),
         )
         items_source = report.to_dict()["items"]
     pending = []
