@@ -146,9 +146,42 @@ def _readability_score(report: ReadabilityReport) -> float:
     return max(0.0, 100.0 - _readability_load(report) * 100.0)
 
 
+# A clip whose VAD found (essentially) no speech is a SILENCE/non-speech clip.
+# On it, the CORRECT output is empty — any produced text is hallucination (the
+# "thank you for watching" end-card artifact, harness-proven on 8s of silence).
+# Requires real VAD data: ranges=None means "no VAD" (can't tell), not silence.
+NON_SPEECH_CLIP_MAX_SPEECH_S = 0.1
+
+
+def _speech_seconds(ranges) -> float:
+    if not ranges:
+        return 0.0
+    return sum(max(0.0, e - s) for s, e in ranges)
+
+
+def _is_non_speech_clip(ranges) -> bool:
+    # ranges is None → no VAD data → NOT treated as silence (stay conservative).
+    # ranges == [] (or ~0s) → VAD ran and found no speech → a genuine silence clip.
+    return ranges is not None and _speech_seconds(ranges) <= NON_SPEECH_CLIP_MAX_SPEECH_S
+
+
 def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scorecard:
+    non_speech_clip = _is_non_speech_clip(entrant.speech_ranges)
     cues = parse_srt(entrant.srt_text)
     if not cues:
+        if non_speech_clip:
+            # Correctly silent on a non-speech clip — the hallucination-resistant
+            # outcome. A clean pass, NOT a disqualification (it must beat any
+            # entrant that hallucinated text here).
+            return Scorecard(
+                entrant_label=entrant.label, disqualified=False, composite=100.0,
+                readability_score=100.0, cue_count=0, gen_time_s=entrant.gen_time_s,
+                readability=None,
+                signals={"silence_text_ratio": 0.0, "repeated_line_ratio": 0.0,
+                         "canned_phrase_hits": 0, "uncovered_speech_ratio": 0.0,
+                         "qe_adequacy": None, "non_speech_clip": True},
+                notes="correctly produced no output on a non-speech clip",
+            )
         return Scorecard(
             entrant_label=entrant.label, disqualified=True, composite=0.0,
             readability_score=0.0, cue_count=0, gen_time_s=entrant.gen_time_s,
@@ -165,6 +198,12 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     # secondary penalty, so an accurate transcript of fast dialogue (high CPS)
     # stays a high score instead of being floored.
     sil = silence_text_ratio(cues, entrant.speech_ranges)
+    # On a known non-speech clip, silence_text_ratio() returns 0 (it can't tell
+    # empty-ranges "silence" from empty-ranges "no VAD"), so force it: every cue
+    # here is text over silence = hallucination. This makes the silence penalty
+    # fire so a hallucinating entrant loses to the correctly-silent one above.
+    if non_speech_clip:
+        sil = 1.0
     rep = repeated_line_ratio(cues)
     canned = canned_phrase_hits(cues)
     # Base-camp COMPLETENESS (#65): speech left without a subtitle = dropped
