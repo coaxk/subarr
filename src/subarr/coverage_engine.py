@@ -628,7 +628,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                           tautulli_hints: dict[str, str] | None = None,
                           user_verifications: dict[str, str] | None = None,
                           failed_idx: dict[str, list] | None = None,
-                          plex_hints: dict[str, str] | None = None) -> None:
+                          plex_hints: dict[str, str] | None = None,
+                          whisper_verifications: dict[str, str] | None = None) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
     audio_langs + file_canonical_path onto the item and mark it verified.
@@ -651,7 +652,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                 item.audio_label_notes.extend(notes)
             _classify_audio_label(item, tautulli_hints=tautulli_hints,
                                   user_verifications=user_verifications,
-                                  plex_hints=plex_hints)
+                                  plex_hints=plex_hints,
+                                  whisper_verifications=whisper_verifications)
             item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
@@ -666,7 +668,8 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
                         tautulli_hints: dict[str, str] | None = None,
                         user_verifications: dict[str, str] | None = None,
                         failed_idx: dict[str, list] | None = None,
-                        plex_hints: dict[str, str] | None = None) -> None:
+                        plex_hints: dict[str, str] | None = None,
+                        whisper_verifications: dict[str, str] | None = None) -> None:
     """Movies: a single video file lives directly under the movie dir.
     First probe under the movie's canonical wins → verified. No probe but a
     recorded failure → probe_failed. Otherwise unprobed."""
@@ -687,7 +690,8 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
         item.audio_label_notes.extend(notes)
     _classify_audio_label(item, tautulli_hints=tautulli_hints,
                           user_verifications=user_verifications,
-                          plex_hints=plex_hints)
+                          plex_hints=plex_hints,
+                          whisper_verifications=whisper_verifications)
     item.verification_state = "verified"
 
 
@@ -1016,16 +1020,27 @@ async def build_coverage(
                 prefix = "/".join(parts[:i])
                 probe_failed_by_prefix.setdefault(prefix, []).append(path)
 
-    # v1.1-O Layer 4: load user verifications. These OVERRIDE all
-    # auto-detected signals — user has ground truth.
-    user_verifications: dict[str, str] = (
+    # Load stored verifications + their sources, then SPLIT by source so each
+    # reaches the right classifier layer:
+    #   - user/plex/series-intent → user_verifications (Layer 0, user ground
+    #     truth, drives Sonarr-propagation + "awaiting sync" semantics)
+    #   - whisper/auto (machine detect, #90) → whisper_verifications (Layer 1,
+    #     overrides tags + flags mismatch, but NOT user-propagation)
+    # Splitting avoids the user layer grabbing a whisper row first (it runs
+    # before the whisper layer) and conflating machine detection with user action.
+    _all_v: dict[str, str] = (
         audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
     )
-    # Per-file verification SOURCE (user / whisper-robust / auto-high-conf),
-    # used by the post-pass to refine audio_source for the UI confidence badge.
     verification_sources: dict[str, str] = (
         audio_lang_store.get_all_sources_as_lookup() if audio_lang_store else {}
     )
+
+    def _is_machine(p: str) -> bool:
+        s = (verification_sources.get(p) or "").lower()
+        return "whisper" in s or "auto" in s
+
+    user_verifications: dict[str, str] = {p: l for p, l in _all_v.items() if not _is_machine(p)}
+    whisper_verifications: dict[str, str] = {p: l for p, l in _all_v.items() if _is_machine(p)}
 
     items: list[CoverageItem] = []
 
@@ -1119,7 +1134,8 @@ async def build_coverage(
                               tautulli_hints=activity.get("audio_lang_hints") or {},
                               user_verifications=user_verifications,
                               failed_idx=probe_failed_by_prefix,
-                              plex_hints=plex_audio_hints)
+                              plex_hints=plex_audio_hints,
+                              whisper_verifications=whisper_verifications)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1161,7 +1177,8 @@ async def build_coverage(
                             tautulli_hints=activity.get("audio_lang_hints") or {},
                             user_verifications=user_verifications,
                             failed_idx=probe_failed_by_prefix,
-                            plex_hints=plex_audio_hints)
+                            plex_hints=plex_audio_hints,
+                            whisper_verifications=whisper_verifications)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1199,6 +1216,7 @@ async def build_coverage(
             probe_by_series_prefix=probe_by_series_prefix,
             failed_idx=probe_failed_by_prefix,
             user_verifications=user_verifications,
+            whisper_verifications=whisper_verifications,
             sources=sources,
             plex_hints=plex_audio_hints,
         )
@@ -1228,6 +1246,7 @@ async def _add_bazarr_blind_synthetic_rows(
     probe_by_series_prefix: dict[str, list[tuple[str, Any]]],
     failed_idx: dict[str, list] | None = None,
     user_verifications: dict[str, str],
+    whisper_verifications: dict[str, str] | None = None,
     sources: dict,
     plex_hints: dict[str, str] | None = None,
 ) -> list[CoverageItem]:
@@ -1386,6 +1405,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 user_verifications=user_verifications,
                 failed_idx=failed_idx,
                 plex_hints=plex_hints,
+                whisper_verifications=whisper_verifications,
             )
             # Bazarr-blind requires positive evidence the file is not
             # what Bazarr thinks it is. Two ways to get there:
