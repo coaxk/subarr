@@ -270,3 +270,125 @@ export function genSpark(n, base, vol) {
   });
 }
 
+// ─── Language tags (#147) ────────────────────────────────────────
+// Render a language code as a small flag + code. IMPORTANT: a flag is
+// DECORATION, not a geography claim — languages are not countries. The
+// tooltip always names the LANGUAGE. Multi-country languages (en, es,
+// ar, pt …) intentionally get NO flag — we keep the bare code rather
+// than pick a misleading single country. No flag → just the code.
+//
+// `name` drives the tooltip; `flag` is optional decoration. Keyed by
+// ISO-639-1; LANG_ALIAS folds 3-letter codes + full names onto it.
+export const LANG_INFO = Object.freeze({
+  ko: { name: 'Korean', flag: '🇰🇷' },
+  ja: { name: 'Japanese', flag: '🇯🇵' },
+  zh: { name: 'Chinese', flag: '🇨🇳' },
+  he: { name: 'Hebrew', flag: '🇮🇱' },
+  ru: { name: 'Russian', flag: '🇷🇺' },
+  fr: { name: 'French', flag: '🇫🇷' },
+  de: { name: 'German', flag: '🇩🇪' },
+  it: { name: 'Italian', flag: '🇮🇹' },
+  hi: { name: 'Hindi', flag: '🇮🇳' },
+  tr: { name: 'Turkish', flag: '🇹🇷' },
+  nl: { name: 'Dutch', flag: '🇳🇱' },
+  pl: { name: 'Polish', flag: '🇵🇱' },
+  sv: { name: 'Swedish', flag: '🇸🇪' },
+  no: { name: 'Norwegian', flag: '🇳🇴' },
+  nb: { name: 'Norwegian Bokmål', flag: '🇳🇴' },
+  nn: { name: 'Norwegian Nynorsk', flag: '🇳🇴' },
+  da: { name: 'Danish', flag: '🇩🇰' },
+  fi: { name: 'Finnish', flag: '🇫🇮' },
+  cs: { name: 'Czech', flag: '🇨🇿' },
+  el: { name: 'Greek', flag: '🇬🇷' },
+  th: { name: 'Thai', flag: '🇹🇭' },
+  vi: { name: 'Vietnamese', flag: '🇻🇳' },
+  id: { name: 'Indonesian', flag: '🇮🇩' },
+  uk: { name: 'Ukrainian', flag: '🇺🇦' },
+  ro: { name: 'Romanian', flag: '🇷🇴' },
+  hu: { name: 'Hungarian', flag: '🇭🇺' },
+  fa: { name: 'Persian', flag: '🇮🇷' },
+  is: { name: 'Icelandic', flag: '🇮🇸' },
+  // Multi-country — name only, no flag (decoration would mislead):
+  en: { name: 'English' },
+  es: { name: 'Spanish' },
+  pt: { name: 'Portuguese' },
+  ar: { name: 'Arabic' },
+  und: { name: 'Undetermined' },
+});
+
+// 3-letter (ISO-639-2/B + /T) and full-name aliases → ISO-639-1.
+export const LANG_ALIAS = Object.freeze({
+  kor: 'ko', korean: 'ko',
+  jpn: 'ja', japanese: 'ja',
+  zho: 'zh', chi: 'zh', chinese: 'zh', mandarin: 'zh',
+  heb: 'he', hebrew: 'he',
+  rus: 'ru', russian: 'ru',
+  fre: 'fr', fra: 'fr', french: 'fr',
+  ger: 'de', deu: 'de', german: 'de',
+  ita: 'it', italian: 'it',
+  hin: 'hi', hindi: 'hi',
+  tur: 'tr', turkish: 'tr',
+  dut: 'nl', nld: 'nl', dutch: 'nl',
+  pol: 'pl', polish: 'pl',
+  swe: 'sv', swedish: 'sv',
+  nor: 'no', norwegian: 'no', nob: 'nb', nno: 'nn',
+  dan: 'da', danish: 'da',
+  fin: 'fi', finnish: 'fi',
+  cze: 'cs', ces: 'cs', czech: 'cs',
+  gre: 'el', ell: 'el', greek: 'el',
+  tha: 'th', thai: 'th',
+  vie: 'vi', vietnamese: 'vi',
+  ind: 'id', indonesian: 'id',
+  ukr: 'uk', ukrainian: 'uk',
+  rum: 'ro', ron: 'ro', romanian: 'ro',
+  hun: 'hu', hungarian: 'hu',
+  per: 'fa', fas: 'fa', persian: 'fa', farsi: 'fa',
+  ice: 'is', isl: 'is', icelandic: 'is',
+  eng: 'en', english: 'en',
+  spa: 'es', spanish: 'es', castilian: 'es',
+  por: 'pt', portuguese: 'pt',
+  ara: 'ar', arabic: 'ar',
+  und: 'und', unknown: 'und',
+});
+
+// Normalize any code/name to ISO-639-1 (mirrors backend langs.normalize_lang).
+export function normalizeLang(value) {
+  if (!value) return '';
+  const v = String(value).trim().toLowerCase();
+  if (LANG_INFO[v]) return v;
+  if (LANG_ALIAS[v]) return LANG_ALIAS[v];
+  // bare 2-letter passthrough even if not in our map
+  return v.length === 2 ? v : v;
+}
+
+export function langName(value) {
+  const code = normalizeLang(value);
+  return (LANG_INFO[code] && LANG_INFO[code].name) || (value ? String(value).toUpperCase() : '');
+}
+
+// LangTag — flag (decoration, when representative) + code, language tooltip.
+export function LangTag({ value, size = 12, showCode = true, style }) {
+  if (!value) return null;
+  const code = normalizeLang(value);
+  const info = LANG_INFO[code];
+  const flag = info && info.flag;
+  const name = (info && info.name) || String(value).toUpperCase();
+  const label = code ? code.toUpperCase() : String(value).toUpperCase();
+  return (
+    <span
+      title={name}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: size, lineHeight: 1, whiteSpace: 'nowrap', ...style,
+      }}
+    >
+      {flag && <span aria-hidden style={{ fontSize: size + 2 }}>{flag}</span>}
+      {(showCode || !flag) && (
+        <span style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.02em' }}>
+          {label}
+        </span>
+      )}
+    </span>
+  );
+}
+

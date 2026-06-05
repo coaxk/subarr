@@ -10,7 +10,7 @@
 // --radius-lg, --success-500, --violet-500) so the page matches the rest of
 // the app — this is the marquee feature, not a bolt-on.
 
-import { SectionCard, StatusDot, Glyph, ICONS } from './atoms.jsx';
+import { SectionCard, StatusDot, Glyph, ICONS, LangTag } from './atoms.jsx';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -547,7 +547,9 @@ function ByLanguagePanel({ data }) {
             <Collapsible key={lang.language} id={`bylang-${lang.language}`} defaultOpen={false}
               label={
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>{(lang.language || '?').toUpperCase()}</span>
+                  {lang.language
+                    ? <LangTag value={lang.language} size={13} style={{ fontWeight: 700, color: 'var(--fg-0)' }} />
+                    : <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>?</span>}
                   <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', fontWeight: 400 }}>
                     {lang.files} file{lang.files === 1 ? '' : 's'} · {lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}{top ? ` · top: ${top.label}` : ''}
                   </span>
@@ -600,10 +602,10 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   <StatusPill status={r.status} />
                   <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
                   {r.source_language && (
-                    <span title={`detected source language: ${r.source_language}`}
-                          style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: 0.5,
+                    <span title="detected source language"
+                          style={{ flex: 'none', fontWeight: 700,
                                    color: 'var(--fg-2)', background: 'var(--bg-4)', borderRadius: 4, padding: '1px 6px' }}>
-                      {r.source_language.toUpperCase()}
+                      <LangTag value={r.source_language} size={11} />
                     </span>
                   )}
                   {active ? (

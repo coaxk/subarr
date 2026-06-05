@@ -5,7 +5,7 @@
 // Row queue + bulk queue post to /api/coverage/queue. Re-walk now calls
 // /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
-import { Glyph, StatusDot } from './atoms.jsx';
+import { Glyph, StatusDot, LangTag } from './atoms.jsx';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -306,7 +306,9 @@ function LangChips({ langs }) {
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
       {visible.map(l => (
-        <span key={l} className="chip" style={{ height: 16, padding: '0 6px', fontSize: 'var(--text-2xs)' }}>{l}</span>
+        <span key={l} className="chip" style={{ height: 16, padding: '0 6px', fontSize: 'var(--text-2xs)' }}>
+          <LangTag value={l} size={11} />
+        </span>
       ))}
       {overflow > 0 && (
         <span className="num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>+{overflow}</span>
@@ -2038,7 +2040,9 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
              : `Audio track languages detected: ${r.audio}`}
            style={{ width: COL.audio, flex: `0 0 ${COL.audio}px`, fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'help',
                     display: 'flex', alignItems: 'center', minWidth: 0 }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.audio}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', gap: 6 }}>
+          {String(r.audio || '').split(',').filter(Boolean).map((l, i) => <LangTag key={l + i} value={l} size={11} />)}
+        </span>
         <AudioLabelChip r={r} onClick={(row) => { window.dispatchEvent(new CustomEvent('open-audio-review', { detail: row })); }} />
       </div>
       <div style={{ width: COL.reason, flex: `0 0 ${COL.reason}px` }}>
