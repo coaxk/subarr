@@ -128,6 +128,11 @@ async def lifespan(app_: FastAPI):
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
     app_.state.ollama = OllamaClient()
+    # #119: last-known ollama reachability, populated by the integrations-
+    # health probe (GET /api/integrations/health). None until first probe;
+    # telemetry gates "ollama configured" on this real signal instead of
+    # the defaulted OLLAMA_URL (non-empty on every install).
+    app_.state.ollama_probe_result = None
     # v1.1-O Layer 4: user audio-language verifications (manual review queue).
     from .audio_lang_store import AudioLangStore
     app_.state.audio_lang = AudioLangStore(settings.db_path)
