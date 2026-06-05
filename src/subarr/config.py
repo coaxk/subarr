@@ -78,6 +78,13 @@ class Settings:
     # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
     # Plex's own scheduler runs at.
     plex_partial_scan_enabled: bool
+    # #87: accept subgen's WEBHOOK_URL_COMPLETED push at
+    # POST /api/subgen/webhook/completed. Push beats polling — lower
+    # queue-UI latency, fewer requests. Default on; the polling watcher
+    # stays running as the fallback for vanilla subgen (operators who
+    # haven't pointed WEBHOOK_URL_COMPLETED at subarr). Set
+    # SUBARR_SUBGEN_WEBHOOK_ENABLED=0 to reject pushes and rely on polling.
+    subgen_webhook_enabled: bool
     # v1.1.1 #219 closer: PUT user-verified audio language back to Sonarr's
     # episodeFile so Bazarr's next sync sees the correct foreign-language
     # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
@@ -96,6 +103,14 @@ class Settings:
     # surprise-downloads — it falls back to silencedetect until the user pulls
     # the model from onboarding. Set SUBARR_VAD_ENABLED=0 to hard-disable.
     vad_enabled: bool
+
+    # #104: minimum seconds between coverage-cache rebuilds triggered by
+    # event kicks (completion / audio-lang verify / manual refresh). A
+    # burst of events coalesces into a single rebuild, and rebuilds are
+    # spaced at least this far apart so we don't hammer the NAS + thread
+    # pool. The fixed background loop (DEFAULT_INTERVAL_S) is the floor
+    # cadence; this knob debounces the on-demand kicks on top of it.
+    coverage_refresh_min_interval_s: float
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -181,6 +196,9 @@ def load() -> Settings:
         plex_partial_scan_enabled=_env_or(
             "PLEX_PARTIAL_SCAN_ENABLED", "1"
         ).strip().lower() not in ("0", "false", "no", "off"),
+        subgen_webhook_enabled=_env_or(
+            "SUBARR_SUBGEN_WEBHOOK_ENABLED", "1"
+        ).strip().lower() not in ("0", "false", "no", "off"),
         sonarr_propagate_audio_lang=os.environ.get(
             "SONARR_PROPAGATE_AUDIO_LANG", "0"
         ).strip().lower() in ("1", "true", "yes", "on"),
@@ -189,6 +207,11 @@ def load() -> Settings:
         ).strip().lower() in ("1", "true", "yes", "on"),
         vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower()
         not in ("0", "false", "no", "off"),
+        # #104: default 120s. Min-clamped at 0 (a 0/negative value disables
+        # debounce — every kick rebuilds, the pre-#104 behaviour).
+        coverage_refresh_min_interval_s=max(
+            0.0, float(_env_or("SUBARR_COVERAGE_REFRESH_MIN_INTERVAL_S", "120"))
+        ),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by
         # the empty api_key, not by clearing the URL.
@@ -252,12 +275,19 @@ FIELD_ENV_VARS: dict[str, str] = {
     "subgen_url": "SUBGEN_URL",
     "ollama_url": "OLLAMA_URL",
     "ollama_model": "OLLAMA_MODEL",
+    # #75: Plex creds become UI-editable. PLEX_URL has a built-in default
+    # (via _env_or) but env_is_set() checks the raw env var presence, so an
+    # operator who pinned PLEX_URL keeps authority; a default-only install
+    # is treated as unset and the UI write is honoured.
+    "plex_url": "PLEX_URL",
+    "plex_token": "PLEX_TOKEN",
     # #111/#112: UI-settable toggles. Listed here so env_is_set() lets an
     # explicit env var override a persisted UI choice (env > file > default).
     "vad_enabled": "SUBARR_VAD_ENABLED",
     "plex_audio_hints": "PLEX_AUDIO_HINTS",
     "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
     "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
+    "subgen_webhook_enabled": "SUBARR_SUBGEN_WEBHOOK_ENABLED",
 }
 
 
@@ -287,9 +317,24 @@ _FIELD_COERCE = {
     "plex_audio_hints": _coerce_bool,
     "sonarr_propagate_audio_lang": _coerce_bool,
     "plex_partial_scan_enabled": _coerce_bool,
+    "subgen_webhook_enabled": _coerce_bool,
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
+    # #75: integration credentials are now UI-editable. Persisting them
+    # here means a saved URL / API key / Plex token survives a restart
+    # (env still wins per _apply_persisted_overrides). All plain strings.
+    "bazarr_url": str,
+    "bazarr_api_key": str,
+    "sonarr_url": str,
+    "sonarr_api_key": str,
+    "radarr_url": str,
+    "radarr_api_key": str,
+    "tautulli_url": str,
+    "tautulli_api_key": str,
+    "plex_url": str,
+    "plex_token": str,
+    "subgen_url": str,
 }
 
 

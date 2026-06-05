@@ -1,18 +1,24 @@
-// Settings — live status + actions, driven entirely by what the v1
-// backend actually exposes (env-driven config, no PUT endpoints yet).
+// Settings — live status + actions.
 // Sections:
 //   - Integrations rail with live online/version/badges per service
-//   - Detail panel per integration with Test connection + raw badges
+//   - Detail panel per integration with an inline credential editor
+//     (#75: URL / API key / Plex token), Test connection + raw badges
 //   - System actions: Restart subarr, Plex scan, Bazarr sync-disk, Refresh updates
 //   - Telemetry transparency: install_id + opt-in toggle + last ping
 //   - Updates: current/latest per product + Refresh now
 //
-// v1 deliberately ships without a settings form — the wizard owns the
-// initial config write and subsequent edits happen via env vars. When a
-// PUT /api/integrations/config exists we'll re-introduce the dirty bar.
+// #75: credentials are editable in-app. Each integration's config is read
+// from GET /api/integrations/{name}/config (per-field env_managed +
+// masked secret), edited behind a dirty bar, optionally test-connected,
+// and saved via PUT /api/integrations/{name}/credentials — which persists
+// below env and rebuilds the client live (no restart). env-managed fields
+// render read-only with a "managed by env" note (env stays authoritative).
 
 import { SectionCard, StatusDot } from './atoms.jsx';
 import { RailFooter } from './chrome.jsx';
+// #75: reuse the wizard's form primitives so the in-app credential editor
+// matches onboarding exactly (same input styling + test-result chip).
+import { FormRow, TextInput, TestResult } from './onboarding.jsx';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -109,31 +115,218 @@ function Row({ label, value, hint, control }) {
   );
 }
 
-// #169 (partial): disabled pencil icon next to read-only credential fields.
-// When the full backend lands (POST /api/integrations/{name}/credentials +
-// SQLite override table) this becomes the entry point for inline editing.
-// Until then it's deliberately disabled with a tooltip steering users to
-// the wizard — better signal than a vanishing button.
-function EditViaWizardButton({ field }) {
+// #75: which editable fields each integration exposes + their human labels.
+// Mirrors the backend _CREDENTIAL_FIELDS schema; the editor renders one
+// FormRow per entry. Keep in sync with routers/integrations.py.
+const CREDENTIAL_SCHEMA = {
+  bazarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
+  sonarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
+  radarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
+  tautulli: [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
+  plex:     [{ key: 'url', label: 'URL', secret: false }, { key: 'token', label: 'Plex token', secret: true }],
+  subgen:   [{ key: 'url', label: 'URL', secret: false }],
+  ollama:   [{ key: 'url', label: 'URL', secret: false }, { key: 'model', label: 'Model', secret: false }],
+};
+
+// #75: inline credential editor. Reads GET /config for per-field
+// env_managed + masked secret, edits behind a dirty bar, tests the
+// connection, and saves via PUT /credentials (persists below env +
+// rebuilds the client live). env-managed fields are read-only.
+function CredentialEditor({ integrationId, refetchHealth }) {
+  const schema = CREDENTIAL_SCHEMA[integrationId];
+  const [config, setConfig] = useState(null);    // { fields: {key: {env_managed, has_value, value, secret}} }
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState({});         // user-edited values, keyed by field
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);   // null | {ok, text} | {err}
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/integrations/${integrationId}/config`, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setConfig(await r.json());
+      setDraft({});
+      setTestResult(null);
+      setSaveMsg(null);
+    } catch (e) {
+      setConfig({ error: String(e.message || e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [integrationId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!schema) return null;
+  if (loading) {
+    return <SectionCard label="Connection"><div style={{ padding: 12, color: 'var(--fg-2)' }}>Loading…</div></SectionCard>;
+  }
+  if (!config || config.error) {
+    return <SectionCard label="Connection"><div style={{ padding: 12, color: 'var(--fg-2)' }}>Couldn't load config: {config?.error || 'unknown'}</div></SectionCard>;
+  }
+
+  const fields = config.fields || {};
+  // Editable fields the user actually changed (env-managed ones can't be in draft).
+  const dirtyKeys = Object.keys(draft).filter(k => {
+    const meta = fields[k] || {};
+    if (meta.env_managed) return false;
+    // For URLs, dirty = different from current. For secrets, any non-empty entry is a change.
+    if (meta.secret) return (draft[k] || '') !== '';
+    return (draft[k] || '') !== (meta.value || '');
+  });
+  const isDirty = dirtyKeys.length > 0;
+  const allEnvManaged = schema.every(f => (fields[f.key] || {}).env_managed);
+
+  const setField = (key, val) => {
+    setDraft(d => ({ ...d, [key]: val }));
+    setSaveMsg(null);
+  };
+
+  // Build the request body from dirty fields + always include URL when we
+  // have one (so the test/save has a target even if only the secret changed).
+  const buildBody = () => {
+    const body = {};
+    for (const f of schema) {
+      const meta = fields[f.key] || {};
+      if (meta.env_managed) continue;
+      const v = draft[f.key];
+      if (v != null && v !== '') body[f.key] = v;
+      else if (!meta.secret && meta.value) body[f.key] = meta.value; // keep current URL/model
+    }
+    return body;
+  };
+
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const body = buildBody();
+      const r = await fetch(`/api/integrations/${integrationId}/test`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      setTestResult(d);
+    } catch (e) {
+      setTestResult({ ok: false, error: String(e.message || e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      // Only send fields the user actually edited.
+      const body = {};
+      for (const k of dirtyKeys) body[k] = draft[k];
+      const r = await fetch(`/api/integrations/${integrationId}/credentials`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (j.detail) detail = j.detail; } catch {}
+        throw new Error(detail);
+      }
+      const d = await r.json();
+      const parts = [];
+      if (d.applied?.length) parts.push(`saved ${d.applied.length} field${d.applied.length === 1 ? '' : 's'}`);
+      if (d.managed_by_env?.length) parts.push(`${d.managed_by_env.length} managed by env (unchanged)`);
+      setSaveMsg({ ok: true, text: parts.join(' · ') || 'no changes' });
+      await load();                 // refresh masked values + env state
+      refetchHealth?.({ silent: false });   // re-probe with new creds
+    } catch (e) {
+      setSaveMsg({ err: String(e.message || e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      disabled
-      title={`Use the wizard to change ${field} for now (#169)`}
-      aria-label={`Edit ${field} — disabled, use wizard (#169)`}
-      style={{
-        background: 'transparent',
-        border: '1px solid var(--bg-4)',
-        borderRadius: 'var(--radius-sm)',
-        color: 'var(--fg-3)',
-        cursor: 'not-allowed',
-        fontSize: 'var(--text-xs)',
-        padding: '2px 6px',
-        opacity: 0.6,
-      }}
-    >
-      ✎ Edit
-    </button>
+    <SectionCard label="Connection" action={
+      <button className="btn sm ghost" onClick={testConnection} disabled={testing}>
+        {testing ? 'Testing…' : 'Test connection'}
+      </button>
+    }>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {allEnvManaged && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+            background: 'var(--bg-2)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
+            Every field here is set via environment variables — the operator's
+            config is authoritative. Edit your <span className="mono">.env</span> and restart to change them.
+          </div>
+        )}
+
+        {schema.map(f => {
+          const meta = fields[f.key] || {};
+          if (meta.env_managed) {
+            return (
+              <FormRow key={f.key} label={f.label} hint="managed by env (read-only)">
+                <div className="mono" style={{
+                  height: 34, display: 'flex', alignItems: 'center', padding: '0 12px',
+                  background: 'var(--bg-3)', border: '1px solid var(--bg-4)',
+                  borderRadius: 'var(--radius-md)', color: 'var(--fg-3)',
+                  fontSize: 'var(--text-md)',
+                }}>
+                  {meta.secret ? (meta.value || '••••') : (meta.value || '—')}
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>🔒 env</span>
+                </div>
+              </FormRow>
+            );
+          }
+          return (
+            <FormRow key={f.key} label={f.label}
+              hint={meta.secret && meta.has_value
+                ? `currently set (${meta.value}) — leave blank to keep`
+                : undefined}>
+              <TextInput
+                value={draft[f.key] ?? (f.secret ? '' : (meta.value || ''))}
+                onChange={(v) => setField(f.key, v)}
+                type={f.secret ? 'password' : 'text'}
+                placeholder={f.secret
+                  ? (meta.has_value ? '•••• (unchanged)' : 'paste key')
+                  : (f.key === 'url' ? 'http://host:port' : '')}
+              />
+            </FormRow>
+          );
+        })}
+
+        {testResult && <TestResult result={testResult} />}
+        {saveMsg?.ok && (
+          <div style={{ fontSize: 'var(--text-sm)', color: '#22c55e' }}>✓ {saveMsg.text}</div>
+        )}
+        {saveMsg?.err && (
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)' }}>Save failed: {saveMsg.err}</div>
+        )}
+      </div>
+
+      {/* Dirty bar — appears only when there are unsaved edits. */}
+      {isDirty && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--bg-3)',
+        }}>
+          <span style={{ flex: 1, fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            {dirtyKeys.length} unsaved change{dirtyKeys.length === 1 ? '' : 's'}. Saves persist across
+            restarts (below any env var) and apply live — no restart.
+          </span>
+          <button className="btn sm ghost" onClick={() => { setDraft({}); setTestResult(null); setSaveMsg(null); }}
+            disabled={saving}>Discard</button>
+          <button className="btn sm" onClick={save} disabled={saving}
+            style={{ background: 'var(--violet-500)', color: '#fff' }}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -1415,14 +1608,6 @@ function IntegrationPanel({ rail, refetchHealth }) {
         </SectionCard>
       )}
 
-      {/* Connection details (read-only — env-driven in v1).
-          #169 TODO: inline-edit URL + API key requires a new
-          POST /api/integrations/{name}/credentials backend route plus a
-          SQLite-backed override table (we can't write the .env — docker
-          compose owns it). Until that lands, the pencil icons below are
-          rendered DISABLED with a tooltip steering users to the wizard.
-          This is intentionally an honest UX improvement, not a half-done
-          edit flow. See task #169. */}
       {/* #171: subgen-only — surface the per-language SUBGEN_KWARGS_LANG_*
           tuning. This is subarr-subgen's anchor differentiator vs vanilla
           subgen and was completely invisible in the UI. Pulls from GET
@@ -1436,35 +1621,24 @@ function IntegrationPanel({ rail, refetchHealth }) {
           implications per Whisper model size. */}
       {rail.id === 'subgen' && <SubgenConcurrencyCard />}
 
-      <SectionCard label="Connection (read-only — env-driven in v1)">
-        <Row label="Name" value={rail.name} />
-        <Row label="Version" value={i.version || '—'} />
-        <Row label="Online" value={i.online ? 'yes' : 'no'} />
-        <Row label="Configured" value={i.configured ? 'yes' : 'no'} />
-        <Row
-          label="URL"
-          control={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>set via wizard / env</span>
-              <EditViaWizardButton field="URL" />
-            </span>
-          }
-        />
-        <Row
-          label="API key"
-          control={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>set via wizard / env</span>
-              <EditViaWizardButton field="API key" />
-            </span>
-          }
-        />
-      </SectionCard>
+      {/* #75: inline credential editor — only for integrations with an
+          editable schema (every one except none currently). Reads
+          GET /config, edits behind a dirty bar, tests + saves live. */}
+      {CREDENTIAL_SCHEMA[rail.id]
+        ? <CredentialEditor integrationId={rail.id} refetchHealth={refetchHealth} />
+        : (
+          <SectionCard label="Connection">
+            <Row label="Name" value={rail.name} />
+            <Row label="Version" value={i.version || '—'} />
+            <Row label="Online" value={i.online ? 'yes' : 'no'} />
+            <Row label="Configured" value={i.configured ? 'yes' : 'no'} />
+          </SectionCard>
+        )}
 
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', padding: '0 6px' }}>
-        To change connection details, edit your <span className="mono">.env</span> file or
+        Changes save instantly and persist across restarts. An environment
+        variable always wins — env-managed fields show as read-only. You can also
         {' '}<a href="/onboarding" style={{ color: 'var(--violet-400)' }}>re-run the onboarding wizard</a>.
-        {' '}Inline-edit lands with <span className="mono">#169</span>.
       </div>
     </div>
   );

@@ -258,3 +258,66 @@ async def test_last_payload_parses_back_to_dict(db_path: Path):
     st = c.state()
     assert isinstance(st.last_payload, dict)
     assert st.last_payload["install_id"] == st.install_id
+
+
+# ─── make_default_stats_provider: ollama configured signal (#119) ───
+#
+# Regression: ollama was reported "configured" for EVERY install because it
+# gated on bool(settings.ollama_url), which defaults to http://ollama:11434.
+# It must instead reflect REAL reachability from the cached integrations-
+# health probe (app.state.ollama_probe_result.reachable), mirroring the
+# subgen_caps pattern.
+
+
+from types import SimpleNamespace
+
+from subarr.telemetry import make_default_stats_provider
+
+
+def _fake_app_state(db_path: Path, ollama_probe_result) -> SimpleNamespace:
+    """Minimal app.state stand-in for make_default_stats_provider.
+
+    Only the attributes the provider touches are wired; everything that
+    can raise is left absent so the provider's try/except fallbacks fire
+    and we isolate the ollama-reachability assertion."""
+    from subarr.probe_store import ProbeStore
+    from subarr.scan_store import ScanStore
+    from subarr.error_store import ErrorStore
+    from subarr.schedule_store import ScheduleStore
+
+    return SimpleNamespace(
+        probe_store=ProbeStore(db_path),
+        scans=ScanStore(db_path),
+        errors=ErrorStore(db_path),
+        schedule=ScheduleStore(db_path),
+        ollama_probe_result=ollama_probe_result,
+    )
+
+
+def test_ollama_configured_true_when_probe_reachable(db_path: Path):
+    """Cached probe says ollama is reachable → reported configured."""
+    state = _fake_app_state(db_path, SimpleNamespace(reachable=True))
+    provider = make_default_stats_provider(state)
+    out = provider()
+    assert out["integrations"]["ollama"] is True
+
+
+def test_ollama_not_configured_when_defaulted_url_but_unreachable(db_path: Path):
+    """Defaulted OLLAMA_URL but nothing listening → cached probe is
+    unreachable → NOT reported configured (the #119 fix). bool(ollama_url)
+    would have been True here on every install."""
+    from subarr.config import settings
+    assert settings.ollama_url  # the default string is non-empty (pre-fix bug)
+    state = _fake_app_state(db_path, SimpleNamespace(reachable=False))
+    provider = make_default_stats_provider(state)
+    out = provider()
+    assert out["integrations"]["ollama"] is False
+
+
+def test_ollama_not_configured_when_probe_never_ran(db_path: Path):
+    """No cached probe yet (app.state.ollama_probe_result is None) →
+    treat as not-configured rather than falling back to the URL default."""
+    state = _fake_app_state(db_path, None)
+    provider = make_default_stats_provider(state)
+    out = provider()
+    assert out["integrations"]["ollama"] is False

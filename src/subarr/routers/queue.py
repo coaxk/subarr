@@ -250,6 +250,78 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     }
 
 
+# ─── subgen push completion (#87) ────────────────────────────────────────
+
+class SubgenCompletedWebhook(BaseModel):
+    """Payload subgen POSTs to WEBHOOK_URL_COMPLETED on task finish.
+
+    Verified against subgen_patched.send_completion_webhook (2026-06):
+      { "event": "transcribed"|"translated"|...,
+        "file":     "/media/TV/Show/file.mkv",   # subgen-space abs path
+        "subtitle": "/media/TV/Show/file.en.srt",
+        "language": "en" }
+
+    `file` is the only field we strictly need (it keys the provenance
+    ledger after prefix-stripping). Everything else is accepted + logged
+    so a future subgen field never 422s the hook. extra="allow" keeps
+    unknown keys visible for logging without breaking validation.
+    """
+    model_config = {"extra": "allow"}
+
+    file: str | None = None
+    subtitle: str | None = None
+    event: str | None = None
+    language: str | None = None
+
+
+@router.post("/subgen/webhook/completed")
+async def subgen_webhook_completed(
+    payload: SubgenCompletedWebhook, request: Request,
+) -> dict:
+    """Push-based completion receiver (#87) — the low-latency alternative
+    to polling subgen's /queue. Operators point subgen's
+    WEBHOOK_URL_COMPLETED at this endpoint; subgen POSTs here the instant a
+    transcribe/translate finishes, and we run the SAME completion flow the
+    polling watcher uses (mark provenance completed → Bazarr write-back →
+    Plex partial-scan). Polling stays running as the fallback for vanilla
+    subgen setups that haven't configured the webhook.
+
+    Reuses CompletionWatcher.complete_by_canonical so the battle-tested
+    Bazarr/Plex logic lives in exactly one place. Idempotent: if polling
+    already completed the entry, this is a benign no-op (matched=0).
+    """
+    from ..config import settings as _settings
+    if not _settings.subgen_webhook_enabled:
+        # Operator opted out of push; tell subgen we received it so it
+        # doesn't log a delivery failure, but do nothing (polling drives).
+        return {"accepted": False, "reason": "webhook disabled", "matched": 0}
+
+    if not payload.file:
+        raise HTTPException(400, detail="payload missing 'file'")
+
+    # Log any fields beyond the documented shape so a subgen change is
+    # discoverable rather than silently dropped.
+    known = {"file", "subtitle", "event", "language"}
+    extra = {k: v for k, v in payload.model_dump().items() if k not in known}
+    if extra:
+        log.info("subgen completion webhook carried unknown fields: %s", extra)
+
+    from ..paths import subgen_to_canonical
+    canonical = subgen_to_canonical(payload.file)
+    watcher = request.app.state.watcher
+    matched = await watcher.complete_by_canonical(canonical)
+    log.info(
+        "subgen completion webhook: event=%s file=%s canonical=%s matched=%d",
+        payload.event, payload.file, canonical, matched,
+    )
+    return {
+        "accepted": True,
+        "canonical_path": canonical,
+        "event": payload.event,
+        "matched": matched,
+    }
+
+
 # ─── Per-row actions ─────────────────────────────────────────────────────
 
 class RequeueRequest(BaseModel):

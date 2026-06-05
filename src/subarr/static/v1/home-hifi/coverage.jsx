@@ -191,6 +191,11 @@ function normalizeRow(item, idx) {
     // and 'probe_failed' are bucketed separately (Analyzing / Couldn't
     // analyze) and never enter the gap table or bulk-select.
     vstate: item.verification_state || 'verified',
+    // #79: forced-only embedded-EN whose connected subgen has
+    // IGNORE_FORCED_SUBTITLES OFF — subgen will SKIP it, so it's a distinct
+    // non-actionable state (NOT a fillable gap). Routed to its own bucket
+    // (visible, never silently hidden) instead of the gap table.
+    forced_skip: !!item.forced_only_subgen_will_skip,
     // raw fields kept for action handlers
     _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
     _canonical_path: item.file_canonical_path || item.canonical_path,
@@ -2299,21 +2304,35 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
 function CoverageBucket({ kind, rows, onProbeNow, probing }) {
   const [open, setOpen] = useState(false);
   if (!rows.length) return null;
-  const meta = kind === 'unprobed'
-    ? {
-        icon: '⏳', label: 'Analyzing',
-        tint: 'var(--cyan-500)',
-        blurb: 'subarr probes each file before calling it a gap, so it never '
-             + 'queues something already covered. These are awaiting analysis '
-             + 'and will move up once probed (or drop out if already covered).',
-      }
-    : {
-        icon: '⚠', label: "Couldn't analyze",
-        tint: 'var(--error-500)',
-        blurb: "subarr couldn't probe these files (unreadable, corrupt, or the "
-             + 'probe timed out). Held here, not silently dropped — fix the '
-             + 'file or check logs, and they re-probe on the next walk.',
-      };
+  const META = {
+    unprobed: {
+      icon: '⏳', label: 'Analyzing',
+      tint: 'var(--cyan-500)',
+      blurb: 'subarr probes each file before calling it a gap, so it never '
+           + 'queues something already covered. These are awaiting analysis '
+           + 'and will move up once probed (or drop out if already covered).',
+    },
+    probe_failed: {
+      icon: '⚠', label: "Couldn't analyze",
+      tint: 'var(--error-500)',
+      blurb: "subarr couldn't probe these files (unreadable, corrupt, or the "
+           + 'probe timed out). Held here, not silently dropped — fix the '
+           + 'file or check logs, and they re-probe on the next walk.',
+    },
+    // #79: forced-only embedded-EN that the connected subgen will SKIP because
+    // its IGNORE_FORCED_SUBTITLES is off. Distinct + visible (not a fillable
+    // gap, not silently hidden) with the exact knob to flip to make it fillable.
+    forced_skip: {
+      icon: '⏭', label: 'subgen will skip (forced-only)',
+      tint: 'var(--warn-500)',
+      blurb: 'These files have only a FORCED English embedded subtitle (covers '
+           + 'foreign dialogue only, not a full transcript). Your connected '
+           + 'subgen has IGNORE_FORCED_SUBTITLES off, so it would SKIP them '
+           + 'rather than transcribe a full sub — they are not actionable gaps. '
+           + 'Set IGNORE_FORCED_SUBTITLES=true on subgen to have it fill these.',
+    },
+  };
+  const meta = META[kind] || META.probe_failed;
   return (
     <div className="panel" style={{
       flexShrink: 0, padding: '10px 14px',
@@ -2414,6 +2433,9 @@ export function CoveragePage() {
     if (!allRows) return [];
     return allRows.filter(r => {
       if (r.vstate !== 'verified') return false;
+      // #79: forced-only EN that subgen will skip is non-actionable — it lives
+      // in its own bucket below, not the gap table.
+      if (r.forced_skip) return false;
       if (monitoredOnly && !r.mon) return false;
       if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
       if (typeFilter !== 'all' && r.type !== typeFilter) return false;
@@ -2433,6 +2455,13 @@ export function CoveragePage() {
     // in the "Couldn't analyze" bucket — disqualified from gaps AND out of
     // "Analyzing", but still visible (no silent hole) and clearly non-actionable.
     () => (allRows || []).filter(r => r.vstate === 'probe_failed' || r.vstate === 'unsupported'),
+    [allRows],
+  );
+  // #79: forced-only-EN rows the connected subgen will SKIP (IGNORE_FORCED_-
+  // SUBTITLES off). Distinct, visible, non-actionable bucket — never presented
+  // as a fillable gap, never silently hidden. Only verified rows qualify.
+  const forcedSkipRows = useMemo(
+    () => (allRows || []).filter(r => r.forced_skip && r.vstate === 'verified'),
     [allRows],
   );
 
@@ -2730,6 +2759,11 @@ export function CoveragePage() {
           not the main flow. The "Analyzing" bucket moved ABOVE the table
           (see below) so it's visible without scrolling to the bottom. */}
       <CoverageBucket kind="probe_failed" rows={failedRows} />
+
+      {/* #79: forced-only-EN rows the connected subgen will skip
+          (IGNORE_FORCED_SUBTITLES off). Distinct, visible, non-actionable —
+          not a fillable gap, not silently dropped. */}
+      <CoverageBucket kind="forced_skip" rows={forcedSkipRows} />
 
       {/* Bottom selection bar — sits in page flow but sticky */}
       <div style={{ position: 'sticky', bottom: 16, marginTop: 0, marginBottom: 16 }}>

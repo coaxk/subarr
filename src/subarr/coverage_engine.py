@@ -118,6 +118,16 @@ class CoverageItem:
     # Only `verified` rows are presented as confident, actionable gaps; the
     # rest are bucketed and held until the probe runs.
     verification_state: str = "unprobed"
+    # #79: this file's only English embedded sub is a *forced* track AND the
+    # connected subgen has IGNORE_FORCED_SUBTITLES OFF — meaning subgen will
+    # SKIP it rather than transcribe a full English sub. Gated on the runtime
+    # capability subgen reports via GET /queue (capabilities.ignore_forced_-
+    # subtitles). When True this row is a DISTINCT non-actionable state — NOT
+    # a normal fillable gap — so the UI can explain "subgen will skip (forced-
+    # only); enable IGNORE_FORCED_SUBTITLES" instead of dangling an un-fillable
+    # gap. When the cap is on, this stays False and the forced-only row is a
+    # normal partial-coverage gap.
+    forced_only_subgen_will_skip: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +165,7 @@ class CoverageItem:
             "score": self.score,
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
+            "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
         }
 
 
@@ -272,6 +283,43 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
         )
     except (OSError, ValueError):
         return []
+
+
+# #104: the per-series rglob is the dominant cost of a coverage build —
+# ~668 foreign series each walked one-at-a-time blocked the build for
+# minutes. We now fan the rglobs out across a bounded thread pool. The
+# cap matters: an UNBOUNDED fan-out would have hundreds of concurrent
+# rglobs hammering the NAS at once, which chokes it worse than serial.
+# 8-wide is a sane default (matches typical NAS spindle/SMB concurrency
+# without thrashing); tune via the call site if needed.
+_SRT_SCAN_CONCURRENCY = 8
+
+
+async def _build_srt_index_parallel(
+    canonical_dirs, cap: int = _SRT_SCAN_CONCURRENCY,
+) -> dict[str, list[str]]:
+    """Recursively scan each (unique, non-empty) series canonical dir for
+    .srt files, with bounded concurrency. Returns {canonical_dir: [rel
+    srt paths]}. Each dir is scanned exactly once (deduped here), so the
+    build's two pass-loops can read straight from the result dict instead
+    of awaiting an rglob inline.
+
+    Concurrency is capped via a semaphore so we parallelise the I/O wait
+    without unbounded fan-out onto the NAS. Each individual scan still
+    runs in a worker thread (rglob is blocking) so the event loop stays
+    free."""
+    unique = [d for d in dict.fromkeys(canonical_dirs) if d]
+    if not unique:
+        return {}
+    sem = asyncio.Semaphore(max(1, cap))
+
+    async def _one(d: str) -> tuple[str, list[str]]:
+        async with sem:
+            paths = await asyncio.to_thread(_scan_for_srt_recursive, d)
+        return d, paths
+
+    pairs = await asyncio.gather(*[_one(d) for d in unique])
+    return dict(pairs)
 
 
 def _match_episode_srt_pattern(srt_paths: list[str], episode_number: str | None) -> tuple[bool, list[str]]:
@@ -817,6 +865,90 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_source = "ffprobe"
 
 
+class _SeriesIntentLookup(dict):
+    """A {canonical_path: value} map that, on a miss, falls back to the
+    longest series-intent prefix that the looked-up path starts with.
+
+    #69: the coverage build loads verifications in BULK (get_all_as_lookup),
+    which deliberately does NOT flatten series intents into one synthetic row
+    per episode — that would be O(declared series x episodes) and would go
+    stale the instant a new episode is added. Instead we keep the per-file
+    rows as the fast exact-match layer and resolve series-intent inheritance
+    lazily here. The net effect: a NEW episode under a declared-language
+    series auto-resolves as verified during the coverage build, without any
+    per-file re-verification — which is exactly the issue's intent.
+
+    Per-file rows always win because dict exact-match short-circuits before
+    the prefix fallback ever runs.
+    """
+
+    __slots__ = ("_intents",)
+
+    def __init__(self, base: dict, intents: list[tuple[str, str]]):
+        super().__init__(base)
+        # Longest prefix first so the most specific declaration wins.
+        self._intents = sorted(intents, key=lambda t: len(t[0]), reverse=True)
+
+    def __bool__(self) -> bool:
+        # Truthy if EITHER per-file rows OR series intents exist — callers
+        # guard with `if user_verifications and ...`, and an intents-only
+        # store (no per-file rows yet) must still be consulted (#69).
+        return bool(len(self) or self._intents)
+
+    def _match_intent(self, key) -> str | None:
+        if not isinstance(key, str):
+            return None
+        for prefix, value in self._intents:
+            if key.startswith(prefix):
+                return value
+        return None
+
+    def __contains__(self, key) -> bool:  # type: ignore[override]
+        if super().__contains__(key):
+            return True
+        return self._match_intent(key) is not None
+
+    def __missing__(self, key):
+        value = self._match_intent(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        value = self._match_intent(key)
+        return value if value is not None else default
+
+
+def _build_verification_lookup(audio_lang_store: Any):
+    """Build the (user_verifications, verification_sources) pair the coverage
+    build feeds to _classify_audio_label / _refine_audio_sources.
+
+    Per-file verifications are the exact-match fast path; declared series
+    intents are layered underneath via longest-prefix fallback (#69) so new
+    episodes of a declared series inherit the language automatically.
+    """
+    if audio_lang_store is None:
+        return {}, {}
+    base_langs = audio_lang_store.get_all_as_lookup()
+    base_sources = audio_lang_store.get_all_sources_as_lookup()
+    intents = audio_lang_store.list_series_intents()
+    lang_intents: list[tuple[str, str]] = [
+        (i["series_prefix"], i["lang_code"]) for i in intents
+    ]
+    # Source string mirrors the per-path get() inheritance label so the UI
+    # badge (via _refine_audio_sources -> "user") and any source-aware
+    # consumer treats inherited rows as user-sourced.
+    source_intents: list[tuple[str, str]] = [
+        (i["series_prefix"], f"series_intent:{i.get('source', 'user')}")
+        for i in intents
+    ]
+    user_verifications = _SeriesIntentLookup(base_langs, lang_intents)
+    verification_sources = _SeriesIntentLookup(base_sources, source_intents)
+    return user_verifications, verification_sources
+
+
 def _refine_audio_sources(items: list, verification_sources: dict) -> None:
     """Post-pass: _classify set audio_source='user' for any store-verified hit;
     refine it to the ACTUAL verification source so the UI badge distinguishes
@@ -843,6 +975,7 @@ def _score(
     just_imported_movies: set[int] | None = None,
     airing_soon_eps: set[int] | None = None,
     transcoding_titles: set[str] | None = None,
+    ignore_forced_subtitles: bool = False,
 ) -> None:
     s = 0
     reasons: list[str] = []
@@ -911,6 +1044,17 @@ def _score(
     elif item.embedded_en in {"EN(forced)", "EN(commentary)"}:
         s -= 500
         reasons.append(f"embedded: {item.embedded_en} — partial coverage")
+        # #79: forced-only EN is only an ACTIONABLE gap if the connected
+        # subgen will actually fill it (IGNORE_FORCED_SUBTITLES on). With the
+        # cap off, subgen SKIPS forced-only files — so flag a distinct,
+        # non-actionable state + reason instead of dangling an un-fillable gap.
+        # The cap governs FORCED subs only; commentary tracks are untouched.
+        if item.embedded_en == "EN(forced)" and not ignore_forced_subtitles:
+            item.forced_only_subgen_will_skip = True
+            reasons.append(
+                "subgen will skip this (forced-only EN) — "
+                "enable IGNORE_FORCED_SUBTITLES on subgen to transcribe it"
+            )
     item.score = s
     item.score_reasons = reasons
 
@@ -942,8 +1086,14 @@ async def build_coverage(
     use_tautulli: bool = True,
     probe_store: Any = None,  # ProbeStore | None — avoid circular import
     audio_lang_store: Any = None,  # AudioLangStore | None
+    subgen_caps: Any = None,  # SubgenCapabilities | None — #79 forced-sub gate
 ) -> CoverageReport:
     sources: dict[str, dict] = {}
+    # #79: gate the forced-only-EN partial gap on subgen's RUNTIME
+    # IGNORE_FORCED_SUBTITLES. caps absent / cap off → forced-only EN rows are
+    # marked forced_only_subgen_will_skip (distinct non-actionable state) rather
+    # than presented as fillable gaps. caps on → they stay actionable gaps.
+    ignore_forced = bool(getattr(subgen_caps, "ignore_forced_subtitles", False))
 
     bz_eps, bz_movs = await _fetch_bazarr(bundle.bazarr, sources)
     sonarr_series_task = asyncio.create_task(
@@ -1028,33 +1178,52 @@ async def build_coverage(
                 prefix = "/".join(parts[:i])
                 probe_failed_by_prefix.setdefault(prefix, []).append(path)
 
-    # Load stored verifications + their sources, then SPLIT by source so each
-    # reaches the right classifier layer:
-    #   - user/plex/series-intent → user_verifications (Layer 0, user ground
-    #     truth, drives Sonarr-propagation + "awaiting sync" semantics)
-    #   - whisper/auto (machine detect, #90) → whisper_verifications (Layer 1,
-    #     overrides tags + flags mismatch, but NOT user-propagation)
-    # Splitting avoids the user layer grabbing a whisper row first (it runs
-    # before the whisper layer) and conflating machine detection with user action.
-    _all_v: dict[str, str] = (
-        audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
-    )
-    verification_sources: dict[str, str] = (
-        audio_lang_store.get_all_sources_as_lookup() if audio_lang_store else {}
+    # #69 + #90 reconciled: build the intent-aware verification lookup (series-
+    # intent prefix fallback so NEW episodes of a declared-language series
+    # auto-resolve as verified during this build), THEN split by source so each
+    # verification reaches the right classifier layer:
+    #   - user/plex/series-intent → user_verifications (Layer 0; user ground
+    #     truth, drives Sonarr-propagation + "awaiting sync"). Stays a
+    #     _SeriesIntentLookup so the series-intent prefix fallback survives the
+    #     split (intents are always user-sourced, never machine).
+    #   - whisper/auto machine detect (#90) → whisper_verifications (Layer 1;
+    #     overrides tags + flags mismatch, NOT user-propagation). Per-file only —
+    #     machine detection never declares a series intent.
+    # Splitting avoids the user layer (which runs first) grabbing a whisper row
+    # and conflating machine detection with user action.
+    user_verifications, verification_sources = _build_verification_lookup(
+        audio_lang_store
     )
 
     def _is_machine(p: str) -> bool:
         s = (verification_sources.get(p) or "").lower()
         return "whisper" in s or "auto" in s
 
-    user_verifications: dict[str, str] = {p: l for p, l in _all_v.items() if not _is_machine(p)}
-    whisper_verifications: dict[str, str] = {p: l for p, l in _all_v.items() if _is_machine(p)}
+    # Machine rows are per-file entries in the lookup's base dict; pull them into
+    # a plain dict, then drop them from the user lookup (its series-intent
+    # fallback stays intact since intents are never machine-sourced).
+    whisper_verifications: dict[str, str] = {
+        p: l for p, l in user_verifications.items() if _is_machine(p)
+    }
+    for _p in whisper_verifications:
+        user_verifications.pop(_p, None)
 
     items: list[CoverageItem] = []
 
     # Per-series srt index cache so 12 episodes of one show only walk the
     # filesystem once.
     series_srt_index: dict[str, list[str]] = {}
+
+    # #104: pre-scan all wanted-episode series dirs in parallel (bounded)
+    # up front, instead of awaiting an rglob inline one series at a time
+    # inside the loop below. On a large foreign library the serialised
+    # rglobs were the dominant cost of the build (minutes). The loop then
+    # just reads from this index.
+    _ep_canonical_dirs = [
+        _strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path"))
+        for w in bz_eps
+    ]
+    series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
 
     # Authoritative file-path resolution via Sonarr (one episode + episodefile
     # call per series with wanted eps). Replaces fragile S<NN>E<NN> filename
@@ -1092,10 +1261,10 @@ async def build_coverage(
         s = sonarr_by_id.get(sonarr_id, {})
         canonical = _strip_arr_prefix(s.get("path"))
         if canonical and canonical not in series_srt_index:
-            # #228: rglob blocks the event loop. On a real-size library this
-            # is the difference between the app feeling responsive during a
-            # walk vs. timeouts on /api/health. Offload to a thread per call;
-            # we already dedupe per-series via series_srt_index above.
+            # #104: normally pre-populated by the parallel pre-scan above.
+            # This inline fallback only fires for a dir that wasn't in the
+            # pre-scan set (defensive); still offloaded so it never blocks
+            # the event loop (#228).
             series_srt_index[canonical] = await asyncio.to_thread(
                 _scan_for_srt_recursive, canonical
             )
@@ -1150,6 +1319,7 @@ async def build_coverage(
             transcoding_titles=activity["transcoding_titles"],
             just_imported_eps=sonarr_recent_ids,
             airing_soon_eps=airing_soon_ids,
+            ignore_forced_subtitles=ignore_forced,
         )
         items.append(item)
 
@@ -1192,6 +1362,7 @@ async def build_coverage(
             now_playing_titles=activity["now_playing_titles"],
             transcoding_titles=activity["transcoding_titles"],
             just_imported_movies=radarr_recent_ids,
+            ignore_forced_subtitles=ignore_forced,
         )
         items.append(item)
 
@@ -1324,12 +1495,22 @@ async def _add_bazarr_blind_synthetic_rows(
     for _eid, _ep in sonarr_eps_by_id.items():
         eps_by_series_id.setdefault(_ep.get("seriesId"), []).append((_eid, _ep))
 
+    # #104: pre-scan all foreign-series dirs not already in the index, in
+    # parallel (bounded), before the loop. This is the ~668-series fan-out
+    # that previously ran strictly one-at-a-time.
+    _foreign_dirs = [
+        c for c in (_strip_arr_prefix(s.get("path")) for s in foreign_series)
+        if c and c not in series_srt_index
+    ]
+    series_srt_index.update(await _build_srt_index_parallel(_foreign_dirs))
+
     synthetic_added = 0
     for s in foreign_series:
         sid = s.get("id")
         series_canonical = _strip_arr_prefix(s.get("path"))
         if series_canonical and series_canonical not in series_srt_index:
-            # #228: same offload as the main loop above.
+            # #104: defensive inline fallback (pre-scan above normally
+            # covers this). Offloaded so it never blocks the loop (#228).
             series_srt_index[series_canonical] = await asyncio.to_thread(
                 _scan_for_srt_recursive, series_canonical
             )
@@ -1447,6 +1628,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 transcoding_titles=activity["transcoding_titles"],
                 just_imported_eps=sonarr_recent_ids,
                 airing_soon_eps=airing_soon_ids,
+                ignore_forced_subtitles=ignore_forced,
             )
             items.append(item)
             seen_ep_ids.add(ep_id)

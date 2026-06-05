@@ -142,6 +142,11 @@ async def lifespan(app_: FastAPI):
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
     app_.state.ollama = OllamaClient()
+    # #119: last-known ollama reachability, populated by the integrations-
+    # health probe (GET /api/integrations/health). None until first probe;
+    # telemetry gates "ollama configured" on this real signal instead of
+    # the defaulted OLLAMA_URL (non-empty on every install).
+    app_.state.ollama_probe_result = None
     # v1.1-O Layer 4: user audio-language verifications (manual review queue).
     from .audio_lang_store import AudioLangStore
     app_.state.audio_lang = AudioLangStore(settings.db_path)
@@ -167,6 +172,9 @@ async def lifespan(app_: FastAPI):
         provenance=app_.state.provenance,
         probe_walker=app_.state.probe_walker,
         pending_store=app_.state.pending,
+        # #79: live caps so the coverage_walk forced-only-EN gate tracks the
+        # runtime IGNORE_FORCED_SUBTITLES value.
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.scheduler.start()
 
@@ -184,6 +192,9 @@ async def lifespan(app_: FastAPI):
             # PR-C: eager-probe unprobed wanted files each refresh so the
             # probe-gate's gap list populates regardless of probe_roots.
             probe_walker=app_.state.probe_walker,
+            # #79: resolve subgen caps live so the forced-only-EN gate tracks
+            # the watchdog-detected IGNORE_FORCED_SUBTITLES runtime value.
+            caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
         )
     )
     # Dashboard cache background refresh — passes a build closure that

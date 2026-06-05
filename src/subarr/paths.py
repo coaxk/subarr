@@ -68,3 +68,26 @@ def canonical_to_subgen_batch(canonical: str) -> str:
     if rel:
         return f"{prefix}/{rel}"
     return prefix + "/"
+
+
+def subgen_to_canonical(subgen_path: str) -> str:
+    """Inverse of canonical_to_subgen_batch: map a subgen-space absolute
+    path (e.g. `/media/TV/Show/file.mkv`) back to subarr's canonical form
+    (`TV/Show/file.mkv`).
+
+    Used by the WEBHOOK_URL_COMPLETED receiver (#87): subgen's completion
+    webhook reports the source file at its OWN mount path, which is the
+    `subgen_media_prefix` prefix. We strip that prefix to get the canonical
+    key the provenance ledger is indexed by.
+
+    If the path doesn't start with the configured prefix, it's returned
+    stripped of leading slashes as a best-effort canonical — the caller
+    will simply find no matching ledger entry, which is benign.
+    """
+    p = (subgen_path or "").strip()
+    prefix = settings.subgen_media_prefix.rstrip("/")
+    if prefix and p.startswith(prefix + "/"):
+        return p[len(prefix) + 1:].strip("/")
+    if prefix and p == prefix:
+        return ""
+    return p.strip("/")
