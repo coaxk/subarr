@@ -412,14 +412,27 @@ def make_default_stats_provider(app_state) -> Any:
         except Exception:
             pass
 
-        # Integrations — configured = api key is non-empty
+        # Integrations — configured = api key is non-empty. Every keyed
+        # integration defaults to an empty key, so bool() is only True
+        # when the user actually wired it up.
+        #
+        # #119: ollama has NO key — only a URL that defaults to
+        # http://ollama:11434 on every install, so bool(settings.ollama_url)
+        # reported "configured" 100% of the time (a measurement artifact,
+        # not real adoption). Gate instead on the cached reachability from
+        # the integrations-health probe (/api/tags), mirroring how
+        # subgen_caps.reachable is cached on app.state. If the probe hasn't
+        # run yet (None), treat as not-configured rather than trusting the
+        # defaulted URL.
+        ollama_probe = getattr(app_state, "ollama_probe_result", None)
+        ollama_reachable = bool(ollama_probe and getattr(ollama_probe, "reachable", False))
         integrations = {
             "bazarr":   bool(settings.bazarr_api_key),
             "sonarr":   bool(settings.sonarr_api_key),
             "radarr":   bool(settings.radarr_api_key),
             "tautulli": bool(settings.tautulli_api_key),
             "plex":     bool(settings.plex_token),
-            "ollama":   bool(settings.ollama_url),
+            "ollama":   ollama_reachable,
         }
 
         # Docker tier inferred from config presence

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -16,6 +17,16 @@ from ..integrations import IntegrationError
 
 router = APIRouter(prefix="/api", tags=["integrations"])
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class OllamaProbeResult:
+    """Last-known ollama reachability, cached on app.state by the
+    integrations-health endpoint. Mirrors the subgen_caps `.reachable`
+    pattern so telemetry can report ollama on a REAL signal (was
+    /api/tags reachable?) rather than the defaulted OLLAMA_URL, which is
+    non-empty on every install (#119)."""
+    reachable: bool
 
 
 async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, Any]:
@@ -90,6 +101,14 @@ async def integrations_health(request: Request) -> dict[str, Any]:
     if ollama is not None:
         probes_coros.append(_probe("ollama", ollama, "ollama_models"))
     probes = await asyncio.gather(*probes_coros)
+    # #119: cache ollama reachability on app.state so telemetry reports it
+    # on a real signal (was /api/tags up?) instead of the defaulted URL.
+    # The ollama probe, when present, is always the last entry appended.
+    if ollama is not None:
+        ollama_probe = next((p for p in probes if p.get("name") == "ollama"), None)
+        request.app.state.ollama_probe_result = OllamaProbeResult(
+            reachable=bool(ollama_probe and ollama_probe.get("online"))
+        )
     # Subgen capabilities probed once at boot, cached on app.state.
     # Surfaced here so the UI can show "compat mode" badges + gate
     # scan-submit on has_batch.
