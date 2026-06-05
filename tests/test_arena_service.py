@@ -125,6 +125,46 @@ async def test_concurrent_sweeps_serialize_one_at_a_time(store):
     assert g2.status == "done", f"r2 {g2.status} err={g2.error}"
 
 
+def test_aggregate_runs_by_language_groups_and_ranks():
+    # #26 herd view: group done sweeps by detected language, rank recipes by
+    # wins then mean composite. Pure helper — no DB.
+    from subarr.arena_store import aggregate_runs_by_language, ArenaRun
+
+    def mk(rid, lang, winner, agg):
+        return ArenaRun(id=rid, media_path=f"/{rid}.mkv",
+                        variants=[{"label": a["label"], "kwargs": {}} for a in agg],
+                        source_language=lang, status="done",
+                        result={"winner": winner, "tie": False, "aggregate": agg})
+
+    runs = [
+        mk("k1", "korean", "noisy-robust",
+           [{"label": "noisy-robust", "mean_composite": 70}, {"label": "default", "mean_composite": 50}]),
+        mk("k2", "korean", "noisy-robust",
+           [{"label": "noisy-robust", "mean_composite": 80}, {"label": "default", "mean_composite": 60}]),
+        mk("f1", "french", "default",
+           [{"label": "default", "mean_composite": 75}, {"label": "noisy-robust", "mean_composite": 40}]),
+    ]
+    out = aggregate_runs_by_language(runs)
+    by = {x["language"]: x for x in out}
+    assert by["korean"]["sweeps"] == 2
+    assert by["korean"]["recipes"][0]["label"] == "noisy-robust"          # ranked top by wins
+    ko = {r["label"]: r for r in by["korean"]["recipes"]}
+    assert ko["noisy-robust"]["wins"] == 2
+    assert ko["noisy-robust"]["mean_composite"] == 75.0                   # (70+80)/2
+    assert by["french"]["recipes"][0]["label"] == "default"
+
+
+def test_store_aggregate_by_language_reads_done_runs(store):
+    svc = _service(store, [])
+    r = svc.create("/m.mkv", [ConfigVariant("default", {})])
+    r.status = "done"; r.source_language = "korean"
+    r.result = {"winner": "default", "tie": False,
+                "aggregate": [{"label": "default", "mean_composite": 65.0}]}
+    store.save(r)
+    out = store.aggregate_by_language()
+    assert len(out) == 1 and out[0]["language"] == "korean" and out[0]["sweeps"] == 1
+
+
 def test_source_language_persists_on_update(store):
     # #23: the detected language is set AFTER create (the initial INSERT has it
     # None), on a later save() — so the UPSERT's UPDATE clause must include it,

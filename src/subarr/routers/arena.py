@@ -82,6 +82,13 @@ async def list_arena_runs(request: Request) -> dict:
     return {"runs": [r.summary() for r in request.app.state.arena.list()]}
 
 
+@router.get("/by-language")
+async def arena_by_language(request: Request) -> dict:
+    # [#26] herd view: per-language recipe stats aggregated across completed
+    # sweeps. Defined BEFORE /{run_id} so it isn't captured as a run id.
+    return {"languages": request.app.state.arena.aggregate_by_language()}
+
+
 @router.get("/{run_id}")
 async def get_arena_run(run_id: str, request: Request) -> dict:
     run = request.app.state.arena.get(run_id)

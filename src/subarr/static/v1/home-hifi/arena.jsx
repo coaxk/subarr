@@ -528,6 +528,39 @@ function SweepDetail({ run }) {
 // The sweeps queue/history — backend-backed, so it survives navigation AND
 // restart. `loaded` distinguishes "still fetching" from "genuinely empty" so
 // we never flash "no sweeps" over data that's about to arrive.
+// [#26] Per-language "herd" view — how recipes perform grouped by the spoken
+// language subarr detected (robust majority vote). The foundation for
+// per-language recommendations + the federated tournament.
+function ByLanguagePanel({ data }) {
+  if (!data || !data.length) return null;
+  return (
+    <Collapsible label="By language" id="bylang" defaultOpen={false}>
+      <Hint>How each recipe performs grouped by the spoken language subarr detected on the file. Fills in as you run more sweeps — this is the groundwork for per-language recommendations.</Hint>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {data.map((lang) => (
+          <div key={lang.language} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', background: 'var(--bg-2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>{(lang.language || '?').toUpperCase()}</span>
+              <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {lang.recipes.map((r, i) => (
+                <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
+                  <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }}>{i === 0 ? '★' : ''}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: i === 0 ? 'var(--fg-0)' : 'var(--fg-2)', fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
+                  <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="sweeps this recipe won (ties excluded)">{r.wins}/{r.sweeps} won</span>
+                  <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="mean composite score across this language's sweeps">{r.mean_composite}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>One sweep per language is a hint, not a verdict — patterns get trustworthy as the counts grow.</div>
+    </Collapsible>
+  );
+}
+
 function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
   const basename = (p) => (p || '').split('/').pop() || p;
   if (!loaded) {
@@ -597,6 +630,7 @@ export function ArenaPage() {
   const [gate, setGate] = useState(null);
   const [notice, setNotice] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [byLang, setByLang] = useState([]);   // [#26] per-language herd view
 
   useEffect(() => {
     let alive = true;
@@ -610,6 +644,12 @@ export function ArenaPage() {
 
   const loadRuns = useCallback(() => fetch('/api/arena/runs').then((r) => r.json()).then((d) => { setRuns(d.runs || []); setLoaded(true); }).catch(() => {}), []);
   const loadDetail = useCallback((id) => fetch(`/api/arena/${id}`).then((r) => r.json()).then((d) => setDetail((prev) => ({ ...prev, [id]: d }))).catch(() => {}), []);
+
+  // [#26] per-language herd view — reload only when a sweep COMPLETES (the set
+  // of done runs changes), not on every poll tick.
+  const loadByLanguage = useCallback(() => fetch('/api/arena/by-language').then((r) => r.json()).then((d) => setByLang(d.languages || [])).catch(() => {}), []);
+  const doneCount = runs.filter((r) => r.status === 'done').length;
+  useEffect(() => { loadByLanguage(); }, [doneCount, loadByLanguage]);
 
   // Load the sweeps list on mount — this is what makes the page survive
   // navigation (state lives in the backend, not just this component).
@@ -664,6 +704,7 @@ export function ArenaPage() {
       <KnobReference />
       <SweepForm onRun={onRun} gate={gate} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
+      <ByLanguagePanel data={byLang} />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
     </main>
   );

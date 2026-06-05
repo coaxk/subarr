@@ -60,6 +60,9 @@ class ArenaService:
     def list(self) -> list[ArenaRun]:
         return self._store.list()
 
+    def aggregate_by_language(self) -> list[dict]:
+        return self._store.aggregate_by_language()
+
     def delete(self, run_id: str) -> bool:
         return self._store.delete(run_id)
 

@@ -138,6 +138,14 @@ class ArenaStore:
             cur = self._conn.execute("DELETE FROM arena_runs WHERE id = ?", (run_id,))
             return (cur.rowcount or 0) > 0
 
+    def aggregate_by_language(self) -> list[dict[str, Any]]:
+        """[#26] Group completed, language-detected sweeps by source language →
+        per-recipe stats. The 'herd' foundation for per-language presets +
+        federated #124."""
+        runs = [r for r in self.list(limit=1000)
+                if r.status == "done" and r.source_language and r.result]
+        return aggregate_runs_by_language(runs)
+
     def reconcile_interrupted(self) -> int:
         """A run that was pending/queued/running when the process died can never
         finish — its asyncio task is gone. Mark such rows as errored on boot
@@ -153,3 +161,37 @@ class ArenaStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
+    """[#26] Pure: group sweeps by source_language → per-recipe {sweeps, wins,
+    mean_composite}, recipes ranked by wins then mean composite, languages by
+    sweep count. A tie counts as no win for anyone. Unit-tested without a DB."""
+    by_lang: dict[str, dict] = {}
+    for r in runs:
+        lang = getattr(r, "source_language", None)
+        result = getattr(r, "result", None) or {}
+        if not lang or not result:
+            continue
+        winner = result.get("winner") if not result.get("tie") else None
+        bucket = by_lang.setdefault(lang, {"language": lang, "sweeps": 0, "_recipes": {}})
+        bucket["sweeps"] += 1
+        for row in result.get("aggregate") or []:
+            label = row.get("label")
+            if not label:
+                continue
+            rec = bucket["_recipes"].setdefault(
+                label, {"label": label, "sweeps": 0, "wins": 0, "_sum": 0.0})
+            rec["sweeps"] += 1
+            rec["_sum"] += row.get("mean_composite") or 0.0
+            if winner == label:
+                rec["wins"] += 1
+    out = []
+    for b in by_lang.values():
+        recipes = [{"label": rec["label"], "sweeps": rec["sweeps"], "wins": rec["wins"],
+                    "mean_composite": round(rec["_sum"] / rec["sweeps"], 2) if rec["sweeps"] else 0.0}
+                   for rec in b["_recipes"].values()]
+        recipes.sort(key=lambda x: (x["wins"], x["mean_composite"]), reverse=True)
+        out.append({"language": b["language"], "sweeps": b["sweeps"], "recipes": recipes})
+    out.sort(key=lambda x: x["sweeps"], reverse=True)
+    return out

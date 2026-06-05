@@ -29,6 +29,13 @@ def _body(label="a", kwargs=None, path="TV/Show/ep.mkv"):
     return {"media_path": path, "variants": [{"label": label, "kwargs": kwargs or {}}]}
 
 
+def test_by_language_route_returns_languages_shape(app_with_stub):
+    # #26: route exists, returns the herd shape, and is NOT captured by /{run_id}.
+    r = app_with_stub.get("/api/arena/by-language")
+    assert r.status_code == 200
+    assert isinstance(r.json().get("languages"), list)
+
+
 def test_run_blocked_when_subgen_lacks_asr_arena(app_with_stub):
     # default stub /queue advertises no asr_arena → 503 with a clear reason
     r = app_with_stub.post("/api/arena/run", json=_body())
