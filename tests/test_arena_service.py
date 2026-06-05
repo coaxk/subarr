@@ -145,13 +145,31 @@ def test_aggregate_runs_by_language_groups_and_ranks():
            [{"label": "default", "mean_composite": 75}, {"label": "noisy-robust", "mean_composite": 40}]),
     ]
     out = aggregate_runs_by_language(runs)
-    by = {x["language"]: x for x in out}
-    assert by["korean"]["sweeps"] == 2
-    assert by["korean"]["recipes"][0]["label"] == "noisy-robust"          # ranked top by wins
-    ko = {r["label"]: r for r in by["korean"]["recipes"]}
+    by = {x["language"]: x for x in out}                                  # languages normalized to ISO
+    assert by["ko"]["sweeps"] == 2
+    assert by["ko"]["recipes"][0]["label"] == "noisy-robust"             # ranked top by wins
+    ko = {r["label"]: r for r in by["ko"]["recipes"]}
     assert ko["noisy-robust"]["wins"] == 2
     assert ko["noisy-robust"]["mean_composite"] == 75.0                   # (70+80)/2
-    assert by["french"]["recipes"][0]["label"] == "default"
+    assert by["fr"]["recipes"][0]["label"] == "default"
+
+
+def test_aggregate_normalizes_language_names_to_iso():
+    # Old sweeps stored full names ('korean', from the deprecated header path);
+    # robust detection now returns ISO ('ko'). They must MERGE into one bucket,
+    # not show as two — otherwise the herd view looks broken.
+    from subarr.arena_store import aggregate_runs_by_language, ArenaRun
+
+    def mk(rid, lang):
+        return ArenaRun(id=rid, media_path="/x.mkv",
+                        variants=[{"label": "default", "kwargs": {}}],
+                        source_language=lang, status="done",
+                        result={"winner": "default", "tie": False,
+                                "aggregate": [{"label": "default", "mean_composite": 60}]})
+
+    out = aggregate_runs_by_language([mk("a", "korean"), mk("b", "ko"), mk("c", "Korean")])
+    assert len(out) == 1
+    assert out[0]["language"] == "ko" and out[0]["sweeps"] == 3
 
 
 def test_store_aggregate_by_language_reads_done_runs(store):
@@ -162,7 +180,7 @@ def test_store_aggregate_by_language_reads_done_runs(store):
                 "aggregate": [{"label": "default", "mean_composite": 65.0}]}
     store.save(r)
     out = store.aggregate_by_language()
-    assert len(out) == 1 and out[0]["language"] == "korean" and out[0]["sweeps"] == 1
+    assert len(out) == 1 and out[0]["language"] == "ko" and out[0]["sweeps"] == 1   # normalized
 
 
 def test_source_language_persists_on_update(store):

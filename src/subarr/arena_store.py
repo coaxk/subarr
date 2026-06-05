@@ -167,9 +167,10 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
     """[#26] Pure: group sweeps by source_language → per-recipe {sweeps, wins,
     mean_composite}, recipes ranked by wins then mean composite, languages by
     sweep count. A tie counts as no win for anyone. Unit-tested without a DB."""
+    from .langs import normalize_lang
     by_lang: dict[str, dict] = {}
     for r in runs:
-        lang = getattr(r, "source_language", None)
+        lang = normalize_lang(getattr(r, "source_language", None))
         result = getattr(r, "result", None) or {}
         if not lang or not result:
             continue
