@@ -41,7 +41,9 @@ def test_whisper_verification_overrides_tag_and_flags_mismatch():
     # #90: tagged 'rus' (+ Sonarr agrees) but Whisper heard Korean → override + flag.
     it = _item(audio_langs=["rus"], original_language="Russian", file_canonical_path="TV/Show/S01E16.mkv")
     _classify_audio_label(it, whisper_verifications={"TV/Show/S01E16.mkv": "ko"})
-    assert it.audio_source == "whisper" and it.audio_verified is True
+    assert it.audio_source == "whisper"
+    # machine detection must NOT set audio_verified (user-propagation-only flag)
+    assert it.audio_verified is False
     assert it.audio_langs == ["ko"]
     assert it.audio_label_whisper_mismatch is True
 

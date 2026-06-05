@@ -742,7 +742,11 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_notes.append(note)
         item.audio_label_suspect = False
         item.audio_label_unknown = False
-        item.audio_verified = True
+        # NOTE: deliberately NOT setting audio_verified — that flag is coupled to
+        # USER-propagated-to-Sonarr semantics (drives the "awaiting Bazarr sync"
+        # reason, and the frontend badge treats it as 'user'). A machine
+        # detection signals via audio_source="whisper" instead, so it badges as
+        # the Whisper ✓ tier and never claims a Sonarr propagation it didn't do.
         item.audio_source = "whisper"
         return
     title_lc = (item.title or "").strip().lower()
