@@ -271,43 +271,47 @@ export function genSpark(n, base, vol) {
 }
 
 // ─── Language tags (#147) ────────────────────────────────────────
-// Render a language code as a small flag + code. IMPORTANT: a flag is
-// DECORATION, not a geography claim — languages are not countries. The
-// tooltip always names the LANGUAGE. Multi-country languages (en, es,
-// ar, pt …) intentionally get NO flag — we keep the bare code rather
-// than pick a misleading single country. No flag → just the code.
+// Render a language code as a small flag IMAGE + code. IMPORTANT: a flag
+// is DECORATION, not a geography claim — languages are not countries. The
+// tooltip always names the LANGUAGE. Multi-country languages (en, es, ar,
+// pt …) intentionally get NO flag — we keep the bare code rather than pick
+// a misleading single country. No flag → just the code.
 //
-// `name` drives the tooltip; `flag` is optional decoration. Keyed by
-// ISO-639-1; LANG_ALIAS folds 3-letter codes + full names onto it.
+// We use bundled SVG flag images (flag-icons, MIT — src/static/v1/flags/)
+// rather than emoji: Windows ships NO flag glyphs in its emoji font, so
+// emoji flags render as bare letters there (the "FR FR" bug). `cc` is the
+// flag-icons country-code filename for the language's representative flag;
+// `name` drives the tooltip. Keyed by ISO-639-1; LANG_ALIAS folds 3-letter
+// codes + full names onto it.
 export const LANG_INFO = Object.freeze({
-  ko: { name: 'Korean', flag: '🇰🇷' },
-  ja: { name: 'Japanese', flag: '🇯🇵' },
-  zh: { name: 'Chinese', flag: '🇨🇳' },
-  he: { name: 'Hebrew', flag: '🇮🇱' },
-  ru: { name: 'Russian', flag: '🇷🇺' },
-  fr: { name: 'French', flag: '🇫🇷' },
-  de: { name: 'German', flag: '🇩🇪' },
-  it: { name: 'Italian', flag: '🇮🇹' },
-  hi: { name: 'Hindi', flag: '🇮🇳' },
-  tr: { name: 'Turkish', flag: '🇹🇷' },
-  nl: { name: 'Dutch', flag: '🇳🇱' },
-  pl: { name: 'Polish', flag: '🇵🇱' },
-  sv: { name: 'Swedish', flag: '🇸🇪' },
-  no: { name: 'Norwegian', flag: '🇳🇴' },
-  nb: { name: 'Norwegian Bokmål', flag: '🇳🇴' },
-  nn: { name: 'Norwegian Nynorsk', flag: '🇳🇴' },
-  da: { name: 'Danish', flag: '🇩🇰' },
-  fi: { name: 'Finnish', flag: '🇫🇮' },
-  cs: { name: 'Czech', flag: '🇨🇿' },
-  el: { name: 'Greek', flag: '🇬🇷' },
-  th: { name: 'Thai', flag: '🇹🇭' },
-  vi: { name: 'Vietnamese', flag: '🇻🇳' },
-  id: { name: 'Indonesian', flag: '🇮🇩' },
-  uk: { name: 'Ukrainian', flag: '🇺🇦' },
-  ro: { name: 'Romanian', flag: '🇷🇴' },
-  hu: { name: 'Hungarian', flag: '🇭🇺' },
-  fa: { name: 'Persian', flag: '🇮🇷' },
-  is: { name: 'Icelandic', flag: '🇮🇸' },
+  ko: { name: 'Korean', cc: 'kr' },
+  ja: { name: 'Japanese', cc: 'jp' },
+  zh: { name: 'Chinese', cc: 'cn' },
+  he: { name: 'Hebrew', cc: 'il' },
+  ru: { name: 'Russian', cc: 'ru' },
+  fr: { name: 'French', cc: 'fr' },
+  de: { name: 'German', cc: 'de' },
+  it: { name: 'Italian', cc: 'it' },
+  hi: { name: 'Hindi', cc: 'in' },
+  tr: { name: 'Turkish', cc: 'tr' },
+  nl: { name: 'Dutch', cc: 'nl' },
+  pl: { name: 'Polish', cc: 'pl' },
+  sv: { name: 'Swedish', cc: 'se' },
+  no: { name: 'Norwegian', cc: 'no' },
+  nb: { name: 'Norwegian Bokmål', cc: 'no' },
+  nn: { name: 'Norwegian Nynorsk', cc: 'no' },
+  da: { name: 'Danish', cc: 'dk' },
+  fi: { name: 'Finnish', cc: 'fi' },
+  cs: { name: 'Czech', cc: 'cz' },
+  el: { name: 'Greek', cc: 'gr' },
+  th: { name: 'Thai', cc: 'th' },
+  vi: { name: 'Vietnamese', cc: 'vn' },
+  id: { name: 'Indonesian', cc: 'id' },
+  uk: { name: 'Ukrainian', cc: 'ua' },
+  ro: { name: 'Romanian', cc: 'ro' },
+  hu: { name: 'Hungarian', cc: 'hu' },
+  fa: { name: 'Persian', cc: 'ir' },
+  is: { name: 'Icelandic', cc: 'is' },
   // Multi-country — name only, no flag (decoration would mislead):
   en: { name: 'English' },
   es: { name: 'Spanish' },
@@ -366,24 +370,43 @@ export function langName(value) {
   return (LANG_INFO[code] && LANG_INFO[code].name) || (value ? String(value).toUpperCase() : '');
 }
 
-// LangTag — flag (decoration, when representative) + code, language tooltip.
+// Flag images live here; served by subarr's static mount (no external
+// requests). 4x3 SVGs from flag-icons (MIT).
+export const FLAG_BASE = '/static/v1/flags/';
+
+// LangTag — flag IMAGE (decoration, when representative) + code, language
+// tooltip. Real SVG flags render identically on every OS (unlike emoji,
+// which Windows shows as bare letters). No flag for multi-country langs.
 export function LangTag({ value, size = 12, showCode = true, style }) {
   if (!value) return null;
   const code = normalizeLang(value);
   const info = LANG_INFO[code];
-  const flag = info && info.flag;
+  const cc = info && info.cc;
   const name = (info && info.name) || String(value).toUpperCase();
   const label = code ? code.toUpperCase() : String(value).toUpperCase();
   return (
     <span
       title={name}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
+        display: 'inline-flex', alignItems: 'center', gap: 5,
         fontSize: size, lineHeight: 1, whiteSpace: 'nowrap', ...style,
       }}
     >
-      {flag && <span aria-hidden style={{ fontSize: size + 2 }}>{flag}</span>}
-      {(showCode || !flag) && (
+      {cc && (
+        <img
+          src={`${FLAG_BASE}${cc}.svg`}
+          alt=""
+          aria-hidden="true"
+          width={Math.round(size * 4 / 3)}
+          height={size}
+          loading="lazy"
+          style={{
+            display: 'block', flex: 'none', borderRadius: 2,
+            objectFit: 'cover', boxShadow: '0 0 0 1px rgba(0,0,0,0.25)',
+          }}
+        />
+      )}
+      {showCode && (
         <span style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.02em' }}>
           {label}
         </span>
