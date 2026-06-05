@@ -41,7 +41,8 @@ const CURATED = [
     kwargs: { vad_filter: false, condition_on_previous_text: true, temperature: 0, no_speech_threshold: 1.0, compression_ratio_threshold: 100 },
     why: 'All guardrails off — deliberately lets the model hallucinate on silence and music. A diagnostic canary (it should lose on the quiet clip), NOT a setting to adopt: it shows you how much the guards are doing.' },
 ];
-const DEFAULT_SELECTED = ['default', 'clean-film', 'noisy-robust'];
+// #142: pre-select all six so a sweep compares the full set by default (max data).
+const DEFAULT_SELECTED = ['default', 'clean-film', 'noisy-robust', 'high-accuracy', 'fast-draft', 'raw-unfiltered'];
 
 const KNOBS = [
   ['beam_size', 'a number, 1 to 10', 'How hard it searches for the best wording. Higher is more accurate but slower. Around 5 is a sensible top end.'],
@@ -537,24 +538,34 @@ function ByLanguagePanel({ data }) {
     <Collapsible label="By language" id="bylang" defaultOpen={false}>
       <Hint>How each recipe performs grouped by the spoken language subarr detected on the file. Fills in as you run more sweeps — this is the groundwork for per-language recommendations.</Hint>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {data.map((lang) => (
-          <div key={lang.language} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', background: 'var(--bg-2)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>{(lang.language || '?').toUpperCase()}</span>
-              <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{lang.files} file{lang.files === 1 ? '' : 's'} · {lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {lang.recipes.map((r, i) => (
-                <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
-                  <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }}>{i === 0 ? '★' : ''}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: i === 0 ? 'var(--fg-0)' : 'var(--fg-2)', fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
-                  <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="files where this recipe won (each file's repeat sweeps consolidated; ties excluded)">{r.wins}/{r.files} won</span>
-                  <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="mean composite score across this language's sweeps">{r.mean_composite}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+        {data.map((lang) => {
+          const top = lang.recipes[0];
+          return (
+            // #143: each language is its own collapsible (state persisted), so the
+            // panel stays scannable as languages accumulate. Collapsed label shows
+            // the headline (counts + current top pick).
+            <Collapsible key={lang.language} id={`bylang-${lang.language}`} defaultOpen={false}
+              label={
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>{(lang.language || '?').toUpperCase()}</span>
+                  <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', fontWeight: 400 }}>
+                    {lang.files} file{lang.files === 1 ? '' : 's'} · {lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}{top ? ` · top: ${top.label}` : ''}
+                  </span>
+                </span>
+              }>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {lang.recipes.map((r, i) => (
+                  <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
+                    <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }}>{i === 0 ? '★' : ''}</span>
+                    <span style={{ flex: 1, minWidth: 0, color: i === 0 ? 'var(--fg-0)' : 'var(--fg-2)', fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
+                    <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="files where this recipe won (each file's repeat sweeps consolidated; ties excluded)">{r.wins}/{r.files} won</span>
+                    <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="mean composite score across this language's sweeps">{r.mean_composite}</span>
+                  </div>
+                ))}
+              </div>
+            </Collapsible>
+          );
+        })}
       </div>
       <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>Each file votes once (its repeat sweeps are averaged), so re-sweeping a file sharpens its estimate rather than skewing the count. One file per language is a hint, not a verdict — trust grows with more files.</div>
     </Collapsible>
