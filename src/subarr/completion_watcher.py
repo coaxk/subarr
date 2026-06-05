@@ -173,20 +173,50 @@ class CompletionWatcher:
             subgen_path = canonical_to_subgen_batch(entry.canonical_path)
             if subgen_path in in_flight:
                 continue
-            self._provenance.mark_completed(entry.id)
-            log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
-            # v1.1-G: try direct multipart upload first (closes the loop
-            # tightly + no race vs. Bazarr's filesystem scan). Falls back
-            # to scan-disk task if upload fails or we lack episode_id.
-            uploaded = await self._try_upload_to_bazarr(entry)
-            if not uploaded and entry.series_id is not None:
-                await self._trigger_bazarr_scan(entry.id, entry.series_id)
-            # v1.1.1: fire Plex partial-scan against the file's directory
-            # so the freshly-written sidecar appears in Plex (and on Apple
-            # TV) without waiting for Plex's periodic scan. Best-effort —
-            # failure here doesn't unwind anything; Plex will pick it up
-            # on the next periodic scan anyway.
-            await self._maybe_plex_partial_scan(entry.canonical_path)
+            await self.complete_entry(entry)
+
+    async def complete_entry(self, entry) -> None:
+        """Run the full completion flow for one ledger entry: mark it
+        completed, write the .srt back to Bazarr (direct upload, falling
+        back to a scan-disk trigger), and fire a Plex partial-scan.
+
+        This is the single battle-tested completion path. It is invoked
+        both by the polling pass (_pass_pending) and by the push-based
+        webhook receiver (#87). Idempotent enough for either driver — a
+        second call merely re-stamps completed_at and re-fires harmless
+        best-effort write-backs.
+        """
+        self._provenance.mark_completed(entry.id)
+        log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
+        # v1.1-G: try direct multipart upload first (closes the loop
+        # tightly + no race vs. Bazarr's filesystem scan). Falls back
+        # to scan-disk task if upload fails or we lack episode_id.
+        uploaded = await self._try_upload_to_bazarr(entry)
+        if not uploaded and entry.series_id is not None:
+            await self._trigger_bazarr_scan(entry.id, entry.series_id)
+        # v1.1.1: fire Plex partial-scan against the file's directory
+        # so the freshly-written sidecar appears in Plex (and on Apple
+        # TV) without waiting for Plex's periodic scan. Best-effort —
+        # failure here doesn't unwind anything; Plex will pick it up
+        # on the next periodic scan anyway.
+        await self._maybe_plex_partial_scan(entry.canonical_path)
+
+    async def complete_by_canonical(self, canonical_path: str) -> int:
+        """Push entrypoint (#87): given a canonical path that subgen just
+        reported finished via WEBHOOK_URL_COMPLETED, run the completion
+        flow for every matching still-pending ledger entry.
+
+        Returns the number of entries completed. Zero is normal and benign
+        — it just means the polling pass already handled this path, or the
+        path was never tracked by subarr (e.g. a subgen Plex/Tautulli
+        auto-transcribe rather than a subarr-submitted job)."""
+        matches = [
+            e for e in self._provenance.query_by_path(canonical_path)
+            if e.completed_at is None
+        ]
+        for entry in matches:
+            await self.complete_entry(entry)
+        return len(matches)
 
     async def _pass_retry_bazarr_notify(self) -> None:
         """Find ledger entries that completed but never successfully fired
