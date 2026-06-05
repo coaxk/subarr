@@ -775,6 +775,90 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_source = "ffprobe"
 
 
+class _SeriesIntentLookup(dict):
+    """A {canonical_path: value} map that, on a miss, falls back to the
+    longest series-intent prefix that the looked-up path starts with.
+
+    #69: the coverage build loads verifications in BULK (get_all_as_lookup),
+    which deliberately does NOT flatten series intents into one synthetic row
+    per episode — that would be O(declared series x episodes) and would go
+    stale the instant a new episode is added. Instead we keep the per-file
+    rows as the fast exact-match layer and resolve series-intent inheritance
+    lazily here. The net effect: a NEW episode under a declared-language
+    series auto-resolves as verified during the coverage build, without any
+    per-file re-verification — which is exactly the issue's intent.
+
+    Per-file rows always win because dict exact-match short-circuits before
+    the prefix fallback ever runs.
+    """
+
+    __slots__ = ("_intents",)
+
+    def __init__(self, base: dict, intents: list[tuple[str, str]]):
+        super().__init__(base)
+        # Longest prefix first so the most specific declaration wins.
+        self._intents = sorted(intents, key=lambda t: len(t[0]), reverse=True)
+
+    def __bool__(self) -> bool:
+        # Truthy if EITHER per-file rows OR series intents exist — callers
+        # guard with `if user_verifications and ...`, and an intents-only
+        # store (no per-file rows yet) must still be consulted (#69).
+        return bool(len(self) or self._intents)
+
+    def _match_intent(self, key) -> str | None:
+        if not isinstance(key, str):
+            return None
+        for prefix, value in self._intents:
+            if key.startswith(prefix):
+                return value
+        return None
+
+    def __contains__(self, key) -> bool:  # type: ignore[override]
+        if super().__contains__(key):
+            return True
+        return self._match_intent(key) is not None
+
+    def __missing__(self, key):
+        value = self._match_intent(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        value = self._match_intent(key)
+        return value if value is not None else default
+
+
+def _build_verification_lookup(audio_lang_store: Any):
+    """Build the (user_verifications, verification_sources) pair the coverage
+    build feeds to _classify_audio_label / _refine_audio_sources.
+
+    Per-file verifications are the exact-match fast path; declared series
+    intents are layered underneath via longest-prefix fallback (#69) so new
+    episodes of a declared series inherit the language automatically.
+    """
+    if audio_lang_store is None:
+        return {}, {}
+    base_langs = audio_lang_store.get_all_as_lookup()
+    base_sources = audio_lang_store.get_all_sources_as_lookup()
+    intents = audio_lang_store.list_series_intents()
+    lang_intents: list[tuple[str, str]] = [
+        (i["series_prefix"], i["lang_code"]) for i in intents
+    ]
+    # Source string mirrors the per-path get() inheritance label so the UI
+    # badge (via _refine_audio_sources -> "user") and any source-aware
+    # consumer treats inherited rows as user-sourced.
+    source_intents: list[tuple[str, str]] = [
+        (i["series_prefix"], f"series_intent:{i.get('source', 'user')}")
+        for i in intents
+    ]
+    user_verifications = _SeriesIntentLookup(base_langs, lang_intents)
+    verification_sources = _SeriesIntentLookup(base_sources, source_intents)
+    return user_verifications, verification_sources
+
+
 def _refine_audio_sources(items: list, verification_sources: dict) -> None:
     """Post-pass: _classify set audio_source='user' for any store-verified hit;
     refine it to the ACTUAL verification source so the UI badge distinguishes
@@ -988,13 +1072,15 @@ async def build_coverage(
 
     # v1.1-O Layer 4: load user verifications. These OVERRIDE all
     # auto-detected signals — user has ground truth.
-    user_verifications: dict[str, str] = (
-        audio_lang_store.get_all_as_lookup() if audio_lang_store else {}
-    )
-    # Per-file verification SOURCE (user / whisper-robust / auto-high-conf),
-    # used by the post-pass to refine audio_source for the UI confidence badge.
-    verification_sources: dict[str, str] = (
-        audio_lang_store.get_all_sources_as_lookup() if audio_lang_store else {}
+    #
+    # #69: the lookups are intent-aware — per-file verifications are the
+    # exact-match fast path, and declared series-level intents are layered
+    # underneath via longest-prefix fallback so NEW episodes of a declared
+    # series auto-resolve as verified during this build (no per-file
+    # re-verification needed). verification_sources mirrors the inheritance
+    # so the UI confidence badge attributes inherited rows to the user.
+    user_verifications, verification_sources = _build_verification_lookup(
+        audio_lang_store
     )
 
     items: list[CoverageItem] = []
