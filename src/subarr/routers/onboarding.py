@@ -37,6 +37,11 @@ class StateUpdate(BaseModel):
 class TestRequest(BaseModel):
     url: str
     api_key: str | None = None
+    # #75: Plex authenticates with a token, not an X-Api-Key header. The
+    # credential editor reuses this model for its test-connection probe, so
+    # token is accepted here and consumed by _test_plex (falls back to
+    # api_key for callers that put the token in the generic field).
+    token: str | None = None
 
 
 class ProbePathsRequest(BaseModel):
@@ -104,6 +109,7 @@ async def test_connection(service: str, body: TestRequest,
         "tautulli": _test_tautulli,
         "subgen": _test_subgen,
         "ollama": _test_ollama,
+        "plex": _test_plex,
     }
     handler = handlers.get(svc)
     if handler is None:
@@ -216,6 +222,26 @@ async def _test_subgen(body: TestRequest) -> dict[str, Any]:
         }
     finally:
         await c.aclose()
+
+
+async def _test_plex(body: TestRequest) -> dict[str, Any]:
+    """Probe Plex's cheap /identity endpoint with the supplied token.
+    Reuses PlexClient.status() so the same XML parsing + error handling as
+    the live health probe applies. Token may arrive in `token` (preferred)
+    or `api_key` (generic credential field)."""
+    from ..integrations.plex import PlexClient
+    token = body.token or body.api_key or ""
+    c = PlexClient(base_url=body.url, token=token)
+    if not c.is_configured():
+        return {"ok": False, "version": None, "detail": None,
+                "error": "Plex URL and token are both required"}
+    status = await c.status()
+    version = status.get("version")
+    return {
+        "ok": True, "version": version,
+        "detail": f"Plex {version or 'connected'}",
+        "error": None,
+    }
 
 
 async def _test_ollama(body: TestRequest) -> dict[str, Any]:

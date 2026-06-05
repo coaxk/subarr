@@ -262,6 +262,12 @@ FIELD_ENV_VARS: dict[str, str] = {
     "subgen_url": "SUBGEN_URL",
     "ollama_url": "OLLAMA_URL",
     "ollama_model": "OLLAMA_MODEL",
+    # #75: Plex creds become UI-editable. PLEX_URL has a built-in default
+    # (via _env_or) but env_is_set() checks the raw env var presence, so an
+    # operator who pinned PLEX_URL keeps authority; a default-only install
+    # is treated as unset and the UI write is honoured.
+    "plex_url": "PLEX_URL",
+    "plex_token": "PLEX_TOKEN",
     # #111/#112: UI-settable toggles. Listed here so env_is_set() lets an
     # explicit env var override a persisted UI choice (env > file > default).
     "vad_enabled": "SUBARR_VAD_ENABLED",
@@ -302,6 +308,20 @@ _FIELD_COERCE = {
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
+    # #75: integration credentials are now UI-editable. Persisting them
+    # here means a saved URL / API key / Plex token survives a restart
+    # (env still wins per _apply_persisted_overrides). All plain strings.
+    "bazarr_url": str,
+    "bazarr_api_key": str,
+    "sonarr_url": str,
+    "sonarr_api_key": str,
+    "radarr_url": str,
+    "radarr_api_key": str,
+    "tautulli_url": str,
+    "tautulli_api_key": str,
+    "plex_url": str,
+    "plex_token": str,
+    "subgen_url": str,
 }
 
 
