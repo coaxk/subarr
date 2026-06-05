@@ -541,14 +541,14 @@ function ByLanguagePanel({ data }) {
           <div key={lang.language} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', padding: '10px 12px', background: 'var(--bg-2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ fontWeight: 700, letterSpacing: 0.5, color: 'var(--fg-0)' }}>{(lang.language || '?').toUpperCase()}</span>
-              <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}</span>
+              <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>{lang.files} file{lang.files === 1 ? '' : 's'} · {lang.sweeps} sweep{lang.sweeps === 1 ? '' : 's'}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {lang.recipes.map((r, i) => (
                 <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
                   <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }}>{i === 0 ? '★' : ''}</span>
                   <span style={{ flex: 1, minWidth: 0, color: i === 0 ? 'var(--fg-0)' : 'var(--fg-2)', fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
-                  <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="sweeps this recipe won (ties excluded)">{r.wins}/{r.sweeps} won</span>
+                  <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="files where this recipe won (each file's repeat sweeps consolidated; ties excluded)">{r.wins}/{r.files} won</span>
                   <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="mean composite score across this language's sweeps">{r.mean_composite}</span>
                 </div>
               ))}
@@ -556,7 +556,7 @@ function ByLanguagePanel({ data }) {
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>One sweep per language is a hint, not a verdict — patterns get trustworthy as the counts grow.</div>
+      <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>Each file votes once (its repeat sweeps are averaged), so re-sweeping a file sharpens its estimate rather than skewing the count. One file per language is a hint, not a verdict — trust grows with more files.</div>
     </Collapsible>
   );
 }

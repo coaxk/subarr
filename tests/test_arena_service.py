@@ -154,6 +154,34 @@ def test_aggregate_runs_by_language_groups_and_ranks():
     assert by["fr"]["recipes"][0]["label"] == "default"
 
 
+def test_repeated_sweeps_of_one_file_consolidate_not_skew():
+    # Bulk/repeat sweeping must not let one heavily-swept file dominate its
+    # language bucket. Per-file consolidation: average a file's repeats, then
+    # each FILE gets one vote.
+    from subarr.arena_store import aggregate_runs_by_language, ArenaRun
+
+    def mk(rid, path, winner, nr, df):
+        return ArenaRun(id=rid, media_path=path,
+                        variants=[{"label": "x", "kwargs": {}}], source_language="ko", status="done",
+                        result={"winner": winner, "tie": False,
+                                "aggregate": [{"label": "noisy-robust", "mean_composite": nr},
+                                              {"label": "default", "mean_composite": df}]})
+    runs = [
+        mk("a", "/same.mkv", "noisy-robust", 70, 50),
+        mk("b", "/same.mkv", "noisy-robust", 72, 52),
+        mk("c", "/same.mkv", "noisy-robust", 74, 54),   # same file ×3
+        mk("d", "/other.mkv", "default", 40, 60),         # a different file
+    ]
+    ko = aggregate_runs_by_language(runs)[0]
+    assert ko["language"] == "ko"
+    assert ko["files"] == 2 and ko["sweeps"] == 4
+    rec = {r["label"]: r for r in ko["recipes"]}
+    # per-file winners: same.mkv→noisy-robust, other.mkv→default → 1 each, NOT 3–1
+    assert rec["noisy-robust"]["wins"] == 1 and rec["default"]["wins"] == 1
+    # noisy-robust mean across files: same.mkv=(70+72+74)/3=72, other=40 → (72+40)/2=56
+    assert rec["noisy-robust"]["mean_composite"] == 56.0
+
+
 def test_aggregate_normalizes_language_names_to_iso():
     # Old sweeps stored full names ('korean', from the deprecated header path);
     # robust detection now returns ISO ('ko'). They must MERGE into one bucket,

@@ -164,35 +164,64 @@ class ArenaStore:
 
 
 def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
-    """[#26] Pure: group sweeps by source_language → per-recipe {sweeps, wins,
-    mean_composite}, recipes ranked by wins then mean composite, languages by
-    sweep count. A tie counts as no win for anyone. Unit-tested without a DB."""
+    """[#26] Pure: group sweeps by detected language → per-recipe stats. CONSOLIDATES
+    per file first (a file's repeat sweeps are averaged into ONE estimate, then each
+    FILE casts one vote) so bulk/repeat sweeping CONFIRMS rather than SKEWS — one
+    heavily-swept file can't dominate its language bucket.
+
+    Per language returns: files (distinct), sweeps (total), and recipes ranked by
+    files-won then mean composite, each = {label, files, wins (files won),
+    mean_composite (mean of per-file means)}. Tie → no win for anyone."""
     from .langs import normalize_lang
-    by_lang: dict[str, dict] = {}
+
+    # 1. Collapse to per-(language, file): average each recipe across the file's
+    #    repeat sweeps; tally per-sweep winner votes for the file.
+    files: dict[tuple, dict] = {}
     for r in runs:
         lang = normalize_lang(getattr(r, "source_language", None))
         result = getattr(r, "result", None) or {}
         if not lang or not result:
             continue
+        key = (lang, getattr(r, "media_path", None))
+        f = files.setdefault(key, {"lang": lang, "sweeps": 0, "_rec": {}, "_winvotes": {}})
+        f["sweeps"] += 1
         winner = result.get("winner") if not result.get("tie") else None
-        bucket = by_lang.setdefault(lang, {"language": lang, "sweeps": 0, "_recipes": {}})
-        bucket["sweeps"] += 1
+        if winner:
+            f["_winvotes"][winner] = f["_winvotes"].get(winner, 0) + 1
         for row in result.get("aggregate") or []:
             label = row.get("label")
             if not label:
                 continue
-            rec = bucket["_recipes"].setdefault(
-                label, {"label": label, "sweeps": 0, "wins": 0, "_sum": 0.0})
-            rec["sweeps"] += 1
+            rec = f["_rec"].setdefault(label, {"_sum": 0.0, "n": 0})
             rec["_sum"] += row.get("mean_composite") or 0.0
-            if winner == label:
+            rec["n"] += 1
+
+    # 2. Roll files up into language buckets — each file contributes one vote.
+    langs: dict[str, dict] = {}
+    for (lang, _path), f in files.items():
+        file_means = {label: rec["_sum"] / rec["n"] for label, rec in f["_rec"].items() if rec["n"]}
+        if f["_winvotes"]:                       # the file's winner = its per-sweep majority
+            file_winner = max(f["_winvotes"].items(), key=lambda kv: kv[1])[0]
+        elif file_means:                         # all ties → best mean is the de-facto winner
+            file_winner = max(file_means.items(), key=lambda kv: kv[1])[0]
+        else:
+            file_winner = None
+        b = langs.setdefault(lang, {"language": lang, "files": 0, "sweeps": 0, "_rec": {}})
+        b["files"] += 1
+        b["sweeps"] += f["sweeps"]
+        for label, mean in file_means.items():
+            rec = b["_rec"].setdefault(label, {"label": label, "files": 0, "wins": 0, "_sum": 0.0})
+            rec["files"] += 1
+            rec["_sum"] += mean
+            if label == file_winner:
                 rec["wins"] += 1
+
     out = []
-    for b in by_lang.values():
-        recipes = [{"label": rec["label"], "sweeps": rec["sweeps"], "wins": rec["wins"],
-                    "mean_composite": round(rec["_sum"] / rec["sweeps"], 2) if rec["sweeps"] else 0.0}
-                   for rec in b["_recipes"].values()]
+    for b in langs.values():
+        recipes = [{"label": rec["label"], "files": rec["files"], "wins": rec["wins"],
+                    "mean_composite": round(rec["_sum"] / rec["files"], 2) if rec["files"] else 0.0}
+                   for rec in b["_rec"].values()]
         recipes.sort(key=lambda x: (x["wins"], x["mean_composite"]), reverse=True)
-        out.append({"language": b["language"], "sweeps": b["sweeps"], "recipes": recipes})
-    out.sort(key=lambda x: x["sweeps"], reverse=True)
+        out.append({"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes})
+    out.sort(key=lambda x: (x["files"], x["sweeps"]), reverse=True)
     return out
