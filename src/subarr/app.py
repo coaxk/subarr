@@ -158,6 +158,9 @@ async def lifespan(app_: FastAPI):
         provenance=app_.state.provenance,
         probe_walker=app_.state.probe_walker,
         pending_store=app_.state.pending,
+        # #79: live caps so the coverage_walk forced-only-EN gate tracks the
+        # runtime IGNORE_FORCED_SUBTITLES value.
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.scheduler.start()
 
@@ -175,6 +178,9 @@ async def lifespan(app_: FastAPI):
             # PR-C: eager-probe unprobed wanted files each refresh so the
             # probe-gate's gap list populates regardless of probe_roots.
             probe_walker=app_.state.probe_walker,
+            # #79: resolve subgen caps live so the forced-only-EN gate tracks
+            # the watchdog-detected IGNORE_FORCED_SUBTITLES runtime value.
+            caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
         )
     )
     # Dashboard cache background refresh — passes a build closure that

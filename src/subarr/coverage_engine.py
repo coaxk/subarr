@@ -114,6 +114,16 @@ class CoverageItem:
     # Only `verified` rows are presented as confident, actionable gaps; the
     # rest are bucketed and held until the probe runs.
     verification_state: str = "unprobed"
+    # #79: this file's only English embedded sub is a *forced* track AND the
+    # connected subgen has IGNORE_FORCED_SUBTITLES OFF — meaning subgen will
+    # SKIP it rather than transcribe a full English sub. Gated on the runtime
+    # capability subgen reports via GET /queue (capabilities.ignore_forced_-
+    # subtitles). When True this row is a DISTINCT non-actionable state — NOT
+    # a normal fillable gap — so the UI can explain "subgen will skip (forced-
+    # only); enable IGNORE_FORCED_SUBTITLES" instead of dangling an un-fillable
+    # gap. When the cap is on, this stays False and the forced-only row is a
+    # normal partial-coverage gap.
+    forced_only_subgen_will_skip: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +160,7 @@ class CoverageItem:
             "score": self.score,
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
+            "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
         }
 
 
@@ -922,6 +933,7 @@ def _score(
     just_imported_movies: set[int] | None = None,
     airing_soon_eps: set[int] | None = None,
     transcoding_titles: set[str] | None = None,
+    ignore_forced_subtitles: bool = False,
 ) -> None:
     s = 0
     reasons: list[str] = []
@@ -990,6 +1002,17 @@ def _score(
     elif item.embedded_en in {"EN(forced)", "EN(commentary)"}:
         s -= 500
         reasons.append(f"embedded: {item.embedded_en} — partial coverage")
+        # #79: forced-only EN is only an ACTIONABLE gap if the connected
+        # subgen will actually fill it (IGNORE_FORCED_SUBTITLES on). With the
+        # cap off, subgen SKIPS forced-only files — so flag a distinct,
+        # non-actionable state + reason instead of dangling an un-fillable gap.
+        # The cap governs FORCED subs only; commentary tracks are untouched.
+        if item.embedded_en == "EN(forced)" and not ignore_forced_subtitles:
+            item.forced_only_subgen_will_skip = True
+            reasons.append(
+                "subgen will skip this (forced-only EN) — "
+                "enable IGNORE_FORCED_SUBTITLES on subgen to transcribe it"
+            )
     item.score = s
     item.score_reasons = reasons
 
@@ -1021,8 +1044,14 @@ async def build_coverage(
     use_tautulli: bool = True,
     probe_store: Any = None,  # ProbeStore | None — avoid circular import
     audio_lang_store: Any = None,  # AudioLangStore | None
+    subgen_caps: Any = None,  # SubgenCapabilities | None — #79 forced-sub gate
 ) -> CoverageReport:
     sources: dict[str, dict] = {}
+    # #79: gate the forced-only-EN partial gap on subgen's RUNTIME
+    # IGNORE_FORCED_SUBTITLES. caps absent / cap off → forced-only EN rows are
+    # marked forced_only_subgen_will_skip (distinct non-actionable state) rather
+    # than presented as fillable gaps. caps on → they stay actionable gaps.
+    ignore_forced = bool(getattr(subgen_caps, "ignore_forced_subtitles", False))
 
     bz_eps, bz_movs = await _fetch_bazarr(bundle.bazarr, sources)
     sonarr_series_task = asyncio.create_task(
@@ -1230,6 +1259,7 @@ async def build_coverage(
             transcoding_titles=activity["transcoding_titles"],
             just_imported_eps=sonarr_recent_ids,
             airing_soon_eps=airing_soon_ids,
+            ignore_forced_subtitles=ignore_forced,
         )
         items.append(item)
 
@@ -1271,6 +1301,7 @@ async def build_coverage(
             now_playing_titles=activity["now_playing_titles"],
             transcoding_titles=activity["transcoding_titles"],
             just_imported_movies=radarr_recent_ids,
+            ignore_forced_subtitles=ignore_forced,
         )
         items.append(item)
 
@@ -1533,6 +1564,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 transcoding_titles=activity["transcoding_titles"],
                 just_imported_eps=sonarr_recent_ids,
                 airing_soon_eps=airing_soon_ids,
+                ignore_forced_subtitles=ignore_forced,
             )
             items.append(item)
             seen_ep_ids.add(ep_id)

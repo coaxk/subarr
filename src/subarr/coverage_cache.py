@@ -301,7 +301,8 @@ class CoverageCache:
         return snap
 
     async def refresh(self, bundle, probe_store, audio_lang_store,
-                       use_tautulli: bool = True, probe_walker=None) -> CachedSnapshot:
+                       use_tautulli: bool = True, probe_walker=None,
+                       caps_provider=None) -> CachedSnapshot:
         """Run build_coverage and store the result. Uses an asyncio.Lock
         so a parallel refresh waits for the in-flight one instead of
         duplicating the expensive build. Notifications dispatched after
@@ -320,10 +321,15 @@ class CoverageCache:
             started = time.time()
             try:
                 from .coverage_engine import build_coverage
+                # #79: resolve subgen caps live (provider) so a watchdog-
+                # detected subgen upgrade / IGNORE_FORCED_SUBTITLES toggle is
+                # reflected on the next refresh without restarting this loop.
+                subgen_caps = caps_provider() if caps_provider else None
                 report = await build_coverage(
                     bundle, use_tautulli=use_tautulli,
                     probe_store=probe_store,
                     audio_lang_store=audio_lang_store,
+                    subgen_caps=subgen_caps,
                 )
                 body = report.to_dict()
                 duration = time.time() - started
@@ -374,6 +380,7 @@ async def background_refresh_loop(
     interval_s: int = DEFAULT_INTERVAL_S,
     bundle_provider=None,
     probe_walker=None,
+    caps_provider=None,
 ) -> None:
     """Sleep, refresh, repeat. Exits on cancellation.
 
@@ -393,14 +400,16 @@ async def background_refresh_loop(
         log.info("coverage cache: no snapshot found; warming on boot")
         try:
             await cache.refresh(get_bundle(), probe_store, audio_lang_store,
-                                probe_walker=probe_walker)
+                                probe_walker=probe_walker,
+                                caps_provider=caps_provider)
         except Exception as e:
             log.warning("coverage cache: initial warm failed: %s", e)
     while True:
         await asyncio.sleep(interval_s)
         try:
             await cache.refresh(get_bundle(), probe_store, audio_lang_store,
-                                probe_walker=probe_walker)
+                                probe_walker=probe_walker,
+                                caps_provider=caps_provider)
         except asyncio.CancelledError:
             raise
         except Exception as e:
