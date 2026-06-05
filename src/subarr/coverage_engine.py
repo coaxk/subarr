@@ -101,6 +101,10 @@ class CoverageItem:
     #   "ffprobe" — the file's metadata tag only (lowest trust — wrong on retags)
     #   None      — no confident source (suspect / unknown / no audio)
     audio_source: str | None = None
+    # #90: Whisper heard a different language than the file's tag/metadata claimed
+    # (e.g. tagged 'rus' but the audio is Korean). Frontend surfaces a
+    # "tag → audio (verified)" badge so the mislabel is visible.
+    audio_label_whisper_mismatch: bool = False
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
@@ -147,6 +151,7 @@ class CoverageItem:
             "bazarr_blind": self.bazarr_blind,
             "audio_verified": self.audio_verified,
             "audio_source": self.audio_source,
+            "audio_label_whisper_mismatch": self.audio_label_whisper_mismatch,
             "score": self.score,
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
@@ -689,7 +694,8 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
 def _classify_audio_label(item: CoverageItem,
                           tautulli_hints: dict[str, str] | None = None,
                           user_verifications: dict[str, str] | None = None,
-                          plex_hints: dict[str, str] | None = None) -> None:
+                          plex_hints: dict[str, str] | None = None,
+                          whisper_verifications: dict[str, str] | None = None) -> None:
     """v1.1-O: cross-check audio_langs against Sonarr/Radarr originalLanguage.
 
     Three outcomes:
@@ -718,6 +724,26 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_unknown = False
         item.audio_verified = True
         item.audio_source = "user"   # refined to whisper/auto in the post-pass
+        return
+    # Layer 1 (#90): Whisper-verified spoken language — subarr LISTENED to the
+    # audio (robust multi-chunk detect), so it beats tag-derived Plex/Tautulli
+    # picks (which inherit the file's mislabel) and the ffprobe tag; it sits
+    # below an explicit user confirmation. DORMANT until verifications are
+    # supplied (the on-demand trigger is slice 3) → no behaviour change yet.
+    if whisper_verifications and file_path and file_path in whisper_verifications:
+        from .langs import normalize_lang
+        verified = (whisper_verifications[file_path] or "").lower()
+        prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
+        item.audio_langs = [verified]
+        note = f"Whisper-verified audio = {verified!r} (heard the audio; overrides tags)"
+        if prior and verified not in {normalize_lang(l) for l in prior}:
+            note += f" — tags claimed {prior}, but the audio is {verified!r}"
+            item.audio_label_whisper_mismatch = True
+        item.audio_label_notes.append(note)
+        item.audio_label_suspect = False
+        item.audio_label_unknown = False
+        item.audio_verified = True
+        item.audio_source = "whisper"
         return
     title_lc = (item.title or "").strip().lower()
     if tautulli_hints and title_lc in tautulli_hints:

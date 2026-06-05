@@ -37,6 +37,35 @@ def test_plex_pick_is_plex_source():
     assert it.audio_source == "plex"
 
 
+def test_whisper_verification_overrides_tag_and_flags_mismatch():
+    # #90: tagged 'rus' (+ Sonarr agrees) but Whisper heard Korean → override + flag.
+    it = _item(audio_langs=["rus"], original_language="Russian", file_canonical_path="TV/Show/S01E16.mkv")
+    _classify_audio_label(it, whisper_verifications={"TV/Show/S01E16.mkv": "ko"})
+    assert it.audio_source == "whisper" and it.audio_verified is True
+    assert it.audio_langs == ["ko"]
+    assert it.audio_label_whisper_mismatch is True
+
+
+def test_whisper_agreeing_with_tag_sets_no_mismatch():
+    # 'kor' tag normalizes to 'ko' → agrees with Whisper → verified, no mismatch.
+    it = _item(audio_langs=["kor"], file_canonical_path="TV/Show/ep.mkv")
+    _classify_audio_label(it, whisper_verifications={"TV/Show/ep.mkv": "ko"})
+    assert it.audio_source == "whisper" and it.audio_label_whisper_mismatch is False
+
+
+def test_whisper_beats_plex_and_tautulli_picks():
+    it = _item(audio_langs=["rus"], original_language="Russian", file_canonical_path="TV/Show/ep.mkv")
+    _classify_audio_label(it, whisper_verifications={"TV/Show/ep.mkv": "ko"},
+                          tautulli_hints={"show": "rus"})
+    assert it.audio_source == "whisper" and it.audio_langs == ["ko"]
+
+
+def test_no_whisper_verification_is_dormant():
+    it = _item(audio_langs=["eng"], original_language="English")
+    _classify_audio_label(it)
+    assert it.audio_source == "ffprobe" and it.audio_label_whisper_mismatch is False
+
+
 def test_no_audio_metadata_has_no_source():
     it = _item(audio_langs=["und"])
     _classify_audio_label(it)
