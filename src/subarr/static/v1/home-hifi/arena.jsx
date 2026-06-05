@@ -304,7 +304,7 @@ function KnobReference() {
 }
 
 // ── configure sweep ──────────────────────────────────────────────────────────
-function SweepForm({ onRun, disabled, gate }) {
+function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
   const [mediaPath, setMediaPath] = useState('');
   const [picking, setPicking] = useState(false);
   const [sourceLang, setSourceLang] = useState('');
@@ -457,11 +457,29 @@ function SweepForm({ onRun, disabled, gate }) {
             so <b>{total + 1}</b> transcription{total + 1 === 1 ? '' : 's'} in total. You’ll get one ranked result per recipe.
           </div>
         )}
-        <button onClick={submit} disabled={!ready || submitting} style={{ ...primaryBtnStyle, opacity: (!ready || submitting) ? 0.5 : 1, cursor: (!ready || submitting) ? 'not-allowed' : 'pointer' }}>
-          {submitting
+        {(() => {
+          // The big button doubles as the live queue-state indicator. While a
+          // sweep is queuing (submit loop) OR draining (active runs), it turns
+          // RED and says so — so after a multi-file pick the user sees the
+          // queue is already running and doesn't hunt for a button to press.
+          // It flips back to green + actionable when the queue goes idle.
+          const queueRunning = submitting || activeCount > 0;
+          const label = submitting
             ? (bulkProgress ? `Queuing ${bulkProgress.done}/${bulkProgress.total}…` : 'Queuing…')
-            : `Queue sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
-        </button>
+            : queueRunning
+              ? `Queue running · ${activeCount} active…`
+              : `Queue sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`;
+          const disabled = queueRunning || !ready;
+          return (
+            <button onClick={submit} disabled={disabled} title={queueRunning ? 'A sweep is running — the queue drains one at a time; this frees up when it finishes.' : ''}
+                    style={{ ...primaryBtnStyle,
+                             background: queueRunning ? 'var(--error-500)' : 'var(--success-500)',
+                             opacity: (!queueRunning && !ready) ? 0.5 : 1,
+                             cursor: disabled ? 'not-allowed' : 'pointer' }}>
+              {label}
+            </button>
+          );
+        })()}
       </div>
     </SectionCard>
   );
@@ -837,7 +855,7 @@ export function ArenaPage() {
       </div>
       <WhatThisIs />
       <KnobReference />
-      <SweepForm onRun={onRun} gate={gate} />
+      <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued').length} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
