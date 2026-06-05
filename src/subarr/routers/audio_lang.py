@@ -87,50 +87,6 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
             "sonarr_propagation": propagation}
 
 
-class DetectRequest(BaseModel):
-    canonical_path: str
-
-
-@router.post("/detect")
-async def detect_language(req: DetectRequest, request: Request) -> dict[str, Any]:
-    """#90: on-demand "listen to the audio" — run subgen's robust multi-chunk
-    language detection on this file and persist the result as a whisper-sourced
-    verification. The next coverage refresh then renders the Whisper badge (and
-    a mismatch flag if it disagreed with the tag). Returns None-detected when
-    there's no confident majority (we never store a guess)."""
-    store = request.app.state.audio_lang
-    subgen = getattr(request.app.state, "subgen", None)
-    caps = getattr(request.app.state, "subgen_caps", None)
-    if subgen is None or not getattr(caps, "robust_language_detection", False):
-        raise HTTPException(
-            503, detail="subgen does not support robust language detection "
-                        "(needs subarr-subgen v4.5+)")
-    from ..audio_lang_verify import verify_audio_language
-    result = await verify_audio_language(subgen, store, req.canonical_path)
-    if result is None:
-        return {"detected": False, "canonical_path": req.canonical_path,
-                "reason": "no confident language majority — left unverified"}
-    lang, confidence = result
-
-    # Kick a background coverage refresh so the badge updates within seconds
-    # (mirrors the user-verify path).
-    import asyncio as _asyncio
-    cov_cache = getattr(request.app.state, "coverage_cache", None)
-    if cov_cache is not None and not cov_cache.is_refreshing():
-        bundle = request.app.state.integrations
-        probe_store = request.app.state.probe_store
-
-        async def _refresh():
-            try:
-                await cov_cache.refresh(bundle, probe_store, store)
-            except Exception as e:
-                log.warning("post-detect refresh failed: %s", e)
-        _asyncio.create_task(_refresh())
-
-    return {"detected": True, "canonical_path": req.canonical_path,
-            "lang_code": lang, "confidence": confidence}
-
-
 async def _propagate_to_sonarr(
     request: Request, *, canonical_path: str, lang_code: str,
 ) -> dict[str, Any]:

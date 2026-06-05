@@ -613,8 +613,12 @@ function AudioLabelChip({ r, onClick }) {
     unknown: { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata on the file' },
   }[kind];
   const evidence = (r.audio_label_notes || []).join('\n• ');
-  const tip = `${cfg.label}${evidence ? '\n\n• ' + evidence : ''}\n\nClick to verify/correct.`;
-  return (
+  const mismatch = !!r.audio_label_whisper_mismatch;  // #90: tag ≠ detected audio
+  const tip = `${cfg.label}`
+    + (mismatch ? '\n\n⚠ Tag mismatch — this file is tagged a different language than its audio.' : '')
+    + (evidence ? '\n\n• ' + evidence : '')
+    + '\n\nClick to verify/correct.';
+  const badge = (
     <span
       title={tip}
       onClick={(e) => { e.stopPropagation(); onClick && onClick(r); }}
@@ -630,6 +634,17 @@ function AudioLabelChip({ r, onClick }) {
         cursor: 'pointer',
         flex: '0 0 auto',
       }}>{cfg.ch}</span>
+  );
+  if (!mismatch) return badge;
+  // small amber corner dot — the tag-vs-audio mismatch signal (#90)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', flex: '0 0 auto' }}>
+      {badge}
+      <span title="tag ≠ detected audio language" style={{
+        position: 'absolute', top: -2, right: -2, width: 7, height: 7,
+        borderRadius: '50%', background: '#f59e0b', border: '1px solid var(--bg-1)',
+      }} />
+    </span>
   );
 }
 
