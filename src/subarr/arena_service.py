@@ -29,12 +29,17 @@ __all__ = ["ArenaRun", "ArenaStore", "ArenaService"]
 
 class ArenaService:
     def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner],
-                 explainer=None):
+                 explainer=None, max_concurrent: int = 1):
         self._store = store
         self._build_runner = build_runner
         self._explainer = explainer  # async (result_dict, media_path) -> str|None
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # Single-flight by default: each sweep runs CPU-heavy QE/torch, so N
+        # concurrent sweeps saturate the box (observed: 6 stacked sweeps pinned
+        # subarr-next + cascade-failed). Submits queue; only `max_concurrent`
+        # process at once.
+        self._sema = asyncio.Semaphore(max_concurrent)
 
     # ── store (persisted) ────────────────────────────────────────────────────
     def create(self, media_path: str, variants: list[ConfigVariant],
@@ -92,45 +97,19 @@ class ArenaService:
 
     async def _run(self, run: ArenaRun) -> None:
         run_id = run.id
-        run.status = "running"
+        # Queued until a slot frees — keeps concurrent submits from running
+        # their heavy QE work in parallel and saturating the box.
+        run.status = "queued"
         run.outcomes = {"clips": [], "done": 0, "total": 0}  # progress scaffold
         self._store.save(run)
-        self._emit(run_id, {"event": "start",
-                            "data": {"id": run.id, "variants": [v["label"] for v in run.variants]}})
+        self._emit(run_id, {"event": "queued", "data": {"id": run.id}})
         try:
-            runner = self._build_runner(run)
-            variants = [ConfigVariant(v["label"], v["kwargs"]) for v in run.variants]
-            per_clip = run.outcomes  # alias the progress dict
-
-            def on_clip(idx: int, kind: str, total: int) -> None:
-                if not per_clip["clips"]:
-                    per_clip["clips"] = [{"kind": None, "status": "pending"} for _ in range(total)]
-                    per_clip["total"] = total * (len(variants) + 1)  # +1 source per clip
-                for j in range(idx):
-                    per_clip["clips"][j]["status"] = "done"
-                per_clip["clips"][idx] = {"kind": kind, "status": "running"}
+            async with self._sema:
+                run.status = "running"
                 self._store.save(run)
-                self._emit(run_id, {"event": "clip", "data": {"idx": idx, "kind": kind, "total": total}})
-
-            def on_step() -> None:
-                per_clip["done"] += 1
-                self._store.save(run)
-                self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
-
-            result = await run_arena(run.media_path, variants, runner=runner,
-                                     on_clip=on_clip, on_step=on_step)
-            for c in per_clip["clips"]:
-                c["status"] = "done"
-            serialized = asdict(result)
-            if self._explainer is not None:
-                try:
-                    serialized["explanation"] = await self._explainer(serialized, run.media_path)
-                except Exception:  # explanation is a nicety — never fail the sweep
-                    serialized["explanation"] = None
-            run.result = serialized
-            run.status = "done"
-            self._store.save(run)
-            self._emit(run_id, {"event": "done", "data": run.to_dict()})
+                self._emit(run_id, {"event": "start",
+                                    "data": {"id": run.id, "variants": [v["label"] for v in run.variants]}})
+                await self._execute(run)
         except asyncio.CancelledError:
             run.status = "error"
             run.error = "cancelled"
@@ -141,3 +120,42 @@ class ArenaService:
             run.error = str(e)
             self._store.save(run)
             self._emit(run_id, {"event": "error", "data": {"error": str(e)}})
+
+    async def _execute(self, run: ArenaRun) -> None:
+        run_id = run.id
+        runner = self._build_runner(run)
+        variants = [ConfigVariant(v["label"], v["kwargs"]) for v in run.variants]
+        per_clip = run.outcomes  # alias the progress dict
+
+        def on_clip(idx: int, kind: str, total: int) -> None:
+            if not per_clip["clips"]:
+                per_clip["clips"] = [{"kind": None, "status": "pending"} for _ in range(total)]
+                per_clip["total"] = total * (len(variants) + 1)  # +1 source per clip
+            for j in range(idx):
+                per_clip["clips"][j]["status"] = "done"
+            per_clip["clips"][idx] = {"kind": kind, "status": "running"}
+            self._store.save(run)
+            self._emit(run_id, {"event": "clip", "data": {"idx": idx, "kind": kind, "total": total}})
+
+        def on_step() -> None:
+            per_clip["done"] += 1
+            self._store.save(run)
+            self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
+
+        result = await run_arena(run.media_path, variants, runner=runner,
+                                 on_clip=on_clip, on_step=on_step)
+        for c in per_clip["clips"]:
+            c["status"] = "done"
+        serialized = asdict(result)
+        if self._explainer is not None:
+            try:
+                serialized["explanation"] = await self._explainer(serialized, run.media_path)
+            except Exception:  # explanation is a nicety — never fail the sweep
+                serialized["explanation"] = None
+        run.result = serialized
+        # [#23] persist the detected source language for the table + per-language
+        # grouping (don't clobber an explicitly-set one with a null detection).
+        run.source_language = serialized.get("source_language") or run.source_language
+        run.status = "done"
+        self._store.save(run)
+        self._emit(run_id, {"event": "done", "data": run.to_dict()})

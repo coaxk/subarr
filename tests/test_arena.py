@@ -191,9 +191,101 @@ def _client(handler):
     return c
 
 
-def _caps(asr_arena):
+def _caps(asr_arena, asr_vanilla_base=False, robust=False):
     return SubgenCapabilities(reachable=True, version="x", has_queue=True,
-                              has_batch=True, is_subarr_subgen=True, asr_arena=asr_arena)
+                              has_batch=True, is_subarr_subgen=True, asr_arena=asr_arena,
+                              asr_vanilla_base=asr_vanilla_base, robust_language_detection=robust)
+
+
+@pytest.mark.asyncio
+async def test_asr_runner_requests_vanilla_base_when_supported(tmp_path):
+    c0 = tmp_path / "c0.wav"; c0.write_bytes(b"RIFF0")
+    seen = []
+
+    def handler(req):
+        seen.append(dict(req.url.params))
+        return httpx.Response(200, text="1\n00:00:00,000 --> 00:00:01,000\nx\n",
+                              headers={"content-type": "text/plain"})
+
+    runner = AsrRunner(_client(handler), capabilities=_caps(True, asr_vanilla_base=True),
+                       to_fs_path=lambda p: p,
+                       sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}])
+    await runner.prepare("TV/Show/ep.mkv")
+    await runner.run(0, task="translate", kwargs={"beam_size": 5})
+    assert seen[-1]["base"] == "vanilla"   # arena always tests from canonical vanilla
+
+
+@pytest.mark.asyncio
+async def test_asr_returns_detected_language_when_requested(tmp_path):
+    c0 = tmp_path / "c.wav"; c0.write_bytes(b"RIFF")
+
+    def handler(req):
+        return httpx.Response(200, text="1\n00:00:00,000 --> 00:00:01,000\nhola\n",
+                              headers={"content-type": "text/plain", "X-Detected-Language": "es"})
+
+    text, lang = await _client(handler).asr(local_file=str(c0), task="transcribe", return_language=True)
+    assert lang == "es" and text.startswith("1")
+
+
+def _arena_handler(c0, *, robust_json):
+    """Handler answering both /asr (text) and /detect_language_robust (json)."""
+    def handler(req):
+        if "detect_language_robust" in req.url.path:
+            return httpx.Response(200, json=robust_json)
+        return httpx.Response(200, text="1\n00:00:00,000 --> 00:00:01,000\nx\n",
+                              headers={"content-type": "text/plain"})
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_arena_detects_source_language_via_robust_majority(tmp_path):
+    c0 = tmp_path / "c0.wav"; c0.write_bytes(b"RIFF")
+    handler = _arena_handler(c0, robust_json={"aggregate": {"language": "ja", "n_agreeing": 3, "n_total": 3, "min_probability": 0.9}})
+    runner = AsrRunner(_client(handler), capabilities=_caps(True, robust=True),
+                       to_fs_path=lambda p: p, to_subgen=lambda p: p,
+                       sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}])
+    result = await run_arena("TV/x.mkv", [ConfigVariant("default", {})], runner=runner)
+    assert result.source_language == "ja" and result.source_language_confidence == 1.0
+
+
+@pytest.mark.asyncio
+async def test_arena_withholds_language_when_chunks_disagree(tmp_path):
+    # No real majority (1 of 3) → don't badge a hallucinated language.
+    c0 = tmp_path / "c0.wav"; c0.write_bytes(b"RIFF")
+    handler = _arena_handler(c0, robust_json={"aggregate": {"language": "en", "n_agreeing": 1, "n_total": 3, "min_probability": 1.0}})
+    runner = AsrRunner(_client(handler), capabilities=_caps(True, robust=True),
+                       to_fs_path=lambda p: p, to_subgen=lambda p: p,
+                       sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}])
+    result = await run_arena("TV/x.mkv", [ConfigVariant("default", {})], runner=runner)
+    assert result.source_language is None and result.source_language_confidence is None
+
+
+@pytest.mark.asyncio
+async def test_arena_skips_language_when_robust_unsupported(tmp_path):
+    c0 = tmp_path / "c0.wav"; c0.write_bytes(b"RIFF")
+    handler = _arena_handler(c0, robust_json={"aggregate": {"language": "ja", "n_agreeing": 3, "n_total": 3}})
+    runner = AsrRunner(_client(handler), capabilities=_caps(True, robust=False),  # no robust cap
+                       to_fs_path=lambda p: p, to_subgen=lambda p: p,
+                       sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}])
+    result = await run_arena("TV/x.mkv", [ConfigVariant("default", {})], runner=runner)
+    assert result.source_language is None
+
+
+@pytest.mark.asyncio
+async def test_asr_runner_omits_base_when_unsupported(tmp_path):
+    c0 = tmp_path / "c0.wav"; c0.write_bytes(b"RIFF0")
+    seen = []
+
+    def handler(req):
+        seen.append(dict(req.url.params))
+        return httpx.Response(200, text="x", headers={"content-type": "text/plain"})
+
+    runner = AsrRunner(_client(handler), capabilities=_caps(True, asr_vanilla_base=False),
+                       to_fs_path=lambda p: p,
+                       sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}])
+    await runner.prepare("TV/Show/ep.mkv")
+    await runner.run(0, task="translate", kwargs={})
+    assert "base" not in seen[-1]          # old subgen: don't send the unknown param
 
 
 @pytest.mark.asyncio

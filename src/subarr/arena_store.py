@@ -24,13 +24,24 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _json_default(o):
+    """Coerce numpy-style scalars/arrays (the QE judge emits float32) so a
+    stray non-builtin number can never crash persistence and strand a run in
+    'running'. Duck-typed — no hard numpy import in this base module."""
+    if hasattr(o, "item"):       # numpy scalar
+        return o.item()
+    if hasattr(o, "tolist"):     # numpy array
+        return o.tolist()
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
 @dataclass
 class ArenaRun:
     id: str
     media_path: str
     variants: list[dict[str, Any]]          # [{label, kwargs}]
     source_language: str | None = None
-    status: str = "pending"                  # pending | running | done | error
+    status: str = "pending"                  # pending | queued | running | done | error
     source_text: str | None = None
     outcomes: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None     # serialized TournamentResult
@@ -48,6 +59,7 @@ class ArenaRun:
         return {
             "id": self.id,
             "media_path": self.media_path,
+            "source_language": self.source_language,   # [#23] for the table + per-lang grouping
             "status": self.status,
             "recipe_count": len(self.variants),
             "clips_total": len(prog.get("clips", [])),
@@ -98,12 +110,14 @@ class ArenaStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                      status=excluded.status, source_text=excluded.source_text,
+                     source_language=excluded.source_language,
                      outcomes=excluded.outcomes, result=excluded.result,
                      winner=excluded.winner, error=excluded.error,
                      updated_at=excluded.updated_at""",
                 (run.id, run.media_path, run.source_language, run.status, run.source_text,
-                 json.dumps(run.variants), json.dumps(run.outcomes),
-                 json.dumps(run.result) if run.result is not None else None,
+                 json.dumps(run.variants, default=_json_default),
+                 json.dumps(run.outcomes, default=_json_default),
+                 json.dumps(run.result, default=_json_default) if run.result is not None else None,
                  winner, run.error, run.created_at, time.time()),
             )
 
@@ -125,13 +139,13 @@ class ArenaStore:
             return (cur.rowcount or 0) > 0
 
     def reconcile_interrupted(self) -> int:
-        """A run that was pending/running when the process died can never
+        """A run that was pending/queued/running when the process died can never
         finish — its asyncio task is gone. Mark such rows as errored on boot
         so the UI shows the truth instead of a forever-spinning sweep."""
         with self._lock:
             cur = self._conn.execute(
                 "UPDATE arena_runs SET status='error', error='interrupted by restart', updated_at=? "
-                "WHERE status IN ('pending', 'running')",
+                "WHERE status IN ('pending', 'queued', 'running')",
                 (time.time(),),
             )
             return cur.rowcount or 0

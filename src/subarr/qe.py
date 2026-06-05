@@ -21,6 +21,11 @@ from __future__ import annotations
 import logging
 import os
 
+# Quiet the HuggingFace tokenizers fork-parallelism warning in this threaded
+# server context. (Cosmetic — not load-bearing; the LaBSE forward pass runs
+# fine in a worker thread, verified.)
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 log = logging.getLogger(__name__)
 
 # LaBSE model id; overridable for a pinned local copy / onnx swap.
@@ -35,7 +40,10 @@ def cosine_similarity(a, b) -> float:
     nb = sum(y * y for y in b) ** 0.5
     if na == 0.0 or nb == 0.0:
         return 0.0
-    return dot / (na * nb)
+    # float(): LaBSE feeds numpy float32 vectors → the quotient is a numpy
+    # float32, which is NOT JSON-serializable and crashed arena_store.save
+    # (the sweep then sat in "running" forever). Always return a builtin float.
+    return float(dot / (na * nb))
 
 
 def qe_available() -> bool:
@@ -57,7 +65,15 @@ def _default_embed(texts):
     global _embedder_cache
     from sentence_transformers import SentenceTransformer
     if _embedder_cache is None:
-        _embedder_cache = SentenceTransformer(os.environ.get(_MODEL_ENV, QE_MODEL))
+        model = os.environ.get(_MODEL_ENV, QE_MODEL)
+        # Prefer a CACHED, offline load: sentence-transformers 5.x otherwise
+        # makes HF hub validation calls on load that can HANG on some setups
+        # (observed: judge thread deadlocked, CPU idle). Fall back to an online
+        # load only if the model isn't cached yet (pre-pull is the real fix).
+        try:
+            _embedder_cache = SentenceTransformer(model, local_files_only=True)
+        except Exception:
+            _embedder_cache = SentenceTransformer(model)
     return _embedder_cache.encode(list(texts), normalize_embeddings=True)
 
 

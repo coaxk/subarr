@@ -89,6 +89,20 @@ class SubgenCapabilities:
     # the dedup hash) and returns the sub over HTTP. The tuning-lab arena gates
     # on this — it's the no-shared-scratch channel (vs /batch's disk output).
     asr_arena: bool = False
+    # v4.11 capability: POST /asr accepts ?base=vanilla — skips the global
+    # SUBGEN_KWARGS + per-language layers so a recipe runs against library
+    # defaults only. The tuning-lab arena ALWAYS tests from vanilla when this is
+    # present, so sweeps are a property of the recipe (not the operator's tuned
+    # env) and are comparable across users (federated #124). Old subgen → False,
+    # and subarr omits the param (the merge-stack behaviour is unchanged).
+    asr_vanilla_base: bool = False
+    # v4.12 capability: /asr returns the single-pass Whisper-detected source
+    # language in the X-Detected-Language header. LOW-TRUST HINT ONLY — single-
+    # chunk detection is unreliable on non-speech (verified: a French file
+    # detects en/nynorsk on its intro/silence windows). The arena labels sweeps
+    # via robust_language_detection (/detect_language_robust, multi-chunk
+    # majority) instead; this header is kept only as a cheap opportunistic hint.
+    asr_detected_language: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -108,6 +122,8 @@ class SubgenCapabilities:
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "asr_arena": self.asr_arena,
+            "asr_vanilla_base": self.asr_vanilla_base,
+            "asr_detected_language": self.asr_detected_language,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
 
@@ -118,7 +134,8 @@ class SubgenCapabilities:
             has_queue=False, has_batch=False, is_subarr_subgen=False,
             audio_language_override=False, queue_cancel=False,
             robust_language_detection=False, per_request_kwargs=False,
-            per_request_task=False, asr_arena=False, subarr_subgen_patch_rev=None,
+            per_request_task=False, asr_arena=False, asr_vanilla_base=False,
+            asr_detected_language=False, subarr_subgen_patch_rev=None,
         )
 
 
@@ -243,6 +260,8 @@ class SubgenClient:
         per_request_kwargs = False
         per_request_task = False
         asr_arena = False
+        asr_vanilla_base = False
+        asr_detected_language = False
         patch_rev: str | None = None
         try:
             qr = await self._client.get("/queue")
@@ -273,6 +292,8 @@ class SubgenClient:
                                 caps_block.get("per_request_task")
                             )
                             asr_arena = bool(caps_block.get("asr_arena"))
+                            asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
+                            asr_detected_language = bool(caps_block.get("asr_detected_language"))
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -295,6 +316,8 @@ class SubgenClient:
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             asr_arena=asr_arena,
+            asr_vanilla_base=asr_vanilla_base,
+            asr_detected_language=asr_detected_language,
             subarr_subgen_patch_rev=patch_rev,
         )
         log.info(
@@ -365,8 +388,9 @@ class SubgenClient:
     async def asr(self, path: str | None = None, *, local_file: str | None = None,
                   task: str = "transcribe",
                   language: str | None = None, kwargs: dict[str, Any] | None = None,
-                  initial_prompt: str | None = None,
-                  timeout_s: float = 7200.0) -> str:
+                  initial_prompt: str | None = None, base: str | None = None,
+                  return_language: bool = False,
+                  timeout_s: float = 7200.0):
         """v4.10+ arena channel: ASR that BLOCKS until done and returns the
         subtitle TEXT over HTTP. Two input modes:
 
@@ -397,6 +421,11 @@ class SubgenClient:
             params["initial_prompt"] = initial_prompt
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
+        # v4.11: 'vanilla' makes subgen skip its global + per-language kwargs so
+        # the recipe runs from a canonical base. Omitted entirely for old subgen
+        # (the param is unknown there) — gate on capabilities.asr_vanilla_base.
+        if base:
+            params["base"] = base
         files = None
         if local_file:
             import os
@@ -416,4 +445,8 @@ class SubgenClient:
             except ValueError:
                 body = {"message": r.text[:200]}
             raise SubgenUnavailable(f"subgen /asr error: {body.get('message', body)}")
+        # v4.12: detected source language in the X-Detected-Language header.
+        # Opt-in tuple return keeps the plain-text return back-compatible.
+        if return_language:
+            return r.text, r.headers.get("x-detected-language")
         return r.text

@@ -23,10 +23,11 @@ subgen is behind ONE injected seam, `CandidateRunner`. The production runner
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from .paths import canonical_to_fs
+from .paths import canonical_to_fs, canonical_to_subgen_batch
 from .subtitle_readability import parse_srt
 from .tournament_harness import judge_candidates
 
@@ -78,6 +79,8 @@ class ArenaResult:
     consistency: float | None         # fraction of clips the winner also topped
     agreement_mean: float | None      # mean clip_agreement across clips
     tie: bool = False                 # top recipes within noise → no real winner
+    source_language: str | None = None  # [#23] robustly-detected source lang (label + per-lang grouping)
+    source_language_confidence: float | None = None  # [#23] fraction of chunks agreeing (None when set conservatively)
     explanation: str | None = None    # optional plain-language read (local ollama)
 
 
@@ -158,16 +161,18 @@ class AsrRunner:
     clip via subgen's v4.10 `/asr` UPLOAD mode (no shared mount). Gate enforced
     in `preflight()`."""
     def __init__(self, subgen, *, capabilities=None, source_language: str | None = None,
-                 to_fs_path=canonical_to_fs, sampler=None):
+                 to_fs_path=canonical_to_fs, to_subgen=canonical_to_subgen_batch, sampler=None):
         self._subgen = subgen
         self._caps = capabilities
         self._source_language = source_language
         self._to_fs_path = to_fs_path
+        self._to_subgen = to_subgen
         self._sampler = sampler
         self._clips: list[dict] = []  # [{path, kind, ranges}]
 
     async def preflight(self) -> None:
         caps = self._caps if self._caps is not None else await self._subgen.probe_capabilities()
+        self._caps = caps  # remember the resolved caps for base-mode selection in run()
         if not getattr(caps, "asr_arena", False):
             raise ArenaUnsupported(
                 "tuning-lab arena needs subarr-subgen >=v4.10 — /asr must "
@@ -185,11 +190,38 @@ class AsrRunner:
 
     async def run(self, clip_idx: int, *, task: str, kwargs: dict[str, Any]) -> str | None:
         clip = self._clips[clip_idx]
+        # Always test from a canonical VANILLA base when subgen supports it, so
+        # results are a property of the recipe — not the operator's tuned env —
+        # and comparable across users (federated #124). Old subgen → base=None,
+        # which preserves the classic merge-on-global behaviour.
+        base = "vanilla" if getattr(self._caps, "asr_vanilla_base", False) else None
         srt = await self._subgen.asr(
             local_file=clip["path"], task=task,
-            language=self._source_language, kwargs=kwargs or None,
+            language=self._source_language, kwargs=kwargs or None, base=base,
         )
         return srt or None
+
+    async def detect_language(self, media_path: str):
+        """[#23] Robust source-language detection via subgen /detect_language_robust
+        (multi-chunk majority vote across the MIDDLE of the file — skips the
+        intro/credits/silence where Whisper hallucinates 'en'/'nynorsk'). Returns
+        (iso_code, confidence) only when a real majority agrees; otherwise
+        (None, None) so we never badge a sweep with a hallucinated language.
+        Single-clip detection is NOT trustworthy here (verified: a French file
+        detects en/nynorsk/fr/fr/en across its windows)."""
+        if not getattr(self._caps, "robust_language_detection", False):
+            return (None, None)
+        try:
+            resp = await self._subgen.detect_language_robust(self._to_subgen(media_path))
+        except Exception:
+            return (None, None)
+        agg = (resp or {}).get("aggregate") or {}
+        lang = agg.get("language")
+        n_ag = agg.get("n_agreeing") or 0
+        n_tot = agg.get("n_total") or 0
+        if lang and lang != "und" and n_tot and (n_ag / n_tot) >= 0.5:
+            return (lang, round(n_ag / n_tot, 2))
+        return (None, None)
 
     async def cleanup(self) -> None:
         import os
@@ -244,7 +276,11 @@ async def run_arena(
                 if on_step is not None:
                     on_step()
 
-            res = judge(candidates, speech_ranges=clip.get("ranges"), source_text=source_text)
+            # The judge is heavy (QE = a torch/LaBSE forward pass, ~6s on first
+            # load then ~0.1s) — run it off the event loop so the model load
+            # can't block the app's SSE/HTTP work.
+            res = await asyncio.to_thread(
+                judge, candidates, speech_ranges=clip.get("ranges"), source_text=source_text)
             per_clip.append(ClipResult(
                 kind=clip.get("kind", "?"), winner=res.winner_label,
                 agreement=res.clip_agreement,
@@ -255,10 +291,18 @@ async def run_arena(
                                    None if produced[v.label] else "no subtitle produced on any clip")
                     for v in variants]
         rows, winner, confidence, consistency, agreement_mean, tie = _aggregate(per_clip, variants)
+        # [#23] robust source-language detection (majority vote, intro-skipping)
+        src_lang, src_conf = None, None
+        if hasattr(runner, "detect_language"):
+            try:
+                src_lang, src_conf = await runner.detect_language(media_path)
+            except Exception:
+                src_lang, src_conf = None, None
         return ArenaResult(
             outcomes=outcomes, aggregate=rows, per_clip=per_clip,
             winner=winner, confidence=confidence,
             consistency=consistency, agreement_mean=agreement_mean, tie=tie,
+            source_language=src_lang, source_language_confidence=src_conf,
         )
     finally:
         await runner.cleanup()

@@ -14,18 +14,34 @@ import { SectionCard, StatusDot, Glyph, ICONS } from './atoms.jsx';
 
 const { useState, useEffect, useRef, useCallback } = React;
 
-// Curated, purpose-built recipes the user toggles into a sweep. Named with a
-// plain reason so nobody has to hand-write JSON. (Seed of the eventual
-// crowd-curated, per-language set — see #124.)
+// Curated recipes the user toggles into a sweep — the validated Tier-B
+// families. CRITICAL: each non-default recipe is a FULL, EXPLICIT config (every
+// discriminating knob set), NOT a partial override. Partial overrides collapse
+// to near-identical output once your subgen base is already tuned (the old set
+// had four recipes converge on a tuned base — a tie that was really an
+// artifact). Full configs differ BY CONSTRUCTION regardless of your base, so a
+// sweep always actually separates them. (Seed of the crowd-curated per-language
+// set — see #124.)
 const CURATED = [
-  { id: 'default', label: 'default', kwargs: {}, why: 'Your current subgen settings, unchanged. The baseline every other recipe has to beat.' },
-  { id: 'noisy', label: 'noisy-robust', kwargs: { vad_filter: true, beam_size: 5, temperature: 0 }, why: 'Skips non-speech and searches harder. Best for music or effects-heavy or low-quality audio.' },
-  { id: 'anti-repeat', label: 'anti-repeat', kwargs: { condition_on_previous_text: false, compression_ratio_threshold: 2.4 }, why: 'Stops the model parroting the previous line. Reach for it when the output loops or drifts.' },
-  { id: 'accurate', label: 'high-accuracy', kwargs: { beam_size: 8, best_of: 5, temperature: 0 }, why: 'Widest search. Slowest of the bunch, but squeezes out the most accurate read.' },
-  { id: 'halluc-guard', label: 'hallucination-guard', kwargs: { vad_filter: true, condition_on_previous_text: false, no_speech_threshold: 0.6 }, why: 'Aggressive about silence with no carry-over. For sparse dialogue or long quiet stretches.' },
-  { id: 'fast', label: 'fast-draft', kwargs: { beam_size: 1 }, why: 'Quick single pass. Good for a fast sanity check, not for final quality.' },
+  { id: 'default', label: 'default', kwargs: {},
+    why: 'Your current subgen settings, unchanged. The baseline every other recipe has to beat.' },
+  { id: 'clean-film', label: 'clean-film',
+    kwargs: { vad_filter: false, condition_on_previous_text: true, beam_size: 5, best_of: 5, temperature: 0, compression_ratio_threshold: 2.4, no_speech_threshold: 0.6 },
+    why: 'Tuned for clean studio audio (most films and TV). Keeps sentence context for natural phrasing and trusts the soundtrack — no aggressive silence gating that could clip soft dialogue.' },
+  { id: 'noisy-robust', label: 'noisy-robust',
+    kwargs: { vad_filter: true, condition_on_previous_text: false, beam_size: 5, best_of: 5, temperature: 0, compression_ratio_threshold: 2.2, no_speech_threshold: 0.7 },
+    why: 'For music, effects-heavy, or low-quality audio. Gates out non-speech, drops line-to-line carry-over (so noise can’t snowball), and tightens the gibberish guard.' },
+  { id: 'high-accuracy', label: 'high-accuracy',
+    kwargs: { vad_filter: false, condition_on_previous_text: true, beam_size: 8, best_of: 8, patience: 2, temperature: 0, compression_ratio_threshold: 2.4, no_speech_threshold: 0.6 },
+    why: 'Widest search with full context. The slowest pass, but squeezes out the most accurate read when quality matters more than speed.' },
+  { id: 'fast-draft', label: 'fast-draft',
+    kwargs: { vad_filter: false, condition_on_previous_text: true, beam_size: 1, best_of: 1, temperature: 0 },
+    why: 'Quick single-pass greedy decode. Good for a fast sanity check or a rough draft — not for final quality.' },
+  { id: 'raw-unfiltered', label: 'raw-unfiltered',
+    kwargs: { vad_filter: false, condition_on_previous_text: true, temperature: 0, no_speech_threshold: 1.0, compression_ratio_threshold: 100 },
+    why: 'All guardrails off — deliberately lets the model hallucinate on silence and music. A diagnostic canary (it should lose on the quiet clip), NOT a setting to adopt: it shows you how much the guards are doing.' },
 ];
-const DEFAULT_SELECTED = ['default', 'noisy', 'anti-repeat'];
+const DEFAULT_SELECTED = ['default', 'clean-film', 'noisy-robust'];
 
 const KNOBS = [
   ['beam_size', 'a number, 1 to 10', 'How hard it searches for the best wording. Higher is more accurate but slower. Around 5 is a sensible top end.'],
@@ -63,7 +79,8 @@ function Hint({ children }) {
 
 function StatusPill({ status }) {
   const map = {
-    pending: { kind: 'idle', text: 'Pending' }, running: { kind: 'busy', text: 'Running' },
+    pending: { kind: 'idle', text: 'Pending' }, queued: { kind: 'idle', text: 'Queued' },
+    running: { kind: 'busy', text: 'Running' },
     done: { kind: 'ok', text: 'Done' }, error: { kind: 'err', text: 'Error' },
   };
   const s = map[status] || map.pending;
@@ -531,13 +548,20 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {runs.map((r) => {
           const open = expandedId === r.id;
-          const active = r.status === 'running' || r.status === 'pending';
+          const active = r.status === 'running' || r.status === 'pending' || r.status === 'queued';
           return (
             <div key={r.id} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-2)' }}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 <button onClick={() => onToggle(r.id)} style={sweepRow}>
                   <StatusPill status={r.status} />
                   <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
+                  {r.source_language && (
+                    <span title={`detected source language: ${r.source_language}`}
+                          style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: 0.5,
+                                   color: 'var(--fg-2)', background: 'var(--bg-4)', borderRadius: 4, padding: '1px 6px' }}>
+                      {r.source_language.toUpperCase()}
+                    </span>
+                  )}
                   {active ? (
                     <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ width: 70, height: 6, borderRadius: 3, background: 'var(--bg-4)', overflow: 'hidden' }}>
@@ -594,7 +618,7 @@ export function ArenaPage() {
   // Poll while anything is pending/running (house usePoller pattern); also
   // refresh the open sweep's detail so its table fills in live.
   useEffect(() => {
-    const active = runs.some((r) => r.status === 'pending' || r.status === 'running');
+    const active = runs.some((r) => r.status === 'pending' || r.status === 'running' || r.status === 'queued');
     if (!active) return;
     const t = setInterval(() => { loadRuns(); if (expandedId) loadDetail(expandedId); }, 2500);
     return () => clearInterval(t);
