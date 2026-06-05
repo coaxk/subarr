@@ -116,7 +116,10 @@ function Stepper({ current }) {
 // ─── Form primitives ─────────────────────────────────────────────
 
 
-function FormRow({ label, hint, children }) {
+// #75: FormRow / TextInput / TestResult are reused by the Settings
+// credential editor so the in-app edit form matches the wizard exactly
+// (same input styling, same test-result chip). Exported for that import.
+export function FormRow({ label, hint, children }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -128,7 +131,7 @@ function FormRow({ label, hint, children }) {
   );
 }
 
-function TextInput({ value, onChange, placeholder, mono = true, type = 'text' }) {
+export function TextInput({ value, onChange, placeholder, mono = true, type = 'text' }) {
   const [focused, setFocused] = useState(false);
   return (
     <input
@@ -156,7 +159,7 @@ function TextInput({ value, onChange, placeholder, mono = true, type = 'text' })
   );
 }
 
-function TestResult({ result }) {
+export function TestResult({ result }) {
   if (!result) return null;
   const isOk = result.ok;
   const bg = isOk ? 'rgba(52,211,153,0.06)' : 'rgba(239,68,68,0.06)';
