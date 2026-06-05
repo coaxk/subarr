@@ -130,7 +130,7 @@ function ProgressSegments({ done, total, running }) {
 // ── file picker modal ────────────────────────────────────────────────────────
 const VIDEO_RE = /\.(mkv|mp4|avi|m4v|mov|webm|ts)$/i;
 
-function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
+function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = false, bulkProgress = null }) {
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -231,11 +231,13 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>
             <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>{picked.size} file{picked.size === 1 ? '' : 's'} selected for bulk sweep</span>
             <span style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setPicked(new Set())} style={ghostBtnStyle}>Clear</button>
-              <button onClick={() => bulkReady && onPickMany([...picked])} disabled={!bulkReady}
+              <button onClick={() => setPicked(new Set())} disabled={bulkBusy} style={{ ...ghostBtnStyle, opacity: bulkBusy ? 0.5 : 1, cursor: bulkBusy ? 'not-allowed' : 'pointer' }}>Clear</button>
+              <button onClick={() => bulkReady && !bulkBusy && onPickMany([...picked])} disabled={!bulkReady || bulkBusy}
                       title={bulkReady ? '' : 'Select at least one recipe first'}
-                      style={{ ...primaryBtnStyle, opacity: bulkReady ? 1 : 0.5, cursor: bulkReady ? 'pointer' : 'not-allowed' }}>
-                Sweep {picked.size} selected →
+                      style={{ ...primaryBtnStyle, opacity: (bulkReady && !bulkBusy) ? 1 : 0.5, cursor: (bulkReady && !bulkBusy) ? 'pointer' : 'not-allowed' }}>
+                {bulkBusy
+                  ? `Queuing ${bulkProgress ? `${bulkProgress.done}/${bulkProgress.total}` : ''}…`
+                  : `Sweep ${picked.size} selected →`}
               </button>
             </span>
           </div>
@@ -308,6 +310,12 @@ function SweepForm({ onRun, disabled, gate }) {
   const [sourceLang, setSourceLang] = useState('');
   const [selected, setSelected] = useState(() => new Set(DEFAULT_SELECTED));
   const [custom, setCustom] = useState([]);
+  // #141 follow-up: in-flight guard. Queueing is async (one POST per file),
+  // and without a busy state the button looked dead → users mashed it →
+  // duplicate jobs piled up. submitting disables both submit paths; bulkProgress
+  // shows "Queuing X/N…" so a multi-file batch visibly advances.
+  const [submitting, setSubmitting] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(null);
 
   const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const addCustom = () => setCustom((c) => [...c, { label: `custom-${c.length + 1}`, kwargs: '{}' }]);
@@ -330,26 +338,41 @@ function SweepForm({ onRun, disabled, gate }) {
   const recipesReady = total >= 1 && !dupLabel && !badCustom;
 
   const submit = async () => {
-    if (!ready) return;
-    const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants: buildVariants() });
-    if (ok) setMediaPath('');  // keep recipe picks; clear the file so the next one is two clicks away
+    if (!ready || submitting) return;
+    setSubmitting(true);
+    try {
+      const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants: buildVariants() });
+      if (ok) setMediaPath('');  // keep recipe picks; clear the file so the next one is two clicks away
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // #141: queue one sweep per selected file with the current recipes. The
   // backend concurrency cap serialises them, so N queued sweeps drain safely.
+  // Keeps the picker open with a live "Queuing X/N…" count + disabled button
+  // so the batch visibly advances and can't be double-fired.
   const submitMany = async (paths) => {
-    if (!recipesReady || !paths || !paths.length) return;
+    if (!recipesReady || !paths || !paths.length || submitting) return;
     const variants = buildVariants();
-    setPicking(false);
-    for (const p of paths) {
-      await onRun({ media_path: p.replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+    setSubmitting(true);
+    setBulkProgress({ done: 0, total: paths.length });
+    try {
+      for (let i = 0; i < paths.length; i++) {
+        await onRun({ media_path: paths[i].replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+        setBulkProgress({ done: i + 1, total: paths.length });
+      }
+    } finally {
+      setSubmitting(false);
+      setBulkProgress(null);
+      setPicking(false);
+      setMediaPath('');
     }
-    setMediaPath('');
   };
 
   return (
     <SectionCard label="Configure sweep">
-      {picking && <FilePicker onClose={() => setPicking(false)} onPick={(p) => { setMediaPath(p); setPicking(false); }} onPickMany={submitMany} bulkReady={recipesReady} />}
+      {picking && <FilePicker onClose={() => { if (!submitting) setPicking(false); }} onPick={(p) => { setMediaPath(p); setPicking(false); }} onPickMany={submitMany} bulkReady={recipesReady} bulkBusy={submitting} bulkProgress={bulkProgress} />}
 
       {/* media file */}
       <div style={fieldStyle}>
@@ -434,8 +457,10 @@ function SweepForm({ onRun, disabled, gate }) {
             so <b>{total + 1}</b> transcription{total + 1 === 1 ? '' : 's'} in total. You’ll get one ranked result per recipe.
           </div>
         )}
-        <button onClick={submit} disabled={!ready} style={{ ...primaryBtnStyle, opacity: !ready ? 0.5 : 1, cursor: !ready ? 'not-allowed' : 'pointer' }}>
-          {`Queue sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
+        <button onClick={submit} disabled={!ready || submitting} style={{ ...primaryBtnStyle, opacity: (!ready || submitting) ? 0.5 : 1, cursor: (!ready || submitting) ? 'not-allowed' : 'pointer' }}>
+          {submitting
+            ? (bulkProgress ? `Queuing ${bulkProgress.done}/${bulkProgress.total}…` : 'Queuing…')
+            : `Queue sweep${total ? ` · ${total} recipe${total === 1 ? '' : 's'}` : ''}`}
         </button>
       </div>
     </SectionCard>
@@ -611,6 +636,12 @@ function ByLanguagePanel({ data }) {
   return (
     <Collapsible label="By language" id="bylang" defaultOpen={false}>
       <Hint>How each recipe performs grouped by the spoken language subarr detected on the file. Fills in as you run more sweeps — this is the groundwork for per-language recommendations.</Hint>
+      <div style={{ margin: '2px 0 12px', padding: '10px 12px', background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-lg)', fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55 }}>
+        <b style={{ color: 'var(--fg-1)' }}>Reading the two numbers — wins vs score.</b> They answer different questions, and can disagree.
+        <div style={{ marginTop: 6 }}><b style={{ color: 'var(--fg-1)' }}>Wins</b> = how many of your files this recipe ranked #1 on — its <i>consistency</i> across varied content.</div>
+        <div style={{ marginTop: 2 }}><b style={{ color: 'var(--fg-1)' }}>Score</b> = its average judged quality (0–100) <i>when it does run</i>.</div>
+        <div style={{ marginTop: 6 }}>So a recipe that <b>wins often at a middling score</b> (e.g. <code>default</code>, 6/12 · 65) is the dependable all-rounder — the safe default. One that <b>rarely wins but scores high</b> (e.g. <code>clean-film</code>, 1/12 · 88) is a <i>specialist</i>: excellent on the content it suits (clean studio audio) and weaker elsewhere. Run the all-rounder by default; reach for a specialist when a file matches its strength.</div>
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {data.map((lang) => {
           const top = lang.recipes[0];
@@ -630,12 +661,18 @@ function ByLanguagePanel({ data }) {
                 </span>
               }>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-2xs)', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg-3)', paddingBottom: 2 }}>
+                  <span style={{ width: 18, flex: 'none' }} />
+                  <span style={{ flex: 1, minWidth: 0 }}>Recipe</span>
+                  <span style={{ flex: 'none' }} title="Files this recipe ranked #1 on — consistency across content">Wins</span>
+                  <span style={{ flex: 'none', width: 64, textAlign: 'right' }} title="Average judged quality (0–100) when it runs">Score</span>
+                </div>
                 {lang.recipes.map((r, i) => (
                   <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
-                    <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }}>{i === 0 ? '★' : ''}</span>
+                    <span style={{ width: 18, color: 'var(--fg-3)', flex: 'none' }} title={i === 0 ? 'Most wins for this language' : ''}>{i === 0 ? '★' : ''}</span>
                     <span style={{ flex: 1, minWidth: 0, color: i === 0 ? 'var(--fg-0)' : 'var(--fg-2)', fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
-                    <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="files where this recipe won (each file's repeat sweeps consolidated; ties excluded)">{r.wins}/{r.files} won</span>
-                    <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="mean composite score across this language's sweeps">{r.mean_composite}</span>
+                    <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="Files where this recipe won (each file's repeat sweeps consolidated; ties excluded) — consistency">{r.wins}/{r.files} won</span>
+                    <span style={{ flex: 'none', width: 64, textAlign: 'right', color: 'var(--fg-2)' }} title="Mean judged quality (0–100) across this language's sweeps">{r.mean_composite}</span>
                   </div>
                 ))}
               </div>

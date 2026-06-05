@@ -221,9 +221,13 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
         recipes = [{"label": rec["label"], "files": rec["files"], "wins": rec["wins"],
                     "mean_composite": round(rec["_sum"] / rec["files"], 2) if rec["files"] else 0.0}
                    for rec in b["_rec"].values()]
-        # Rank by mean composite (the quality metric) — files-won is shown as
-        # supporting info but is noisy with few files. (#26 ranking note)
-        recipes.sort(key=lambda x: (x["mean_composite"], x["wins"]), reverse=True)
+        # Rank by WINS (consistency across this language's files), tie-broken by
+        # mean composite. The top row is the per-language *default recommendation*
+        # — for a config you apply to all content, the one that ranks #1 most
+        # often is the safer pick than a specialist that scores high on one file
+        # but loses elsewhere. Score is shown alongside for the specialist nuance
+        # (the UI explains wins-vs-score). (#26/#141 ranking note)
+        recipes.sort(key=lambda x: (x["wins"], x["mean_composite"]), reverse=True)
         out.append({"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes})
     out.sort(key=lambda x: (x["files"], x["sweeps"]), reverse=True)
     return out
