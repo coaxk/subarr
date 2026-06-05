@@ -78,6 +78,13 @@ class Settings:
     # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
     # Plex's own scheduler runs at.
     plex_partial_scan_enabled: bool
+    # #87: accept subgen's WEBHOOK_URL_COMPLETED push at
+    # POST /api/subgen/webhook/completed. Push beats polling — lower
+    # queue-UI latency, fewer requests. Default on; the polling watcher
+    # stays running as the fallback for vanilla subgen (operators who
+    # haven't pointed WEBHOOK_URL_COMPLETED at subarr). Set
+    # SUBARR_SUBGEN_WEBHOOK_ENABLED=0 to reject pushes and rely on polling.
+    subgen_webhook_enabled: bool
     # v1.1.1 #219 closer: PUT user-verified audio language back to Sonarr's
     # episodeFile so Bazarr's next sync sees the correct foreign-language
     # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
@@ -181,6 +188,9 @@ def load() -> Settings:
         plex_partial_scan_enabled=_env_or(
             "PLEX_PARTIAL_SCAN_ENABLED", "1"
         ).strip().lower() not in ("0", "false", "no", "off"),
+        subgen_webhook_enabled=_env_or(
+            "SUBARR_SUBGEN_WEBHOOK_ENABLED", "1"
+        ).strip().lower() not in ("0", "false", "no", "off"),
         sonarr_propagate_audio_lang=os.environ.get(
             "SONARR_PROPAGATE_AUDIO_LANG", "0"
         ).strip().lower() in ("1", "true", "yes", "on"),
@@ -258,6 +268,7 @@ FIELD_ENV_VARS: dict[str, str] = {
     "plex_audio_hints": "PLEX_AUDIO_HINTS",
     "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
     "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
+    "subgen_webhook_enabled": "SUBARR_SUBGEN_WEBHOOK_ENABLED",
 }
 
 
@@ -287,6 +298,7 @@ _FIELD_COERCE = {
     "plex_audio_hints": _coerce_bool,
     "sonarr_propagate_audio_lang": _coerce_bool,
     "plex_partial_scan_enabled": _coerce_bool,
+    "subgen_webhook_enabled": _coerce_bool,
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
