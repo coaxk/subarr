@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..audio_lang_store import resolve_audio_language_override
+from ..config import settings
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import (
@@ -189,6 +190,24 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     except SubgenUnavailable as e:
         log.warning("subgen unreachable; serving history-only queue view: %s", e)
         live["subgen_error"] = str(e)
+
+    # Tuning-lab arena sweeps run through subgen via /asr UPLOAD mode, so they
+    # surface in subgen's /queue with a subgen-side temp upload path (not a
+    # `<subgen_media_prefix>/…` library path). They belong to the Tuning Lab,
+    # not the main queue — without this filter the sidebar counted a sweep
+    # ("1 running") that the queue page never rendered (it keys off library
+    # paths), so the count and the list disagreed. Drop non-library jobs from
+    # BOTH the lists and the counts so they stay in sync.
+    _media_prefix = settings.subgen_media_prefix.rstrip("/") + "/"
+
+    def _is_library_job(t: object) -> bool:
+        return (isinstance(t, dict) and isinstance(t.get("path"), str)
+                and t["path"].startswith(_media_prefix))
+
+    live["processing"] = [t for t in (live.get("processing") or []) if _is_library_job(t)]
+    live["queued"] = [t for t in (live.get("queued") or []) if _is_library_job(t)]
+    live["processing_count"] = len(live["processing"])
+    live["queued_count"] = len(live["queued"])
 
     progress_map = await docker_ops.recent_progress(tail=80)
     if progress_map and isinstance(live.get("processing"), list):
