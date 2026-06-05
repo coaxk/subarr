@@ -104,6 +104,14 @@ class Settings:
     # the model from onboarding. Set SUBARR_VAD_ENABLED=0 to hard-disable.
     vad_enabled: bool
 
+    # #104: minimum seconds between coverage-cache rebuilds triggered by
+    # event kicks (completion / audio-lang verify / manual refresh). A
+    # burst of events coalesces into a single rebuild, and rebuilds are
+    # spaced at least this far apart so we don't hammer the NAS + thread
+    # pool. The fixed background loop (DEFAULT_INTERVAL_S) is the floor
+    # cadence; this knob debounces the on-demand kicks on top of it.
+    coverage_refresh_min_interval_s: float
+
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
     bazarr_api_key: str
@@ -199,6 +207,11 @@ def load() -> Settings:
         ).strip().lower() in ("1", "true", "yes", "on"),
         vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower()
         not in ("0", "false", "no", "off"),
+        # #104: default 120s. Min-clamped at 0 (a 0/negative value disables
+        # debounce — every kick rebuilds, the pre-#104 behaviour).
+        coverage_refresh_min_interval_s=max(
+            0.0, float(_env_or("SUBARR_COVERAGE_REFRESH_MIN_INTERVAL_S", "120"))
+        ),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by
         # the empty api_key, not by clearing the URL.

@@ -269,6 +269,43 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
         return []
 
 
+# #104: the per-series rglob is the dominant cost of a coverage build —
+# ~668 foreign series each walked one-at-a-time blocked the build for
+# minutes. We now fan the rglobs out across a bounded thread pool. The
+# cap matters: an UNBOUNDED fan-out would have hundreds of concurrent
+# rglobs hammering the NAS at once, which chokes it worse than serial.
+# 8-wide is a sane default (matches typical NAS spindle/SMB concurrency
+# without thrashing); tune via the call site if needed.
+_SRT_SCAN_CONCURRENCY = 8
+
+
+async def _build_srt_index_parallel(
+    canonical_dirs, cap: int = _SRT_SCAN_CONCURRENCY,
+) -> dict[str, list[str]]:
+    """Recursively scan each (unique, non-empty) series canonical dir for
+    .srt files, with bounded concurrency. Returns {canonical_dir: [rel
+    srt paths]}. Each dir is scanned exactly once (deduped here), so the
+    build's two pass-loops can read straight from the result dict instead
+    of awaiting an rglob inline.
+
+    Concurrency is capped via a semaphore so we parallelise the I/O wait
+    without unbounded fan-out onto the NAS. Each individual scan still
+    runs in a worker thread (rglob is blocking) so the event loop stays
+    free."""
+    unique = [d for d in dict.fromkeys(canonical_dirs) if d]
+    if not unique:
+        return {}
+    sem = asyncio.Semaphore(max(1, cap))
+
+    async def _one(d: str) -> tuple[str, list[str]]:
+        async with sem:
+            paths = await asyncio.to_thread(_scan_for_srt_recursive, d)
+        return d, paths
+
+    pairs = await asyncio.gather(*[_one(d) for d in unique])
+    return dict(pairs)
+
+
 def _match_episode_srt_pattern(srt_paths: list[str], episode_number: str | None) -> tuple[bool, list[str]]:
     """Given a list of relative .srt paths under a series dir and an
     episode_number ('1x3'), return (any_match, matching_paths).
@@ -1089,6 +1126,17 @@ async def build_coverage(
     # filesystem once.
     series_srt_index: dict[str, list[str]] = {}
 
+    # #104: pre-scan all wanted-episode series dirs in parallel (bounded)
+    # up front, instead of awaiting an rglob inline one series at a time
+    # inside the loop below. On a large foreign library the serialised
+    # rglobs were the dominant cost of the build (minutes). The loop then
+    # just reads from this index.
+    _ep_canonical_dirs = [
+        _strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path"))
+        for w in bz_eps
+    ]
+    series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
+
     # Authoritative file-path resolution via Sonarr (one episode + episodefile
     # call per series with wanted eps). Replaces fragile S<NN>E<NN> filename
     # pattern matching — catches releases that use Part.N / Episode_NN / other
@@ -1125,10 +1173,10 @@ async def build_coverage(
         s = sonarr_by_id.get(sonarr_id, {})
         canonical = _strip_arr_prefix(s.get("path"))
         if canonical and canonical not in series_srt_index:
-            # #228: rglob blocks the event loop. On a real-size library this
-            # is the difference between the app feeling responsive during a
-            # walk vs. timeouts on /api/health. Offload to a thread per call;
-            # we already dedupe per-series via series_srt_index above.
+            # #104: normally pre-populated by the parallel pre-scan above.
+            # This inline fallback only fires for a dir that wasn't in the
+            # pre-scan set (defensive); still offloaded so it never blocks
+            # the event loop (#228).
             series_srt_index[canonical] = await asyncio.to_thread(
                 _scan_for_srt_recursive, canonical
             )
@@ -1353,12 +1401,22 @@ async def _add_bazarr_blind_synthetic_rows(
     for _eid, _ep in sonarr_eps_by_id.items():
         eps_by_series_id.setdefault(_ep.get("seriesId"), []).append((_eid, _ep))
 
+    # #104: pre-scan all foreign-series dirs not already in the index, in
+    # parallel (bounded), before the loop. This is the ~668-series fan-out
+    # that previously ran strictly one-at-a-time.
+    _foreign_dirs = [
+        c for c in (_strip_arr_prefix(s.get("path")) for s in foreign_series)
+        if c and c not in series_srt_index
+    ]
+    series_srt_index.update(await _build_srt_index_parallel(_foreign_dirs))
+
     synthetic_added = 0
     for s in foreign_series:
         sid = s.get("id")
         series_canonical = _strip_arr_prefix(s.get("path"))
         if series_canonical and series_canonical not in series_srt_index:
-            # #228: same offload as the main loop above.
+            # #104: defensive inline fallback (pre-scan above normally
+            # covers this). Offloaded so it never blocks the loop (#228).
             series_srt_index[series_canonical] = await asyncio.to_thread(
                 _scan_for_srt_recursive, series_canonical
             )

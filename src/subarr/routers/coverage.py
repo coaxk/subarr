@@ -35,29 +35,25 @@ async def refresh_coverage(request: Request) -> dict[str, Any]:
     Frontend calls this after user actions that invalidate the cache
     (e.g. audio-lang verification, manual Bazarr sync). UI polls until
     `refreshing` flips back to False."""
-    import asyncio as _asyncio
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     if cov_cache is None:
         return {"refreshed": False, "reason": "cache not configured"}
-    if cov_cache.is_refreshing():
-        return {"refreshed": False, "reason": "refresh already in flight"}
     bundle = request.app.state.integrations
     probe_store = request.app.state.probe_store
     audio_lang_store = getattr(request.app.state, "audio_lang", None)
-
     probe_walker = getattr(request.app.state, "probe_walker", None)
 
-    async def _do():
-        try:
-            await cov_cache.refresh(bundle, probe_store, audio_lang_store,
-                                    probe_walker=probe_walker)
-        except Exception as e:
-            log.warning("manual coverage refresh failed: %s", e)
-
-    _asyncio.create_task(_do())
+    # #104: route through the coalescing entry point. A burst of UI/event
+    # kicks collapses into at most one in-flight build + one follow-up,
+    # debounced to settings.coverage_refresh_min_interval_s. We no longer
+    # reject when a build is in flight — the request is coalesced instead.
+    cov_cache.request_refresh(
+        bundle, probe_store, audio_lang_store, probe_walker=probe_walker,
+    )
     snap = cov_cache.get_cached()
     return {
         "refreshed": True,
+        "coalesced": cov_cache.is_refreshing() or cov_cache.has_pending_refresh(),
         "previous_generated_at": snap.generated_at if snap else None,
         "previous_item_count": snap.item_count if snap else 0,
     }
