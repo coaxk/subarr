@@ -129,6 +129,111 @@ class CoverageCache:
         # is currently being rebuilt.
         self._refresh_lock = asyncio.Lock()
         self._refreshing = False
+        # #104 debounce/coalesce state. `request_refresh` is the single
+        # entry point for all event-driven kicks (completion / audio-lang
+        # verify / manual refresh / queue change). It collapses a burst of
+        # kicks into at most one in-flight build + one queued follow-up,
+        # and spaces builds at least `_min_interval_s` apart.
+        from . import config
+        try:
+            self._min_interval_s: float = config.load().coverage_refresh_min_interval_s
+        except Exception:
+            self._min_interval_s = 120.0
+        self._last_refresh_done: float = 0.0  # monotonic clock
+        self._pending_again: bool = False     # coalesced follow-up flag
+        self._pending_args: tuple | None = None  # args for the follow-up
+        self._refresh_task: asyncio.Task | None = None
+        self._debounce_handle: asyncio.TimerHandle | None = None
+
+    # ─── #104: debounce / coalesce ──────────────────────────────────
+    @property
+    def min_interval_s(self) -> float:
+        return self._min_interval_s
+
+    def set_min_interval_s(self, v: float) -> None:
+        self._min_interval_s = max(0.0, float(v))
+
+    def has_pending_refresh(self) -> bool:
+        """True when a coalesced follow-up build is queued or a debounce
+        timer is armed — i.e. work is still pending beyond the current
+        in-flight build."""
+        return self._pending_again or self._debounce_handle is not None
+
+    def request_refresh(self, bundle, probe_store, audio_lang_store,
+                        *, use_tautulli: bool = True, probe_walker=None) -> None:
+        """Single coalescing entry point for event-driven refresh kicks.
+
+        Behaviour:
+        - If a build is in flight: set a flag so exactly ONE follow-up
+          build runs after it completes (N kicks → 1 follow-up, not N).
+        - Else if we're inside the min-interval debounce window since the
+          last build: arm (or keep) a single timer to run one build when
+          the window elapses. Repeated kicks during the window collapse
+          into that one timer.
+        - Else: start a build immediately.
+
+        Non-blocking / fire-and-forget. The expensive build always runs
+        under `refresh()`'s asyncio.Lock, so even racing callers can't
+        double-build."""
+        args = (bundle, probe_store, audio_lang_store, use_tautulli, probe_walker)
+        self._pending_args = args
+
+        if self._refreshing:
+            # A build is running — mark "run once more when done".
+            self._pending_again = True
+            return
+
+        if self._debounce_handle is not None:
+            # A debounce timer is already armed; latest args win (set
+            # above), nothing else to do.
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop (shouldn't happen in app context)
+
+        wait = self._time_until_allowed(loop)
+        if wait <= 0:
+            self._start_refresh_task(args)
+        else:
+            self._debounce_handle = loop.call_later(
+                wait, self._fire_debounced
+            )
+
+    def _time_until_allowed(self, loop) -> float:
+        if self._min_interval_s <= 0 or self._last_refresh_done == 0.0:
+            return 0.0
+        elapsed = loop.time() - self._last_refresh_done
+        return max(0.0, self._min_interval_s - elapsed)
+
+    def _fire_debounced(self) -> None:
+        self._debounce_handle = None
+        if self._refreshing:
+            self._pending_again = True
+            return
+        if self._pending_args is not None:
+            self._start_refresh_task(self._pending_args)
+
+    def _start_refresh_task(self, args: tuple) -> None:
+        bundle, probe_store, audio_lang_store, use_tautulli, probe_walker = args
+
+        async def _run():
+            try:
+                await self.refresh(
+                    bundle, probe_store, audio_lang_store,
+                    use_tautulli=use_tautulli, probe_walker=probe_walker,
+                )
+            except Exception as e:  # pragma: no cover - logged, non-fatal
+                log.warning("coverage refresh (coalesced) failed: %s", e)
+            finally:
+                # If kicks arrived while we built, run exactly one more.
+                if self._pending_again:
+                    self._pending_again = False
+                    if self._pending_args is not None:
+                        self._start_refresh_task(self._pending_args)
+
+        self._refresh_task = asyncio.ensure_future(_run())
 
     def load(self) -> None:
         """Warm the in-memory mirror from the persisted snapshot so the
@@ -235,6 +340,11 @@ class CoverageCache:
                 return snap
             finally:
                 self._refreshing = False
+                # #104: record completion time for the debounce window.
+                try:
+                    self._last_refresh_done = asyncio.get_running_loop().time()
+                except RuntimeError:  # pragma: no cover
+                    pass
 
     async def _kick_eager_probe(self, probe_walker, items: list[dict[str, Any]]) -> None:
         """Queue a targeted probe of the build's unprobed rows. Never lets a

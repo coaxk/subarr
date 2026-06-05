@@ -70,18 +70,13 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
 
     # v1.1 ARCH fix #197: kick a background coverage refresh so the
     # corresponding row's chip turns green within a few seconds, not 30.
-    import asyncio as _asyncio
+    # #104: route through the coalescing entry point so a burst of
+    # verifications collapses into a single debounced rebuild.
     cov_cache = getattr(request.app.state, "coverage_cache", None)
-    if cov_cache is not None and not cov_cache.is_refreshing():
+    if cov_cache is not None:
         bundle = request.app.state.integrations
         probe_store = request.app.state.probe_store
-
-        async def _refresh():
-            try:
-                await cov_cache.refresh(bundle, probe_store, store)
-            except Exception as e:
-                log.warning("post-verify refresh failed: %s", e)
-        _asyncio.create_task(_refresh())
+        cov_cache.request_refresh(bundle, probe_store, store)
     return {"verified": True, "canonical_path": req.canonical_path,
             "lang_code": req.lang_code.lower(),
             "sonarr_propagation": propagation}
