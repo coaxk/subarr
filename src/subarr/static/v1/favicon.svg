@@ -1,14 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <!-- Subarr favicon — wordmark-derived. Dark rounded square + violet
-       's' letterform. Same design tokens as the rest of the UI:
-       bg = --bg-0 #1a1a1c, accent = --violet-500 #8b5cf6.
-       SVG favicons work in all modern browsers; the docstring above
-       documents intent in case we add PNG fallbacks later. -->
+  <!-- Subarr favicon: dark rounded square + violet 's' letterform (Space
+       Grotesk Bold), OUTLINED to a path so the icon is font-independent and
+       renders identically everywhere. A text-element SVG would depend on a
+       font the rasterizer lacks (selfhst/icons #849). Brand: bg #1a1a1c,
+       accent violet #8b5cf6. -->
   <rect width="32" height="32" rx="6" fill="#1a1a1c"/>
-  <text x="16" y="22"
-        font-family="'Space Grotesk', 'Inter', sans-serif"
-        font-size="22"
-        font-weight="700"
-        text-anchor="middle"
-        fill="#8b5cf6">s</text>
+  <path transform="translate(10.236 22.0) scale(0.022 -0.022)" fill="#8b5cf6" d="M276 -14Q179 -14 117.0 28.0Q55 70 42 148L158 178Q165 143 181.5 123.0Q198 103 222.5 94.5Q247 86 276 86Q320 86 341.0 101.5Q362 117 362 140Q362 163 342.0 175.5Q322 188 278 196L250 201Q198 211 155.0 228.5Q112 246 86.0 277.0Q60 308 60 357Q60 431 114.0 470.5Q168 510 256 510Q339 510 394.0 473.0Q449 436 466 376L349 340Q341 378 316.5 394.0Q292 410 256 410Q220 410 201.0 397.5Q182 385 182 363Q182 339 202.0 327.5Q222 316 256 310L284 305Q340 295 385.5 278.5Q431 262 457.5 231.5Q484 201 484 149Q484 71 427.5 28.5Q371 -14 276 -14Z"/>
 </svg>
