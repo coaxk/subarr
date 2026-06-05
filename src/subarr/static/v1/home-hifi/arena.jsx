@@ -642,6 +642,10 @@ function ByLanguagePanel({ data }) {
         <div style={{ marginTop: 2 }}><b style={{ color: 'var(--fg-1)' }}>Score</b> = its average judged quality (0–100) <i>when it does run</i>.</div>
         <div style={{ marginTop: 6 }}>So a recipe that <b>wins often at a middling score</b> (e.g. <code>default</code>, 6/12 · 65) is the dependable all-rounder — the safe default. One that <b>rarely wins but scores high</b> (e.g. <code>clean-film</code>, 1/12 · 88) is a <i>specialist</i>: excellent on the content it suits (clean studio audio) and weaker elsewhere. Run the all-rounder by default; reach for a specialist when a file matches its strength.</div>
       </div>
+      {/* Cap height so a library with many detected languages scrolls in
+          place rather than ballooning the panel. Plain scroll BLOCK wraps the
+          flex column so rows keep natural height (flex-shrink trap). */}
+      <div style={{ maxHeight: 560, overflowY: 'auto', paddingRight: 4, marginRight: -4 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {data.map((lang) => {
           const top = lang.recipes[0];
@@ -680,6 +684,7 @@ function ByLanguagePanel({ data }) {
           );
         })}
       </div>
+      </div>
       <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>Each file votes once (its repeat sweeps are averaged), so re-sweeping a file sharpens its estimate rather than skewing the count. One file per language is a hint, not a verdict — trust grows with more files.</div>
     </Collapsible>
   );
@@ -701,7 +706,12 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
     );
   }
   return (
-    <SectionCard label="Sweeps">
+    <SectionCard label="Sweeps" action={<span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>{runs.length} total</span>}>
+      {/* Cap the list height so a long history scrolls in place instead of
+          pushing the whole page into a mega-scroll. A plain scroll BLOCK wraps
+          the flex column so the rows keep their natural height — putting
+          overflow on the flex column itself lets flex-shrink squash them. */}
+      <div style={{ maxHeight: 600, overflowY: 'auto', paddingRight: 4, marginRight: -4 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {runs.map((r) => {
           const open = expandedId === r.id;
@@ -742,6 +752,7 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
             </div>
           );
         })}
+      </div>
       </div>
     </SectionCard>
   );
