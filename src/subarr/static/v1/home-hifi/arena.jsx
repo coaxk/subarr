@@ -129,11 +129,15 @@ function ProgressSegments({ done, total, running }) {
 // ── file picker modal ────────────────────────────────────────────────────────
 const VIDEO_RE = /\.(mkv|mp4|avi|m4v|mov|webm|ts)$/i;
 
-function FilePicker({ onPick, onClose }) {
+function FilePicker({ onPick, onPickMany, onClose, bulkReady = true }) {
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  // #141: multi-select — checkboxes accumulate across folders so you can
+  // assemble a bulk batch from several shows, then queue a sweep for each.
+  const [picked, setPicked] = useState(() => new Set());
+  const togglePick = (p) => setPicked((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; });
 
   useEffect(() => {
     let alive = true;
@@ -176,13 +180,32 @@ function FilePicker({ onPick, onClose }) {
                   </button>
                 ))}
                 {files.map((e) => (
-                  <button key={e.path} onClick={() => onPick(e.path)} style={{ ...pickRow, color: 'var(--fg-0)' }}>
-                    <span style={{ marginRight: 8 }}>🎬</span>{e.name}
-                  </button>
+                  <div key={e.path} style={{ display: 'flex', alignItems: 'center' }}>
+                    <input type="checkbox" checked={picked.has(e.path)} onChange={() => togglePick(e.path)}
+                           onClick={(ev) => ev.stopPropagation()} title="Add to bulk batch"
+                           style={{ margin: '0 0 0 12px', flex: 'none', cursor: 'pointer', accentColor: 'var(--violet-500)' }} />
+                    <button onClick={() => onPick(e.path)} style={{ ...pickRow, color: 'var(--fg-0)', flex: 1 }}>
+                      <span style={{ marginRight: 8 }}>🎬</span>{e.name}
+                    </button>
+                  </div>
                 ))}
               </>)}
         </div>
-        <Hint>A short, representative clip (a few minutes with real dialogue) compares recipes just as well as a whole episode, and finishes far faster.</Hint>
+        {picked.size > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>{picked.size} file{picked.size === 1 ? '' : 's'} selected for bulk sweep</span>
+            <span style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setPicked(new Set())} style={ghostBtnStyle}>Clear</button>
+              <button onClick={() => bulkReady && onPickMany([...picked])} disabled={!bulkReady}
+                      title={bulkReady ? '' : 'Select at least one recipe first'}
+                      style={{ ...primaryBtnStyle, opacity: bulkReady ? 1 : 0.5, cursor: bulkReady ? 'pointer' : 'not-allowed' }}>
+                Sweep {picked.size} selected →
+              </button>
+            </span>
+          </div>
+        ) : (
+          <Hint>Click a file to sweep it, or tick several (across folders) and queue a sweep for each at once. A short clip with real dialogue compares recipes just as well as a whole episode, and finishes far faster.</Hint>
+        )}
       </div>
     </div>
   );
@@ -263,19 +286,34 @@ function SweepForm({ onRun, disabled, gate }) {
   const total = chosen.length + custom.length;
   const ready = mediaPath.trim() && total >= 1 && !dupLabel && !badCustom;
 
+  const buildVariants = () => [
+    ...chosen.map((c) => ({ label: c.label, kwargs: c.kwargs })),
+    ...custom.map((c, i) => ({ label: c.label.trim(), kwargs: customParsed[i].value })),
+  ];
+  // recipes-ready (independent of the file field) — gates the bulk path
+  const recipesReady = total >= 1 && !dupLabel && !badCustom;
+
   const submit = async () => {
     if (!ready) return;
-    const variants = [
-      ...chosen.map((c) => ({ label: c.label, kwargs: c.kwargs })),
-      ...custom.map((c, i) => ({ label: c.label.trim(), kwargs: customParsed[i].value })),
-    ];
-    const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+    const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants: buildVariants() });
     if (ok) setMediaPath('');  // keep recipe picks; clear the file so the next one is two clicks away
+  };
+
+  // #141: queue one sweep per selected file with the current recipes. The
+  // backend concurrency cap serialises them, so N queued sweeps drain safely.
+  const submitMany = async (paths) => {
+    if (!recipesReady || !paths || !paths.length) return;
+    const variants = buildVariants();
+    setPicking(false);
+    for (const p of paths) {
+      await onRun({ media_path: p.replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+    }
+    setMediaPath('');
   };
 
   return (
     <SectionCard label="Configure sweep">
-      {picking && <FilePicker onClose={() => setPicking(false)} onPick={(p) => { setMediaPath(p); setPicking(false); }} />}
+      {picking && <FilePicker onClose={() => setPicking(false)} onPick={(p) => { setMediaPath(p); setPicking(false); }} onPickMany={submitMany} bulkReady={recipesReady} />}
 
       {/* media file */}
       <div style={fieldStyle}>
