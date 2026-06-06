@@ -5,6 +5,17 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.2.1] - 2026-06-07
+
+### Fixed
+- **Coverage refresh could silently freeze on foreign-language libraries.** A
+  regression in the v1.2.0 Bazarr-blind defense pass referenced an out-of-scope
+  variable, so any coverage walk that produced a Bazarr-blind synthetic row
+  (libraries with foreign-language content) crashed in the background — the
+  coverage cache stopped updating and resolved gaps never cleared. Fixed; the
+  walk completes and resolved files drop out as expected. English-only libraries
+  were unaffected.
+
 ## [1.2.0] - 2026-06-07
 
 ### Added
