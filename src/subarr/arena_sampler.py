@@ -95,15 +95,17 @@ def _duration_s(path: str) -> float:
     return float(out)
 
 
-def _cut_clip(fs_path: str, start: float, length: float, out_path: str) -> None:
-    """Extract one window → 16 kHz mono wav (audio-only keeps the upload tiny)."""
+def _cut_clip(fs_path: str, start: float, length: float, out_path: str, track: int = 0) -> None:
+    """Extract one window → 16 kHz mono wav (audio-only keeps the upload tiny).
+    `track` selects the Nth audio stream (0-based) for multi-track files (an
+    original + a dub get swept separately, each from its own track)."""
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
            "-ss", str(start), "-i", fs_path, "-t", str(length),
-           "-map", "0:a:0", "-ar", "16000", "-ac", "1", out_path]
+           "-map", f"0:a:{track}", "-ar", "16000", "-ac", "1", out_path]
     subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
 
 
-def build_samples(fs_path: str, *, out_dir: str | None = None) -> list[dict]:
+def build_samples(fs_path: str, *, out_dir: str | None = None, track: int = 0) -> list[dict]:
     """VAD `fs_path` and cut each strata window into its OWN 30s clip.
 
     Returns a list of {path, kind, ranges} — one SEPARATE clip per stratum
@@ -123,11 +125,11 @@ def build_samples(fs_path: str, *, out_dir: str | None = None) -> list[dict]:
              len(windows), ", ".join(w["kind"] for w in windows))
 
     base = Path(out_dir or tempfile.gettempdir())
-    key = abs(hash((fs_path, duration))) % 10**8
+    key = abs(hash((fs_path, duration, track))) % 10**8   # track in key so multi-track clips don't collide
     clips: list[dict] = []
     for i, w in enumerate(windows):
-        clip_path = str(base / f"arena-sample-{key}-{i}-{w['kind']}.wav")
-        _cut_clip(fs_path, w["start"], w["len"], clip_path)
+        clip_path = str(base / f"arena-sample-{key}-t{track}-{i}-{w['kind']}.wav")
+        _cut_clip(fs_path, w["start"], w["len"], clip_path, track=track)
         clip_ranges = vad.detect_speech_ranges(clip_path) or []
         clips.append({"path": clip_path, "kind": w["kind"], "ranges": clip_ranges})
     return clips

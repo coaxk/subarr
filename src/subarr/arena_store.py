@@ -47,6 +47,10 @@ class ArenaRun:
     result: dict[str, Any] | None = None     # serialized TournamentResult
     error: str | None = None
     created_at: float = 0.0
+    # Audio-stream ordinal this sweep transcribes (multi-track files fan out one
+    # run per track). In-memory only — it flows create→execute in one process;
+    # not a persisted column (a restart errors the run anyway).
+    track_index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

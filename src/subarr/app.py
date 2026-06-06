@@ -188,6 +188,7 @@ async def lifespan(app_: FastAPI):
             app_.state.subgen,
             capabilities=getattr(app_.state, "subgen_caps", None),
             source_language=run.source_language,
+            track=getattr(run, "track_index", 0),
         ),
         # ollama EXPLAINS the result in plain language (not scoring). Resolved
         # live so an onboarding ollama-config swap is picked up without restart.

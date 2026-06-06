@@ -90,13 +90,14 @@ class ArenaService:
 
     # ── store (persisted) ────────────────────────────────────────────────────
     def create(self, media_path: str, variants: list[ConfigVariant],
-               source_language: str | None = None) -> ArenaRun:
+               source_language: str | None = None, track_index: int = 0) -> ArenaRun:
         run = ArenaRun(
             id=uuid.uuid4().hex[:12],
             media_path=media_path,
             variants=[{"label": v.label, "kwargs": v.kwargs} for v in variants],
             source_language=source_language,
             created_at=time.time(),
+            track_index=track_index,
         )
         self._store.save(run)
         return run

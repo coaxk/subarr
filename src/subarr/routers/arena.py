@@ -25,6 +25,18 @@ from ..paths import PathOutsideRootError, canonical_to_fs
 router = APIRouter(prefix="/api/arena", tags=["arena"])
 
 
+def _audio_track_langs(app, canonical_path: str) -> list:
+    """Ordered audio-track languages (ISO-639-1) from probe_store ffprobe
+    streams. The list index is the audio-stream ordinal used for -map 0:a:N."""
+    from ..langs import normalize_lang
+    out = []
+    store = getattr(app.state, "probe_store", None)
+    pr = store.get(canonical_path) if store is not None else None
+    for a in (getattr(pr, "audio", None) or []):
+        out.append(normalize_lang(getattr(a, "language", None) or "") or None)
+    return out
+
+
 class VariantSpec(BaseModel):
     label: str = Field(..., min_length=1)
     kwargs: dict = Field(default_factory=dict)
@@ -70,6 +82,19 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
 
     svc = request.app.state.arena
     variants = [ConfigVariant(v.label, v.kwargs) for v in req.variants]
+    # Multi-track fan-out: a file with ≥2 distinct audio-track languages (an
+    # original + a dub) sweeps EACH track — one run per track, labeled by that
+    # track's language, extracting from that audio stream — so the herd gets
+    # per-track recipe data. Skipped when the user pinned a language explicitly.
+    track_langs = _audio_track_langs(request.app, p)
+    if not req.source_language and len({t for t in track_langs if t}) >= 2:
+        runs = []
+        for idx, lang in enumerate(track_langs):
+            r = svc.create(p, variants, source_language=lang, track_index=idx)
+            svc.start(r)
+            runs.append(r)
+        return {**runs[0].to_dict(), "fanned_out": len(runs),
+                "fanned_tracks": [t for t in track_langs]}
     run = svc.create(p, variants, source_language=req.source_language)
     svc.start(run)
     return run.to_dict()

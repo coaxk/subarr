@@ -164,13 +164,15 @@ class AsrRunner:
     clip via subgen's v4.10 `/asr` UPLOAD mode (no shared mount). Gate enforced
     in `preflight()`."""
     def __init__(self, subgen, *, capabilities=None, source_language: str | None = None,
-                 to_fs_path=canonical_to_fs, to_subgen=canonical_to_subgen_batch, sampler=None):
+                 to_fs_path=canonical_to_fs, to_subgen=canonical_to_subgen_batch, sampler=None,
+                 track: int = 0):
         self._subgen = subgen
         self._caps = capabilities
         self._source_language = source_language
         self._to_fs_path = to_fs_path
         self._to_subgen = to_subgen
         self._sampler = sampler
+        self._track = track   # audio-stream ordinal to sweep (multi-track files)
         self._clips: list[dict] = []  # [{path, kind, ranges}]
 
     async def preflight(self) -> None:
@@ -188,7 +190,12 @@ class AsrRunner:
             from .arena_sampler import build_samples as sampler
         fs_path = str(self._to_fs_path(media_path))
         import asyncio
-        self._clips = await asyncio.to_thread(sampler, fs_path)
+        try:
+            self._clips = await asyncio.to_thread(sampler, fs_path, track=self._track)
+        except TypeError:
+            # a sampler that predates the multi-track `track` kwarg → call it the
+            # old way (only the default track 0 is reachable for it).
+            self._clips = await asyncio.to_thread(sampler, fs_path)
         return [{"kind": c["kind"], "ranges": c["ranges"]} for c in self._clips]
 
     async def run(self, clip_idx: int, *, task: str, kwargs: dict[str, Any]) -> str | None:
