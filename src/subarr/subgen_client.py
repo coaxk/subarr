@@ -89,6 +89,20 @@ class SubgenCapabilities:
     # the dedup hash) and returns the sub over HTTP. The tuning-lab arena gates
     # on this — it's the no-shared-scratch channel (vs /batch's disk output).
     asr_arena: bool = False
+    # v4.11 capability: POST /asr accepts ?base=vanilla — skips the global
+    # SUBGEN_KWARGS + per-language layers so a recipe runs against library
+    # defaults only. The tuning-lab arena ALWAYS tests from vanilla when this is
+    # present, so sweeps are a property of the recipe (not the operator's tuned
+    # env) and are comparable across users (federated #124). Old subgen → False,
+    # and subarr omits the param (the merge-stack behaviour is unchanged).
+    asr_vanilla_base: bool = False
+    # v4.12 capability: /asr returns the single-pass Whisper-detected source
+    # language in the X-Detected-Language header. LOW-TRUST HINT ONLY — single-
+    # chunk detection is unreliable on non-speech (verified: a French file
+    # detects en/nynorsk on its intro/silence windows). The arena labels sweeps
+    # via robust_language_detection (/detect_language_robust, multi-chunk
+    # majority) instead; this header is kept only as a cheap opportunistic hint.
+    asr_detected_language: bool = False
     # v4.13 capability (#79): subgen's RUNTIME IGNORE_FORCED_SUBTITLES value.
     # When True, subgen TRANSCRIBES files whose only English embedded sub is a
     # forced track (forced subs cover foreign dialogue only — not a full
@@ -116,6 +130,8 @@ class SubgenCapabilities:
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "asr_arena": self.asr_arena,
+            "asr_vanilla_base": self.asr_vanilla_base,
+            "asr_detected_language": self.asr_detected_language,
             "ignore_forced_subtitles": self.ignore_forced_subtitles,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
         }
@@ -127,8 +143,9 @@ class SubgenCapabilities:
             has_queue=False, has_batch=False, is_subarr_subgen=False,
             audio_language_override=False, queue_cancel=False,
             robust_language_detection=False, per_request_kwargs=False,
-            per_request_task=False, asr_arena=False,
-            ignore_forced_subtitles=False, subarr_subgen_patch_rev=None,
+            per_request_task=False, asr_arena=False, asr_vanilla_base=False,
+            asr_detected_language=False, ignore_forced_subtitles=False,
+            subarr_subgen_patch_rev=None,
         )
 
 
@@ -253,6 +270,8 @@ class SubgenClient:
         per_request_kwargs = False
         per_request_task = False
         asr_arena = False
+        asr_vanilla_base = False
+        asr_detected_language = False
         ignore_forced_subtitles = False
         patch_rev: str | None = None
         try:
@@ -284,6 +303,8 @@ class SubgenClient:
                                 caps_block.get("per_request_task")
                             )
                             asr_arena = bool(caps_block.get("asr_arena"))
+                            asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
+                            asr_detected_language = bool(caps_block.get("asr_detected_language"))
                             ignore_forced_subtitles = bool(
                                 caps_block.get("ignore_forced_subtitles")
                             )
@@ -309,6 +330,8 @@ class SubgenClient:
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             asr_arena=asr_arena,
+            asr_vanilla_base=asr_vanilla_base,
+            asr_detected_language=asr_detected_language,
             ignore_forced_subtitles=ignore_forced_subtitles,
             subarr_subgen_patch_rev=patch_rev,
         )
@@ -377,35 +400,57 @@ class SubgenClient:
             body = {"_raw": r.text[:500]}
         return r.status_code, body
 
-    async def asr(self, path: str, *, task: str = "transcribe",
+    async def asr(self, path: str | None = None, *, local_file: str | None = None,
+                  task: str = "transcribe",
                   language: str | None = None, kwargs: dict[str, Any] | None = None,
-                  initial_prompt: str | None = None,
-                  timeout_s: float = 900.0) -> str:
-        """v4.10+ arena channel: path-input ASR that BLOCKS until done and
-        returns the subtitle TEXT over HTTP — no upload, no shared scratch.
+                  initial_prompt: str | None = None, base: str | None = None,
+                  return_language: bool = False,
+                  timeout_s: float = 7200.0):
+        """v4.10+ arena channel: ASR that BLOCKS until done and returns the
+        subtitle TEXT over HTTP. Two input modes:
 
-        `path` is a subgen-visible path (the file subgen can already read off
-        the shared media mount). `task` is transcribe|translate; `kwargs` is a
-        per-request Whisper override (folded into subgen's dedup hash so two
-        configs don't collide). Gate on capabilities.asr_arena before calling.
+          - `path`: a subgen-visible path (subgen reads it off the shared media
+            mount — no upload). Good for whole files.
+          - `local_file`: UPLOAD a local file (multipart). Used for the
+            tuning-lab's short auto-sampled clip, so it works with no shared
+            writable mount and the upload stays tiny.
 
-        Returns the raw subtitle text (SRT by default; '' if the model produced
-        nothing). Raises SubgenUnavailable on transport failure or a structured
-        error payload, ValueError on a bad task.
+        `task` is transcribe|translate; `kwargs` is a per-request Whisper
+        override (folded into subgen's dedup hash so configs don't collide).
+        Gate on capabilities.asr_arena before calling.
+
+        Returns the raw subtitle text ('' if nothing produced). Raises
+        SubgenUnavailable on transport failure or a structured error payload,
+        ValueError on a bad task or missing input.
         """
         if task not in ("transcribe", "translate"):
             raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
-        params: dict[str, Any] = {"task": task, "path": path}
+        if not path and not local_file:
+            raise ValueError("asr() needs either path= or local_file=")
+        params: dict[str, Any] = {"task": task}
+        if path:
+            params["path"] = path
         if language:
             params["language"] = language
         if initial_prompt:
             params["initial_prompt"] = initial_prompt
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
+        # v4.11: 'vanilla' makes subgen skip its global + per-language kwargs so
+        # the recipe runs from a canonical base. Omitted entirely for old subgen
+        # (the param is unknown there) — gate on capabilities.asr_vanilla_base.
+        if base:
+            params["base"] = base
+        files = None
+        if local_file:
+            import os
+            with open(local_file, "rb") as fh:
+                content = fh.read()
+            files = {"audio_file": (os.path.basename(local_file), content, "application/octet-stream")}
         # /asr blocks for the whole transcription — needs a wide read timeout.
         asr_timeout = httpx.Timeout(connect=3.0, read=timeout_s, write=10.0, pool=3.0)
         try:
-            r = await self._client.post("/asr", params=params, timeout=asr_timeout)
+            r = await self._client.post("/asr", params=params, files=files, timeout=asr_timeout)
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /asr failed: {e}") from e
         # Success streams text/plain (the subtitle); errors return a JSON dict.
@@ -415,4 +460,8 @@ class SubgenClient:
             except ValueError:
                 body = {"message": r.text[:200]}
             raise SubgenUnavailable(f"subgen /asr error: {body.get('message', body)}")
+        # v4.12: detected source language in the X-Detected-Language header.
+        # Opt-in tuple return keeps the plain-text return back-compatible.
+        if return_language:
+            return r.text, r.headers.get("x-detected-language")
         return r.text

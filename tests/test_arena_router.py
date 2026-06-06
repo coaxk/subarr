@@ -29,6 +29,23 @@ def _body(label="a", kwargs=None, path="TV/Show/ep.mkv"):
     return {"media_path": path, "variants": [{"label": label, "kwargs": kwargs or {}}]}
 
 
+def test_by_language_route_returns_languages_shape(app_with_stub):
+    # #26: route exists, returns the herd shape, and is NOT captured by /{run_id}.
+    r = app_with_stub.get("/api/arena/by-language")
+    assert r.status_code == 200
+    assert isinstance(r.json().get("languages"), list)
+
+
+def test_leaderboard_route_returns_shape(app_with_stub):
+    # #146: route exists, returns {leaderboard:[], min_languages:N}, and is NOT
+    # captured by /{run_id}. Honors the min_languages query param.
+    r = app_with_stub.get("/api/arena/leaderboard?min_languages=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body.get("leaderboard"), list)
+    assert body.get("min_languages") == 2
+
+
 def test_run_blocked_when_subgen_lacks_asr_arena(app_with_stub):
     # default stub /queue advertises no asr_arena → 503 with a clear reason
     r = app_with_stub.post("/api/arena/run", json=_body())
@@ -69,3 +86,18 @@ def test_unknown_path_404(app_with_stub):
 
 def test_get_unknown_run_404(app_with_stub):
     assert app_with_stub.get("/api/arena/deadbeef").status_code == 404
+
+
+@pytest.mark.subgen(handler=_arena_stub)
+def test_set_language_updates_run(app_with_stub):
+    # Manual "set language" escape: sets the run's source_language (normalized)
+    # so an undetermined sweep re-buckets in the herd.
+    rid = app_with_stub.post("/api/arena/run", json=_body(kwargs={"beam_size": 5})).json()["id"]
+    r = app_with_stub.post(f"/api/arena/{rid}/language", json={"lang": "nor"})
+    assert r.status_code == 200
+    assert r.json()["source_language"] == "no"          # nor → ISO-639-1 no
+    # persisted: a fresh GET reflects it
+    assert app_with_stub.get(f"/api/arena/{rid}").json()["source_language"] == "no"
+    # unknown run → 404; undetermined-language input → 400
+    assert app_with_stub.post("/api/arena/deadbeef/language", json={"lang": "no"}).status_code == 404
+    assert app_with_stub.post(f"/api/arena/{rid}/language", json={"lang": "und"}).status_code == 400

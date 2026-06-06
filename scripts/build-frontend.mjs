@@ -41,6 +41,7 @@ const PAGES = [
   'library',
   'logs',
   'review',
+  'arena',
 ];
 
 const watch = process.argv.includes('--watch');

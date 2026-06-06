@@ -270,3 +270,170 @@ export function genSpark(n, base, vol) {
   });
 }
 
+// ─── Language tags (#147) ────────────────────────────────────────
+// Render a language code as a small flag IMAGE + code. IMPORTANT: a flag
+// is DECORATION, not a geography claim — languages are not countries. The
+// tooltip always names the LANGUAGE. Multi-country languages (en, es, ar,
+// pt …) intentionally get NO flag — we keep the bare code rather than pick
+// a misleading single country. No flag → just the code.
+//
+// We use bundled SVG flag images (circle-flags, MIT — src/static/v1/flags/)
+// rather than emoji: Windows ships NO flag glyphs in its emoji font, so
+// emoji flags render as bare letters there (the "FR FR" bug). `cc` is the
+// circle-flags country-code filename for the language's REPRESENTATIVE flag.
+// The flag is pure decoration — the tooltip always names the LANGUAGE — so
+// even multi-country languages get a sensible representative flag (en→gb,
+// es→es, etc.) rather than a blank that reads as a missing-asset bug. `name`
+// drives the tooltip. Keyed by ISO-639-1; LANG_ALIAS folds 3-letter codes +
+// full names onto it. Only `und` (undetermined) has no flag.
+export const LANG_INFO = Object.freeze({
+  ko: { name: 'Korean', cc: 'kr' },
+  ja: { name: 'Japanese', cc: 'jp' },
+  zh: { name: 'Chinese', cc: 'cn' },
+  he: { name: 'Hebrew', cc: 'il' },
+  ru: { name: 'Russian', cc: 'ru' },
+  fr: { name: 'French', cc: 'fr' },
+  de: { name: 'German', cc: 'de' },
+  it: { name: 'Italian', cc: 'it' },
+  hi: { name: 'Hindi', cc: 'in' },
+  tr: { name: 'Turkish', cc: 'tr' },
+  nl: { name: 'Dutch', cc: 'nl' },
+  pl: { name: 'Polish', cc: 'pl' },
+  sv: { name: 'Swedish', cc: 'se' },
+  no: { name: 'Norwegian', cc: 'no' },
+  nb: { name: 'Norwegian Bokmål', cc: 'no' },
+  nn: { name: 'Norwegian Nynorsk', cc: 'no' },
+  da: { name: 'Danish', cc: 'dk' },
+  fi: { name: 'Finnish', cc: 'fi' },
+  cs: { name: 'Czech', cc: 'cz' },
+  el: { name: 'Greek', cc: 'gr' },
+  th: { name: 'Thai', cc: 'th' },
+  vi: { name: 'Vietnamese', cc: 'vn' },
+  id: { name: 'Indonesian', cc: 'id' },
+  uk: { name: 'Ukrainian', cc: 'ua' },
+  ro: { name: 'Romanian', cc: 'ro' },
+  hu: { name: 'Hungarian', cc: 'hu' },
+  fa: { name: 'Persian', cc: 'ir' },
+  is: { name: 'Icelandic', cc: 'is' },
+  hr: { name: 'Croatian', cc: 'hr' },
+  sr: { name: 'Serbian', cc: 'rs' },
+  sk: { name: 'Slovak', cc: 'sk' },
+  sl: { name: 'Slovenian', cc: 'si' },
+  bg: { name: 'Bulgarian', cc: 'bg' },
+  et: { name: 'Estonian', cc: 'ee' },
+  lv: { name: 'Latvian', cc: 'lv' },
+  lt: { name: 'Lithuanian', cc: 'lt' },
+  ms: { name: 'Malay', cc: 'my' },
+  // Multi-country — representative flag (decoration; tooltip names the language):
+  en: { name: 'English', cc: 'gb' },
+  es: { name: 'Spanish', cc: 'es' },
+  pt: { name: 'Portuguese', cc: 'pt' },
+  ar: { name: 'Arabic', cc: 'sa' },
+  und: { name: 'Undetermined' },
+});
+
+// 3-letter (ISO-639-2/B + /T) and full-name aliases → ISO-639-1.
+export const LANG_ALIAS = Object.freeze({
+  kor: 'ko', korean: 'ko',
+  jpn: 'ja', japanese: 'ja',
+  zho: 'zh', chi: 'zh', chinese: 'zh', mandarin: 'zh',
+  heb: 'he', hebrew: 'he',
+  rus: 'ru', russian: 'ru',
+  fre: 'fr', fra: 'fr', french: 'fr',
+  ger: 'de', deu: 'de', german: 'de',
+  ita: 'it', italian: 'it',
+  hin: 'hi', hindi: 'hi',
+  tur: 'tr', turkish: 'tr',
+  dut: 'nl', nld: 'nl', dutch: 'nl',
+  pol: 'pl', polish: 'pl',
+  swe: 'sv', swedish: 'sv',
+  nor: 'no', norwegian: 'no', nob: 'nb', nno: 'nn',
+  dan: 'da', danish: 'da',
+  fin: 'fi', finnish: 'fi',
+  cze: 'cs', ces: 'cs', czech: 'cs',
+  gre: 'el', ell: 'el', greek: 'el',
+  tha: 'th', thai: 'th',
+  vie: 'vi', vietnamese: 'vi',
+  ind: 'id', indonesian: 'id',
+  ukr: 'uk', ukrainian: 'uk',
+  rum: 'ro', ron: 'ro', romanian: 'ro',
+  hun: 'hu', hungarian: 'hu',
+  per: 'fa', fas: 'fa', persian: 'fa', farsi: 'fa',
+  ice: 'is', isl: 'is', icelandic: 'is',
+  hrv: 'hr', croatian: 'hr',
+  srp: 'sr', serbian: 'sr',
+  slk: 'sk', slo: 'sk', slovak: 'sk',
+  slv: 'sl', slovenian: 'sl', slovene: 'sl',
+  bul: 'bg', bulgarian: 'bg',
+  est: 'et', estonian: 'et',
+  lav: 'lv', latvian: 'lv',
+  lit: 'lt', lithuanian: 'lt',
+  may: 'ms', msa: 'ms', malay: 'ms',
+  eng: 'en', english: 'en',
+  spa: 'es', spanish: 'es', castilian: 'es',
+  por: 'pt', portuguese: 'pt',
+  ara: 'ar', arabic: 'ar',
+  und: 'und', unknown: 'und',
+});
+
+// Normalize any code/name to ISO-639-1 (mirrors backend langs.normalize_lang).
+export function normalizeLang(value) {
+  if (!value) return '';
+  const v = String(value).trim().toLowerCase();
+  if (LANG_INFO[v]) return v;
+  if (LANG_ALIAS[v]) return LANG_ALIAS[v];
+  // bare 2-letter passthrough even if not in our map
+  return v.length === 2 ? v : v;
+}
+
+export function langName(value) {
+  const code = normalizeLang(value);
+  return (LANG_INFO[code] && LANG_INFO[code].name) || (value ? String(value).toUpperCase() : '');
+}
+
+// Flag images live here; served by subarr's static mount (no external
+// requests). Circular SVGs from circle-flags (MIT) — tiny (~1-3KB each).
+export const FLAG_BASE = '/static/v1/flags/';
+
+// LangTag — flag IMAGE (decoration) + code, language tooltip. Real SVG flags
+// render identically on every OS (unlike emoji, which Windows shows as bare
+// letters). circle-flags are square/circular, so we render a size×size disc.
+export function LangTag({ value, size = 12, showCode = true, style }) {
+  if (!value) return null;
+  const code = normalizeLang(value);
+  const info = LANG_INFO[code];
+  const cc = info && info.cc;
+  const name = (info && info.name) || String(value).toUpperCase();
+  const label = code ? code.toUpperCase() : String(value).toUpperCase();
+  const disc = size + 2;
+  return (
+    <span
+      title={name}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        fontSize: size, lineHeight: 1, whiteSpace: 'nowrap', ...style,
+      }}
+    >
+      {cc && (
+        <img
+          src={`${FLAG_BASE}${cc}.svg`}
+          alt=""
+          aria-hidden="true"
+          width={disc}
+          height={disc}
+          loading="lazy"
+          style={{
+            display: 'block', flex: 'none', borderRadius: '50%',
+            boxShadow: '0 0 0 1px rgba(0,0,0,0.25)',
+          }}
+        />
+      )}
+      {showCode && (
+        <span style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.02em' }}>
+          {label}
+        </span>
+      )}
+    </span>
+  );
+}
+

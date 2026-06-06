@@ -5,6 +5,101 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.2.0] - 2026-06-07
+
+### Added
+- **Tuning Lab — find the Whisper settings that actually win, on your hardware.**
+  An in-app config arena: pick a file, choose recipes to compare, and subarr
+  runs each against the live subgen model and lets a tournament judge rank them
+  objectively. It auto-samples up to 3 short strata clips per file (dialogue, a
+  speech→silence edge, a quiet stretch) and requires a recipe to win *across*
+  clips, not on one. A per-language "herd" view aggregates results so a
+  dependable default emerges per language; bulk multi-file sweeps gather data
+  fast; everything runs over subgen with nothing written to your library. (#131)
+- **Audio-language verification — subarr *listens* and tells you the truth
+  about a track.** This is something the *arr metadata chain structurally
+  can't do: Sonarr/Radarr tag a show's language and everyone downstream
+  parrots it, even when it's wrong. The Tuning Lab's robust multi-chunk Whisper
+  detection verifies the *spoken* language by ear, and reads the per-chunk
+  agreement to tell three real situations apart:
+    - a **mislabeled track** (file tagged Danish, audio unanimously Dutch) →
+      flags it and offers a one-click correction that flows back into coverage;
+    - a **bilingual file** (English detectives + Serbian crooks; or JP/KO) →
+      detected as multiple languages and flagged, instead of being mis-collapsed
+      to whichever language a chunk happened to land on;
+    - **Whisper unsure** → falls back to the known tag rather than guessing.
+  A 🎧 listen-and-confirm action (audio player + on-demand detection) settles
+  any case in seconds; confirmations persist as ground truth that coverage and
+  future sweeps inherit. **Multi-track files** (an original plus a dub) are
+  detected too: each audio track is swept separately, labeled by its own
+  language, so the Tuning Lab gives per-track recommendations instead of only
+  the default track. An **Audio language issues** panel collects every flagged
+  file in one place for review.
+- **Library-wide audio-language scan.** A one-click **Scan library** runs that
+  same listening pass over your whole library — not just files you happened to
+  sweep — so subarr can surface mislabels, bilingual tracks, and multi-track
+  files proactively. The scan is opt-in, throttled to a background trickle, and
+  GPU-polite: it pauses automatically while live Tuning Lab sweeps run and
+  resumes on its own, skipping files it already checked (resumable across
+  restarts). Findings flow into the same Audio language issues panel, and once
+  you confirm a file it drops out for good. (#155)
+- **In-app integration credential editing.** Add or change Bazarr/Sonarr/
+  Radarr/Tautulli URLs + API keys and the Plex token from Settings, with
+  test-connection and live apply — no env edit or restart. Env-set fields stay
+  authoritative and read-only. (#75)
+- **Push-based subgen completion.** subarr consumes subgen's
+  `WEBHOOK_URL_COMPLETED` as an alternative to polling `/queue` (polling stays
+  as the fallback). (#87)
+- **Series-level audio-language intent inherits to new episodes** — declare a
+  series' language once and new episodes resolve as verified during the next
+  coverage build. (#69)
+- **Language tags as flag icons** across coverage and the Tuning Lab (bundled
+  SVGs, no external requests; decoration only — the tooltip names the
+  *language*). (#147)
+- **Global recipe leaderboard.** The per-language herd rolled up into one
+  overall ranking — scored by the *mean of per-language means* so each language
+  counts equally and a heavily-swept/easy language can't skew the result.
+  Medals for the top three, a confidence signal, and an expandable per-language
+  breakdown; recipes need data across at least three languages to earn a rank.
+  (#146)
+
+### Changed
+- **Performance & best-practices pass.** Responses are gzip-compressed; static
+  vendor/flag/favicon assets get a one-week revalidated cache while
+  non-hashed bundles + HTML stay `no-cache` (fresh UI the instant it changes);
+  a Content-Security-Policy and the standard hardening headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`) are sent on every response; and `/favicon.ico` is
+  served directly. (#138)
+- **Coverage refresh is debounced + parallelized** — bursts of completion/scan
+  events coalesce to one refresh, and the per-series subtitle scans run with
+  bounded concurrency instead of one-at-a-time. (#104)
+- Forced-only embedded-English files are gated on subgen's runtime
+  `IGNORE_FORCED_SUBTITLES` capability, so a forced-only gap is only presented
+  as actionable when the connected subgen will actually fill it. (#79)
+- Tuning Lab + coverage lists cap their height and scroll in place instead of
+  ballooning the page.
+- **Age-based retention for tuning-lab sweeps.** The append-only `arena_runs`
+  table is pruned on boot to `SUBARR_ARENA_RETENTION_DAYS` (default 30; 0
+  disables) so it can't grow unbounded on long-running installs. (#136)
+
+### Fixed
+- **ISO language-code variants are normalized in coverage detection.** A present
+  `.ger.srt`/`.deu.srt` sidecar now satisfies a `de` target (and `.eng.srt` an
+  `en` target) instead of raising a phantom gap; the Bazarr-blind mislabel check
+  also catches `eng`/`en-US`, not just bare `en`. (#118)
+- **Icelandic is selectable** in the audio-language picker (it was in the
+  language map but missing from the dropdown).
+- **Telemetry no longer reports the ollama integration "configured" on ~100%
+  of installs** — it now gates on real reachability. (#119)
+- The main queue no longer counts Tuning Lab sweeps (they run through subgen's
+  `/asr` and were inflating the sidebar count against an empty page).
+- The favicon ships its 's' as an outlined path, so it renders correctly in
+  icon pipelines instead of depending on a font.
+- Multi-track fan-out sweeps now label their herd source as `track` (the
+  language came from the track's tag) rather than `user`, so track-derived and
+  user-pinned languages are distinguishable.
+
 ## [1.1.0] - 2026-06-04
 
 ### Added

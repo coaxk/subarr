@@ -5,7 +5,7 @@
 // Row queue + bulk queue post to /api/coverage/queue. Re-walk now calls
 // /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
-import { Glyph, StatusDot } from './atoms.jsx';
+import { Glyph, StatusDot, LangTag } from './atoms.jsx';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -311,7 +311,9 @@ function LangChips({ langs }) {
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
       {visible.map(l => (
-        <span key={l} className="chip" style={{ height: 16, padding: '0 6px', fontSize: 'var(--text-2xs)' }}>{l}</span>
+        <span key={l} className="chip" style={{ height: 16, padding: '0 6px', fontSize: 'var(--text-2xs)' }}>
+          <LangTag value={l} size={11} />
+        </span>
       ))}
       {overflow > 0 && (
         <span className="num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>+{overflow}</span>
@@ -618,8 +620,12 @@ function AudioLabelChip({ r, onClick }) {
     unknown: { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata on the file' },
   }[kind];
   const evidence = (r.audio_label_notes || []).join('\n• ');
-  const tip = `${cfg.label}${evidence ? '\n\n• ' + evidence : ''}\n\nClick to verify/correct.`;
-  return (
+  const mismatch = !!r.audio_label_whisper_mismatch;  // #90: tag ≠ detected audio
+  const tip = `${cfg.label}`
+    + (mismatch ? '\n\n⚠ Tag mismatch — this file is tagged a different language than its audio.' : '')
+    + (evidence ? '\n\n• ' + evidence : '')
+    + '\n\nClick to verify/correct.';
+  const badge = (
     <span
       title={tip}
       onClick={(e) => { e.stopPropagation(); onClick && onClick(r); }}
@@ -635,6 +641,17 @@ function AudioLabelChip({ r, onClick }) {
         cursor: 'pointer',
         flex: '0 0 auto',
       }}>{cfg.ch}</span>
+  );
+  if (!mismatch) return badge;
+  // small amber corner dot — the tag-vs-audio mismatch signal (#90)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', flex: '0 0 auto' }}>
+      {badge}
+      <span title="tag ≠ detected audio language" style={{
+        position: 'absolute', top: -2, right: -2, width: 7, height: 7,
+        borderRadius: '50%', background: '#f59e0b', border: '1px solid var(--bg-1)',
+      }} />
+    </span>
   );
 }
 
@@ -1426,6 +1443,7 @@ const LANG_PICKS = [
   ['heb','Hebrew'],
   ['hin','Hindi'],
   ['hun','Hungarian'],
+  ['ice','Icelandic'],
   ['ind','Indonesian'],
   ['ita','Italian'],
   ['jpn','Japanese'],
@@ -1569,7 +1587,8 @@ export function AudioReviewModal() {
       setWhisperRunning(false);
     }
   };
-  const save = async (langCode) => {
+  const save = async (langCode, opts = {}) => {
+    const { source = 'user', confidence = 1.0, evidence } = opts;
     setSaving(true);
     setError(null);
     try {
@@ -1580,9 +1599,9 @@ export function AudioReviewModal() {
         body: JSON.stringify({
           canonical_path: row._canonical_path,
           lang_code: langCode,
-          source: 'user',
-          confidence: 1.0,
-          evidence: { notes: row.audio_label_notes || [], track },
+          source,
+          confidence,
+          evidence: evidence || { notes: row.audio_label_notes || [], track },
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1840,6 +1859,22 @@ export function AudioReviewModal() {
                         ? 'Chunks disagree or low probability — listen above and confirm manually.'
                         : 'Whisper returned no signal — listen above and pick from the list.')}
                 </div>
+                {/* #90 (B): accept the machine detection AS whisper-verified
+                    (distinct from Confirm below, which stores it as YOUR call).
+                    Stores source=whisper → cyan badge + tag-mismatch flag. */}
+                {agg.language && agg.language !== 'und' && agg.n_total > 0 && (
+                  <button className="btn sm"
+                    onClick={() => save(agg.language, {
+                      source: 'whisper',
+                      confidence: agg.n_total ? +(agg.n_agreeing / agg.n_total).toFixed(2) : 0,
+                      evidence: whisperResult,
+                    })}
+                    disabled={saving}
+                    title="Store this as the Whisper-verified audio language (machine detection). Renders the Whisper badge and flags a tag mismatch — distinct from Confirm, which records it as your own verification."
+                    style={{ alignSelf: 'flex-start', background: 'rgba(34,211,238,0.18)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.35)' }}>
+                    {saving ? 'Saving…' : `✓ Accept as Whisper-verified (${agg.language})`}
+                  </button>
+                )}
               </>
             );
           })()}
@@ -2011,7 +2046,9 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
              : `Audio track languages detected: ${r.audio}`}
            style={{ width: COL.audio, flex: `0 0 ${COL.audio}px`, fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'help',
                     display: 'flex', alignItems: 'center', minWidth: 0 }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.audio}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', gap: 6 }}>
+          {String(r.audio || '').split(',').filter(Boolean).map((l, i) => <LangTag key={l + i} value={l} size={11} />)}
+        </span>
         <AudioLabelChip r={r} onClick={(row) => { window.dispatchEvent(new CustomEvent('open-audio-review', { detail: row })); }} />
       </div>
       <div style={{ width: COL.reason, flex: `0 0 ${COL.reason}px` }}>

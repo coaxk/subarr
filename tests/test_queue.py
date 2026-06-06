@@ -38,6 +38,37 @@ def test_queue_busy(app_with_stub):
     assert body["processing"][0]["type"] == "transcribe"
 
 
+def _arena_mixed_handler(req: httpx.Request) -> httpx.Response:
+    # subgen /queue with one real library job (/media/...) and one tuning-lab
+    # arena sweep, which runs via /asr UPLOAD mode → a subgen temp upload path
+    # (NOT under the media prefix). The arena job must NOT count toward the main
+    # queue or appear in its lists.
+    if req.url.path == "/queue":
+        return httpx.Response(200, json={
+            "queued": [],
+            "processing": [
+                {"path": "/media/library/TV/A/file1.mkv", "type": "transcribe"},
+                {"path": "/tmp/subgen-upload-abc123.wav", "type": "transcribe"},
+            ],
+            "queued_count": 0,
+            "processing_count": 2,
+            "idle": False,
+            "version": "2026.05.3",
+        })
+    return httpx.Response(404)
+
+
+@pytest.mark.subgen(handler=_arena_mixed_handler)
+def test_queue_excludes_arena_asr_upload_jobs(app_with_stub):
+    body = app_with_stub.get("/api/queue").json()
+    # Only the /media library job survives — the /tmp arena upload is dropped
+    # from both the list and the count (count must match what the page renders).
+    assert body["processing_count"] == 1
+    paths = [t["path"] for t in body["processing"]]
+    assert paths == ["/media/library/TV/A/file1.mkv"]
+    assert not any("subgen-upload" in p for p in paths)
+
+
 def _one_queued_handler(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/queue":
         return httpx.Response(200, json={

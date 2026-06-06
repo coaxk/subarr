@@ -31,6 +31,21 @@ def test_cosine_handles_zero_vector():
     assert qe.cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
 
 
+def test_cosine_returns_builtin_float_for_numpy_inputs():
+    # LaBSE returns numpy float32 vectors; the score must be a builtin float so
+    # the sweep result is JSON-serializable for SQLite persistence (a numpy
+    # float32 leaking through crashed arena_store.save → run stuck "running").
+    import json
+    import pytest
+    np = pytest.importorskip("numpy")  # QE-backend dep; skipped on base CI
+    qe = _qe()
+    a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    b = np.array([0.5, 0.5, 0.0], dtype=np.float32)
+    score = qe.cosine_similarity(a, b)
+    assert type(score) is float
+    json.dumps(score)  # must not raise
+
+
 def test_qe_adequacy_high_when_source_and_hyp_align():
     qe = _qe()
     # fake embedder: aligned strings → near-parallel vectors

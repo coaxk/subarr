@@ -101,6 +101,10 @@ class CoverageItem:
     #   "ffprobe" — the file's metadata tag only (lowest trust — wrong on retags)
     #   None      — no confident source (suspect / unknown / no audio)
     audio_source: str | None = None
+    # #90: Whisper heard a different language than the file's tag/metadata claimed
+    # (e.g. tagged 'rus' but the audio is Korean). Frontend surfaces a
+    # "tag → audio (verified)" badge so the mislabel is visible.
+    audio_label_whisper_mismatch: bool = False
     # Scoring
     score: int = 0
     score_reasons: list[str] = field(default_factory=list)
@@ -157,6 +161,7 @@ class CoverageItem:
             "bazarr_blind": self.bazarr_blind,
             "audio_verified": self.audio_verified,
             "audio_source": self.audio_source,
+            "audio_label_whisper_mismatch": self.audio_label_whisper_mismatch,
             "score": self.score,
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
@@ -451,8 +456,13 @@ def _stale_for_episode(
         if not ep_pattern_hit:
             return False, []
         sidecars = pattern_matches
-    langs_present = _langs_in_sidecars(sidecars)
-    wanted_codes = {(c or "").lower()[:2] for c in (missing_subs or []) if c}
+    # [#118] Normalize BOTH sides to canonical ISO-639-1 before comparing — a
+    # '.ger.srt'/'.deu.srt' sidecar must satisfy a 'de' wanted, and '.eng.srt'
+    # an 'en' wanted. The old raw `[:2]` truncation made 'eng' != 'en' and
+    # 'ger'/'deu' un-matchable, raising phantom gaps for langs already on disk.
+    from .langs import normalize_lang
+    langs_present = {normalize_lang(l) for l in _langs_in_sidecars(sidecars)}
+    wanted_codes = {normalize_lang(c) for c in (missing_subs or []) if c}
     # If no missing-subs language list (shouldn't happen for Bazarr wanted
     # rows but be defensive) → any sidecar counts as stale.
     if not wanted_codes:
@@ -671,7 +681,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                           tautulli_hints: dict[str, str] | None = None,
                           user_verifications: dict[str, str] | None = None,
                           failed_idx: dict[str, list] | None = None,
-                          plex_hints: dict[str, str] | None = None) -> None:
+                          plex_hints: dict[str, str] | None = None,
+                          whisper_verifications: dict[str, str] | None = None) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
     audio_langs + file_canonical_path onto the item and mark it verified.
@@ -694,7 +705,8 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                 item.audio_label_notes.extend(notes)
             _classify_audio_label(item, tautulli_hints=tautulli_hints,
                                   user_verifications=user_verifications,
-                                  plex_hints=plex_hints)
+                                  plex_hints=plex_hints,
+                                  whisper_verifications=whisper_verifications)
             item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
@@ -709,7 +721,8 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
                         tautulli_hints: dict[str, str] | None = None,
                         user_verifications: dict[str, str] | None = None,
                         failed_idx: dict[str, list] | None = None,
-                        plex_hints: dict[str, str] | None = None) -> None:
+                        plex_hints: dict[str, str] | None = None,
+                        whisper_verifications: dict[str, str] | None = None) -> None:
     """Movies: a single video file lives directly under the movie dir.
     First probe under the movie's canonical wins → verified. No probe but a
     recorded failure → probe_failed. Otherwise unprobed."""
@@ -730,14 +743,16 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
         item.audio_label_notes.extend(notes)
     _classify_audio_label(item, tautulli_hints=tautulli_hints,
                           user_verifications=user_verifications,
-                          plex_hints=plex_hints)
+                          plex_hints=plex_hints,
+                          whisper_verifications=whisper_verifications)
     item.verification_state = "verified"
 
 
 def _classify_audio_label(item: CoverageItem,
                           tautulli_hints: dict[str, str] | None = None,
                           user_verifications: dict[str, str] | None = None,
-                          plex_hints: dict[str, str] | None = None) -> None:
+                          plex_hints: dict[str, str] | None = None,
+                          whisper_verifications: dict[str, str] | None = None) -> None:
     """v1.1-O: cross-check audio_langs against Sonarr/Radarr originalLanguage.
 
     Three outcomes:
@@ -759,13 +774,45 @@ def _classify_audio_label(item: CoverageItem,
     # Layer 0 (absolute): user verification beats everything.
     file_path = item.file_canonical_path
     if user_verifications and file_path and file_path in user_verifications:
+        from .langs import normalize_lang
         confirmed = user_verifications[file_path]
+        prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
         item.audio_langs = [confirmed]
-        item.audio_label_notes.append(f"user-confirmed: {confirmed!r}")
+        note = f"user-confirmed: {confirmed!r}"
+        # #90 (C): a verification that disagrees with the file's tag is a
+        # mismatch too ("you said X, tag said Y") — show the same dot.
+        if prior and normalize_lang(confirmed) not in {normalize_lang(l) for l in prior}:
+            note += f" — tags claimed {prior}"
+            item.audio_label_whisper_mismatch = True
+        item.audio_label_notes.append(note)
         item.audio_label_suspect = False
         item.audio_label_unknown = False
         item.audio_verified = True
         item.audio_source = "user"   # refined to whisper/auto in the post-pass
+        return
+    # Layer 1 (#90): Whisper-verified spoken language — subarr LISTENED to the
+    # audio (robust multi-chunk detect), so it beats tag-derived Plex/Tautulli
+    # picks (which inherit the file's mislabel) and the ffprobe tag; it sits
+    # below an explicit user confirmation. DORMANT until verifications are
+    # supplied (the on-demand trigger is slice 3) → no behaviour change yet.
+    if whisper_verifications and file_path and file_path in whisper_verifications:
+        from .langs import normalize_lang
+        verified = (whisper_verifications[file_path] or "").lower()
+        prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
+        item.audio_langs = [verified]
+        note = f"Whisper-verified audio = {verified!r} (heard the audio; overrides tags)"
+        if prior and verified not in {normalize_lang(l) for l in prior}:
+            note += f" — tags claimed {prior}, but the audio is {verified!r}"
+            item.audio_label_whisper_mismatch = True
+        item.audio_label_notes.append(note)
+        item.audio_label_suspect = False
+        item.audio_label_unknown = False
+        # NOTE: deliberately NOT setting audio_verified — that flag is coupled to
+        # USER-propagated-to-Sonarr semantics (drives the "awaiting Bazarr sync"
+        # reason, and the frontend badge treats it as 'user'). A machine
+        # detection signals via audio_source="whisper" instead, so it badges as
+        # the Whisper ✓ tier and never claims a Sonarr propagation it didn't do.
+        item.audio_source = "whisper"
         return
     title_lc = (item.title or "").strip().lower()
     if tautulli_hints and title_lc in tautulli_hints:
@@ -794,7 +841,10 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_unknown = False
         item.audio_source = "plex"
         return
-    langs = [(l or "").lower() for l in (item.audio_langs or [])]
+    # [#118] Normalize audio tags to ISO-639-1 so the English-on-foreign-show
+    # suspect check below catches eng/en-US, not just the bare 'en'/'eng' forms.
+    from .langs import normalize_lang
+    langs = [normalize_lang(l) or "und" for l in (item.audio_langs or [])]
     only_und = bool(langs) and all(l in ("", "und") for l in langs)
     no_data = not langs
     if only_und or no_data:
@@ -808,7 +858,7 @@ def _classify_audio_label(item: CoverageItem,
     if orig and orig != "english":
         non_und = [l for l in langs if l not in ("", "und")]
         # Suspect when EVERY identified track is English on a foreign show.
-        if non_und and all(l in ("en", "eng") for l in non_und):
+        if non_und and all(l == "en" for l in non_und):  # langs are normalized
             item.audio_label_suspect = True
             item.audio_label_notes.append(
                 f"originalLanguage={item.original_language!r} but audio tags "
@@ -1136,18 +1186,35 @@ async def build_coverage(
                 prefix = "/".join(parts[:i])
                 probe_failed_by_prefix.setdefault(prefix, []).append(path)
 
-    # v1.1-O Layer 4: load user verifications. These OVERRIDE all
-    # auto-detected signals — user has ground truth.
-    #
-    # #69: the lookups are intent-aware — per-file verifications are the
-    # exact-match fast path, and declared series-level intents are layered
-    # underneath via longest-prefix fallback so NEW episodes of a declared
-    # series auto-resolve as verified during this build (no per-file
-    # re-verification needed). verification_sources mirrors the inheritance
-    # so the UI confidence badge attributes inherited rows to the user.
+    # #69 + #90 reconciled: build the intent-aware verification lookup (series-
+    # intent prefix fallback so NEW episodes of a declared-language series
+    # auto-resolve as verified during this build), THEN split by source so each
+    # verification reaches the right classifier layer:
+    #   - user/plex/series-intent → user_verifications (Layer 0; user ground
+    #     truth, drives Sonarr-propagation + "awaiting sync"). Stays a
+    #     _SeriesIntentLookup so the series-intent prefix fallback survives the
+    #     split (intents are always user-sourced, never machine).
+    #   - whisper/auto machine detect (#90) → whisper_verifications (Layer 1;
+    #     overrides tags + flags mismatch, NOT user-propagation). Per-file only —
+    #     machine detection never declares a series intent.
+    # Splitting avoids the user layer (which runs first) grabbing a whisper row
+    # and conflating machine detection with user action.
     user_verifications, verification_sources = _build_verification_lookup(
         audio_lang_store
     )
+
+    def _is_machine(p: str) -> bool:
+        s = (verification_sources.get(p) or "").lower()
+        return "whisper" in s or "auto" in s
+
+    # Machine rows are per-file entries in the lookup's base dict; pull them into
+    # a plain dict, then drop them from the user lookup (its series-intent
+    # fallback stays intact since intents are never machine-sourced).
+    whisper_verifications: dict[str, str] = {
+        p: l for p, l in user_verifications.items() if _is_machine(p)
+    }
+    for _p in whisper_verifications:
+        user_verifications.pop(_p, None)
 
     items: list[CoverageItem] = []
 
@@ -1252,7 +1319,8 @@ async def build_coverage(
                               tautulli_hints=activity.get("audio_lang_hints") or {},
                               user_verifications=user_verifications,
                               failed_idx=probe_failed_by_prefix,
-                              plex_hints=plex_audio_hints)
+                              plex_hints=plex_audio_hints,
+                              whisper_verifications=whisper_verifications)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1295,7 +1363,8 @@ async def build_coverage(
                             tautulli_hints=activity.get("audio_lang_hints") or {},
                             user_verifications=user_verifications,
                             failed_idx=probe_failed_by_prefix,
-                            plex_hints=plex_audio_hints)
+                            plex_hints=plex_audio_hints,
+                            whisper_verifications=whisper_verifications)
         _score(
             item, tt_signals,
             now_playing_titles=activity["now_playing_titles"],
@@ -1334,6 +1403,7 @@ async def build_coverage(
             probe_by_series_prefix=probe_by_series_prefix,
             failed_idx=probe_failed_by_prefix,
             user_verifications=user_verifications,
+            whisper_verifications=whisper_verifications,
             sources=sources,
             plex_hints=plex_audio_hints,
         )
@@ -1363,6 +1433,7 @@ async def _add_bazarr_blind_synthetic_rows(
     probe_by_series_prefix: dict[str, list[tuple[str, Any]]],
     failed_idx: dict[str, list] | None = None,
     user_verifications: dict[str, str],
+    whisper_verifications: dict[str, str] | None = None,
     sources: dict,
     plex_hints: dict[str, str] | None = None,
 ) -> list[CoverageItem]:
@@ -1531,6 +1602,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 user_verifications=user_verifications,
                 failed_idx=failed_idx,
                 plex_hints=plex_hints,
+                whisper_verifications=whisper_verifications,
             )
             # Bazarr-blind requires positive evidence the file is not
             # what Bazarr thinks it is. Two ways to get there:
@@ -1589,7 +1661,10 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     `None` (no probe data) is treated as 'insufficient evidence'."""
     if audio_langs is None:
         return False
-    norm = [(l or "").strip().lower() for l in audio_langs]
+    # [#118] Normalize to ISO-639-1 so eng/en-US collapse to 'en' — otherwise a
+    # region-tagged English track on a foreign show slips the mislabel check.
+    from .langs import normalize_lang
+    norm = [normalize_lang(l) or "und" for l in audio_langs]
     if not norm:
         # Empty audio_langs list = probe ran but found nothing → undetected,
         # which IS a bazarr-blind candidate (Bazarr also has nothing to go on).
@@ -1599,7 +1674,7 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     if not non_und:
         # All und → undetected, treat as candidate.
         return True
-    return all(l in ("en", "eng") for l in non_und)
+    return all(l == "en" for l in non_und)  # norm is ISO-639-1
 
 
 def _is_en_sidecar_for(srt_path: str, file_stem: str) -> bool:

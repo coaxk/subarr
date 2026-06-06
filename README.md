@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v1.1-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-410_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v1.2-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-603_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -15,11 +15,16 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 1.1 — speech-aware audio
+## New in 1.2 — the Tuning Lab and verified audio
 
-- **Review clips land on dialogue, not dead air.** When you check a file's audio language by ear, subarr now uses [silero](https://github.com/snakers4/silero-vad) voice-activity detection to pick a clip that sits on actual speech — instead of the old fixed 5-second window that landed on silence or intro music most of the time. Opt-in (one click in onboarding or Settings; pulls a ~2 MB model). When it's off or undownloaded, it falls back cleanly to the previous behaviour.
-- **Settings persist across restarts.** A config-persistence layer means UI toggles survive a container restart (env vars still win — they're authoritative).
-- *(Foundation, internal):* the same speech detection powers the Whisper-tuning **tournament** judge — validated this release, surfacing as a user feature in v1.2.
+- **Tuning Lab: find the Whisper settings that actually win on your hardware.** Pick a file, choose recipes to compare, and subarr runs each one against your live subgen and lets a validated tournament judge rank them objectively. It auto-samples up to three short clips per file (dialogue, a speech-to-silence edge, a quiet stretch) and a recipe has to win across clips, not on a lucky one. A per-language "herd" view aggregates results so a dependable default emerges for each language, and nothing is ever written to your library.
+- **Audio-language verification: subarr listens and tells you the truth about the track.** The *arr metadata chain can only parrot whatever Sonarr or Radarr tagged. Subarr verifies the spoken language by ear with robust multi-chunk Whisper detection and tells three real situations apart: a mislabeled track (tagged Danish, audio unanimously Dutch) with a one-click correction that flows back into coverage, a bilingual file flagged as mixed instead of mis-collapsed, and "Whisper unsure" that falls back to the known tag rather than guessing. Multi-track files (an original plus a dub) are swept per track. An Audio language issues panel collects every flagged file in one place.
+- **Library-wide audio scan.** One click runs that same listening pass over your whole library, not just files you happened to sweep. It is opt-in, throttled to a background trickle, GPU-polite (it pauses while live Tuning Lab sweeps run), and resumable across restarts. Findings land in the same Audio language issues panel and drop out once you confirm them.
+- **Global recipe leaderboard.** Per-language herds roll up into one overall ranking, scored by the mean of per-language means so each language counts equally. Medals for the top three, a confidence signal, and an expandable per-language breakdown.
+- **Edit integrations in-app.** Add or change Bazarr, Sonarr, Radarr, Tautulli URLs and API keys plus the Plex token from Settings, with test-connection and live apply. No env edit, no restart. Env-set fields stay authoritative and read-only.
+- **Push-based completion.** Subarr consumes subgen's completion webhook instead of polling the queue (polling stays as the fallback).
+
+*Speech-aware audio (silero VAD) and config persistence landed in 1.1; see the changelog for history.*
 
 ---
 
@@ -28,6 +33,8 @@ Subarr decides what subtitles are actually missing across your library, which pr
 - **See your whole library's subtitle coverage at a glance.** Per-language gap view across Sonarr + Radarr + Bazarr, with audio language we trust.
 - **We verify before we call it a gap.** A row only becomes an actionable gap once subarr has actually probed the file — so it never queues something that already has an embedded sub subgen would skip. Un-probed files wait in a visible "Analyzing" bucket, not silently dropped or falsely surfaced.
 - **Calibrated audio language detection.** Three Whisper chunks across the file, conservative voting, confidence-gated. Cheap to skip files Whisper would hallucinate on.
+- **We don't parrot the metadata, we verify it.** Subarr listens to the actual audio and tells a mislabeled track from a bilingual one from "genuinely unsure", then offers a one-click fix that flows back into coverage. Beside Bazarr, never instead of it.
+- **Tune Whisper to your hardware.** The Tuning Lab sweeps recipe variants against your live subgen, a validated judge ranks them, and a per-language leaderboard surfaces the dependable default for each language.
 - **Don't burn GPU on content nobody watches.** Scheduled walks with backpressure. Tautulli playback signal influences priority.
 - **Provenance ledger.** Which provider gave you which sub, when, why. Survives re-search runs.
 - **Embedded subs are first-class.** SDH, forced, PGS, full, all distinguished, not collapsed.
@@ -48,8 +55,9 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       - UMASK=022
+      - SUBARR_DB_PATH=/data/subarr.db     # SQLite + persisted settings live here
     volumes:
-      - ./subarr/config:/config
+      - ./subarr/data:/data                # subarr.db (override the path with SUBARR_DB_PATH)
       - /path/to/media:/media/library:rw   # same path Bazarr and subgen see
 ```
 
@@ -59,6 +67,8 @@ docker compose up -d
 ```
 
 The wizard tries to auto-detect Sonarr/Radarr/Bazarr/Tautulli/subgen on your existing Docker network and prefills URLs. Manual entry is available at every step as a safety net. Auto-detect plus manual fallback at every step is the design rule.
+
+After onboarding you can edit any integration's URL and API key (and the Plex token) directly in Settings, with test-connection and live apply. Values you set via env vars stay authoritative and show as read-only.
 
 **Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned `.srt` files whose basename drifted from the video. Read-only blocks this. If you don't want it, set `SUBARR_SIDECAR_RENAME=0` and mount `:ro`, the rest of the product works.
 
@@ -81,7 +91,7 @@ The most-asked question. Quick answer.
 | You have | What to do |
 |---|---|
 | Vanilla `mccloud/subgen` | Keep it. Add subarr next to it. Subarr detects vanilla and runs in compat mode. Coverage, provenance, scheduling, audio-language review all work. You miss calibrated multi-chunk detection and queue cancel, both require our subgen patches. |
-| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 13 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
+| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 20 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
 | No subgen yet | Start with `ghcr.io/coaxk/subarr-subgen`. Everything works on day one. |
 | You run Bazarr only | Subarr adds a coordination layer beside Bazarr. Bazarr keeps doing what it does. Subarr surfaces what is actually missing, schedules the work, and writes results back. |
 
@@ -104,10 +114,11 @@ Subarr's value compounds with: multi-language libraries, three or more Bazarr pr
 | Dashboard | Live column-as-stage pipeline (discovered → probing → bazarr-wanted → transcribing → written-back), GPU widget, integration health, next scheduled run, recent activity |
 | Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue |
 | Library | Tree across all series and movies. Audio / sub / runtime columns with probe-state indicators |
-| Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row and **bulk** requeue / remove / cancel (multi-select across every section). Promote / demote / reorder / pause are roadmap (need subgen v4.9 queue-mutation endpoints) |
+| Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row and **bulk** requeue / remove / cancel (multi-select across every section). Promote / demote / reorder / pause are roadmap (need a subgen queue-mutation patch first) |
 | Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, Layer 3 Whisper detection inline. **Speech-aware clip selection (1.1):** the player lands on actual dialogue via silero VAD, with a "🎙 speech-detected" badge |
 | Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification |
-| Settings | Per-language Whisper kwargs, integrations health, system actions, telemetry transparency panel showing the exact JSON last sent. **Speech-aware audio (1.1):** enable/disable + download the silero model |
+| Tuning Lab | Config arena: sweep Whisper recipes against your live subgen, judged by a validated tournament judge across multiple strata clips. Per-language herd view, global recipe leaderboard, and an Audio language issues panel surfacing mislabeled / bilingual / multi-track files from on-demand sweeps and the opt-in library-wide scan |
+| Settings | Per-language Whisper kwargs, **in-app integration editing** (URLs + API keys + Plex token, test-connection + live apply, env-set fields stay read-only), integrations health, system actions, telemetry transparency panel showing the exact JSON last sent. **Speech-aware audio:** enable/disable + download the silero model |
 
 ### About ollama (optional, recommended)
 
@@ -141,6 +152,18 @@ Real library, real foreign-language content — nothing staged.
 **Review** — manual audio-language verification with an audio player, multi-track support, and inline Whisper detection. In 1.1 the clip lands on actual dialogue (silero VAD), not dead air.
 
 ![Review](docs/screenshots/05-review.png)
+
+**Tuning Lab** — sweep Whisper recipes against your live subgen; a validated judge ranks them across multiple clips, with plain-language guidance and per-clip winners. Nothing is written to your library.
+
+![Tuning Lab](docs/screenshots/10-tuning-lab.png)
+
+**Recipe leaderboard** — every recipe's per-language results rolled into one overall ranking (mean of per-language means, so each language counts equally). Medals for the top three, a confidence signal, and an expandable per-language breakdown.
+
+![Recipe leaderboard](docs/screenshots/11-leaderboard.png)
+
+**Audio language issues** — subarr listened and disagreed with the tag: mislabeled, bilingual, and multi-track files flagged in one place, from on-demand sweeps and the opt-in library-wide scan. One click to review and confirm.
+
+![Audio language issues](docs/screenshots/12-audio-issues.png)
 
 **Rules** — auto-queue policy with score thresholds and language filters, plus a live "what would queue right now?" preview.
 
@@ -194,13 +217,13 @@ Once a verification exists, every downstream submission carries it through an ev
 
 **Will this work with Jellyfin / Emby?** Not yet — a candidate if there's demand. Open a feature request.
 
-## Known limitations (v1.1)
+## Known limitations (v1.2)
 
 Transparent before you install.
 
 - Requires `ghcr.io/coaxk/subarr-subgen` for calibrated Layer 3 detection, queue cancel, curated per-language `initial_prompt`s, and the safe-decode preset. Vanilla subgen works in compat mode but you miss these.
 - No built-in multi-user auth. Basic-auth env vars exist as a single-admin fallback. Run behind a reverse proxy (Authelia / Caddy / Traefik) for anything serious.
-- Queue reorder / promote / demote / pause aren't shipped yet — they need subgen patch v4.9 first. Requeue / remove / cancel work today.
+- Queue reorder / promote / demote / pause aren't shipped yet — they need a subgen queue-mutation patch first. Requeue / remove / cancel work today.
 - Auto-update is intentionally absent. Update notifications appear in the UI; you run the upgrade.
 - Plex activity signal goes through Tautulli (the bridge). Reading a show's *selected* audio language straight from Plex metadata is an opt-in extra (`PLEX_AUDIO_HINTS=1`), off by default.
 - Multi-episode disc images (a single `.iso` holding a whole season) can't be probed per-episode, so they're surfaced in a distinct "Couldn't analyze" (unsupported) bucket rather than becoming verified gaps or sitting in "Analyzing" forever. Standard per-episode files are unaffected.
@@ -229,10 +252,12 @@ Subarr ships with anonymous telemetry **on by default**. We are explicit about w
 
 **Never sent:** file paths, titles, IPs, hostnames, API keys, languages, anything user-fingerprintable. Enforced by a regression test on the client AND by an allow-list / forbidden-pattern check on the receiving Cloudflare Worker. Both pin against the same forbidden-fields list.
 
-**What it buys you:**
-- The v1.2 global Whisper kwargs leaderboard is built from aggregated telemetry. The more installs send their per-language kwargs plus verification outcomes, the more accurate the "best French settings" recommendation gets.
-- The v1.2 global provider success leaderboard is the same loop for Bazarr providers.
-- The v1.2 tuning lab pre-fills variant suggestions from cohort data.
+**What it buys you:** the Tuning Lab and recipe leaderboard shipped in 1.2 are the *local* half of a feedback loop. Telemetry is what lets the *global* half follow:
+- A global Whisper-kwargs leaderboard built from aggregated telemetry. The more installs send their per-language kwargs plus verification outcomes, the more accurate the "best French settings" recommendation gets.
+- A global provider success leaderboard, the same loop for Bazarr providers.
+- Tuning Lab variant suggestions pre-filled from cohort data.
+
+These cross-install loops are the post-1.2 roadmap (gated on a trustworthy reference-free quality judge before any crowd-aggregation); 1.2 ships the local lab + leaderboard they build on.
 
 **Where to verify:** Settings → Telemetry shows the exact JSON of the last ping. Receiving worker source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). Public stats dashboard at [`stats.subarr.com`](https://stats.subarr.com).
 
@@ -281,9 +306,9 @@ The Settings panel shows the current vs latest version per product with release 
 | Layer | Detail |
 |---|---|
 | Backend | Python 3.12 + FastAPI + httpx. Async throughout. |
-| Storage | Single SQLite file at `/config/subarr.db`. Hand-rolled migrations runner. |
+| Storage | Single SQLite file, default `/data/subarr.db` (override with `SUBARR_DB_PATH`). Hand-rolled migrations runner. |
 | Frontend | React 18 + esbuild. CDN React. Bundles committed so `pip install` ships a working SPA. |
-| Subgen drive | HTTP. 13 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
+| Subgen drive | HTTP. 20 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
 | Discovery | Read-only Docker API via [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy). |
 | Telemetry receiver | Cloudflare Worker + D1. Open source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). |
 
@@ -297,25 +322,26 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## Roadmap
 
-**v1.1 (this release)** — speech-aware audio:
+**v1.2 (this release)** — the Tuning Lab and verified audio:
 
-- **Speech-aware clip selection** (shipped, see top): silero VAD lands review clips on dialogue.
-- **Config persistence**: UI settings survive a container restart.
-- *Under the hood:* the Whisper-tuning tournament judge is built and validated this release (see [`docs/research/tournament-validation.md`](docs/research/tournament-validation.md)) — it surfaces as a user feature in v1.2.
+- **Tuning Lab** (shipped): sweep Whisper recipes against your live subgen, judged by the validated tournament judge, with per-language herd adoption.
+- **Global recipe leaderboard** (shipped): per-language herds rolled into one overall ranking, each language weighted equally.
+- **Audio-language verification + library-wide scan** (shipped): subarr listens and flags mislabeled, bilingual, and multi-track files, with one-click fixes that flow into coverage.
+- **In-app integration editing** (shipped): credentials editable from Settings, test-connection + live apply, no restart.
+- **Series-level audio-language intent** (shipped): declare a series' language once; new episodes inherit it as verified on the next coverage build.
 
-**v1.2** — the tuning lab + global feedback loops:
+**Later** — still on the list:
 
-- **In-app Whisper tuning lab**: run Whisper kwargs variants against a file, score them with the validated tournament judge, adopt the winner per language. (Judge validated in 1.1; UI + per-language adoption in 1.2.)
 - **Provider success leaderboard**: aggregate Bazarr per-provider history across opt-in installs into a global ranking. Closes "which subtitle providers actually deliver?", a long-standing Bazarr feature request.
-- **Cross-install kwargs aggregation** ranked by verification outcomes, and **"use community-best for &lt;language&gt;"** one-click adoption in Settings.
-- **Queue mutation**: promote, demote, reorder, pause. Requires subarr-subgen v4.9 patch first.
-- Series-level audio-language intent memory propagating to newly discovered episodes.
+- **Cross-install kwargs aggregation** ranked by verification outcomes, and **"use community-best for &lt;language&gt;"** one-click adoption (the global half of the Tuning Lab loop; gated on a trustworthy reference-free quality judge).
+- **Queue mutation**: promote, demote, reorder, pause. Requires a subgen queue-mutation patch first.
+- Jellyfin / Emby support if there's demand.
 
 ## The subgen patch story
 
-Subarr drives subgen through 13 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
+Subarr drives subgen through 20 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
 
-The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v4.7` current, with `latest`, `stable` (7-day soak), and per-version tags.
+The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v2026.05.3-r5` current, with `latest`, `stable` (7-day soak), and per-version tags.
 
 You do not need our patched image. See the "I already have subgen" table at the top.
 
@@ -327,7 +353,7 @@ cd subarr
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[dev]
 PYTHONPATH=src uvicorn subarr.app:app --reload --port 9922
-PYTHONPATH=src pytest -q                    # 410 passing
+PYTHONPATH=src pytest -q                    # 603 passing
 npm install && npm run build:frontend       # SPA bundles
 ```
 

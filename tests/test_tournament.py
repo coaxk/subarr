@@ -23,6 +23,44 @@ SLOPPY = "1\n00:00:00,000 --> 00:00:00,500\nA calm, readable line that flashes b
 BROKEN = "not a subtitle file at all\njust noise\n"
 
 
+# A silence clip = VAD ran and found NO speech (empty ranges). The ideal output
+# is empty; any text is hallucination (the "thank you for watching" artifact).
+SILENCE_CLIP: list = []
+HALLUCINATION = "1\n00:00:01,000 --> 00:00:04,000\nThank you for watching until the end.\n"
+
+
+def test_empty_output_wins_on_a_silence_clip():
+    # Harness-proven: on 8s of silence, default hallucinated a YouTube outro
+    # while noisy-robust (VAD) produced nothing. Empty is CORRECT here — it must
+    # beat the hallucination, not be disqualified below it.
+    t = _t()
+    quiet = t.score_entrant(t.Entrant(label="quiet", srt_text="", speech_ranges=SILENCE_CLIP))
+    halluc = t.score_entrant(t.Entrant(label="halluc", srt_text=HALLUCINATION, speech_ranges=SILENCE_CLIP))
+    assert not quiet.disqualified
+    assert quiet.composite >= 90.0           # correctly silent = clean pass
+    assert quiet.composite > halluc.composite  # and it beats the hallucination
+
+
+def test_hallucination_on_silence_is_penalised():
+    t = _t()
+    halluc = t.score_entrant(t.Entrant(label="halluc", srt_text=HALLUCINATION, speech_ranges=SILENCE_CLIP))
+    assert halluc.composite < 50.0           # text on a known-silent clip is hallucination
+
+
+def test_empty_still_disqualified_when_clip_has_speech():
+    # Dropout: speech was present but nothing was transcribed → still DQ.
+    t = _t()
+    dropout = t.score_entrant(t.Entrant(label="dropout", srt_text="", speech_ranges=[(0.0, 10.0)]))
+    assert dropout.disqualified and dropout.composite == 0.0
+
+
+def test_empty_still_disqualified_when_no_vad_data():
+    # ranges=None → can't tell silence from missing VAD → stay conservative (DQ).
+    t = _t()
+    e = t.score_entrant(t.Entrant(label="x", srt_text="", speech_ranges=None))
+    assert e.disqualified
+
+
 def test_clean_beats_sloppy():
     t = _t()
     result = t.run_tournament([

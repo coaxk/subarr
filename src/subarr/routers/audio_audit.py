@@ -1,0 +1,77 @@
+"""#155 phase 2 — library-wide audio-language audit API.
+
+POST /api/audio-audit/start   kick the throttled background walker (409 if running)
+POST /api/audio-audit/stop    cancel the walker
+GET  /api/audio-audit         current progress + the actionable findings
+
+The walker is OPT-IN (never auto-started) and GPU-polite (yields to live tuning-
+lab sweeps), so starting it is safe even mid-sweep — it just trickles in the
+background and pauses while sweeps run.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Request
+
+router = APIRouter(prefix="/api/audio-audit", tags=["audio-audit"])
+
+
+_SCOPES = ("coverage", "library")
+
+
+@router.post("/start", status_code=202)
+async def start_audit(request: Request, scope: str = "coverage") -> dict:
+    # Validate scope BEFORE the running-check so a typo is a clear 400, not a
+    # confusing 409. coverage = the tracked set (default); library = a full
+    # media-root walk (opt-in deep scan).
+    if scope not in _SCOPES:
+        raise HTTPException(400, detail=f"scope must be one of {_SCOPES}")
+    walker = request.app.state.audio_audit
+    if walker.is_running():
+        raise HTTPException(409, detail="audio-language audit already running")
+    state = await walker.start(scope=scope)
+    return {"state": state.to_dict(), "scope": scope}
+
+
+@router.post("/stop")
+async def stop_audit(request: Request) -> dict:
+    walker = request.app.state.audio_audit
+    await walker.stop()
+    state = walker.get_state()
+    return {"state": state.to_dict() if state is not None else None}
+
+
+def _verified_paths(request: Request) -> set[str]:
+    """Canonical paths the user has already adjudicated (audio-lang verification
+    = ground truth). Normalized to bare (no leading slash) so a finding stored
+    with/without a leading slash still matches. Used to drop resolved files from
+    the findings list — and to keep them dropped across a re-scan, which skips
+    unchanged files by mtime and would otherwise leave the stale row forever."""
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is None:
+        return set()
+    try:
+        # ONLY user confirmations resolve a finding. The walker's own Tier 2
+        # `whisper-robust` auto-verification must NOT hide the finding (else it
+        # would self-erase everything it writes) — the user still gets to
+        # confirm or correct it.
+        return {(p or "").lstrip("/")
+                for p, src in store.get_all_sources_as_lookup().items()
+                if src == "user"}
+    except Exception:
+        return set()
+
+
+@router.get("")
+async def get_audit(request: Request) -> dict:
+    walker = request.app.state.audio_audit
+    store = request.app.state.audio_audit_store
+    state = walker.get_state()
+    verified = _verified_paths(request)
+    findings = [f.to_dict() for f in store.list_findings()
+                if (f.canonical_path or "").lstrip("/") not in verified]
+    return {
+        "state": state.to_dict() if state is not None else None,
+        "findings": findings,
+        "counts": store.count_by_status(),
+        "summary": store.scan_summary(),
+    }

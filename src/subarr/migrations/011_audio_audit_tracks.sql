@@ -1,0 +1,12 @@
+-- #155: store the per-track audio languages on an audit finding.
+--
+-- The `multitrack` verdict comes from ffprobe seeing >=2 distinct audio-track
+-- language tags, but `languages_heard` only reflects what Whisper heard in the
+-- ONE track the walker listened to (the default). So a genuinely multi-track
+-- file could show a single language on the right — confusing next to a
+-- "multi-track" badge. This column stores the actual track languages (e.g.
+-- ["de","ru"]) so the UI can show "DE + RU" for multi-track rows.
+--
+-- Nullable/default '[]': existing rows pre-date the column; the migrate runner
+-- tolerates "duplicate column name" on transitional DBs.
+ALTER TABLE audio_lang_audit ADD COLUMN track_languages TEXT NOT NULL DEFAULT '[]';

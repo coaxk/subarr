@@ -12,16 +12,41 @@ from fastapi.staticfiles import StaticFiles
 
 
 class RevalidatingStaticFiles(StaticFiles):
-    """Static files that must be revalidated before reuse. The v1 HTML
-    references bundles by a fixed name with no cache-bust, so without this
-    browsers heuristic-cache the bundles and serve STALE UI after every
-    update. `no-cache` forces an ETag revalidation each load — cheap 304s
-    when unchanged, fresh bundle the instant it changes. ETag/Last-Modified
-    are still sent by the base class, so this stays bandwidth-efficient."""
+    """Static files with path-aware Cache-Control (issue #138).
+
+    Default = `no-cache`: the v1 HTML references its JS bundles by a fixed
+    name with NO content hash, so any heuristic caching serves STALE UI
+    after an update. `no-cache` forces an ETag revalidation each load —
+    cheap 304s when unchanged, fresh bundle the instant it changes.
+    Bundles (v1/home-hifi/*.bundle.js) and HTML therefore stay no-cache.
+
+    Exception = a 1-week revalidated cache for assets that are either
+    content-stable or change only with a version bump: pinned vendor JS,
+    favicons, flag SVGs, and the OG card. NOT `immutable` (filenames have
+    no hash, so we still want a conditional revalidation, just not on
+    every navigation). `path` here is RELATIVE to the mount root (e.g.
+    "v1/vendor/react.production.min.js") — no "/static" prefix, no leading
+    slash — so the prefixes below are matched in that space."""
+
+    # Long-cache, version-stable assets, matched against the mount-relative
+    # path (starlette passes get_response a prefix-less path).
+    _LONG_CACHE_PREFIXES = (
+        "v1/vendor/",
+        "v1/flags/",
+        "v1/favicon-",
+    )
+    _LONG_CACHE_EXACT = (
+        "v1/favicon.svg",
+        "v1/og-card.png",
+    )
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-cache"
+        norm = path.replace("\\", "/").lstrip("/")
+        if norm in self._LONG_CACHE_EXACT or norm.startswith(self._LONG_CACHE_PREFIXES):
+            resp.headers["Cache-Control"] = "max-age=604800, must-revalidate"
+        else:
+            resp.headers["Cache-Control"] = "no-cache"
         return resp
 
 from . import __version__
@@ -38,6 +63,7 @@ from .provenance import ProvenanceStore
 from .onboarding import OnboardingStore
 from .routers import (
     admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
+    audio_audit as r_audio_audit,
     audio_lang as r_audio_lang,
     bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
     discovery as r_discovery, household as r_household,
@@ -47,8 +73,10 @@ from .routers import (
     queue, scan, schedule as r_schedule, sidecar as r_sidecar,
     telemetry as r_telemetry, updates as r_updates, vad as r_vad,
 )
+from . import arena_explain as _arena_explain
 from .arena import AsrRunner
 from .arena_service import ArenaService
+from .arena_store import ArenaStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
@@ -58,6 +86,75 @@ from .subgen_client import SubgenClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
+
+
+def _arena_fallback_lang(app_, media_path):
+    """Arena fallback source language when Whisper robust detection is
+    inconclusive: the file's KNOWN spoken/audio language.
+
+    Tier 1 — the ffprobe audio-stream tag (probe_store).
+    Tier 2 — coverage's `audio_langs`, which folds in arr mediaInfo. This
+    catches files whose ffprobe audio track is UNTAGGED (language=null) but
+    Sonarr/Radarr knows the spoken language (e.g. Black Wedding: ffprobe tag
+    null, Sonarr original_language 'Serbian', but the audio is Norwegian — and
+    coverage's AUDIO column correctly shows `nor`). We use audio_langs (the
+    spoken track), NOT original_language (the show's production-language
+    metadata, which can differ from what's actually spoken).
+
+    Returns an ISO-639-1 code, or None (→ the herd's 'undetermined' bucket)."""
+    from .langs import normalize_lang
+    canon = (media_path or "").strip().lstrip("/")
+    # Tier 0: a user's manual audio-lang verification (incl. one set via the
+    # tuning-lab "set language" action) — ground truth, so a corrected file's
+    # future sweeps auto-resolve.
+    try:
+        als = getattr(app_.state, "audio_lang", None)
+        v = als.get(canon) if als is not None else None
+        code = normalize_lang(getattr(v, "lang_code", None) or "")
+        if code and code != "und":
+            return code
+    except Exception:
+        pass
+    # Tier 1: ffprobe audio-stream language tag.
+    try:
+        store = getattr(app_.state, "probe_store", None)
+        pr = store.get(canon) if store is not None else None
+        for a in (getattr(pr, "audio", None) or []):
+            code = normalize_lang(getattr(a, "language", None) or "")
+            if code and code != "und":
+                return code
+    except Exception:
+        pass
+    # Tier 2: coverage's audio_langs (ffprobe + arr mediaInfo merged).
+    try:
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        for it in (getattr(snap, "items", None) or []):
+            if it.get("file_canonical_path") == canon or it.get("canonical_path") == canon:
+                for al in (it.get("audio_langs") or []):
+                    code = normalize_lang(al)
+                    if code and code != "und":
+                        return code
+    except Exception:
+        pass
+    return None
+
+
+def _arena_audio_tracks(app_, media_path):
+    """The file's audio-TRACK languages (normalized ISO-639-1) from the ffprobe
+    streams in probe_store. ≥2 distinct = a multi-track file (e.g. an original +
+    a dub), which the Tuning Lab can only sweep ONE track of — surfaced as a
+    'multitrack' advisory distinct from single-track bilingual content."""
+    from .langs import normalize_lang
+    out = []
+    try:
+        store = getattr(app_.state, "probe_store", None)
+        pr = store.get((media_path or "").strip().lstrip("/")) if store is not None else None
+        for a in (getattr(pr, "audio", None) or []):
+            out.append(normalize_lang(getattr(a, "language", None) or "") or None)
+    except Exception:
+        return []
+    return out
 
 
 @asynccontextmanager
@@ -101,15 +198,44 @@ async def lifespan(app_: FastAPI):
         # Best-effort anonymous error-class recording for telemetry.
         error_recorder=lambda cls: app_.state.errors.record(cls),
     )
-    # #131 tuning-lab arena. build_runner resolves subgen + caps LIVE (closure
+    # #131 tuning-lab arena. Sweeps persist (SQLite) so history survives a
+    # restart and feeds the federated tournament (#124). Reconcile any run that
+    # was mid-flight when the process last died → error, so the UI never shows a
+    # forever-spinning sweep. build_runner resolves subgen + caps LIVE (closure
     # over app_.state) so an onboarding client-swap or a subgen upgrade picked
     # up by the watchdog is reflected on the next run without a restart.
+    app_.state.arena_store = ArenaStore(settings.db_path)
+    _orphaned = app_.state.arena_store.reconcile_interrupted()
+    if _orphaned:
+        log.info("arena: marked %d interrupted sweep(s) as errored on boot", _orphaned)
+    # #136: age-based retention — arena_runs is append-only and grows unbounded.
+    # Prune sweeps older than the retention window on boot (0/negative disables).
+    if settings.arena_retention_days > 0:
+        import time as _time
+        _cutoff = _time.time() - settings.arena_retention_days * 86400
+        _pruned = app_.state.arena_store.prune_older_than(_cutoff)
+        if _pruned:
+            log.info("arena: pruned %d sweep(s) older than %d days on boot",
+                     _pruned, settings.arena_retention_days)
     app_.state.arena = ArenaService(
+        app_.state.arena_store,
         build_runner=lambda run: AsrRunner(
             app_.state.subgen,
             capabilities=getattr(app_.state, "subgen_caps", None),
             source_language=run.source_language,
+            track=getattr(run, "track_index", 0),
         ),
+        # ollama EXPLAINS the result in plain language (not scoring). Resolved
+        # live so an onboarding ollama-config swap is picked up without restart.
+        explainer=lambda result, media_path: _arena_explain.explain(
+            result, media_path, getattr(app_.state, "ollama", None)),
+        # Fallback source language when Whisper robust detection is inconclusive:
+        # the file's KNOWN audio language from the ffprobe tag (probe_store).
+        # Resolved live (probe_store is created later in lifespan; this closure
+        # runs only at sweep time, by which point it exists).
+        lang_fallback=lambda media_path: _arena_fallback_lang(app_, media_path),
+        # Audio-track languages → 'multitrack' advisory (original + dub etc.).
+        track_info=lambda media_path: _arena_audio_tracks(app_, media_path),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
@@ -146,6 +272,115 @@ async def lifespan(app_: FastAPI):
     app_.state.enrichment = EnrichmentStore(settings.db_path)
     app_.state.probe_store = ProbeStore(settings.db_path)
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
+    # #155 phase 2: library-wide audio-language audit walker. OPT-IN (started
+    # only via POST /api/audio-audit/start) + throttled + GPU-polite (yields to
+    # live tuning-lab sweeps). The worklist is the coverage snapshot's files
+    # that have a known audio tag; busy_check reports active arena sweeps.
+    from .audio_audit import AudioAuditWalker
+    from .audio_audit_store import AudioAuditStore
+    from .langs import normalize_lang as _normalize_lang
+
+    def _safe_mtime(canonical: str):
+        # File mtime makes the walk resumable (a re-scan skips unchanged files).
+        # Best-effort: a missing/unreadable file just gets None (always re-checked).
+        try:
+            from .paths import canonical_to_fs as _c2fs
+            return _c2fs(canonical).stat().st_mtime
+        except Exception:
+            return None
+
+    def _coverage_tag_map():
+        # {canonical_path: tag_lang} for files the coverage snapshot knows — used
+        # to give library-scope files a tag (so mislabel can fire) when one exists.
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        out = {}
+        for it in ((snap.items if snap is not None else None) or []):
+            c = it.get("file_canonical_path") or it.get("canonical_path")
+            audio = it.get("audio_langs") or []
+            if c and audio:
+                tag = _normalize_lang(audio[0])
+                if tag:
+                    out[c] = tag
+        return out
+
+    def _coverage_worklist():
+        # Default scope: the tracked coverage set, files with a known audio tag.
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        if snap is None:
+            return []
+        out = []
+        seen = set()
+        for it in (snap.items or []):
+            c = it.get("file_canonical_path") or it.get("canonical_path")
+            audio = it.get("audio_langs") or []
+            if not c or not audio or c in seen:
+                continue
+            tag = _normalize_lang(audio[0])
+            if not tag:
+                continue
+            seen.add(c)
+            out.append((c, tag, _safe_mtime(c)))
+        return out
+
+    def _library_worklist():
+        # Opt-in deep scan: every video file under the media root, not just the
+        # tracked set. Tags come from coverage where known (else None → bilingual/
+        # multitrack still detected, mislabel needs a tag to disagree with).
+        import os
+        from .paths import VIDEO_EXTS, fs_to_canonical
+        root = settings.media_root
+        tag_map = _coverage_tag_map()
+        out = []
+        seen = set()
+        try:
+            walk = os.walk(root)
+        except Exception:
+            return []
+        for dirpath, _dirs, files in walk:
+            for fn in files:
+                dot = fn.rfind(".")
+                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
+                    continue
+                fp = os.path.join(dirpath, fn)
+                try:
+                    from pathlib import Path as _P
+                    c = fs_to_canonical(_P(fp))
+                except Exception:
+                    continue
+                if c in seen:
+                    continue
+                seen.add(c)
+                try:
+                    mt = os.stat(fp).st_mtime
+                except OSError:
+                    mt = None
+                out.append((c, tag_map.get(c), mt))
+        return out
+
+    def _audit_worklist(scope: str = "coverage"):
+        return _library_worklist() if scope == "library" else _coverage_worklist()
+
+    def _audit_busy():
+        arena = getattr(app_.state, "arena", None)
+        if arena is None:
+            return False
+        try:
+            return any(r.status in ("running", "queued", "pending")
+                       for r in arena.list())
+        except Exception:
+            return False
+
+    app_.state.audio_audit_store = AudioAuditStore(settings.db_path)
+    app_.state.audio_audit = AudioAuditWalker(
+        app_.state.subgen,
+        app_.state.audio_audit_store,
+        worklist=_audit_worklist,
+        probe_store=app_.state.probe_store,
+        busy_check=_audit_busy,
+        audio_lang=app_.state.audio_lang,
+    )
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
@@ -341,6 +576,10 @@ async def lifespan(app_: FastAPI):
         except (AttributeError, Exception):
             pass
         await app_.state.probe_walker.aclose()
+        try:
+            await app_.state.audio_audit.aclose()
+        except (AttributeError, Exception):
+            pass
         await app_.state.scheduler.stop()
         try:
             app_.state.coverage_cache_task.cancel()
@@ -363,6 +602,10 @@ async def lifespan(app_: FastAPI):
         app_.state.schedule.close()
         app_.state.enrichment.close()
         app_.state.probe_store.close()
+        try:
+            app_.state.audio_audit_store.close()
+        except (AttributeError, Exception):
+            pass
         app_.state.pending.close()
         app_.state.onboarding.close()
         app_.state.docker.close()
@@ -370,10 +613,22 @@ async def lifespan(app_: FastAPI):
 
 app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 
-# Basic auth — no-op when SUBARR_USER/SUBARR_PASS unset. Added first
-# so the middleware wraps everything below (including static asset
-# serving and the legacy / route).
+# Middleware stack (#138). Starlette wraps the LAST-added middleware
+# OUTERMOST, so registration order below is the REVERSE of execution
+# order. Target, from the wire inward:
+#   BasicAuth -> SecurityHeaders -> GZip -> routes
+# so register GZip first, then SecurityHeaders, then BasicAuth last.
+#   - GZip compresses route/static bodies >=1KB (text/JSON/JS/CSS).
+#   - SecurityHeaders stamps CSP + hardening headers on every response
+#     (static assets + health included).
+#   - BasicAuth is outermost so a 401 challenge returns before any body
+#     is built or compressed. No-op when SUBARR_USER/SUBARR_PASS unset.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+from .security_headers import SecurityHeadersMiddleware  # noqa: E402
 from .auth import BasicAuthMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
 
 app.include_router(browse.router)
@@ -406,6 +661,7 @@ app.include_router(r_onboarding.router)
 app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
 app.include_router(r_arena.router)
+app.include_router(r_audio_audit.router)
 
 
 @app.get("/api/health")
@@ -421,6 +677,19 @@ def health() -> dict:
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", RevalidatingStaticFiles(directory=_STATIC_DIR), name="static")
+
+    # Browsers request /favicon.ico unconditionally (#138). Serve the
+    # existing 32px PNG; the .ico extension in the URL is just convention.
+    # 1-week revalidated cache to match the other version-stable favicons.
+    _FAVICON_PNG = _STATIC_DIR / "v1" / "favicon-32.png"
+    if _FAVICON_PNG.is_file():
+        @app.get("/favicon.ico", include_in_schema=False)
+        def favicon() -> FileResponse:
+            return FileResponse(
+                _FAVICON_PNG,
+                media_type="image/png",
+                headers={"Cache-Control": "max-age=604800, must-revalidate"},
+            )
 
     from fastapi.responses import RedirectResponse
     from fastapi import Request
@@ -447,6 +716,7 @@ if _STATIC_DIR.is_dir():
             "/library":    "library.html",
             "/logs":       "logs.html",
             "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
+            "/arena":      "arena.html",   # #131: tuning-lab config sweep
         }
 
         def _make_v1_route(html_file: str):
