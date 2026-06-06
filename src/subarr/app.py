@@ -12,16 +12,41 @@ from fastapi.staticfiles import StaticFiles
 
 
 class RevalidatingStaticFiles(StaticFiles):
-    """Static files that must be revalidated before reuse. The v1 HTML
-    references bundles by a fixed name with no cache-bust, so without this
-    browsers heuristic-cache the bundles and serve STALE UI after every
-    update. `no-cache` forces an ETag revalidation each load — cheap 304s
-    when unchanged, fresh bundle the instant it changes. ETag/Last-Modified
-    are still sent by the base class, so this stays bandwidth-efficient."""
+    """Static files with path-aware Cache-Control (issue #138).
+
+    Default = `no-cache`: the v1 HTML references its JS bundles by a fixed
+    name with NO content hash, so any heuristic caching serves STALE UI
+    after an update. `no-cache` forces an ETag revalidation each load —
+    cheap 304s when unchanged, fresh bundle the instant it changes.
+    Bundles (v1/home-hifi/*.bundle.js) and HTML therefore stay no-cache.
+
+    Exception = a 1-week revalidated cache for assets that are either
+    content-stable or change only with a version bump: pinned vendor JS,
+    favicons, flag SVGs, and the OG card. NOT `immutable` (filenames have
+    no hash, so we still want a conditional revalidation, just not on
+    every navigation). `path` here is RELATIVE to the mount root (e.g.
+    "v1/vendor/react.production.min.js") — no "/static" prefix, no leading
+    slash — so the prefixes below are matched in that space."""
+
+    # Long-cache, version-stable assets, matched against the mount-relative
+    # path (starlette passes get_response a prefix-less path).
+    _LONG_CACHE_PREFIXES = (
+        "v1/vendor/",
+        "v1/flags/",
+        "v1/favicon-",
+    )
+    _LONG_CACHE_EXACT = (
+        "v1/favicon.svg",
+        "v1/og-card.png",
+    )
 
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
-        resp.headers["Cache-Control"] = "no-cache"
+        norm = path.replace("\\", "/").lstrip("/")
+        if norm in self._LONG_CACHE_EXACT or norm.startswith(self._LONG_CACHE_PREFIXES):
+            resp.headers["Cache-Control"] = "max-age=604800, must-revalidate"
+        else:
+            resp.headers["Cache-Control"] = "no-cache"
         return resp
 
 from . import __version__
@@ -579,10 +604,22 @@ async def lifespan(app_: FastAPI):
 
 app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 
-# Basic auth — no-op when SUBARR_USER/SUBARR_PASS unset. Added first
-# so the middleware wraps everything below (including static asset
-# serving and the legacy / route).
+# Middleware stack (#138). Starlette wraps the LAST-added middleware
+# OUTERMOST, so registration order below is the REVERSE of execution
+# order. Target, from the wire inward:
+#   BasicAuth -> SecurityHeaders -> GZip -> routes
+# so register GZip first, then SecurityHeaders, then BasicAuth last.
+#   - GZip compresses route/static bodies >=1KB (text/JSON/JS/CSS).
+#   - SecurityHeaders stamps CSP + hardening headers on every response
+#     (static assets + health included).
+#   - BasicAuth is outermost so a 401 challenge returns before any body
+#     is built or compressed. No-op when SUBARR_USER/SUBARR_PASS unset.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+from .security_headers import SecurityHeadersMiddleware  # noqa: E402
 from .auth import BasicAuthMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
 
 app.include_router(browse.router)
@@ -631,6 +668,19 @@ def health() -> dict:
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", RevalidatingStaticFiles(directory=_STATIC_DIR), name="static")
+
+    # Browsers request /favicon.ico unconditionally (#138). Serve the
+    # existing 32px PNG; the .ico extension in the URL is just convention.
+    # 1-week revalidated cache to match the other version-stable favicons.
+    _FAVICON_PNG = _STATIC_DIR / "v1" / "favicon-32.png"
+    if _FAVICON_PNG.is_file():
+        @app.get("/favicon.ico", include_in_schema=False)
+        def favicon() -> FileResponse:
+            return FileResponse(
+                _FAVICON_PNG,
+                media_type="image/png",
+                headers={"Cache-Control": "max-age=604800, must-revalidate"},
+            )
 
     from fastapi.responses import RedirectResponse
     from fastapi import Request
