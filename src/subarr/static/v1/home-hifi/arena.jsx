@@ -743,13 +743,27 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                 <button onClick={() => onToggle(r.id)} style={sweepRow}>
                   <StatusPill status={r.status} />
                   <span style={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'var(--fg-0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.media_path}>{basename(r.media_path)}</span>
-                  {r.source_language && (
-                    <span title="detected source language"
-                          style={{ flex: 'none', fontWeight: 700,
-                                   color: 'var(--fg-2)', background: 'var(--bg-4)', borderRadius: 4, padding: '1px 6px' }}>
-                      <LangTag value={r.source_language} size={11} />
-                    </span>
-                  )}
+                  {r.source_language && (() => {
+                    // A "tagged" label fell back to the file's known audio tag
+                    // because Whisper couldn't agree — show it weaker (dashed,
+                    // dimmer) than a Whisper-heard or user-set label.
+                    const tagged = r.source_language_source === 'tagged';
+                    const tip = tagged
+                      ? 'Language from the file’s audio tag (Whisper detection was inconclusive) — not heard-confirmed'
+                      : r.source_language_source === 'user'
+                        ? 'Source language you set for this sweep'
+                        : 'Source language Whisper detected (multi-chunk majority)';
+                    return (
+                      <span title={tip}
+                            style={{ flex: 'none', fontWeight: 700,
+                                     color: tagged ? 'var(--fg-3)' : 'var(--fg-2)',
+                                     background: 'var(--bg-4)', borderRadius: 4, padding: '1px 6px',
+                                     border: tagged ? '1px dashed var(--fg-4, #555)' : '1px solid transparent',
+                                     opacity: tagged ? 0.85 : 1 }}>
+                        <LangTag value={r.source_language} size={11} />
+                      </span>
+                    );
+                  })()}
                   {active ? (
                     <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ width: 70, height: 6, borderRadius: 3, background: 'var(--bg-4)', overflow: 'hidden' }}>

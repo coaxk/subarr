@@ -60,6 +60,11 @@ class ArenaRun:
             "id": self.id,
             "media_path": self.media_path,
             "source_language": self.source_language,   # [#23] for the table + per-lang grouping
+            # how the language was decided: "whisper" (robust majority), "user"
+            # (set at submit), or "tagged" (fell back to the file's known audio
+            # language when Whisper was inconclusive). Lets the UI mark a
+            # tagged-not-heard label as weaker than a Whisper-confirmed one.
+            "source_language_source": res.get("source_language_source"),
             "status": self.status,
             "recipe_count": len(self.variants),
             "clips_total": len(prog.get("clips", [])),
@@ -178,9 +183,13 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
     #    repeat sweeps; tally per-sweep winner votes for the file.
     files: dict[tuple, dict] = {}
     for r in runs:
-        lang = normalize_lang(getattr(r, "source_language", None))
+        # Bucket a sweep with no resolved language under "undetermined" (und)
+        # rather than dropping it — a sweep that ran but whose language Whisper
+        # couldn't agree on (and that had no tagged fallback) should still be
+        # visible in the herd, not vanish.
+        lang = normalize_lang(getattr(r, "source_language", None)) or "und"
         result = getattr(r, "result", None) or {}
-        if not lang or not result:
+        if not result:
             continue
         key = (lang, getattr(r, "media_path", None))
         f = files.setdefault(key, {"lang": lang, "sweeps": 0, "_rec": {}, "_winvotes": {}})

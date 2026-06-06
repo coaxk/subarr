@@ -62,6 +62,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger(__name__)
 
 
+def _arena_fallback_lang(app_, media_path):
+    """Arena fallback source language when Whisper robust detection is
+    inconclusive: the file's KNOWN spoken/audio language.
+
+    Tier 1 — the ffprobe audio-stream tag (probe_store).
+    Tier 2 — coverage's `audio_langs`, which folds in arr mediaInfo. This
+    catches files whose ffprobe audio track is UNTAGGED (language=null) but
+    Sonarr/Radarr knows the spoken language (e.g. Black Wedding: ffprobe tag
+    null, Sonarr original_language 'Serbian', but the audio is Norwegian — and
+    coverage's AUDIO column correctly shows `nor`). We use audio_langs (the
+    spoken track), NOT original_language (the show's production-language
+    metadata, which can differ from what's actually spoken).
+
+    Returns an ISO-639-1 code, or None (→ the herd's 'undetermined' bucket)."""
+    from .langs import normalize_lang
+    canon = (media_path or "").strip().lstrip("/")
+    # Tier 1: ffprobe audio-stream language tag.
+    try:
+        store = getattr(app_.state, "probe_store", None)
+        pr = store.get(canon) if store is not None else None
+        for a in (getattr(pr, "audio", None) or []):
+            code = normalize_lang(getattr(a, "language", None) or "")
+            if code and code != "und":
+                return code
+    except Exception:
+        pass
+    # Tier 2: coverage's audio_langs (ffprobe + arr mediaInfo merged).
+    try:
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        for it in (getattr(snap, "items", None) or []):
+            if it.get("file_canonical_path") == canon or it.get("canonical_path") == canon:
+                for al in (it.get("audio_langs") or []):
+                    code = normalize_lang(al)
+                    if code and code != "und":
+                        return code
+    except Exception:
+        pass
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     # Schema migrations run BEFORE any store touches the DB. After they
@@ -124,6 +165,11 @@ async def lifespan(app_: FastAPI):
         # live so an onboarding ollama-config swap is picked up without restart.
         explainer=lambda result, media_path: _arena_explain.explain(
             result, media_path, getattr(app_.state, "ollama", None)),
+        # Fallback source language when Whisper robust detection is inconclusive:
+        # the file's KNOWN audio language from the ffprobe tag (probe_store).
+        # Resolved live (probe_store is created later in lifespan; this closure
+        # runs only at sweep time, by which point it exists).
+        lang_fallback=lambda media_path: _arena_fallback_lang(app_, media_path),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()

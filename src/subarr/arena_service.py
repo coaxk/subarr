@@ -29,10 +29,14 @@ __all__ = ["ArenaRun", "ArenaStore", "ArenaService"]
 
 class ArenaService:
     def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner],
-                 explainer=None, max_concurrent: int = 1):
+                 explainer=None, max_concurrent: int = 1, lang_fallback=None):
         self._store = store
         self._build_runner = build_runner
         self._explainer = explainer  # async (result_dict, media_path) -> str|None
+        # (media_path) -> iso code | None. Resolves the file's KNOWN audio
+        # language (ffprobe tag / arr) so a sweep whose Whisper detection was
+        # inconclusive still gets a (weaker, "tagged") label instead of None.
+        self._lang_fallback = lang_fallback
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         # Single-flight by default: each sweep runs CPU-heavy QE/torch, so N
@@ -155,10 +159,26 @@ class ArenaService:
                 serialized["explanation"] = await self._explainer(serialized, run.media_path)
             except Exception:  # explanation is a nicety — never fail the sweep
                 serialized["explanation"] = None
+        # [#23] resolve the source language for the table + per-language grouping.
+        # Precedence: Whisper robust detection > a language set at submit > a
+        # TAGGED fallback (the file's known audio language) when Whisper was
+        # inconclusive. The chosen source is recorded so the UI can show a
+        # tagged-not-heard label as weaker than a Whisper-confirmed one. If even
+        # the fallback is unknown, it stays null → the herd's "undetermined".
+        detected = serialized.get("source_language")
+        final = detected or run.source_language
+        src = "whisper" if detected else ("user" if run.source_language else None)
+        if not final and self._lang_fallback is not None:
+            try:
+                fb = self._lang_fallback(run.media_path)
+            except Exception:
+                fb = None
+            if fb:
+                final, src = fb, "tagged"
+        run.source_language = final
+        serialized["source_language"] = final
+        serialized["source_language_source"] = src
         run.result = serialized
-        # [#23] persist the detected source language for the table + per-language
-        # grouping (don't clobber an explicitly-set one with a null detection).
-        run.source_language = serialized.get("source_language") or run.source_language
         run.status = "done"
         self._store.save(run)
         self._emit(run_id, {"event": "done", "data": run.to_dict()})

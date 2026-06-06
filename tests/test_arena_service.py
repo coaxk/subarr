@@ -154,6 +154,26 @@ def test_aggregate_runs_by_language_groups_and_ranks():
     assert by["fr"]["recipes"][0]["label"] == "default"
 
 
+def test_aggregate_buckets_unknown_language_under_und():
+    # A sweep that ran but whose language couldn't be resolved (Whisper
+    # inconclusive AND no tagged fallback) must NOT vanish — it buckets under
+    # "und" (undetermined) so it stays visible in the herd.
+    from subarr.arena_store import aggregate_runs_by_language, ArenaRun
+
+    runs = [
+        ArenaRun(id="u1", media_path="/mystery.mkv",
+                 variants=[{"label": "default", "kwargs": {}}],
+                 source_language=None, status="done",
+                 result={"winner": "default", "tie": False,
+                         "aggregate": [{"label": "default", "mean_composite": 60}]}),
+    ]
+    out = aggregate_runs_by_language(runs)
+    by = {x["language"]: x for x in out}
+    assert "und" in by
+    assert by["und"]["sweeps"] == 1
+    assert by["und"]["recipes"][0]["label"] == "default"
+
+
 def test_repeated_sweeps_of_one_file_consolidate_not_skew():
     # Bulk/repeat sweeping must not let one heavily-swept file dominate its
     # language bucket. Per-file consolidation: average a file's repeats, then
