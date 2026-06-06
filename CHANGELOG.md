@@ -56,8 +56,21 @@ breaking config changes.
 - **Language tags as flag icons** across coverage and the Tuning Lab (bundled
   SVGs, no external requests; decoration only — the tooltip names the
   *language*). (#147)
+- **Global recipe leaderboard.** The per-language herd rolled up into one
+  overall ranking — scored by the *mean of per-language means* so each language
+  counts equally and a heavily-swept/easy language can't skew the result.
+  Medals for the top three, a confidence signal, and an expandable per-language
+  breakdown; recipes need data across at least three languages to earn a rank.
+  (#146)
 
 ### Changed
+- **Performance & best-practices pass.** Responses are gzip-compressed; static
+  vendor/flag/favicon assets get a one-week revalidated cache while
+  non-hashed bundles + HTML stay `no-cache` (fresh UI the instant it changes);
+  a Content-Security-Policy and the standard hardening headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`) are sent on every response; and `/favicon.ico` is
+  served directly. (#138)
 - **Coverage refresh is debounced + parallelized** — bursts of completion/scan
   events coalesce to one refresh, and the per-series subtitle scans run with
   bounded concurrency instead of one-at-a-time. (#104)
@@ -74,6 +87,9 @@ breaking config changes.
   `/asr` and were inflating the sidebar count against an empty page).
 - The favicon ships its 's' as an outlined path, so it renders correctly in
   icon pipelines instead of depending on a font.
+- Multi-track fan-out sweeps now label their herd source as `track` (the
+  language came from the track's tag) rather than `user`, so track-derived and
+  user-pinned languages are distinguishable.
 
 ## [1.1.0] - 2026-06-04
 
