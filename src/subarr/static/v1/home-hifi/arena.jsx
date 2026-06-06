@@ -252,8 +252,8 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = 
 // ── "what this is" ───────────────────────────────────────────────────────────
 function WhatThisIs() {
   const steps = [
-    ['1', 'Transcribe the source once', 'subgen transcribes your file in its own language. That transcript is the yardstick everything else is measured against.'],
-    ['2', 'Run each recipe', 'Every recipe you choose runs as its own pass on the live model, producing one subtitle each.'],
+    ['1', 'Transcribe the source', 'For each sampled clip, subgen first transcribes it in its own language. That transcript is the yardstick everything else is measured against.'],
+    ['2', 'Run each recipe', 'Every recipe you choose runs as its own pass on each clip, producing one subtitle each.'],
     ['3', 'The judge ranks them', "subarr's tournament judge scores each result (invented lines, repetition, readability, and how faithful it is to the source) and crowns a winner."],
   ];
   return (
@@ -274,10 +274,11 @@ function WhatThisIs() {
         ))}
       </div>
       <div style={expectStyle}>
-        <b style={{ color: 'var(--fg-1)' }}>What to expect:</b> you just pick a file — subarr automatically cuts a short
-        representative sample (mixing dialogue, a speech→silence edge, and a quiet/music stretch, because that quiet bit is
-        exactly where bad settings start inventing lines). Recipes run on that sample, so a sweep takes a couple of minutes,
-        not an hour. Progress shows live; you can leave and come back; nothing is written to your library.
+        <b style={{ color: 'var(--fg-1)' }}>What to expect:</b> you just pick a file — subarr automatically cuts it into
+        up to 3 short 30-second clips, each a different stratum (dialogue, a speech→silence edge, and a quiet/music stretch,
+        because that quiet bit is exactly where bad settings start inventing lines). Every recipe runs on EACH clip and the
+        judge looks for a winner that holds across them — so a sweep is a handful of short passes (a couple of minutes), not an
+        hour. Progress shows live; you can leave and come back; nothing is written to your library.
       </div>
     </Collapsible>
   );
@@ -381,7 +382,7 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
           <input value={mediaPath} onChange={(e) => setMediaPath(e.target.value)} placeholder="Pick a file from your library…" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
           <button onClick={() => setPicking(true)} style={ghostBtnStyle}>Browse…</button>
         </div>
-        <Hint>Pick any file — even a full episode. subarr samples a short representative clip from it automatically; you don't need to trim anything.</Hint>
+        <Hint>Pick any file — even a full episode. subarr samples up to 3 short strata clips from it automatically; you don't need to trim anything.</Hint>
       </div>
 
       {/* spoken language */}
@@ -453,8 +454,10 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
       <div style={{ borderTop: 'var(--border)', paddingTop: 16, marginTop: 2 }}>
         {total > 0 && (
           <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', marginBottom: 10, lineHeight: 1.5 }}>
-            This runs <b>{total}</b> recipe{total === 1 ? '' : 's'} separately (plus <b>1</b> pass to transcribe the source),
-            so <b>{total + 1}</b> transcription{total + 1 === 1 ? '' : 's'} in total. You’ll get one ranked result per recipe.
+            This runs <b>{total}</b> recipe{total === 1 ? '' : 's'} + <b>1</b> source transcribe = <b>{total + 1}</b> passes <b>per clip</b>.
+            subarr samples your file into <b>up to 3</b> short strata clips (dialogue, a speech→silence edge, a quiet stretch) and runs all
+            {' '}{total + 1} on each — so a full sweep is up to <b>{(total + 1) * 3}</b> passes (fewer if the file has fewer distinct strata;
+            e.g. 2 clips → {(total + 1) * 2}). Testing across separate clips is what makes a winner trustworthy. You’ll get one ranked result per recipe.
           </div>
         )}
         {(() => {
