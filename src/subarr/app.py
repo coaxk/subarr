@@ -208,6 +208,15 @@ async def lifespan(app_: FastAPI):
     _orphaned = app_.state.arena_store.reconcile_interrupted()
     if _orphaned:
         log.info("arena: marked %d interrupted sweep(s) as errored on boot", _orphaned)
+    # #136: age-based retention — arena_runs is append-only and grows unbounded.
+    # Prune sweeps older than the retention window on boot (0/negative disables).
+    if settings.arena_retention_days > 0:
+        import time as _time
+        _cutoff = _time.time() - settings.arena_retention_days * 86400
+        _pruned = app_.state.arena_store.prune_older_than(_cutoff)
+        if _pruned:
+            log.info("arena: pruned %d sweep(s) older than %d days on boot",
+                     _pruned, settings.arena_retention_days)
     app_.state.arena = ArenaService(
         app_.state.arena_store,
         build_runner=lambda run: AsrRunner(

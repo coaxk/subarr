@@ -82,6 +82,28 @@ def test_save_coerces_numpy_like_scalars_in_result(store):
     assert persisted.result["score"] == 0.581
 
 
+def test_prune_older_than_drops_old_keeps_recent(store):
+    # #136 retention: append-only arena_runs grows unbounded on long-running
+    # installs. prune_older_than() drops runs whose created_at predates the
+    # cutoff and leaves recent ones, mirroring scan_store's age-cutoff DELETE.
+    import time as _t
+
+    now = _t.time()
+    old = ArenaRun(id="old", media_path="/old.mkv", variants=[],
+                   status="done", created_at=now - 10 * 86400)   # 10 days old
+    recent = ArenaRun(id="recent", media_path="/recent.mkv", variants=[],
+                      status="done", created_at=now - 1 * 86400)  # 1 day old
+    store.save(old)
+    store.save(recent)
+
+    cutoff = now - 7 * 86400        # 7-day window
+    deleted = store.prune_older_than(cutoff)
+
+    assert deleted == 1
+    assert store.get("old") is None       # old run pruned
+    assert store.get("recent") is not None  # recent run kept
+
+
 @pytest.mark.asyncio
 async def test_concurrent_sweeps_serialize_one_at_a_time(store):
     # A user firing several sweeps must NOT run them all at once — each runs

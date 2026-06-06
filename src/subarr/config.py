@@ -173,6 +173,14 @@ class Settings:
     sonarr_path_prefix: str
     radarr_path_prefix: str
 
+    # #136: age-based retention for arena_runs (tuning-lab sweeps). The table is
+    # append-only and grows unbounded on long-running installs; sweeps older than
+    # this many days are pruned on boot. Default 30 (not pending_store's 7) because
+    # sweeps are durable history feeding the federated tournament (#124) — pruning
+    # too aggressively destroys that crowd-curated signal. 0/negative disables
+    # pruning (keep everything). Set SUBARR_ARENA_RETENTION_DAYS to override.
+    arena_retention_days: int
+
 
 def load() -> Settings:
     # See _env_or docstring for the empty-string fall-through rule (#127).
@@ -250,6 +258,8 @@ def load() -> Settings:
         ),
         auth_user=os.environ.get("SUBARR_USER", ""),
         auth_pass=os.environ.get("SUBARR_PASS", ""),
+        # #136: default 30 days. 0/negative disables arena-run pruning.
+        arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )
     _apply_persisted_overrides(_s)
     return _s

@@ -185,6 +185,18 @@ class ArenaStore:
                 if r.status == "done" and r.source_language and r.result]
         return aggregate_global_leaderboard(runs, min_languages=min_languages)
 
+    def prune_older_than(self, cutoff_epoch: float) -> int:
+        """[#136] Age-based retention: drop arena_runs whose created_at predates
+        cutoff_epoch. arena_runs is append-only (a row per sweep, never deleted
+        except by the user) so it grows unbounded on long-running installs. This
+        mirrors scan_store.delete_where_status_in's age-cutoff DELETE; called on
+        boot from the app lifespan (idx_arena_runs_created keeps it cheap)."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM arena_runs WHERE created_at < ?", (cutoff_epoch,)
+            )
+            return cur.rowcount or 0
+
     def reconcile_interrupted(self) -> int:
         """A run that was pending/queued/running when the process died can never
         finish — its asyncio task is gone. Mark such rows as errored on boot
