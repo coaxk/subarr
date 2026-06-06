@@ -47,6 +47,15 @@ log = logging.getLogger(__name__)
 # 24h captures a full day's submissions without dragging in noise.
 _DEFAULT_HISTORY_WINDOW_S = 24 * 3600
 
+# Subtitle sidecar extensions subgen treats as an already-existing subtitle.
+# Mirrors has_external_subtitle_in_language() in subgen_patched.py — a file
+# subgen skipped because ANY of these sits next to it (not only .srt) was
+# previously mislabeled 'unknown' (#89). Kept in sync with subgen's set.
+_SUBTITLE_SIDECAR_EXTS = (
+    ".srt", ".vtt", ".sub", ".ass", ".ssa",
+    ".idx", ".sbv", ".pgs", ".ttml", ".lrc",
+)
+
 
 def match_progress(processing_path: str, progress_map: dict[str, dict]) -> dict | None:
     """Find a progress entry whose bracket-name is a prefix of the
@@ -72,9 +81,23 @@ def _infer_skip_reason(canonical_path: str) -> str:
     internal sub language match, lrc exists, etc.). The per-file reason
     only appears in subgen's logs. Until subgen emits a per-reason
     breakdown (subgen-side patch — out of scope here), we infer the most
-    common case heuristically: if an .srt sits next to the video file the
-    user submitted, classify as 'sub_exists'. Otherwise 'unknown' (most
-    often audio_lang, but other branches are possible).
+    common case heuristically: if a recognized subtitle sidecar sits next
+    to the video file the user submitted, classify as 'sub_exists'.
+    Otherwise 'unknown' (most often audio_lang, but other branches are
+    possible).
+
+    The sidecar match covers every extension subgen's
+    has_external_subtitle_in_language() recognizes (see
+    _SUBTITLE_SIDECAR_EXTS), not just .srt — a skip caused by an existing
+    .ass/.vtt/etc. sidecar is just as much "sub already exists" and should
+    not land in the noisy 'unknown' bucket (#89).
+
+    NOTE: subgen ALSO skips on EMBEDDED (internal) subtitles and on
+    SKIP_IF_AUDIO_LANGUAGES. Detecting either requires opening/probing the
+    media container — a signal this function does not have (the scan_store
+    PathResult it's derived from carries only path/status/error, no
+    audio_langs or embedded-sub flags). Those remain 'unknown' here; see
+    the follow-up note in the PR for wiring probe data through.
 
     Returns 'sub_exists' | 'audio_lang' | 'unknown'. 'audio_lang' is
     reserved for a future subgen-side patch; today this helper never
@@ -98,8 +121,10 @@ def _infer_skip_reason(canonical_path: str) -> str:
             if not sibling.is_file():
                 continue
             name = sibling.name
-            # Match `<stem>.srt`, `<stem>.<lang>.srt`, `<stem>.<lang>.<flag>.srt`
-            if name.startswith(stem + ".") and name.lower().endswith(".srt"):
+            # Match `<stem>.<ext>`, `<stem>.<lang>.<ext>`,
+            # `<stem>.<lang>.<flag>.<ext>` for any subtitle sidecar ext.
+            if name.startswith(stem + ".") and \
+                    name.lower().endswith(_SUBTITLE_SIDECAR_EXTS):
                 return "sub_exists"
     except OSError:
         return "unknown"
