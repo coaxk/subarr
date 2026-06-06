@@ -1406,6 +1406,7 @@ async def build_coverage(
             whisper_verifications=whisper_verifications,
             sources=sources,
             plex_hints=plex_audio_hints,
+            ignore_forced_subtitles=ignore_forced,
         )
 
     _disqualify_unsupported(items)
@@ -1436,6 +1437,7 @@ async def _add_bazarr_blind_synthetic_rows(
     whisper_verifications: dict[str, str] | None = None,
     sources: dict,
     plex_hints: dict[str, str] | None = None,
+    ignore_forced_subtitles: bool = False,
 ) -> list[CoverageItem]:
     """Build synthetic CoverageItem rows for episodes Bazarr can't see —
     foreign-language series where the file metadata lies and Bazarr's
@@ -1636,7 +1638,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 transcoding_titles=activity["transcoding_titles"],
                 just_imported_eps=sonarr_recent_ids,
                 airing_soon_eps=airing_soon_ids,
-                ignore_forced_subtitles=ignore_forced,
+                ignore_forced_subtitles=ignore_forced_subtitles,
             )
             items.append(item)
             seen_ep_ids.add(ep_id)
