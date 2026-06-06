@@ -824,6 +824,51 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
   );
 }
 
+// [#155 phase 1] Central list of audio-language issues caught by sweeps so far
+// (mislabel / bilingual) — the library-audit surface, zero extra GPU. Each row
+// opens the shared audio-review modal to confirm/correct.
+function AudioIssuesPanel() {
+  const [issues, setIssues] = useState([]);
+  const load = React.useCallback(
+    () => fetch('/api/arena/audio-issues').then((r) => r.json()).then((d) => setIssues(d.issues || [])).catch(() => {}), []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const h = () => load();
+    window.addEventListener('audio-lang-verified', h);
+    return () => window.removeEventListener('audio-lang-verified', h);
+  }, [load]);
+  if (!issues.length) return null;
+  const base = (p) => (p || '').split('/').pop() || p;
+  return (
+    <Collapsible label={`Audio language issues · ${issues.length}`} id="audio-issues" defaultOpen={false}>
+      <Hint>Files where the Tuning Lab's listening disagreed with the tagged audio language — a likely mislabel, or a genuinely bilingual track. Listen + confirm to correct coverage. (Builds up as you sweep; a library-wide scan is coming.)</Hint>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
+        {issues.map((it) => {
+          const ml = it.status === 'mislabel';
+          return (
+            <div key={it.run_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
+              <span style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, borderRadius: 4, padding: '1px 6px',
+                             color: ml ? '#f59e0b' : '#38bdf8', background: ml ? 'rgba(245,158,11,0.15)' : 'rgba(56,189,248,0.15)' }}>
+                {ml ? '🔎 mislabel' : '🌐 bilingual'}
+              </span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg-1)' }} title={it.media_path}>{base(it.media_path)}</span>
+              <span style={{ flex: 'none', color: 'var(--fg-3)' }}>
+                {ml ? `heard ${(it.detected || '').toUpperCase()}` : (it.languages_heard || []).map((l) => l.toUpperCase()).join('/')}
+              </span>
+              <button onClick={() => window.dispatchEvent(new CustomEvent('open-audio-review', {
+                detail: { _canonical_path: (it.media_path || '').replace(/^\/+/, ''), title: base(it.media_path) },
+              }))}
+                title="Listen + confirm the language" style={{ flex: 'none', border: 'var(--border)', background: 'transparent', color: 'var(--fg-2)', borderRadius: 'var(--radius-md)', padding: '2px 8px', fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
+                🎧 review
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </Collapsible>
+  );
+}
+
 export function ArenaPage() {
   const [runs, setRuns] = useState([]);
   const [detail, setDetail] = useState({});
@@ -929,6 +974,7 @@ export function ArenaPage() {
       <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued').length} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
+      <AudioIssuesPanel />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
       {/* Shared audio-review modal (player + Whisper-detect + lang picker),
           reused for the sweep "Set language" action. Listens for the global

@@ -89,6 +89,38 @@ async def arena_by_language(request: Request) -> dict:
     return {"languages": request.app.state.arena.aggregate_by_language()}
 
 
+@router.get("/audio-issues")
+async def arena_audio_issues(request: Request) -> dict:
+    """[#155 phase 1] Library audio-language issues, aggregated from sweeps that
+    have ALREADY run — zero extra GPU. Collects done runs the language resolver
+    flagged as a mislabel (Whisper unanimously disagrees with the tag) or
+    bilingual (multiple languages heard), newest run per file, so a user can
+    review/correct them in one place. (Phase 2 = a throttled walker for
+    not-yet-swept files.) Defined before /{run_id} so it isn't captured as one."""
+    runs = sorted(request.app.state.arena.list(),
+                  key=lambda r: getattr(r, "created_at", 0) or 0, reverse=True)
+    by_path: dict[str, dict] = {}
+    for r in runs:
+        if r.status != "done":
+            continue
+        res = r.result or {}
+        mislabel = bool(res.get("audio_lang_mislabel"))
+        mixed = bool(res.get("audio_lang_mixed"))
+        if not (mislabel or mixed):
+            continue
+        if r.media_path in by_path:   # keep the newest run per file
+            continue
+        by_path[r.media_path] = {
+            "run_id": r.id,
+            "media_path": r.media_path,
+            "status": "mislabel" if mislabel else "bilingual",
+            "detected": r.source_language,
+            "languages_heard": res.get("audio_languages_heard") or [],
+        }
+    issues = list(by_path.values())
+    return {"issues": issues, "count": len(issues)}
+
+
 @router.get("/{run_id}")
 async def get_arena_run(run_id: str, request: Request) -> dict:
     run = request.app.state.arena.get(run_id)
