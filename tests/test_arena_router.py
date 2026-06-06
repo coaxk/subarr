@@ -36,6 +36,16 @@ def test_by_language_route_returns_languages_shape(app_with_stub):
     assert isinstance(r.json().get("languages"), list)
 
 
+def test_leaderboard_route_returns_shape(app_with_stub):
+    # #146: route exists, returns {leaderboard:[], min_languages:N}, and is NOT
+    # captured by /{run_id}. Honors the min_languages query param.
+    r = app_with_stub.get("/api/arena/leaderboard?min_languages=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body.get("leaderboard"), list)
+    assert body.get("min_languages") == 2
+
+
 def test_run_blocked_when_subgen_lacks_asr_arena(app_with_stub):
     # default stub /queue advertises no asr_arena → 503 with a clear reason
     r = app_with_stub.post("/api/arena/run", json=_body())

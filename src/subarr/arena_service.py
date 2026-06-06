@@ -111,6 +111,9 @@ class ArenaService:
     def aggregate_by_language(self) -> list[dict]:
         return self._store.aggregate_by_language()
 
+    def aggregate_global_leaderboard(self, *, min_languages: int = 3) -> list[dict]:
+        return self._store.aggregate_global_leaderboard(min_languages=min_languages)
+
     def delete(self, run_id: str) -> bool:
         return self._store.delete(run_id)
 

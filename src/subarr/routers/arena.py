@@ -114,6 +114,15 @@ async def arena_by_language(request: Request) -> dict:
     return {"languages": request.app.state.arena.aggregate_by_language()}
 
 
+@router.get("/leaderboard")
+async def arena_leaderboard(request: Request, min_languages: int = 3) -> dict:
+    # [#146] Global recipe leaderboard: rolls the per-language herd up into one
+    # overall ranking by the MEAN OF PER-LANGUAGE MEANS (each language weighted
+    # equally). Defined BEFORE /{run_id} so it isn't captured as a run id.
+    board = request.app.state.arena.aggregate_global_leaderboard(min_languages=min_languages)
+    return {"leaderboard": board, "min_languages": min_languages}
+
+
 @router.get("/audio-issues")
 async def arena_audio_issues(request: Request) -> dict:
     """[#155 phase 1] Library audio-language issues, aggregated from sweeps that

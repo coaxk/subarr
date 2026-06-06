@@ -23,6 +23,12 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# [#146] How many distinct *real* spoken languages a recipe must have data in
+# before it earns a global rank. Below this it's an artifact of one easy/popular
+# language, not a cross-language verdict. The "und" (undetermined) bucket never
+# counts toward this — it isn't a language.
+LEADERBOARD_MIN_LANGUAGES = 3
+
 
 def _json_default(o):
     """Coerce numpy-style scalars/arrays (the QE judge emits float32) so a
@@ -165,6 +171,16 @@ class ArenaStore:
                 if r.status == "done" and r.source_language and r.result]
         return aggregate_runs_by_language(runs)
 
+    def aggregate_global_leaderboard(
+        self, *, min_languages: int = LEADERBOARD_MIN_LANGUAGES,
+    ) -> list[dict[str, Any]]:
+        """[#146] Overall recipe ranking (mean of per-language means). Same
+        completed-sweep filter as aggregate_by_language; delegates to the pure
+        module function."""
+        runs = [r for r in self.list(limit=1000)
+                if r.status == "done" and r.source_language and r.result]
+        return aggregate_global_leaderboard(runs, min_languages=min_languages)
+
     def reconcile_interrupted(self) -> int:
         """A run that was pending/queued/running when the process died can never
         finish — its asyncio task is gone. Mark such rows as errored on boot
@@ -254,3 +270,77 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
         out.append({"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes})
     out.sort(key=lambda x: (x["files"], x["sweeps"]), reverse=True)
     return out
+
+
+def aggregate_global_leaderboard(runs, *, min_languages: int = LEADERBOARD_MIN_LANGUAGES) -> list[dict[str, Any]]:
+    """[#146] Roll the per-language herd up one level into a single overall
+    recipe ranking — the 'recipe leaderboard'.
+
+    Ranks by the MEAN OF PER-LANGUAGE MEANS (each language weighted equally),
+    NOT a flat mean across all files — otherwise heavily-swept / easy languages
+    (English) would skew the global ranking. Reuses aggregate_runs_by_language
+    and averages each recipe's per-language mean_composite values.
+
+    The "und" bucket is excluded — it's not a real language and would let a recipe
+    game the cross-language threshold. A recipe with data in fewer than
+    ``min_languages`` real languages is returned but marked ``eligible=False``
+    (and ``rank=None``) so the UI can show it as 'still accumulating' without
+    pretending it's a ranked verdict.
+
+    Each row: {label, rank (1..k for eligible, else None), global_mean,
+    languages_covered, total_files, total_wins, eligible, confidence,
+    per_language:[{language, files, wins, mean_composite}, ...]}.
+    """
+    by_lang = aggregate_runs_by_language(runs)
+    if not by_lang:
+        return []
+
+    recipes: dict[str, dict] = {}
+    for bucket in by_lang:
+        lang = bucket["language"]
+        if lang == "und":          # not a real language — never counts
+            continue
+        for r in bucket["recipes"]:
+            label = r["label"]
+            entry = recipes.setdefault(label, {
+                "label": label, "_means": [], "_detail": [],
+                "total_wins": 0, "total_files": 0,
+            })
+            entry["_means"].append(float(r["mean_composite"]))
+            entry["total_wins"] += r["wins"]
+            entry["total_files"] += r["files"]
+            entry["_detail"].append({
+                "language": lang, "files": r["files"],
+                "wins": r["wins"], "mean_composite": r["mean_composite"],
+            })
+
+    rows = []
+    for entry in recipes.values():
+        means = entry["_means"]
+        lang_count = len(means)
+        global_mean = round(sum(means) / lang_count, 2) if means else 0.0
+        eligible = lang_count >= min_languages
+        if lang_count >= 3 and entry["total_files"] >= 10:
+            confidence = "high"
+        elif lang_count >= 2 or entry["total_files"] >= 5:
+            confidence = "moderate"
+        else:
+            confidence = "low"
+        detail = sorted(entry["_detail"], key=lambda x: x["files"], reverse=True)
+        rows.append({
+            "label": entry["label"], "global_mean": global_mean,
+            "languages_covered": lang_count, "total_files": entry["total_files"],
+            "total_wins": entry["total_wins"], "eligible": eligible,
+            "confidence": confidence, "per_language": detail,
+        })
+
+    # Eligible recipes first, then by global_mean desc, tie-broken by total_wins.
+    rows.sort(key=lambda x: (x["eligible"], x["global_mean"], x["total_wins"]), reverse=True)
+    rank = 0
+    for row in rows:
+        if row["eligible"]:
+            rank += 1
+            row["rank"] = rank
+        else:
+            row["rank"] = None
+    return rows

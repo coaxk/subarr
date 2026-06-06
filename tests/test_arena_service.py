@@ -154,6 +154,97 @@ def test_aggregate_runs_by_language_groups_and_ranks():
     assert by["fr"]["recipes"][0]["label"] == "default"
 
 
+def _lb_mk(rid, lang, agg):
+    """A done sweep with one file (media_path = rid) for leaderboard tests."""
+    from subarr.arena_store import ArenaRun
+    return ArenaRun(id=rid, media_path=f"/{rid}.mkv",
+                    variants=[{"label": a["label"], "kwargs": {}} for a in agg],
+                    source_language=lang, status="done",
+                    result={"winner": agg[0]["label"], "tie": False, "aggregate": agg})
+
+
+def test_global_leaderboard_weights_languages_equally():
+    # #146: rank by MEAN OF PER-LANGUAGE MEANS — heavily-swept languages must
+    # NOT skew the global score. Recipe A: eng has 2 files (means 80,100 -> 90),
+    # fra 1 file (60). Equal-weight global = (90+60)/2 = 75, NOT the flat
+    # across-files mean (80+100+60)/3 = 80.
+    from subarr.arena_store import aggregate_global_leaderboard
+    runs = [
+        _lb_mk("e1", "eng", [{"label": "A", "mean_composite": 80}]),
+        _lb_mk("e2", "eng", [{"label": "A", "mean_composite": 100}]),
+        _lb_mk("f1", "fra", [{"label": "A", "mean_composite": 60}]),
+    ]
+    board = aggregate_global_leaderboard(runs, min_languages=2)
+    row = {r["label"]: r for r in board}["A"]
+    assert row["languages_covered"] == 2
+    assert row["total_files"] == 3
+    assert row["global_mean"] == 75.0
+    assert row["eligible"] is True
+    assert row["rank"] == 1
+
+
+def test_global_leaderboard_min_languages_marks_ineligible():
+    # #146: a recipe seen in fewer than min_languages real languages is returned
+    # but eligible=False with rank=None (still accumulating, not a verdict).
+    from subarr.arena_store import aggregate_global_leaderboard
+    runs = [
+        _lb_mk("e1", "eng", [{"label": "A", "mean_composite": 90}]),
+        _lb_mk("f1", "fra", [{"label": "A", "mean_composite": 90}]),
+    ]
+    board = aggregate_global_leaderboard(runs, min_languages=3)
+    row = board[0]
+    assert row["label"] == "A"
+    assert row["languages_covered"] == 2
+    assert row["eligible"] is False
+    assert row["rank"] is None
+
+
+def test_global_leaderboard_excludes_und():
+    # #146: the "und" (undetermined) bucket is not a real language — it must not
+    # count toward languages_covered nor pull the mean.
+    from subarr.arena_store import aggregate_global_leaderboard
+    runs = [
+        _lb_mk("e1", "eng", [{"label": "A", "mean_composite": 80}]),
+        _lb_mk("f1", "fra", [{"label": "A", "mean_composite": 80}]),
+        _lb_mk("u1", None, [{"label": "A", "mean_composite": 10}]),   # -> und
+    ]
+    board = aggregate_global_leaderboard(runs, min_languages=2)
+    row = board[0]
+    assert row["languages_covered"] == 2
+    assert row["global_mean"] == 80.0
+
+
+def test_global_leaderboard_ranks_eligible_above_ineligible():
+    # #146: eligible recipes sorted by score get ranks 1..k; ineligible sort last
+    # with rank None. B (3 langs) outranks A (3 langs, lower score); C (1 lang)
+    # is ineligible.
+    from subarr.arena_store import aggregate_global_leaderboard
+    runs = []
+    for lang in ("eng", "fra", "deu"):
+        runs.append(_lb_mk(f"a-{lang}", lang, [{"label": "A", "mean_composite": 60}]))
+        runs.append(_lb_mk(f"b-{lang}", lang, [{"label": "B", "mean_composite": 90}]))
+    runs.append(_lb_mk("c-eng", "eng", [{"label": "C", "mean_composite": 99}]))
+    board = aggregate_global_leaderboard(runs, min_languages=3)
+    ranked = [r for r in board if r["eligible"]]
+    assert [r["label"] for r in ranked] == ["B", "A"]
+    assert [r["rank"] for r in ranked] == [1, 2]
+    c = {r["label"]: r for r in board}["C"]
+    assert c["eligible"] is False and c["rank"] is None
+
+
+def test_global_leaderboard_empty():
+    from subarr.arena_store import aggregate_global_leaderboard
+    assert aggregate_global_leaderboard([]) == []
+
+
+def test_store_global_leaderboard_reads_done_runs(store):
+    # #146: store wrapper applies the same done-runs filter as the herd view.
+    r = _lb_mk("s1", "eng", [{"label": "A", "mean_composite": 70}])
+    store.save(r)
+    board = store.aggregate_global_leaderboard(min_languages=1)
+    assert any(x["label"] == "A" for x in board)
+
+
 def test_resolve_source_language_unanimous_mislabel():
     # The Ring: tagged Danish, Whisper heard Dutch on ALL chunks → trust Whisper
     # (override) + flag the mislabel.
