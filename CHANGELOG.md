@@ -30,7 +30,11 @@ breaking config changes.
     - **Whisper unsure** → falls back to the known tag rather than guessing.
   A 🎧 listen-and-confirm action (audio player + on-demand detection) settles
   any case in seconds; confirmations persist as ground truth that coverage and
-  future sweeps inherit.
+  future sweeps inherit. **Multi-track files** (an original plus a dub) are
+  detected too: each audio track is swept separately, labeled by its own
+  language, so the Tuning Lab gives per-track recommendations instead of only
+  the default track. An **Audio language issues** panel collects every flagged
+  file in one place for review.
 - **In-app integration credential editing.** Add or change Bazarr/Sonarr/
   Radarr/Tautulli URLs + API keys and the Plex token from Settings, with
   test-connection and live apply — no env edit or restart. Env-set fields stay
