@@ -5,6 +5,64 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.2.0] - Unreleased
+
+### Added
+- **Tuning Lab — find the Whisper settings that actually win, on your hardware.**
+  An in-app config arena: pick a file, choose recipes to compare, and subarr
+  runs each against the live subgen model and lets a tournament judge rank them
+  objectively. It auto-samples up to 3 short strata clips per file (dialogue, a
+  speech→silence edge, a quiet stretch) and requires a recipe to win *across*
+  clips, not on one. A per-language "herd" view aggregates results so a
+  dependable default emerges per language; bulk multi-file sweeps gather data
+  fast; everything runs over subgen with nothing written to your library. (#131)
+- **Audio-language verification — subarr *listens* and tells you the truth
+  about a track.** This is something the *arr metadata chain structurally
+  can't do: Sonarr/Radarr tag a show's language and everyone downstream
+  parrots it, even when it's wrong. The Tuning Lab's robust multi-chunk Whisper
+  detection verifies the *spoken* language by ear, and reads the per-chunk
+  agreement to tell three real situations apart:
+    - a **mislabeled track** (file tagged Danish, audio unanimously Dutch) →
+      flags it and offers a one-click correction that flows back into coverage;
+    - a **bilingual file** (English detectives + Serbian crooks; or JP/KO) →
+      detected as multiple languages and flagged, instead of being mis-collapsed
+      to whichever language a chunk happened to land on;
+    - **Whisper unsure** → falls back to the known tag rather than guessing.
+  A 🎧 listen-and-confirm action (audio player + on-demand detection) settles
+  any case in seconds; confirmations persist as ground truth that coverage and
+  future sweeps inherit.
+- **In-app integration credential editing.** Add or change Bazarr/Sonarr/
+  Radarr/Tautulli URLs + API keys and the Plex token from Settings, with
+  test-connection and live apply — no env edit or restart. Env-set fields stay
+  authoritative and read-only. (#75)
+- **Push-based subgen completion.** subarr consumes subgen's
+  `WEBHOOK_URL_COMPLETED` as an alternative to polling `/queue` (polling stays
+  as the fallback). (#87)
+- **Series-level audio-language intent inherits to new episodes** — declare a
+  series' language once and new episodes resolve as verified during the next
+  coverage build. (#69)
+- **Language tags as flag icons** across coverage and the Tuning Lab (bundled
+  SVGs, no external requests; decoration only — the tooltip names the
+  *language*). (#147)
+
+### Changed
+- **Coverage refresh is debounced + parallelized** — bursts of completion/scan
+  events coalesce to one refresh, and the per-series subtitle scans run with
+  bounded concurrency instead of one-at-a-time. (#104)
+- Forced-only embedded-English files are gated on subgen's runtime
+  `IGNORE_FORCED_SUBTITLES` capability, so a forced-only gap is only presented
+  as actionable when the connected subgen will actually fill it. (#79)
+- Tuning Lab + coverage lists cap their height and scroll in place instead of
+  ballooning the page.
+
+### Fixed
+- **Telemetry no longer reports the ollama integration "configured" on ~100%
+  of installs** — it now gates on real reachability. (#119)
+- The main queue no longer counts Tuning Lab sweeps (they run through subgen's
+  `/asr` and were inflating the sidebar count against an empty page).
+- The favicon ships its 's' as an outlined path, so it renders correctly in
+  icon pipelines instead of depending on a font.
+
 ## [1.1.0] - 2026-06-04
 
 ### Added
