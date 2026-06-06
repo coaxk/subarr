@@ -76,3 +76,18 @@ def test_unknown_path_404(app_with_stub):
 
 def test_get_unknown_run_404(app_with_stub):
     assert app_with_stub.get("/api/arena/deadbeef").status_code == 404
+
+
+@pytest.mark.subgen(handler=_arena_stub)
+def test_set_language_updates_run(app_with_stub):
+    # Manual "set language" escape: sets the run's source_language (normalized)
+    # so an undetermined sweep re-buckets in the herd.
+    rid = app_with_stub.post("/api/arena/run", json=_body(kwargs={"beam_size": 5})).json()["id"]
+    r = app_with_stub.post(f"/api/arena/{rid}/language", json={"lang": "nor"})
+    assert r.status_code == 200
+    assert r.json()["source_language"] == "no"          # nor → ISO-639-1 no
+    # persisted: a fresh GET reflects it
+    assert app_with_stub.get(f"/api/arena/{rid}").json()["source_language"] == "no"
+    # unknown run → 404; undetermined-language input → 400
+    assert app_with_stub.post("/api/arena/deadbeef/language", json={"lang": "no"}).status_code == 404
+    assert app_with_stub.post(f"/api/arena/{rid}/language", json={"lang": "und"}).status_code == 400

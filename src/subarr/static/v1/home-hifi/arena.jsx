@@ -12,6 +12,7 @@
 
 import { SectionCard, StatusDot, Glyph, ICONS, LangTag } from './atoms.jsx';
 import { fetchBrowse } from './library.jsx';  // #145: reuse Library's cached, rollup-skipping browse
+import { AudioReviewModal } from './coverage.jsx';  // reuse the audio player + lang picker for "set language"
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -779,6 +780,20 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   {r.status === 'done' && r.confidence && !r.tie && <ConfChip conf={r.confidence} />}
                   <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
                 </button>
+                {r.status === 'done' && (!r.source_language || r.source_language_source === 'tagged') && (
+                  <button
+                    onClick={() => window.dispatchEvent(new CustomEvent('open-audio-review', {
+                      detail: { _canonical_path: (r.media_path || '').replace(/^\/+/, ''), title: basename(r.media_path) },
+                    }))}
+                    title={r.source_language
+                      ? 'Confirm or correct the language — listen to a sample + Whisper-detect, then pick'
+                      : 'Language undetermined — listen to a sample + Whisper-detect, then set it (re-buckets the herd)'}
+                    style={{ border: 'var(--border)', background: 'transparent', color: 'var(--fg-2)',
+                             borderRadius: 'var(--radius-md)', padding: '2px 8px', marginRight: 6,
+                             fontSize: 'var(--text-xs)', whiteSpace: 'nowrap', flex: 'none', cursor: 'pointer' }}>
+                    🎧 {r.source_language ? 'confirm' : 'set language'}
+                  </button>
+                )}
                 <button onClick={() => onDelete(r.id)} title="remove sweep" style={{ ...iconBtnStyle, border: 'none', background: 'transparent', marginRight: 8 }}>
                   <Glyph char={ICONS.close || '×'} size={13} />
                 </button>
@@ -824,6 +839,29 @@ export function ArenaPage() {
   // Load the sweeps list on mount — this is what makes the page survive
   // navigation (state lives in the backend, not just this component).
   useEffect(() => { loadRuns(); }, [loadRuns]);
+
+  // "Set language" reuses the shared AudioReviewModal (audio player + Whisper-
+  // detect + lang picker). When it saves a verification it fires
+  // 'audio-lang-verified' {file_canonical_path, lang_code}; we map that back to
+  // the matching sweep(s) and set their language so the herd re-buckets.
+  useEffect(() => {
+    const onVerified = (e) => {
+      const path = e.detail && e.detail.file_canonical_path;
+      const lang = e.detail && e.detail.lang_code;
+      if (!path || !lang) return;
+      const norm = (p) => (p || '').replace(/^\/+/, '');
+      const targets = runs.filter((r) => norm(r.media_path) === norm(path));
+      if (!targets.length) return;
+      Promise.all(targets.map((r) =>
+        fetch(`/api/arena/${r.id}/language`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin', body: JSON.stringify({ lang }),
+        }).catch(() => {}),
+      )).then(() => { loadRuns(); loadByLanguage(); });
+    };
+    window.addEventListener('audio-lang-verified', onVerified);
+    return () => window.removeEventListener('audio-lang-verified', onVerified);
+  }, [runs, loadRuns, loadByLanguage]);
 
   // Poll while anything is pending/running (house usePoller pattern); also
   // refresh the open sweep's detail so its table fills in live.
@@ -876,6 +914,10 @@ export function ArenaPage() {
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
+      {/* Shared audio-review modal (player + Whisper-detect + lang picker),
+          reused for the sweep "Set language" action. Listens for the global
+          'open-audio-review' event a sweep row dispatches. */}
+      <AudioReviewModal />
     </main>
   );
 }

@@ -104,6 +104,43 @@ async def delete_arena_run(run_id: str, request: Request):
     return None
 
 
+class SetLanguageRequest(BaseModel):
+    lang: str = Field(..., min_length=1)
+
+
+@router.post("/{run_id}/language")
+async def set_arena_run_language(run_id: str, req: SetLanguageRequest, request: Request) -> dict:
+    """Manually set a sweep's source language — the escape hatch for sweeps that
+    landed in 'undetermined' (Whisper inconclusive + no tagged fallback). Sets
+    the run's language (user-sourced → re-buckets it in the herd) AND records a
+    global audio-lang verification for the file, so coverage and FUTURE sweeps
+    of the same file inherit it (user ground truth)."""
+    from ..langs import normalize_lang
+    run = request.app.state.arena.get(run_id)
+    if run is None:
+        raise HTTPException(404, detail="arena run not found")
+    code = normalize_lang(req.lang)
+    if not code or code == "und":
+        raise HTTPException(400, detail=f"unrecognized language: {req.lang!r}")
+    run.source_language = code
+    if isinstance(run.result, dict):
+        run.result["source_language"] = code
+        run.result["source_language_source"] = "user"
+    request.app.state.arena_store.save(run)
+    # Persist as global ground truth (best-effort — the herd update above is the
+    # required part; the verification is the bonus that benefits coverage + the
+    # next sweep of this file).
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is not None:
+        try:
+            store.upsert(canonical_path=(run.media_path or "").strip().lstrip("/"),
+                         lang_code=code, source="user", confidence=1.0,
+                         evidence={"via": "tuning-lab set-language", "run_id": run_id})
+        except Exception:
+            pass
+    return run.to_dict()
+
+
 @router.get("/{run_id}/events")
 async def arena_events(run_id: str, request: Request) -> StreamingResponse:
     svc = request.app.state.arena

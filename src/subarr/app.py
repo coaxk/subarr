@@ -78,6 +78,17 @@ def _arena_fallback_lang(app_, media_path):
     Returns an ISO-639-1 code, or None (→ the herd's 'undetermined' bucket)."""
     from .langs import normalize_lang
     canon = (media_path or "").strip().lstrip("/")
+    # Tier 0: a user's manual audio-lang verification (incl. one set via the
+    # tuning-lab "set language" action) — ground truth, so a corrected file's
+    # future sweeps auto-resolve.
+    try:
+        als = getattr(app_.state, "audio_lang", None)
+        v = als.get(canon) if als is not None else None
+        code = normalize_lang(getattr(v, "lang_code", None) or "")
+        if code and code != "und":
+            return code
+    except Exception:
+        pass
     # Tier 1: ffprobe audio-stream language tag.
     try:
         store = getattr(app_.state, "probe_store", None)
