@@ -15,13 +15,21 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/api/audio-audit", tags=["audio-audit"])
 
 
+_SCOPES = ("coverage", "library")
+
+
 @router.post("/start", status_code=202)
-async def start_audit(request: Request) -> dict:
+async def start_audit(request: Request, scope: str = "coverage") -> dict:
+    # Validate scope BEFORE the running-check so a typo is a clear 400, not a
+    # confusing 409. coverage = the tracked set (default); library = a full
+    # media-root walk (opt-in deep scan).
+    if scope not in _SCOPES:
+        raise HTTPException(400, detail=f"scope must be one of {_SCOPES}")
     walker = request.app.state.audio_audit
     if walker.is_running():
         raise HTTPException(409, detail="audio-language audit already running")
-    state = await walker.start()
-    return {"state": state.to_dict()}
+    state = await walker.start(scope=scope)
+    return {"state": state.to_dict(), "scope": scope}
 
 
 @router.post("/stop")
@@ -42,7 +50,13 @@ def _verified_paths(request: Request) -> set[str]:
     if store is None:
         return set()
     try:
-        return {(p or "").lstrip("/") for p in store.get_all_as_lookup().keys()}
+        # ONLY user confirmations resolve a finding. The walker's own Tier 2
+        # `whisper-robust` auto-verification must NOT hide the finding (else it
+        # would self-erase everything it writes) — the user still gets to
+        # confirm or correct it.
+        return {(p or "").lstrip("/")
+                for p, src in store.get_all_sources_as_lookup().items()
+                if src == "user"}
     except Exception:
         return set()
 
@@ -59,4 +73,5 @@ async def get_audit(request: Request) -> dict:
         "state": state.to_dict() if state is not None else None,
         "findings": findings,
         "counts": store.count_by_status(),
+        "summary": store.scan_summary(),
     }

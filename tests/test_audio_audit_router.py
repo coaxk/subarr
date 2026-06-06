@@ -50,6 +50,35 @@ def test_get_audit_verified_match_is_slash_insensitive(app_with_stub):
                    for f in app_with_stub.get("/api/audio-audit").json()["findings"])
 
 
+def test_get_audit_whisper_robust_does_not_hide(app_with_stub):
+    # The walker's OWN Tier 2 auto-verification (source=whisper-robust) must
+    # NOT hide the finding — only a user confirmation does. Otherwise Tier 2
+    # would self-erase every finding it writes.
+    _seed_finding(app_with_stub, path="TV/X/a.mkv")
+    app_with_stub.app.state.audio_lang.upsert(
+        canonical_path="TV/X/a.mkv", lang_code="nld",
+        source="whisper-robust", confidence=0.7)
+    assert any(f["canonical_path"] == "TV/X/a.mkv"
+               for f in app_with_stub.get("/api/audio-audit").json()["findings"])
+
+
+def test_get_audit_includes_scan_summary(app_with_stub):
+    _seed_finding(app_with_stub, path="TV/X/a.mkv")
+    body = app_with_stub.get("/api/audio-audit").json()
+    assert body["summary"]["total_checked"] >= 1
+    assert body["summary"]["last_checked_at"] is not None
+
+
+def test_start_validates_scope(app_with_stub):
+    # bogus scope rejected up front (validated before the running-check)
+    assert app_with_stub.post("/api/audio-audit/start?scope=bogus").status_code == 400
+
+
+def test_start_accepts_library_scope(app_with_stub):
+    r = app_with_stub.post("/api/audio-audit/start?scope=library")
+    assert r.status_code in (202, 409)
+
+
 def test_start_then_double_start_409(app_with_stub):
     # First start kicks the walker; an immediate second start is rejected while
     # it's still running. (Worklist is empty in the stub env, so it may finish

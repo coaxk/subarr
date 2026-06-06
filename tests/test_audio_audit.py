@@ -183,6 +183,67 @@ async def test_walker_classifies_mislabel_bilingual_agrees(tmp_path):
     assert state.found == 2  # mislabel + bilingual
 
 
+class _FakeLangStore:
+    """Records Tier 2 auto-verifications the walker writes."""
+    def __init__(self):
+        self.rows: dict = {}
+
+    def upsert(self, *, canonical_path, lang_code, source="user", confidence=1.0,
+               verified_by=None, evidence=None):
+        self.rows[canonical_path] = {
+            "lang_code": lang_code, "source": source,
+            "confidence": confidence, "evidence": evidence,
+        }
+
+
+@pytest.mark.asyncio
+async def test_walker_tier2_writes_whisper_robust_on_mislabel(tmp_path):
+    """Tier 2 feedback: a unanimous mislabel writes a `whisper-robust`
+    verification (conf 0.7) so coverage + the override gate can use it — but
+    bilingual stays advisory (no writeback), and risky JA/KO/ZH are written
+    BELOW the override threshold so a wrong auto-guess can't change output."""
+    from subarr.audio_audit import AudioAuditWalker
+    s = _store(tmp_path)
+    lang = _FakeLangStore()
+    subgen = _FakeSubgen({
+        "mislabel.mkv": _unanimous("nl"),     # tagged da → mislabel nl
+        "risky.mkv": _unanimous("ja"),        # tagged en → mislabel ja (risky)
+        "bi.mkv": _split(["en", "en", "sr"]),  # bilingual → advisory, NO writeback
+        "agree.mkv": _unanimous("en"),        # agrees → no writeback
+    })
+    worklist = [("mislabel.mkv", "da", 10.0), ("risky.mkv", "en", 10.0),
+                ("bi.mkv", "sr", 10.0), ("agree.mkv", "en", 10.0)]
+    w = AudioAuditWalker(subgen, s, worklist=lambda: worklist,
+                         audio_lang=lang, to_subgen=_identity)
+    await (await w.start(), w._task)[-1]
+    assert lang.rows["mislabel.mkv"]["source"] == "whisper-robust"
+    assert lang.rows["mislabel.mkv"]["lang_code"] == "nl"
+    assert lang.rows["mislabel.mkv"]["confidence"] == 0.7
+    # risky language written below the 0.5 override gate (display-only)
+    assert lang.rows["risky.mkv"]["confidence"] < 0.5
+    # bilingual + agrees never auto-write
+    assert "bi.mkv" not in lang.rows
+    assert "agree.mkv" not in lang.rows
+
+
+@pytest.mark.asyncio
+async def test_walker_start_passes_scope_when_supported(tmp_path):
+    """start(scope=...) is forwarded to a scope-aware worklist, and falls back
+    cleanly for a legacy zero-arg worklist (the test fakes)."""
+    from subarr.audio_audit import AudioAuditWalker
+    s = _store(tmp_path)
+    seen = {}
+
+    def worklist(scope="coverage"):
+        seen["scope"] = scope
+        return []
+
+    subgen = _FakeSubgen({})
+    w = AudioAuditWalker(subgen, s, worklist=worklist, to_subgen=_identity)
+    await (await w.start(scope="library"), w._task)[-1]
+    assert seen["scope"] == "library"
+
+
 @pytest.mark.asyncio
 async def test_walker_undetermined_when_no_detection(tmp_path):
     from subarr.audio_audit import AudioAuditWalker

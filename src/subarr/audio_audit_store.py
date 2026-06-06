@@ -146,3 +146,15 @@ class AudioAuditStore:
                 "SELECT status, COUNT(*) AS n FROM audio_lang_audit GROUP BY status"
             ).fetchall()
         return {r["status"]: r["n"] for r in rows}
+
+    def scan_summary(self) -> dict:
+        """Cheap freshness summary derived straight from the rows — no extra
+        persistence. `total_checked` = files ever audited; `last_checked_at` =
+        most recent verdict. Powers the panel's 'Last scanned X ago · N checked'
+        line, which survives restarts because it reads the durable table (the
+        in-memory AuditState progress does not)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n, MAX(checked_at) AS last FROM audio_lang_audit"
+            ).fetchone()
+        return {"total_checked": (row["n"] or 0), "last_checked_at": row["last"]}

@@ -47,6 +47,16 @@ _PER_FILE_SLEEP_S = 1.0
 # belongs to the user-facing tuning lab.
 _BUSY_SLEEP_S = 5.0
 
+# Tier 2 feedback: a unanimous mislabel writes a `whisper-robust` audio-lang
+# verification so coverage + the override gate can use it (without it being
+# treated as user ground truth). Non-risky languages get a confidence ABOVE the
+# override gate's 0.5 floor (informs decisions); risky non-Latin scripts get one
+# BELOW it (shows in coverage, but a wrong auto-guess can't change output until
+# the user confirms).
+_RISKY_LANGS = {"ja", "ko", "zh"}
+_TIER2_CONF = 0.7
+_TIER2_CONF_RISKY = 0.45
+
 
 @dataclass
 class AuditState:
@@ -93,17 +103,21 @@ def _derive_status(detect: dict | None, mixed: bool, mislabel: bool,
 
 
 class AudioAuditWalker:
-    def __init__(self, subgen, audit_store, *, worklist: Callable[[], list],
+    def __init__(self, subgen, audit_store, *, worklist: Callable[..., list],
                  probe_store=None, busy_check: Callable[[], bool] | None = None,
+                 audio_lang=None,
                  to_subgen: Callable[[str], str] = canonical_to_subgen_batch):
         self._subgen = subgen
         self._store = audit_store
-        # worklist() -> [(canonical_path, tag_lang, mtime), ...]. Resolved lazily
-        # at start() so it reflects the latest coverage snapshot.
+        # worklist(scope) -> [(canonical_path, tag_lang, mtime), ...]. Resolved
+        # lazily at start() so it reflects the latest coverage snapshot. Legacy
+        # zero-arg worklists are supported via a TypeError fallback.
         self._worklist = worklist
         self._probe_store = probe_store
         # busy_check() -> True when live sweeps are running (yield the GPU).
         self._busy_check = busy_check
+        # audio_lang verification store — Tier 2 feedback writes here.
+        self._audio_lang = audio_lang
         self._to_subgen = to_subgen
         self._state: AuditState | None = None
         self._task: asyncio.Task | None = None
@@ -114,11 +128,23 @@ class AudioAuditWalker:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(self) -> AuditState:
+    def _resolve_worklist(self, scope: str) -> list:
+        # Scope-aware worklist with a fallback for legacy zero-arg callables
+        # (the test fakes). Runs OFF the event loop (see start()) because the
+        # 'library' scope walks the whole media root + stats every file.
+        try:
+            return list(self._worklist(scope) or [])
+        except TypeError:
+            return list(self._worklist() or [])
+
+    async def start(self, scope: str = "coverage") -> AuditState:
         if self.is_running():
             raise RuntimeError("audio-language audit already running")
         try:
-            worklist = list(self._worklist() or [])
+            # Resolve off-thread: coverage scope stats hundreds of files and
+            # library scope walks the entire media root — neither should block
+            # the event loop during the start request.
+            worklist = await asyncio.to_thread(self._resolve_worklist, scope)
         except Exception as e:  # pragma: no cover - defensive
             log.warning("audio-audit: worklist resolution failed: %s", e)
             worklist = []
@@ -233,3 +259,25 @@ class AudioAuditWalker:
         )
         if status in ("mislabel", "bilingual", "multitrack"):
             state.found += 1
+        # Tier 2 feedback: a unanimous mislabel is high-confidence ground that
+        # subarr HEARD a different language than the tag. Write a `whisper-robust`
+        # verification so coverage shows it and the override gate can act —
+        # NEVER as `user` truth, so it stays visible for the user to confirm and
+        # never silently parrots a wrong auto-guess (risky scripts go sub-gate).
+        if (status == "mislabel" and detected_lang
+                and self._audio_lang is not None):
+            conf = (_TIER2_CONF_RISKY if detected_lang in _RISKY_LANGS
+                    else _TIER2_CONF)
+            try:
+                self._audio_lang.upsert(
+                    canonical_path=(canonical_path or "").lstrip("/"),
+                    lang_code=detected_lang, source="whisper-robust",
+                    confidence=conf,
+                    evidence={"via": "library-audit",
+                              "heard": list(det.get("languages_heard") or []),
+                              "n_agreeing": det.get("n_agreeing"),
+                              "n_total": det.get("n_total"),
+                              "tag_was": tag_lang},
+                )
+            except Exception:  # best-effort — the audit row is the required part
+                pass

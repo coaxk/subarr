@@ -833,18 +833,58 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
 // [#155 phase 1] Central list of audio-language issues caught by sweeps so far
 // (mislabel / bilingual) — the library-audit surface, zero extra GPU. Each row
 // opens the shared audio-review modal to confirm/correct.
-// Badge presentation for an audio-language finding (shared by sweep-derived and
-// library-scan findings). Multitrack is scan-only (sweeps fan out per-track and
-// don't flag it); mislabel/bilingual come from either source.
+// Badge presentation + plain-English legend for an audio-language finding
+// (shared by sweep-derived and library-scan findings, and by the legend so the
+// two never drift). Multitrack is scan-only (sweeps fan out per-track and don't
+// flag it); mislabel/bilingual come from either source.
 const AUDIO_BADGE = {
-  mislabel: { label: '🔎 mislabel', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
-  bilingual: { label: '🌐 bilingual', color: '#38bdf8', bg: 'rgba(56,189,248,0.15)' },
-  multitrack: { label: '🎚 multi-track', color: '#a78bfa', bg: 'rgba(167,139,250,0.15)' },
+  mislabel: {
+    label: '🔎 mislabel', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',
+    what: 'The tagged audio language is wrong — subarr heard one language consistently across the file, and it isn’t the tag. Review to confirm; confirming corrects coverage (and can push the fix back to Sonarr/Bazarr).',
+  },
+  bilingual: {
+    label: '🌐 bilingual', color: '#38bdf8', bg: 'rgba(56,189,248,0.15)',
+    what: 'A single audio track that switches between languages (common in border-region shows). Not an error — flagged so you can verify the primary language for subtitle decisions.',
+  },
+  multitrack: {
+    label: '🎚 multi-track', color: '#a78bfa', bg: 'rgba(167,139,250,0.15)',
+    what: 'The file has more than one separate audio track (e.g. original + a dub). Sweeps handle each track on its own — this is just letting you know the file is multi-track.',
+  },
 };
+
+// Human "x ago" for the last-scan summary. epoch seconds → short relative.
+function timeAgo(epochSeconds) {
+  if (!epochSeconds) return null;
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function AudioLegend() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10,
+                  padding: '8px 10px', border: 'var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
+      {Object.values(AUDIO_BADGE).map((b) => (
+        <div key={b.label} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 'var(--text-xs)' }}>
+          <span style={{ flex: 'none', fontWeight: 700, borderRadius: 4, padding: '1px 6px', color: b.color, background: b.bg, whiteSpace: 'nowrap' }}>{b.label}</span>
+          <span style={{ color: 'var(--fg-3)', lineHeight: 1.45 }}>{b.what}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-4)', marginTop: 2 }}>
+        🎧 <strong>review</strong> opens the audio player so you can listen and confirm the real language — your confirmation becomes ground truth that coverage and future sweeps inherit.
+      </div>
+    </div>
+  );
+}
 
 function AudioIssuesPanel({ refreshKey = 0 }) {
   const [issues, setIssues] = useState([]);          // sweep-derived (phase 1)
-  const [audit, setAudit] = useState(null);          // library-scan {state, findings, counts}
+  const [audit, setAudit] = useState(null);          // library-scan {state, findings, counts, summary}
+  const [deep, setDeep] = useState(false);           // scope: false=coverage, true=entire library
   const pollRef = React.useRef(null);
 
   const loadIssues = React.useCallback(
@@ -873,8 +913,9 @@ function AudioIssuesPanel({ refreshKey = 0 }) {
   }, [scanning, loadAudit]);
 
   const startScan = React.useCallback(() => {
-    fetch('/api/audio-audit/start', { method: 'POST' }).then(() => loadAudit()).catch(() => {});
-  }, [loadAudit]);
+    const scope = deep ? 'library' : 'coverage';
+    fetch(`/api/audio-audit/start?scope=${scope}`, { method: 'POST' }).then(() => loadAudit()).catch(() => {});
+  }, [loadAudit, deep]);
   const stopScan = React.useCallback(() => {
     fetch('/api/audio-audit/stop', { method: 'POST' }).then(() => loadAudit()).catch(() => {});
   }, [loadAudit]);
@@ -906,21 +947,26 @@ function AudioIssuesPanel({ refreshKey = 0 }) {
     return out;
   }, [issues, audit]);
 
+  const pct = scanning && scanState.total > 0
+    ? Math.min(100, Math.round((scanState.processed / scanState.total) * 100)) : 0;
   const scanLabel = scanning
     ? `Scanning… ${scanState.processed}/${scanState.total} · ${scanState.found} found`
     : (scanState && scanState.status === 'done' ? `Scan complete · ${scanState.processed} checked`
        : (scanState && scanState.status === 'cancelled' ? 'Scan stopped' : null));
+  const summary = audit && audit.summary ? audit.summary : null;
+  const lastAgo = summary ? timeAgo(summary.last_checked_at) : null;
 
   // Nothing to show AND no scan ever run → keep the panel hidden (don't clutter
   // a fresh install). Once a scan runs (or any finding exists) the panel stays.
-  if (!merged.length && !scanState) return null;
+  if (!merged.length && !scanState && !(summary && summary.total_checked)) return null;
 
   return (
     <Collapsible label={`Audio language issues · ${merged.length}`} id="audio-issues" defaultOpen={false}>
       <Hint>Files where subarr's listening disagreed with the tagged audio language — a likely mislabel, a genuinely bilingual track, or a multi-track file. This is something the *arr metadata simply can't tell you: subarr listened and told you the truth about the track. Listen + confirm to correct coverage.</Hint>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+      <AudioLegend />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
         {!scanning && (
-          <button onClick={startScan} title="Run robust language detection across your whole library (throttled, pauses for live sweeps)"
+          <button onClick={startScan} title="Run robust language detection across your library (throttled, pauses for live sweeps)"
             style={{ border: 'var(--border)', background: 'var(--bg-2)', color: 'var(--fg-1)', borderRadius: 'var(--radius-md)', padding: '4px 12px', fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer' }}>
             🔬 Scan library
           </button>
@@ -931,9 +977,25 @@ function AudioIssuesPanel({ refreshKey = 0 }) {
             ⏹ Stop scan
           </button>
         )}
-        {scanLabel && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>{scanLabel}</span>}
+        {!scanning && (
+          <label title="Off: scan the tracked coverage set (recommended). On: walk your ENTIRE library — slower, more GPU, but the most complete picture (and contributes more data to the shared dataset)."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--fg-3)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
+            Deep scan (entire library)
+          </label>
+        )}
+        {(scanLabel || lastAgo) && (
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+            {scanLabel || (lastAgo ? `Last scanned ${lastAgo} · ${summary.total_checked} checked` : null)}
+          </span>
+        )}
         {scanning && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-4)' }}>(pauses while sweeps run — findings appear as files are checked)</span>}
       </div>
+      {scanning && (
+        <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-3, rgba(255,255,255,0.08))', overflow: 'hidden', marginBottom: 10 }}>
+          <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#38bdf8,#a78bfa)', transition: 'width 0.4s ease' }} />
+        </div>
+      )}
       {!merged.length && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>No audio-language issues found yet.</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
         {merged.map((it) => {

@@ -246,7 +246,32 @@ async def lifespan(app_: FastAPI):
     from .audio_audit_store import AudioAuditStore
     from .langs import normalize_lang as _normalize_lang
 
-    def _audit_worklist():
+    def _safe_mtime(canonical: str):
+        # File mtime makes the walk resumable (a re-scan skips unchanged files).
+        # Best-effort: a missing/unreadable file just gets None (always re-checked).
+        try:
+            from .paths import canonical_to_fs as _c2fs
+            return _c2fs(canonical).stat().st_mtime
+        except Exception:
+            return None
+
+    def _coverage_tag_map():
+        # {canonical_path: tag_lang} for files the coverage snapshot knows — used
+        # to give library-scope files a tag (so mislabel can fire) when one exists.
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        out = {}
+        for it in ((snap.items if snap is not None else None) or []):
+            c = it.get("file_canonical_path") or it.get("canonical_path")
+            audio = it.get("audio_langs") or []
+            if c and audio:
+                tag = _normalize_lang(audio[0])
+                if tag:
+                    out[c] = tag
+        return out
+
+    def _coverage_worklist():
+        # Default scope: the tracked coverage set, files with a known audio tag.
         cc = getattr(app_.state, "coverage_cache", None)
         snap = cc.get_cached() if cc is not None else None
         if snap is None:
@@ -262,8 +287,46 @@ async def lifespan(app_: FastAPI):
             if not tag:
                 continue
             seen.add(c)
-            out.append((c, tag, None))
+            out.append((c, tag, _safe_mtime(c)))
         return out
+
+    def _library_worklist():
+        # Opt-in deep scan: every video file under the media root, not just the
+        # tracked set. Tags come from coverage where known (else None → bilingual/
+        # multitrack still detected, mislabel needs a tag to disagree with).
+        import os
+        from .paths import VIDEO_EXTS, fs_to_canonical
+        root = settings.media_root
+        tag_map = _coverage_tag_map()
+        out = []
+        seen = set()
+        try:
+            walk = os.walk(root)
+        except Exception:
+            return []
+        for dirpath, _dirs, files in walk:
+            for fn in files:
+                dot = fn.rfind(".")
+                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
+                    continue
+                fp = os.path.join(dirpath, fn)
+                try:
+                    from pathlib import Path as _P
+                    c = fs_to_canonical(_P(fp))
+                except Exception:
+                    continue
+                if c in seen:
+                    continue
+                seen.add(c)
+                try:
+                    mt = os.stat(fp).st_mtime
+                except OSError:
+                    mt = None
+                out.append((c, tag_map.get(c), mt))
+        return out
+
+    def _audit_worklist(scope: str = "coverage"):
+        return _library_worklist() if scope == "library" else _coverage_worklist()
 
     def _audit_busy():
         arena = getattr(app_.state, "arena", None)
@@ -282,6 +345,7 @@ async def lifespan(app_: FastAPI):
         worklist=_audit_worklist,
         probe_store=app_.state.probe_store,
         busy_check=_audit_busy,
+        audio_lang=app_.state.audio_lang,
     )
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.onboarding = OnboardingStore(settings.db_path)
