@@ -765,6 +765,18 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                       </span>
                     );
                   })()}
+                  {r.status === 'done' && r.audio_lang_mislabel && (
+                    <span title={`Whisper heard ${(r.source_language || '').toUpperCase()} on every chunk, but the file is tagged a different audio language — likely a mislabeled track. 🎧 confirm to correct coverage.`}
+                          style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', borderRadius: 4, padding: '1px 6px' }}>
+                      🔎 likely mislabel
+                    </span>
+                  )}
+                  {r.status === 'done' && r.audio_lang_mixed && (
+                    <span title={`Whisper heard more than one language (${(r.audio_languages_heard || []).join(', ')}) — this file looks bilingual. Kept the tagged language as the primary; the lab still compares recipes fine.`}
+                          style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.15)', borderRadius: 4, padding: '1px 6px' }}>
+                      🌐 {(r.audio_languages_heard || []).map((l) => l.toUpperCase()).join('/') || 'multiple'}
+                    </span>
+                  )}
                   {active ? (
                     <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ width: 70, height: 6, borderRadius: 3, background: 'var(--bg-4)', overflow: 'hidden' }}>
@@ -780,14 +792,18 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   {r.status === 'done' && r.confidence && !r.tie && <ConfChip conf={r.confidence} />}
                   <span style={{ color: 'var(--fg-3)', flex: 'none' }}>{open ? '▾' : '▸'}</span>
                 </button>
-                {r.status === 'done' && (!r.source_language || r.source_language_source === 'tagged') && (
+                {r.status === 'done' && (!r.source_language || r.source_language_source === 'tagged' || r.audio_lang_mislabel || r.audio_lang_mixed) && (
                   <button
                     onClick={() => window.dispatchEvent(new CustomEvent('open-audio-review', {
                       detail: { _canonical_path: (r.media_path || '').replace(/^\/+/, ''), title: basename(r.media_path) },
                     }))}
-                    title={r.source_language
-                      ? 'Confirm or correct the language — listen to a sample + Whisper-detect, then pick'
-                      : 'Language undetermined — listen to a sample + Whisper-detect, then set it (re-buckets the herd)'}
+                    title={r.audio_lang_mislabel
+                      ? 'Whisper says the tag is wrong — listen + confirm to correct coverage'
+                      : r.audio_lang_mixed
+                        ? 'Bilingual file — listen + set the primary language if needed'
+                        : r.source_language
+                          ? 'Confirm or correct the language — listen to a sample + Whisper-detect, then pick'
+                          : 'Language undetermined — listen to a sample + Whisper-detect, then set it (re-buckets the herd)'}
                     style={{ border: 'var(--border)', background: 'transparent', color: 'var(--fg-2)',
                              borderRadius: 'var(--radius-md)', padding: '2px 8px', marginRight: 6,
                              fontSize: 'var(--text-xs)', whiteSpace: 'nowrap', flex: 'none', cursor: 'pointer' }}>

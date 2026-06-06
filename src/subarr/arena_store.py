@@ -65,6 +65,12 @@ class ArenaRun:
             # language when Whisper was inconclusive). Lets the UI mark a
             # tagged-not-heard label as weaker than a Whisper-confirmed one.
             "source_language_source": res.get("source_language_source"),
+            # #(bilingual) per-chunk language signal: which languages Whisper
+            # heard, whether they disagree with the tag (mislabel) or coexist
+            # (mixed/bilingual). Drives the sweep-row "verify" badges.
+            "audio_languages_heard": res.get("audio_languages_heard") or [],
+            "audio_lang_mixed": bool(res.get("audio_lang_mixed")),
+            "audio_lang_mislabel": bool(res.get("audio_lang_mislabel")),
             "status": self.status,
             "recipe_count": len(self.variants),
             "clips_total": len(prog.get("clips", [])),

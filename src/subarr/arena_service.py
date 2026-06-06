@@ -24,7 +24,41 @@ from typing import AsyncIterator, Callable
 from .arena import CandidateRunner, ConfigVariant, run_arena
 from .arena_store import ArenaRun, ArenaStore  # re-exported for stable imports
 
-__all__ = ["ArenaRun", "ArenaStore", "ArenaService"]
+__all__ = ["ArenaRun", "ArenaStore", "ArenaService", "resolve_source_language"]
+
+
+def resolve_source_language(detect, tag, submit):
+    """Decide a sweep's source language from the Whisper per-chunk distribution,
+    the file's known audio tag, and any language the user set at submit.
+
+    The chunk-agreement SHAPE is the discriminator (not a single ratio):
+      - user submit         → authoritative.
+      - Whisper UNANIMOUS   → trust it (overrides a wrong tag); mislabel=True if
+        it disagrees with the tag (The Ring: tagged Danish, heard Dutch 3/3).
+      - SPLIT, real 2nd lang (majority ≥2 AND ≥2 distinct, not unanimous) →
+        BILINGUAL: keep the tag as the nominal primary, mixed=True (Besa: tagged
+        Serbian, heard en/en/sr → stays Serbian, flagged en+sr).
+      - else tag fallback; else a bare plurality; else undetermined.
+
+    Returns (language|None, source|None, mixed: bool, mislabel: bool) where
+    source ∈ {user, whisper, tagged, whisper-weak, None}."""
+    det = detect or {}
+    heard = list(det.get("languages_heard") or [])
+    whisper_lang = det.get("language")
+    unanimous = bool(det.get("unanimous"))
+    n_ag = int(det.get("n_agreeing") or 0)
+    # a real secondary language (true majority + ≥2 distinct) = bilingual;
+    # 1/1/1 (no majority) is just Whisper confused, NOT mixed.
+    mixed = (not unanimous) and n_ag >= 2 and len(set(heard)) >= 2
+    if submit:
+        return submit, "user", False, False
+    if unanimous and whisper_lang:
+        return whisper_lang, "whisper", False, bool(tag and tag != whisper_lang)
+    if tag:
+        return tag, "tagged", mixed, False
+    if whisper_lang and n_ag >= 2:
+        return whisper_lang, "whisper-weak", mixed, False
+    return None, None, mixed, False
 
 
 class ArenaService:
@@ -159,25 +193,30 @@ class ArenaService:
                 serialized["explanation"] = await self._explainer(serialized, run.media_path)
             except Exception:  # explanation is a nicety — never fail the sweep
                 serialized["explanation"] = None
-        # [#23] resolve the source language for the table + per-language grouping.
-        # Precedence: Whisper robust detection > a language set at submit > a
-        # TAGGED fallback (the file's known audio language) when Whisper was
-        # inconclusive. The chosen source is recorded so the UI can show a
-        # tagged-not-heard label as weaker than a Whisper-confirmed one. If even
-        # the fallback is unknown, it stays null → the herd's "undetermined".
-        detected = serialized.get("source_language")
-        final = detected or run.source_language
-        src = "whisper" if detected else ("user" if run.source_language else None)
-        if not final and self._lang_fallback is not None:
+        # Resolve the source language from the Whisper per-chunk distribution +
+        # the file's known audio tag. The chunk-agreement SHAPE is the key:
+        #   * user set it at submit            → authoritative.
+        #   * Whisper UNANIMOUS                 → trust it (can override a wrong
+        #       tag); flag a mislabel if it disagrees with the tag (The Ring:
+        #       tagged Danish, heard Dutch 3/3 → Dutch + mislabel).
+        #   * Whisper SPLIT (real 2nd language) → BILINGUAL content; keep the
+        #       tag as the nominal primary + flag the languages heard (Besa:
+        #       tagged Serbian, heard en/en/sr → stays Serbian + "mixed en,sr").
+        #   * else → tag fallback; else weak plurality; else undetermined.
+        det = serialized.get("audio_detect") or {}
+        tag = None
+        if self._lang_fallback is not None:
             try:
-                fb = self._lang_fallback(run.media_path)
+                tag = self._lang_fallback(run.media_path)
             except Exception:
-                fb = None
-            if fb:
-                final, src = fb, "tagged"
+                tag = None
+        final, src, mixed, mislabel = resolve_source_language(det, tag, run.source_language)
         run.source_language = final
         serialized["source_language"] = final
         serialized["source_language_source"] = src
+        serialized["audio_languages_heard"] = list(det.get("languages_heard") or [])
+        serialized["audio_lang_mixed"] = mixed
+        serialized["audio_lang_mislabel"] = mislabel
         run.result = serialized
         run.status = "done"
         self._store.save(run)

@@ -81,6 +81,9 @@ class ArenaResult:
     tie: bool = False                 # top recipes within noise → no real winner
     source_language: str | None = None  # [#23] robustly-detected source lang (label + per-lang grouping)
     source_language_confidence: float | None = None  # [#23] fraction of chunks agreeing (None when set conservatively)
+    # Raw Whisper per-chunk distribution; the SERVICE turns this + the file's
+    # known audio tag into the final source_language + mislabel/mixed flags.
+    audio_detect: dict | None = None
     explanation: str | None = None    # optional plain-language read (local ollama)
 
 
@@ -203,25 +206,44 @@ class AsrRunner:
 
     async def detect_language(self, media_path: str):
         """[#23] Robust source-language detection via subgen /detect_language_robust
-        (multi-chunk majority vote across the MIDDLE of the file — skips the
-        intro/credits/silence where Whisper hallucinates 'en'/'nynorsk'). Returns
-        (iso_code, confidence) only when a real majority agrees; otherwise
-        (None, None) so we never badge a sweep with a hallucinated language.
-        Single-clip detection is NOT trustworthy here (verified: a French file
-        detects en/nynorsk/fr/fr/en across its windows)."""
+        (multi-chunk vote across the MIDDLE of the file — skips intro/credits/
+        silence where Whisper hallucinates).
+
+        Returns the RAW per-chunk distribution (not a verdict) so the caller can
+        tell three very different situations apart — the discriminator is *how*
+        the chunks agree, not a single ratio:
+          - unanimous (all chunks one language) → confident; can override a
+            wrong arr tag (e.g. The Ring tagged Danish, heard Dutch 3/3).
+          - split with a real second language (e.g. 2 en / 1 sr) → BILINGUAL
+            content (Besa: English detectives + Serbian crooks), not "English".
+          - no majority (1/1/1) → Whisper confused; trust the tag instead.
+        Returns None when detection is unavailable/failed.
+        Shape: {language(plurality|None), n_agreeing, n_total, unanimous,
+                languages_heard:[iso...]}."""
         if not getattr(self._caps, "robust_language_detection", False):
-            return (None, None)
+            return None
         try:
             resp = await self._subgen.detect_language_robust(self._to_subgen(media_path))
         except Exception:
-            return (None, None)
-        agg = (resp or {}).get("aggregate") or {}
+            return None
+        resp = resp or {}
+        agg = resp.get("aggregate") or {}
         lang = agg.get("language")
-        n_ag = agg.get("n_agreeing") or 0
-        n_tot = agg.get("n_total") or 0
-        if lang and lang != "und" and n_tot and (n_ag / n_tot) >= 0.5:
-            return (lang, round(n_ag / n_tot, 2))
-        return (None, None)
+        n_ag = int(agg.get("n_agreeing") or 0)
+        n_tot = int(agg.get("n_total") or 0)
+        heard = sorted({
+            c.get("language") for c in (resp.get("chunks") or [])
+            if c.get("language") and c.get("language") != "und"
+        })
+        if not n_tot:
+            return None
+        return {
+            "language": lang if (lang and lang != "und") else None,
+            "n_agreeing": n_ag,
+            "n_total": n_tot,
+            "unanimous": n_tot >= 2 and n_ag == n_tot,
+            "languages_heard": heard,
+        }
 
     async def cleanup(self) -> None:
         import os
@@ -291,18 +313,27 @@ async def run_arena(
                                    None if produced[v.label] else "no subtitle produced on any clip")
                     for v in variants]
         rows, winner, confidence, consistency, agreement_mean, tie = _aggregate(per_clip, variants)
-        # [#23] robust source-language detection (majority vote, intro-skipping)
-        src_lang, src_conf = None, None
+        # [#23] robust source-language detection (per-chunk distribution).
+        # Conservative standalone verdict: only assert a language when the chunks
+        # are UNANIMOUS. The service refines this with the file's known tag
+        # (mislabel override / bilingual detection / tag fallback).
+        detect = None
         if hasattr(runner, "detect_language"):
             try:
-                src_lang, src_conf = await runner.detect_language(media_path)
+                detect = await runner.detect_language(media_path)
             except Exception:
-                src_lang, src_conf = None, None
+                detect = None
+        src_lang, src_conf = None, None
+        if detect and detect.get("unanimous") and detect.get("language"):
+            src_lang = detect["language"]
+            n_tot = detect.get("n_total") or 0
+            src_conf = round(detect.get("n_agreeing", 0) / n_tot, 2) if n_tot else None
         return ArenaResult(
             outcomes=outcomes, aggregate=rows, per_clip=per_clip,
             winner=winner, confidence=confidence,
             consistency=consistency, agreement_mean=agreement_mean, tie=tie,
             source_language=src_lang, source_language_confidence=src_conf,
+            audio_detect=detect,
         )
     finally:
         await runner.cleanup()

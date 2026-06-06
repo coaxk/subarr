@@ -154,6 +154,51 @@ def test_aggregate_runs_by_language_groups_and_ranks():
     assert by["fr"]["recipes"][0]["label"] == "default"
 
 
+def test_resolve_source_language_unanimous_mislabel():
+    # The Ring: tagged Danish, Whisper heard Dutch on ALL chunks → trust Whisper
+    # (override) + flag the mislabel.
+    from subarr.arena_service import resolve_source_language
+    det = {"language": "nl", "n_agreeing": 3, "n_total": 3, "unanimous": True,
+           "languages_heard": ["nl"]}
+    lang, src, mixed, mislabel = resolve_source_language(det, tag="da", submit=None)
+    assert (lang, src) == ("nl", "whisper")
+    assert mislabel is True and mixed is False
+
+
+def test_resolve_source_language_bilingual_split_keeps_tag():
+    # Besa: tagged Serbian, Whisper heard en/en/sr (2/3) → bilingual; keep the
+    # tag as primary, flag mixed. Must NOT flip to English.
+    from subarr.arena_service import resolve_source_language
+    det = {"language": "en", "n_agreeing": 2, "n_total": 3, "unanimous": False,
+           "languages_heard": ["en", "sr"]}
+    lang, src, mixed, mislabel = resolve_source_language(det, tag="sr", submit=None)
+    assert (lang, src) == ("sr", "tagged")
+    assert mixed is True and mislabel is False
+
+
+def test_resolve_source_language_no_majority_uses_tag_not_mixed():
+    # Black Wedding: 1/3 (three different guesses) → Whisper confused, NOT mixed.
+    # Trust the tag; no mixed flag.
+    from subarr.arena_service import resolve_source_language
+    det = {"language": "sr", "n_agreeing": 1, "n_total": 3, "unanimous": False,
+           "languages_heard": ["sr", "fr", "nn"]}
+    lang, src, mixed, mislabel = resolve_source_language(det, tag="no", submit=None)
+    assert (lang, src) == ("no", "tagged")
+    assert mixed is False and mislabel is False
+
+
+def test_resolve_source_language_submit_wins_and_no_signal():
+    from subarr.arena_service import resolve_source_language
+    # user-set at submit beats everything
+    assert resolve_source_language({"language": "en", "unanimous": True, "n_agreeing": 3,
+                                    "n_total": 3, "languages_heard": ["en"]}, tag="de",
+                                   submit="ja")[:2] == ("ja", "user")
+    # nothing trustworthy + no tag → undetermined
+    assert resolve_source_language({"language": "sr", "n_agreeing": 1, "n_total": 3,
+                                    "unanimous": False, "languages_heard": ["sr", "fr", "de"]},
+                                   tag=None, submit=None)[:2] == (None, None)
+
+
 def test_aggregate_buckets_unknown_language_under_und():
     # A sweep that ran but whose language couldn't be resolved (Whisper
     # inconclusive AND no tagged fallback) must NOT vanish — it buckets under
