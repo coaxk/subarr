@@ -772,9 +772,15 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                     </span>
                   )}
                   {r.status === 'done' && r.audio_lang_mixed && (
-                    <span title={`Whisper heard more than one language (${(r.audio_languages_heard || []).join(', ')}) — this file looks bilingual. Kept the tagged language as the primary; the lab still compares recipes fine.`}
+                    <span title={`Whisper heard more than one language (${(r.audio_languages_heard || []).join(', ')}) within one track — this file looks bilingual. Kept the tagged language as the primary; the lab still compares recipes fine.`}
                           style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.15)', borderRadius: 4, padding: '1px 6px' }}>
                       🌐 {(r.audio_languages_heard || []).map((l) => l.toUpperCase()).join('/') || 'multiple'}
+                    </span>
+                  )}
+                  {r.status === 'done' && r.audio_multitrack && (
+                    <span title={`This file has multiple audio tracks (${(r.audio_track_languages || []).join(', ')}) — e.g. an original + a dub. The sweep transcribed ONE track (${(r.source_language || '?').toUpperCase()}, the default). This is different from a single bilingual track.`}
+                          style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.16)', borderRadius: 4, padding: '1px 6px' }}>
+                      🎚 {(r.audio_track_languages || []).map((l) => l.toUpperCase()).join('+') || 'multitrack'}
                     </span>
                   )}
                   {active ? (

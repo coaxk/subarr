@@ -71,6 +71,10 @@ class ArenaRun:
             "audio_languages_heard": res.get("audio_languages_heard") or [],
             "audio_lang_mixed": bool(res.get("audio_lang_mixed")),
             "audio_lang_mislabel": bool(res.get("audio_lang_mislabel")),
+            # multi-track file (original + dub): ≥2 distinct audio-track langs;
+            # the sweep transcribed one. Distinct from single-track bilingual.
+            "audio_multitrack": bool(res.get("audio_multitrack")),
+            "audio_track_languages": res.get("audio_track_languages") or [],
             "status": self.status,
             "recipe_count": len(self.variants),
             "clips_total": len(prog.get("clips", [])),

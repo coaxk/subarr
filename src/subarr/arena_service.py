@@ -27,7 +27,7 @@ from .arena_store import ArenaRun, ArenaStore  # re-exported for stable imports
 __all__ = ["ArenaRun", "ArenaStore", "ArenaService", "resolve_source_language"]
 
 
-def resolve_source_language(detect, tag, submit):
+def resolve_source_language(detect, tag, submit, multitrack=False):
     """Decide a sweep's source language from the Whisper per-chunk distribution,
     the file's known audio tag, and any language the user set at submit.
 
@@ -39,6 +39,11 @@ def resolve_source_language(detect, tag, submit):
         BILINGUAL: keep the tag as the nominal primary, mixed=True (Besa: tagged
         Serbian, heard en/en/sr → stays Serbian, flagged en+sr).
       - else tag fallback; else a bare plurality; else undetermined.
+
+    `multitrack` (the file has ≥2 distinct audio-TRACK languages, e.g. an
+    original + a dub) suppresses the mislabel flag: a Whisper-vs-tag mismatch
+    there just means the sweep transcribed a different track (Trigger: ger+rus
+    tracks, swept the default German), not a mislabeled tag.
 
     Returns (language|None, source|None, mixed: bool, mislabel: bool) where
     source ∈ {user, whisper, tagged, whisper-weak, None}."""
@@ -53,7 +58,8 @@ def resolve_source_language(detect, tag, submit):
     if submit:
         return submit, "user", False, False
     if unanimous and whisper_lang:
-        return whisper_lang, "whisper", False, bool(tag and tag != whisper_lang)
+        mislabel = bool(tag and tag != whisper_lang and not multitrack)
+        return whisper_lang, "whisper", False, mislabel
     if tag:
         return tag, "tagged", mixed, False
     if whisper_lang and n_ag >= 2:
@@ -63,7 +69,8 @@ def resolve_source_language(detect, tag, submit):
 
 class ArenaService:
     def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner],
-                 explainer=None, max_concurrent: int = 1, lang_fallback=None):
+                 explainer=None, max_concurrent: int = 1, lang_fallback=None,
+                 track_info=None):
         self._store = store
         self._build_runner = build_runner
         self._explainer = explainer  # async (result_dict, media_path) -> str|None
@@ -71,6 +78,8 @@ class ArenaService:
         # language (ffprobe tag / arr) so a sweep whose Whisper detection was
         # inconclusive still gets a (weaker, "tagged") label instead of None.
         self._lang_fallback = lang_fallback
+        # (media_path) -> [track-lang...]. ≥2 distinct = multitrack advisory.
+        self._track_info = track_info
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         # Single-flight by default: each sweep runs CPU-heavy QE/torch, so N
@@ -210,13 +219,28 @@ class ArenaService:
                 tag = self._lang_fallback(run.media_path)
             except Exception:
                 tag = None
-        final, src, mixed, mislabel = resolve_source_language(det, tag, run.source_language)
+        tracks = []
+        if self._track_info is not None:
+            try:
+                tracks = self._track_info(run.media_path) or []
+            except Exception:
+                tracks = []
+        track_langs = sorted({t for t in tracks if t})
+        # ≥2 distinct audio-track LANGUAGES = a multi-track file (original + dub)
+        # — the sweep only transcribed ONE track. Distinct from single-track
+        # bilingual content; also suppresses a false "mislabel" (the Whisper-vs-
+        # tag mismatch is just a different track).
+        multitrack = len(track_langs) >= 2
+        final, src, mixed, mislabel = resolve_source_language(
+            det, tag, run.source_language, multitrack=multitrack)
         run.source_language = final
         serialized["source_language"] = final
         serialized["source_language_source"] = src
         serialized["audio_languages_heard"] = list(det.get("languages_heard") or [])
         serialized["audio_lang_mixed"] = mixed
         serialized["audio_lang_mislabel"] = mislabel
+        serialized["audio_multitrack"] = multitrack
+        serialized["audio_track_languages"] = track_langs
         run.result = serialized
         run.status = "done"
         self._store.save(run)

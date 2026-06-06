@@ -114,6 +114,23 @@ def _arena_fallback_lang(app_, media_path):
     return None
 
 
+def _arena_audio_tracks(app_, media_path):
+    """The file's audio-TRACK languages (normalized ISO-639-1) from the ffprobe
+    streams in probe_store. ≥2 distinct = a multi-track file (e.g. an original +
+    a dub), which the Tuning Lab can only sweep ONE track of — surfaced as a
+    'multitrack' advisory distinct from single-track bilingual content."""
+    from .langs import normalize_lang
+    out = []
+    try:
+        store = getattr(app_.state, "probe_store", None)
+        pr = store.get((media_path or "").strip().lstrip("/")) if store is not None else None
+        for a in (getattr(pr, "audio", None) or []):
+            out.append(normalize_lang(getattr(a, "language", None) or "") or None)
+    except Exception:
+        return []
+    return out
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     # Schema migrations run BEFORE any store touches the DB. After they
@@ -181,6 +198,8 @@ async def lifespan(app_: FastAPI):
         # Resolved live (probe_store is created later in lifespan; this closure
         # runs only at sweep time, by which point it exists).
         lang_fallback=lambda media_path: _arena_fallback_lang(app_, media_path),
+        # Audio-track languages → 'multitrack' advisory (original + dub etc.).
+        track_info=lambda media_path: _arena_audio_tracks(app_, media_path),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()

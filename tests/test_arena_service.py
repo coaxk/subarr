@@ -187,6 +187,19 @@ def test_resolve_source_language_no_majority_uses_tag_not_mixed():
     assert mixed is False and mislabel is False
 
 
+def test_resolve_source_language_multitrack_suppresses_mislabel():
+    # Trigger: ger+rus audio tracks, sweep transcribed the DEFAULT (German) → de
+    # 3/3. The tag may name the original (ru). multitrack must SUPPRESS the
+    # mislabel — that's a different track, not a mislabeled tag.
+    from subarr.arena_service import resolve_source_language
+    det = {"language": "de", "n_agreeing": 3, "n_total": 3, "unanimous": True,
+           "languages_heard": ["de"]}
+    lang, src, mixed, mislabel = resolve_source_language(det, tag="ru", submit=None, multitrack=True)
+    assert (lang, src) == ("de", "whisper") and mislabel is False
+    # same disagreement on a SINGLE-track file would (correctly) flag mislabel
+    assert resolve_source_language(det, tag="ru", submit=None, multitrack=False)[3] is True
+
+
 def test_resolve_source_language_submit_wins_and_no_signal():
     from subarr.arena_service import resolve_source_language
     # user-set at submit beats everything
