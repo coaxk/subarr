@@ -5,7 +5,7 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-06-07
 
 ### Added
 - **Tuning Lab — find the Whisper settings that actually win, on your hardware.**
@@ -79,8 +79,17 @@ breaking config changes.
   as actionable when the connected subgen will actually fill it. (#79)
 - Tuning Lab + coverage lists cap their height and scroll in place instead of
   ballooning the page.
+- **Age-based retention for tuning-lab sweeps.** The append-only `arena_runs`
+  table is pruned on boot to `SUBARR_ARENA_RETENTION_DAYS` (default 30; 0
+  disables) so it can't grow unbounded on long-running installs. (#136)
 
 ### Fixed
+- **ISO language-code variants are normalized in coverage detection.** A present
+  `.ger.srt`/`.deu.srt` sidecar now satisfies a `de` target (and `.eng.srt` an
+  `en` target) instead of raising a phantom gap; the Bazarr-blind mislabel check
+  also catches `eng`/`en-US`, not just bare `en`. (#118)
+- **Icelandic is selectable** in the audio-language picker (it was in the
+  language map but missing from the dropdown).
 - **Telemetry no longer reports the ollama integration "configured" on ~100%
   of installs** — it now gates on real reachability. (#119)
 - The main queue no longer counts Tuning Lab sweeps (they run through subgen's

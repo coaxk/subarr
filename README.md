@@ -153,6 +153,18 @@ Real library, real foreign-language content — nothing staged.
 
 ![Review](docs/screenshots/05-review.png)
 
+**Tuning Lab** — sweep Whisper recipes against your live subgen; a validated judge ranks them across multiple clips, with plain-language guidance and per-clip winners. Nothing is written to your library.
+
+![Tuning Lab](docs/screenshots/10-tuning-lab.png)
+
+**Recipe leaderboard** — every recipe's per-language results rolled into one overall ranking (mean of per-language means, so each language counts equally). Medals for the top three, a confidence signal, and an expandable per-language breakdown.
+
+![Recipe leaderboard](docs/screenshots/11-leaderboard.png)
+
+**Audio language issues** — subarr listened and disagreed with the tag: mislabeled, bilingual, and multi-track files flagged in one place, from on-demand sweeps and the opt-in library-wide scan. One click to review and confirm.
+
+![Audio language issues](docs/screenshots/12-audio-issues.png)
+
 **Rules** — auto-queue policy with score thresholds and language filters, plus a live "what would queue right now?" preview.
 
 ![Rules](docs/screenshots/06-rules.png)
