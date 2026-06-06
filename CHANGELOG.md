@@ -35,6 +35,14 @@ breaking config changes.
   language, so the Tuning Lab gives per-track recommendations instead of only
   the default track. An **Audio language issues** panel collects every flagged
   file in one place for review.
+- **Library-wide audio-language scan.** A one-click **Scan library** runs that
+  same listening pass over your whole library — not just files you happened to
+  sweep — so subarr can surface mislabels, bilingual tracks, and multi-track
+  files proactively. The scan is opt-in, throttled to a background trickle, and
+  GPU-polite: it pauses automatically while live Tuning Lab sweeps run and
+  resumes on its own, skipping files it already checked (resumable across
+  restarts). Findings flow into the same Audio language issues panel, and once
+  you confirm a file it drops out for good. (#155)
 - **In-app integration credential editing.** Add or change Bazarr/Sonarr/
   Radarr/Tautulli URLs + API keys and the Plex token from Settings, with
   test-connection and live apply — no env edit or restart. Env-set fields stay

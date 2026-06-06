@@ -124,6 +124,15 @@ async def arena_audio_issues(request: Request) -> dict:
     not-yet-swept files.) Defined before /{run_id} so it isn't captured as one."""
     runs = sorted(request.app.state.arena.list(),
                   key=lambda r: getattr(r, "created_at", 0) or 0, reverse=True)
+    # User adjudication is ground truth: once a file has an audio-lang
+    # verification, drop it from the issues list (it's been resolved).
+    verified: set[str] = set()
+    als = getattr(request.app.state, "audio_lang", None)
+    if als is not None:
+        try:
+            verified = {(p or "").lstrip("/") for p in als.get_all_as_lookup().keys()}
+        except Exception:
+            verified = set()
     by_path: dict[str, dict] = {}
     for r in runs:
         if r.status != "done":
@@ -132,6 +141,8 @@ async def arena_audio_issues(request: Request) -> dict:
         mislabel = bool(res.get("audio_lang_mislabel"))
         mixed = bool(res.get("audio_lang_mixed"))
         if not (mislabel or mixed):
+            continue
+        if (r.media_path or "").lstrip("/") in verified:   # already resolved
             continue
         if r.media_path in by_path:   # keep the newest run per file
             continue

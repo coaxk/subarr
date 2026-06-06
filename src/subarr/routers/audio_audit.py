@@ -32,13 +32,31 @@ async def stop_audit(request: Request) -> dict:
     return {"state": state.to_dict() if state is not None else None}
 
 
+def _verified_paths(request: Request) -> set[str]:
+    """Canonical paths the user has already adjudicated (audio-lang verification
+    = ground truth). Normalized to bare (no leading slash) so a finding stored
+    with/without a leading slash still matches. Used to drop resolved files from
+    the findings list — and to keep them dropped across a re-scan, which skips
+    unchanged files by mtime and would otherwise leave the stale row forever."""
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is None:
+        return set()
+    try:
+        return {(p or "").lstrip("/") for p in store.get_all_as_lookup().keys()}
+    except Exception:
+        return set()
+
+
 @router.get("")
 async def get_audit(request: Request) -> dict:
     walker = request.app.state.audio_audit
     store = request.app.state.audio_audit_store
     state = walker.get_state()
+    verified = _verified_paths(request)
+    findings = [f.to_dict() for f in store.list_findings()
+                if (f.canonical_path or "").lstrip("/") not in verified]
     return {
         "state": state.to_dict() if state is not None else None,
-        "findings": [f.to_dict() for f in store.list_findings()],
+        "findings": findings,
         "counts": store.count_by_status(),
     }

@@ -833,39 +833,123 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
 // [#155 phase 1] Central list of audio-language issues caught by sweeps so far
 // (mislabel / bilingual) — the library-audit surface, zero extra GPU. Each row
 // opens the shared audio-review modal to confirm/correct.
+// Badge presentation for an audio-language finding (shared by sweep-derived and
+// library-scan findings). Multitrack is scan-only (sweeps fan out per-track and
+// don't flag it); mislabel/bilingual come from either source.
+const AUDIO_BADGE = {
+  mislabel: { label: '🔎 mislabel', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
+  bilingual: { label: '🌐 bilingual', color: '#38bdf8', bg: 'rgba(56,189,248,0.15)' },
+  multitrack: { label: '🎚 multi-track', color: '#a78bfa', bg: 'rgba(167,139,250,0.15)' },
+};
+
 function AudioIssuesPanel({ refreshKey = 0 }) {
-  const [issues, setIssues] = useState([]);
-  const load = React.useCallback(
+  const [issues, setIssues] = useState([]);          // sweep-derived (phase 1)
+  const [audit, setAudit] = useState(null);          // library-scan {state, findings, counts}
+  const pollRef = React.useRef(null);
+
+  const loadIssues = React.useCallback(
     () => fetch('/api/arena/audio-issues').then((r) => r.json()).then((d) => setIssues(d.issues || [])).catch(() => {}), []);
+  const loadAudit = React.useCallback(
+    () => fetch('/api/audio-audit').then((r) => r.json()).then((d) => { setAudit(d); return d; }).catch(() => {}), []);
+
   // Reload on mount, when a verify lands, AND when refreshKey changes (the
   // parent bumps it as sweeps COMPLETE — otherwise a freshly-flagged file like
   // a just-finished bilingual sweep wouldn't appear until a page reload).
-  useEffect(() => { load(); }, [load, refreshKey]);
+  useEffect(() => { loadIssues(); loadAudit(); }, [loadIssues, loadAudit, refreshKey]);
   useEffect(() => {
-    const h = () => load();
+    const h = () => { loadIssues(); loadAudit(); };
     window.addEventListener('audio-lang-verified', h);
     return () => window.removeEventListener('audio-lang-verified', h);
-  }, [load]);
-  if (!issues.length) return null;
+  }, [loadIssues, loadAudit]);
+
+  // Poll the scan while it's running (the walker trickles + pauses for sweeps,
+  // so findings appear gradually). Stop polling the moment it's no longer running.
+  const scanState = audit && audit.state ? audit.state : null;
+  const scanning = scanState && scanState.status === 'running';
+  useEffect(() => {
+    if (!scanning) { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } return; }
+    pollRef.current = setInterval(() => { loadAudit(); }, 3000);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [scanning, loadAudit]);
+
+  const startScan = React.useCallback(() => {
+    fetch('/api/audio-audit/start', { method: 'POST' }).then(() => loadAudit()).catch(() => {});
+  }, [loadAudit]);
+  const stopScan = React.useCallback(() => {
+    fetch('/api/audio-audit/stop', { method: 'POST' }).then(() => loadAudit()).catch(() => {});
+  }, [loadAudit]);
+
+  const norm = (p) => (p || '').replace(/^\/+/, '');
   const base = (p) => (p || '').split('/').pop() || p;
+
+  // Merge sweep-derived findings (have run_id) with library-scan findings
+  // (keyed by canonical_path), deduped by path — a swept file already corrected
+  // shouldn't double-list. Sweep wins on collision (it's the more specific,
+  // possibly per-track, signal).
+  const merged = React.useMemo(() => {
+    const sweepItems = (issues || []).map((it) => ({
+      key: `s:${it.run_id}`, path: it.media_path, status: it.status,
+      detected: it.detected, heard: it.languages_heard || [], source: 'sweep',
+    }));
+    const scanItems = ((audit && audit.findings) || []).map((f) => ({
+      key: `a:${f.canonical_path}`, path: f.canonical_path, status: f.status,
+      detected: f.detected_lang, heard: f.languages_heard || [], source: 'scan',
+    }));
+    const seen = new Set();
+    const out = [];
+    for (const x of [...sweepItems, ...scanItems]) {
+      const k = norm(x.path);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(x);
+    }
+    return out;
+  }, [issues, audit]);
+
+  const scanLabel = scanning
+    ? `Scanning… ${scanState.processed}/${scanState.total} · ${scanState.found} found`
+    : (scanState && scanState.status === 'done' ? `Scan complete · ${scanState.processed} checked`
+       : (scanState && scanState.status === 'cancelled' ? 'Scan stopped' : null));
+
+  // Nothing to show AND no scan ever run → keep the panel hidden (don't clutter
+  // a fresh install). Once a scan runs (or any finding exists) the panel stays.
+  if (!merged.length && !scanState) return null;
+
   return (
-    <Collapsible label={`Audio language issues · ${issues.length}`} id="audio-issues" defaultOpen={false}>
-      <Hint>Files where the Tuning Lab's listening disagreed with the tagged audio language — a likely mislabel, or a genuinely bilingual track. Listen + confirm to correct coverage. (Builds up as you sweep; a library-wide scan is coming.)</Hint>
+    <Collapsible label={`Audio language issues · ${merged.length}`} id="audio-issues" defaultOpen={false}>
+      <Hint>Files where subarr's listening disagreed with the tagged audio language — a likely mislabel, a genuinely bilingual track, or a multi-track file. This is something the *arr metadata simply can't tell you: subarr listened and told you the truth about the track. Listen + confirm to correct coverage.</Hint>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        {!scanning && (
+          <button onClick={startScan} title="Run robust language detection across your whole library (throttled, pauses for live sweeps)"
+            style={{ border: 'var(--border)', background: 'var(--bg-2)', color: 'var(--fg-1)', borderRadius: 'var(--radius-md)', padding: '4px 12px', fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer' }}>
+            🔬 Scan library
+          </button>
+        )}
+        {scanning && (
+          <button onClick={stopScan} title="Stop the library scan"
+            style={{ border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.12)', color: '#f87171', borderRadius: 'var(--radius-md)', padding: '4px 12px', fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer' }}>
+            ⏹ Stop scan
+          </button>
+        )}
+        {scanLabel && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>{scanLabel}</span>}
+        {scanning && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-4)' }}>(pauses while sweeps run — findings appear as files are checked)</span>}
+      </div>
+      {!merged.length && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>No audio-language issues found yet.</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
-        {issues.map((it) => {
-          const ml = it.status === 'mislabel';
+        {merged.map((it) => {
+          const badge = AUDIO_BADGE[it.status] || AUDIO_BADGE.bilingual;
+          const detail = it.status === 'mislabel'
+            ? `heard ${(it.detected || '').toUpperCase()}`
+            : (it.heard || []).map((l) => l.toUpperCase()).join('/');
           return (
-            <div key={it.run_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
-              <span style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, borderRadius: 4, padding: '1px 6px',
-                             color: ml ? '#f59e0b' : '#38bdf8', background: ml ? 'rgba(245,158,11,0.15)' : 'rgba(56,189,248,0.15)' }}>
-                {ml ? '🔎 mislabel' : '🌐 bilingual'}
+            <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
+              <span style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, borderRadius: 4, padding: '1px 6px', color: badge.color, background: badge.bg }}>
+                {badge.label}
               </span>
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg-1)' }} title={it.media_path}>{base(it.media_path)}</span>
-              <span style={{ flex: 'none', color: 'var(--fg-3)' }}>
-                {ml ? `heard ${(it.detected || '').toUpperCase()}` : (it.languages_heard || []).map((l) => l.toUpperCase()).join('/')}
-              </span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg-1)' }} title={it.path}>{base(it.path)}</span>
+              <span style={{ flex: 'none', color: 'var(--fg-3)' }}>{detail}</span>
               <button onClick={() => window.dispatchEvent(new CustomEvent('open-audio-review', {
-                detail: { _canonical_path: (it.media_path || '').replace(/^\/+/, ''), title: base(it.media_path) },
+                detail: { _canonical_path: norm(it.path), title: base(it.path) },
               }))}
                 title="Listen + confirm the language" style={{ flex: 'none', border: 'var(--border)', background: 'transparent', color: 'var(--fg-2)', borderRadius: 'var(--radius-md)', padding: '2px 8px', fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
                 🎧 review
