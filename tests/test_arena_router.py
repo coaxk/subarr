@@ -93,6 +93,15 @@ def test_set_language_updates_run(app_with_stub):
     # Manual "set language" escape: sets the run's source_language (normalized)
     # so an undetermined sweep re-buckets in the herd.
     rid = app_with_stub.post("/api/arena/run", json=_body(kwargs={"beam_size": 5})).json()["id"]
+    # The run auto-starts a background sweep whose completion resolves (and
+    # writes) source_language. Drive it to a terminal state FIRST so the manual
+    # set-language is the authoritative last write — mirrors real usage (you set
+    # a language on a finished, undetermined sweep), and removes a completion-vs-
+    # set-language race that made this test order-dependent. Each sync GET pumps
+    # the app's event loop, advancing the background task.
+    for _ in range(200):
+        if app_with_stub.get(f"/api/arena/{rid}").json().get("status") in ("done", "error"):
+            break
     r = app_with_stub.post(f"/api/arena/{rid}/language", json={"lang": "nor"})
     assert r.status_code == 200
     assert r.json()["source_language"] == "no"          # nor → ISO-639-1 no
