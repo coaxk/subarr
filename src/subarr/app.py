@@ -38,6 +38,7 @@ from .provenance import ProvenanceStore
 from .onboarding import OnboardingStore
 from .routers import (
     admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
+    audio_audit as r_audio_audit,
     audio_lang as r_audio_lang,
     bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
     discovery as r_discovery, household as r_household,
@@ -237,6 +238,51 @@ async def lifespan(app_: FastAPI):
     app_.state.enrichment = EnrichmentStore(settings.db_path)
     app_.state.probe_store = ProbeStore(settings.db_path)
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
+    # #155 phase 2: library-wide audio-language audit walker. OPT-IN (started
+    # only via POST /api/audio-audit/start) + throttled + GPU-polite (yields to
+    # live tuning-lab sweeps). The worklist is the coverage snapshot's files
+    # that have a known audio tag; busy_check reports active arena sweeps.
+    from .audio_audit import AudioAuditWalker
+    from .audio_audit_store import AudioAuditStore
+    from .langs import normalize_lang as _normalize_lang
+
+    def _audit_worklist():
+        cc = getattr(app_.state, "coverage_cache", None)
+        snap = cc.get_cached() if cc is not None else None
+        if snap is None:
+            return []
+        out = []
+        seen = set()
+        for it in (snap.items or []):
+            c = it.get("file_canonical_path") or it.get("canonical_path")
+            audio = it.get("audio_langs") or []
+            if not c or not audio or c in seen:
+                continue
+            tag = _normalize_lang(audio[0])
+            if not tag:
+                continue
+            seen.add(c)
+            out.append((c, tag, None))
+        return out
+
+    def _audit_busy():
+        arena = getattr(app_.state, "arena", None)
+        if arena is None:
+            return False
+        try:
+            return any(r.status in ("running", "queued", "pending")
+                       for r in arena.list())
+        except Exception:
+            return False
+
+    app_.state.audio_audit_store = AudioAuditStore(settings.db_path)
+    app_.state.audio_audit = AudioAuditWalker(
+        app_.state.subgen,
+        app_.state.audio_audit_store,
+        worklist=_audit_worklist,
+        probe_store=app_.state.probe_store,
+        busy_check=_audit_busy,
+    )
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
@@ -432,6 +478,10 @@ async def lifespan(app_: FastAPI):
         except (AttributeError, Exception):
             pass
         await app_.state.probe_walker.aclose()
+        try:
+            await app_.state.audio_audit.aclose()
+        except (AttributeError, Exception):
+            pass
         await app_.state.scheduler.stop()
         try:
             app_.state.coverage_cache_task.cancel()
@@ -454,6 +504,10 @@ async def lifespan(app_: FastAPI):
         app_.state.schedule.close()
         app_.state.enrichment.close()
         app_.state.probe_store.close()
+        try:
+            app_.state.audio_audit_store.close()
+        except (AttributeError, Exception):
+            pass
         app_.state.pending.close()
         app_.state.onboarding.close()
         app_.state.docker.close()
@@ -497,6 +551,7 @@ app.include_router(r_onboarding.router)
 app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
 app.include_router(r_arena.router)
+app.include_router(r_audio_audit.router)
 
 
 @app.get("/api/health")

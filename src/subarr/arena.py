@@ -36,6 +36,40 @@ class ArenaUnsupported(RuntimeError):
     """The connected subgen can't run the arena (missing the v4.10 /asr channel)."""
 
 
+def parse_robust_detect(resp) -> dict | None:
+    """Parse a subgen `/detect_language_robust` response into the RAW per-chunk
+    distribution `resolve_source_language` consumes. Shared by the tuning-lab
+    sweeps (`AsrRunner.detect_language`) and the #155 audit walker so both feed
+    the classifier identical shapes.
+
+    Returns the discriminating SHAPE (not a verdict): the caller tells apart
+    unanimous (confident, can override a wrong tag), split-with-a-real-second-
+    language (bilingual), and no-majority (Whisper confused → trust the tag) by
+    looking at `unanimous` + `n_agreeing` + `languages_heard`, not a single ratio.
+
+    Shape: {language(plurality|None), n_agreeing, n_total, unanimous,
+            languages_heard:[iso...]}. Returns None when detection is
+    unavailable/failed (no chunks voted)."""
+    resp = resp or {}
+    agg = resp.get("aggregate") or {}
+    lang = agg.get("language")
+    n_ag = int(agg.get("n_agreeing") or 0)
+    n_tot = int(agg.get("n_total") or 0)
+    heard = sorted({
+        c.get("language") for c in (resp.get("chunks") or [])
+        if c.get("language") and c.get("language") != "und"
+    })
+    if not n_tot:
+        return None
+    return {
+        "language": lang if (lang and lang != "und") else None,
+        "n_agreeing": n_ag,
+        "n_total": n_tot,
+        "unanimous": n_tot >= 2 and n_ag == n_tot,
+        "languages_heard": heard,
+    }
+
+
 @dataclass
 class ConfigVariant:
     """One candidate Whisper config to trial. `kwargs` is the per-request
@@ -233,24 +267,7 @@ class AsrRunner:
             resp = await self._subgen.detect_language_robust(self._to_subgen(media_path))
         except Exception:
             return None
-        resp = resp or {}
-        agg = resp.get("aggregate") or {}
-        lang = agg.get("language")
-        n_ag = int(agg.get("n_agreeing") or 0)
-        n_tot = int(agg.get("n_total") or 0)
-        heard = sorted({
-            c.get("language") for c in (resp.get("chunks") or [])
-            if c.get("language") and c.get("language") != "und"
-        })
-        if not n_tot:
-            return None
-        return {
-            "language": lang if (lang and lang != "und") else None,
-            "n_agreeing": n_ag,
-            "n_total": n_tot,
-            "unanimous": n_tot >= 2 and n_ag == n_tot,
-            "languages_heard": heard,
-        }
+        return parse_robust_detect(resp)
 
     async def cleanup(self) -> None:
         import os
