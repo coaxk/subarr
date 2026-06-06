@@ -35,6 +35,7 @@ const LANG_PICKS = [
   ['heb','Hebrew'],
   ['hin','Hindi'],
   ['hun','Hungarian'],
+  ['ice','Icelandic'],
   ['ind','Indonesian'],
   ['ita','Italian'],
   ['jpn','Japanese'],
