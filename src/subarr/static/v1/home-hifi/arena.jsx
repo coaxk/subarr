@@ -930,11 +930,12 @@ function AudioIssuesPanel({ refreshKey = 0 }) {
   const merged = React.useMemo(() => {
     const sweepItems = (issues || []).map((it) => ({
       key: `s:${it.run_id}`, path: it.media_path, status: it.status,
-      detected: it.detected, heard: it.languages_heard || [], source: 'sweep',
+      detected: it.detected, heard: it.languages_heard || [], tracks: [], source: 'sweep',
     }));
     const scanItems = ((audit && audit.findings) || []).map((f) => ({
       key: `a:${f.canonical_path}`, path: f.canonical_path, status: f.status,
-      detected: f.detected_lang, heard: f.languages_heard || [], source: 'scan',
+      detected: f.detected_lang, heard: f.languages_heard || [],
+      tracks: f.track_languages || [], source: 'scan',
     }));
     const seen = new Set();
     const out = [];
@@ -1000,9 +1001,14 @@ function AudioIssuesPanel({ refreshKey = 0 }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
         {merged.map((it) => {
           const badge = AUDIO_BADGE[it.status] || AUDIO_BADGE.bilingual;
+          // multi-track → the actual TRACK languages (DE + RU), not what was
+          // heard in the one track we listened to. mislabel → what was heard.
+          // bilingual → the languages heard within the single track (DE/EN).
           const detail = it.status === 'mislabel'
             ? `heard ${(it.detected || '').toUpperCase()}`
-            : (it.heard || []).map((l) => l.toUpperCase()).join('/');
+            : it.status === 'multitrack' && (it.tracks || []).length
+              ? (it.tracks).map((l) => l.toUpperCase()).join(' + ')
+              : (it.heard || []).map((l) => l.toUpperCase()).join('/');
           return (
             <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
               <span style={{ flex: 'none', fontSize: 'var(--text-xs)', fontWeight: 700, borderRadius: 4, padding: '1px 6px', color: badge.color, background: badge.bg }}>

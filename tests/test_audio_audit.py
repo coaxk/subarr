@@ -40,6 +40,19 @@ def test_upsert_and_get(tmp_path):
     assert f.checked_at > 0
 
 
+def test_upsert_roundtrips_track_languages(tmp_path):
+    s = _store(tmp_path)
+    s.upsert(canonical_path="TV/X/mt.mkv", tag_lang="de", detected_lang="de",
+             status="multitrack", languages_heard=["de"], n_agreeing=3,
+             n_total=3, mtime=1.0, track_languages=["de", "ru"])
+    f = s.get("TV/X/mt.mkv")
+    assert f.track_languages == ["de", "ru"]
+    # default when omitted = empty list (not None) in to_dict
+    s.upsert(canonical_path="TV/X/a.mkv", tag_lang="en", detected_lang="en",
+             status="agrees", languages_heard=[], n_agreeing=3, n_total=3, mtime=1.0)
+    assert s.get("TV/X/a.mkv").to_dict()["track_languages"] == []
+
+
 def test_upsert_replaces_existing(tmp_path):
     s = _store(tmp_path)
     s.upsert(canonical_path="TV/X/a.mkv", tag_lang="da", detected_lang=None,
@@ -266,8 +279,12 @@ async def test_walker_multitrack_from_probe(tmp_path):
                          probe_store=probe, to_subgen=_identity)
     await (await w.start(), w._task)[-1]
     # ≥2 distinct track langs → multitrack suppresses mislabel
-    assert s.get("mt.mkv").status == "multitrack"
-    assert s.get("mt.mkv").status != "mislabel"
+    finding = s.get("mt.mkv")
+    assert finding.status == "multitrack"
+    assert finding.status != "mislabel"
+    # the actual TRACK languages are stored (so the UI shows "DE + RU", not the
+    # single language heard in the one track the walker listened to)
+    assert finding.track_languages == ["de", "ru"]
 
 
 @pytest.mark.asyncio

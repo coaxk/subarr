@@ -36,6 +36,7 @@ class AuditFinding:
     n_total: int | None
     mtime: float | None
     checked_at: float
+    track_languages: list[str] | None = None  # ffprobe per-track langs (multi-track)
 
     def to_dict(self) -> dict:
         return {
@@ -48,6 +49,7 @@ class AuditFinding:
             "n_total": self.n_total,
             "mtime": self.mtime,
             "checked_at": self.checked_at,
+            "track_languages": list(self.track_languages or []),
         }
 
 
@@ -69,22 +71,25 @@ class AudioAuditStore:
     def upsert(self, *, canonical_path: str, tag_lang: str | None,
                detected_lang: str | None, status: str,
                languages_heard: list[str] | None, n_agreeing: int | None,
-               n_total: int | None, mtime: float | None) -> None:
+               n_total: int | None, mtime: float | None,
+               track_languages: list[str] | None = None) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audio_lang_audit "
                 "(canonical_path, tag_lang, detected_lang, status, languages_heard, "
-                " n_agreeing, n_total, mtime, checked_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " n_agreeing, n_total, mtime, checked_at, track_languages) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(canonical_path) DO UPDATE SET "
                 "  tag_lang=excluded.tag_lang, detected_lang=excluded.detected_lang, "
                 "  status=excluded.status, languages_heard=excluded.languages_heard, "
                 "  n_agreeing=excluded.n_agreeing, n_total=excluded.n_total, "
-                "  mtime=excluded.mtime, checked_at=excluded.checked_at",
+                "  mtime=excluded.mtime, checked_at=excluded.checked_at, "
+                "  track_languages=excluded.track_languages",
                 (
                     canonical_path, tag_lang, detected_lang, status,
                     json.dumps(list(languages_heard or [])),
                     n_agreeing, n_total, mtime, time.time(),
+                    json.dumps(list(track_languages or [])),
                 ),
             )
 
@@ -93,21 +98,32 @@ class AudioAuditStore:
             self._conn.execute("DELETE FROM audio_lang_audit")
 
     # ── reads ───────────────────────────────────────────────────────────────
-    def _row(self, r: sqlite3.Row) -> AuditFinding:
+    @staticmethod
+    def _json_list(value) -> list:
         try:
-            heard = json.loads(r["languages_heard"] or "[]")
+            v = json.loads(value or "[]")
         except (ValueError, TypeError):
-            heard = []
+            return []
+        return v if isinstance(v, list) else []
+
+    def _row(self, r: sqlite3.Row) -> AuditFinding:
+        # track_languages is a column added in migration 011 — tolerate rows/DBs
+        # that predate it (sqlite3.Row raises IndexError on a missing key).
+        try:
+            tracks = self._json_list(r["track_languages"])
+        except (IndexError, KeyError):
+            tracks = []
         return AuditFinding(
             canonical_path=r["canonical_path"],
             tag_lang=r["tag_lang"],
             detected_lang=r["detected_lang"],
             status=r["status"],
-            languages_heard=heard if isinstance(heard, list) else [],
+            languages_heard=self._json_list(r["languages_heard"]),
             n_agreeing=r["n_agreeing"],
             n_total=r["n_total"],
             mtime=r["mtime"],
             checked_at=r["checked_at"],
+            track_languages=tracks,
         )
 
     def get(self, canonical_path: str) -> AuditFinding | None:

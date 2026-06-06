@@ -165,23 +165,23 @@ class AudioAuditWalker:
         await self.stop()
 
     # ── internals ─────────────────────────────────────────────────────────
-    def _multitrack(self, canonical_path: str) -> bool:
-        """≥2 distinct audio-track languages = a genuinely multi-track file
-        (original + dub). Read from probe_store ffprobe streams; absent →
-        False (treated as single-track)."""
+    def _track_langs(self, canonical_path: str) -> list:
+        """Ordered, de-duplicated audio-track languages from probe_store ffprobe
+        streams (e.g. ['de', 'ru']). Drives both the multi-track verdict (≥2
+        distinct) AND the per-track display, so the UI shows the actual track
+        languages instead of what was heard in the one track we listened to."""
         if self._probe_store is None:
-            return False
+            return []
         try:
             pr = self._probe_store.get(canonical_path)
         except Exception:
-            return False
-        langs = {
-            (getattr(a, "language", None) or "").strip().lower()
-            for a in (getattr(pr, "audio", None) or [])
-        }
-        langs.discard("")
-        langs.discard("und")
-        return len(langs) >= 2
+            return []
+        out = []
+        for a in (getattr(pr, "audio", None) or []):
+            code = (getattr(a, "language", None) or "").strip().lower()
+            if code and code != "und" and code not in out:
+                out.append(code)
+        return out
 
     async def _run(self, state: AuditState, worklist: list) -> None:
         try:
@@ -241,7 +241,8 @@ class AudioAuditWalker:
                          tag_lang: str | None, mtime: float | None) -> None:
         resp = await self._subgen.detect_language_robust(self._to_subgen(canonical_path))
         detect = parse_robust_detect(resp)
-        multitrack = self._multitrack(canonical_path)
+        track_langs = self._track_langs(canonical_path)
+        multitrack = len(track_langs) >= 2
         lang, _src, mixed, mislabel = resolve_source_language(
             detect, tag_lang, None, multitrack=multitrack)
         status = _derive_status(detect, mixed, mislabel, multitrack)
@@ -256,6 +257,7 @@ class AudioAuditWalker:
             n_agreeing=det.get("n_agreeing"),
             n_total=det.get("n_total"),
             mtime=mtime,
+            track_languages=track_langs,
         )
         if status in ("mislabel", "bilingual", "multitrack"):
             state.found += 1
