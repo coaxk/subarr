@@ -712,6 +712,101 @@ function ByLanguagePanel({ data }) {
   );
 }
 
+// [#146] Global recipe leaderboard — the per-language herd rolled up into ONE
+// overall ranking. Score = the MEAN OF PER-LANGUAGE MEANS (each language
+// weighted equally), so a recipe can't climb just by doing well on one
+// heavily-swept/easy language. The gamified summit of the herd: the best
+// all-round pick across everything you've swept.
+const LB_MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' };
+const LB_CONF = {
+  high: { text: 'high', color: 'var(--success-500)' },
+  moderate: { text: 'moderate', color: 'var(--warn-500)' },
+  low: { text: 'low', color: 'var(--fg-3)' },
+};
+
+function LeaderboardConf({ level }) {
+  const c = LB_CONF[level] || LB_CONF.low;
+  return (
+    <span title="Confidence — grows with the number of languages and files behind this ranking"
+      style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.04em', color: c.color }}>
+      {c.text}
+    </span>
+  );
+}
+
+function GlobalLeaderboardPanel({ data, minLanguages = 3 }) {
+  const [open, setOpen] = useState({});   // recipe label -> per-language breakdown open
+  if (!data || !data.length) return null;
+  const eligible = data.filter((r) => r.eligible);
+  const top = eligible[0];
+  const colHead = { fontSize: 'var(--text-2xs)', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg-3)', flex: 'none' };
+  return (
+    <Collapsible id="leaderboard" defaultOpen={false}
+      label={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: 700, color: 'var(--fg-0)' }}>Recipe leaderboard</span>
+          {top
+            ? <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', fontWeight: 400 }}>{LB_MEDAL[1]} {top.label} · {top.global_mean.toFixed(1)}</span>
+            : <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', fontWeight: 400 }}>still accumulating</span>}
+        </span>
+      }>
+      <Hint>The single overall ranking across every language you've swept. A recipe's score is the <b>mean of its per-language means</b> — each language counts equally, so a recipe can't climb just by winning on one heavily-swept language. A recipe needs data in at least <b>{minLanguages} languages</b> to earn a rank; below that it's shown dimmed as <i>still accumulating</i>.</Hint>
+      {!eligible.length && (
+        <div style={{ ...guidanceBoxStyle, marginTop: 8, marginBottom: 8 }}>
+          No recipe has been swept across {minLanguages} languages yet — run sweeps on files in more spoken languages and the ranking fills in. Single-language scores aren't comparable, so they're held back from the leaderboard.
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px 2px' }}>
+          <span style={{ ...colHead, width: 30, textAlign: 'center' }}>#</span>
+          <span style={{ ...colHead, flex: 1, minWidth: 0 }}>Recipe</span>
+          <span style={{ ...colHead, width: 64, textAlign: 'center' }} title="Distinct spoken languages this recipe has data in">Langs</span>
+          <span style={{ ...colHead, width: 70, textAlign: 'right' }} title="Total files this recipe ranked #1 on, across every language">Wins</span>
+          <span style={{ ...colHead, width: 52, textAlign: 'right' }} title="Mean of this recipe's per-language mean scores (0–100)">Score</span>
+          <span style={{ ...colHead, width: 64, textAlign: 'right' }}>Conf.</span>
+          <span style={{ width: 14, flex: 'none' }} />
+        </div>
+        {data.map((r) => {
+          const isOpen = !!open[r.label];
+          const medal = r.eligible ? LB_MEDAL[r.rank] : null;
+          return (
+            <React.Fragment key={r.label}>
+              <div onClick={() => setOpen((o) => ({ ...o, [r.label]: !o[r.label] }))}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)', cursor: 'pointer',
+                         padding: '7px 8px', borderRadius: 'var(--radius-md)', opacity: r.eligible ? 1 : 0.5,
+                         background: r.rank === 1 ? 'rgba(52,211,153,0.08)' : 'transparent' }}>
+                <span style={{ width: 30, flex: 'none', textAlign: 'center', color: 'var(--fg-3)', fontSize: medal ? 'var(--text-md)' : 'var(--text-sm)' }}
+                      title={r.eligible ? `Rank ${r.rank}` : `Needs ${minLanguages}+ languages to rank`}>
+                  {medal || (r.eligible ? r.rank : '—')}
+                </span>
+                <span style={{ flex: 1, minWidth: 0, color: r.rank === 1 ? 'var(--fg-0)' : 'var(--fg-1)', fontWeight: r.rank === 1 ? 700 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
+                <span style={{ width: 64, flex: 'none', textAlign: 'center', color: 'var(--fg-3)' }}>{r.languages_covered}</span>
+                <span style={{ width: 70, flex: 'none', textAlign: 'right', color: 'var(--fg-3)' }}>{r.total_wins}</span>
+                <span style={{ width: 52, flex: 'none', textAlign: 'right', color: 'var(--fg-1)', fontWeight: 600 }}>{r.global_mean.toFixed(1)}</span>
+                <span style={{ width: 64, flex: 'none', textAlign: 'right' }}>{r.eligible ? <LeaderboardConf level={r.confidence} /> : null}</span>
+                <span style={{ width: 14, flex: 'none', color: 'var(--fg-3)' }}>{isOpen ? '▾' : '▸'}</span>
+              </div>
+              {isOpen && (
+                <div style={{ margin: '2px 0 8px 38px', padding: '8px 10px', background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {r.per_language.map((pl) => (
+                    <div key={pl.language} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 'var(--text-sm)' }}>
+                      <span style={{ width: 64, flex: 'none' }}><LangTag value={pl.language} size={12} /></span>
+                      <span style={{ flex: 1, minWidth: 0, color: 'var(--fg-3)' }}>{pl.files} file{pl.files === 1 ? '' : 's'}</span>
+                      <span style={{ flex: 'none', color: 'var(--fg-3)' }} title="Files this recipe won in this language">{pl.wins} won</span>
+                      <span style={{ width: 52, flex: 'none', textAlign: 'right', color: 'var(--fg-2)' }} title="This recipe's mean score in this language">{pl.mean_composite}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>Click a recipe to see its per-language breakdown. The leaderboard is the herd's summit — for a config you apply everywhere, the top-ranked recipe is the strongest all-round pick across your languages.</div>
+    </Collapsible>
+  );
+}
+
 function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
   const basename = (p) => (p || '').split('/').pop() || p;
   if (!loaded) {
@@ -1038,6 +1133,8 @@ export function ArenaPage() {
   const [notice, setNotice] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [byLang, setByLang] = useState([]);   // [#26] per-language herd view
+  const [leaderboard, setLeaderboard] = useState([]);   // [#146] global recipe ranking
+  const [lbMin, setLbMin] = useState(3);                // min languages to rank
 
   useEffect(() => {
     let alive = true;
@@ -1055,8 +1152,10 @@ export function ArenaPage() {
   // [#26] per-language herd view — reload only when a sweep COMPLETES (the set
   // of done runs changes), not on every poll tick.
   const loadByLanguage = useCallback(() => fetch('/api/arena/by-language').then((r) => r.json()).then((d) => setByLang(d.languages || [])).catch(() => {}), []);
+  // [#146] global leaderboard — same completion trigger as the herd view.
+  const loadLeaderboard = useCallback(() => fetch('/api/arena/leaderboard').then((r) => r.json()).then((d) => { setLeaderboard(d.leaderboard || []); if (d.min_languages) setLbMin(d.min_languages); }).catch(() => {}), []);
   const doneCount = runs.filter((r) => r.status === 'done').length;
-  useEffect(() => { loadByLanguage(); }, [doneCount, loadByLanguage]);
+  useEffect(() => { loadByLanguage(); loadLeaderboard(); }, [doneCount, loadByLanguage, loadLeaderboard]);
 
   // Load the sweeps list on mount — this is what makes the page survive
   // navigation (state lives in the backend, not just this component).
@@ -1079,11 +1178,11 @@ export function ArenaPage() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin', body: JSON.stringify({ lang }),
         }).catch(() => {}),
-      )).then(() => { loadRuns(); loadByLanguage(); });
+      )).then(() => { loadRuns(); loadByLanguage(); loadLeaderboard(); });
     };
     window.addEventListener('audio-lang-verified', onVerified);
     return () => window.removeEventListener('audio-lang-verified', onVerified);
-  }, [runs, loadRuns, loadByLanguage]);
+  }, [runs, loadRuns, loadByLanguage, loadLeaderboard]);
 
   // Poll while anything is pending/running (house usePoller pattern); also
   // refresh the open sweep's detail so its table fills in live.
@@ -1135,6 +1234,7 @@ export function ArenaPage() {
       <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued').length} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
+      <GlobalLeaderboardPanel data={leaderboard} minLanguages={lbMin} />
       <AudioIssuesPanel refreshKey={doneCount} />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
       {/* Shared audio-review modal (player + Whisper-detect + lang picker),
