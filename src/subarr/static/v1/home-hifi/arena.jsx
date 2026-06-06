@@ -833,11 +833,14 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
 // [#155 phase 1] Central list of audio-language issues caught by sweeps so far
 // (mislabel / bilingual) — the library-audit surface, zero extra GPU. Each row
 // opens the shared audio-review modal to confirm/correct.
-function AudioIssuesPanel() {
+function AudioIssuesPanel({ refreshKey = 0 }) {
   const [issues, setIssues] = useState([]);
   const load = React.useCallback(
     () => fetch('/api/arena/audio-issues').then((r) => r.json()).then((d) => setIssues(d.issues || [])).catch(() => {}), []);
-  useEffect(() => { load(); }, [load]);
+  // Reload on mount, when a verify lands, AND when refreshKey changes (the
+  // parent bumps it as sweeps COMPLETE — otherwise a freshly-flagged file like
+  // a just-finished bilingual sweep wouldn't appear until a page reload).
+  useEffect(() => { load(); }, [load, refreshKey]);
   useEffect(() => {
     const h = () => load();
     window.addEventListener('audio-lang-verified', h);
@@ -980,7 +983,7 @@ export function ArenaPage() {
       <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued').length} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
-      <AudioIssuesPanel />
+      <AudioIssuesPanel refreshKey={doneCount} />
       <SweepList runs={runs} detail={detail} expandedId={expandedId} onToggle={onToggle} onDelete={onDelete} loaded={loaded} />
       {/* Shared audio-review modal (player + Whisper-detect + lang picker),
           reused for the sweep "Set language" action. Listens for the global
