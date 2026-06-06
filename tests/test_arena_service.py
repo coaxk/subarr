@@ -408,6 +408,28 @@ async def test_run_completes_and_persists_result(store):
 
 
 @pytest.mark.asyncio
+async def test_fanout_leg_source_labeled_track_not_user(store):
+    # Cosmetic (§3.3): a multi-track fan-out leg's language is the track's tag,
+    # not a user pick — the herd source must read "track", not "user".
+    svc = _service(store, [_srt("source"), _srt("a")])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})],
+                     source_language="de", is_track_fanout=True)
+    svc.start(run)
+    await svc._tasks[run.id]
+    assert svc.get(run.id).result["source_language_source"] == "track"
+
+
+@pytest.mark.asyncio
+async def test_user_pinned_source_stays_user(store):
+    # Counterpart: a genuinely user-pinned single run keeps source "user".
+    svc = _service(store, [_srt("source"), _srt("a")])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})], source_language="de")
+    svc.start(run)
+    await svc._tasks[run.id]
+    assert svc.get(run.id).result["source_language_source"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_survives_a_fresh_service_on_the_same_store(store):
     """Simulates a restart: a new ArenaService over the same store still sees
     the finished sweep — this is what makes history survive a restart + feed

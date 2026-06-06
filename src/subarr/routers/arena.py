@@ -90,7 +90,8 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
     if not req.source_language and len({t for t in track_langs if t}) >= 2:
         runs = []
         for idx, lang in enumerate(track_langs):
-            r = svc.create(p, variants, source_language=lang, track_index=idx)
+            r = svc.create(p, variants, source_language=lang, track_index=idx,
+                           is_track_fanout=True)
             svc.start(r)
             runs.append(r)
         return {**runs[0].to_dict(), "fanned_out": len(runs),

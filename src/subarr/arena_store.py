@@ -57,6 +57,10 @@ class ArenaRun:
     # run per track). In-memory only — it flows create→execute in one process;
     # not a persisted column (a restart errors the run anyway).
     track_index: int = 0
+    # True when this run is one leg of a multi-track fan-out (its language came
+    # from the track's tag, not a user pick). Lets the resolver label the herd
+    # source "track" rather than "user". In-memory only, like track_index.
+    is_track_fanout: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -90,7 +90,8 @@ class ArenaService:
 
     # ── store (persisted) ────────────────────────────────────────────────────
     def create(self, media_path: str, variants: list[ConfigVariant],
-               source_language: str | None = None, track_index: int = 0) -> ArenaRun:
+               source_language: str | None = None, track_index: int = 0,
+               is_track_fanout: bool = False) -> ArenaRun:
         run = ArenaRun(
             id=uuid.uuid4().hex[:12],
             media_path=media_path,
@@ -98,6 +99,7 @@ class ArenaService:
             source_language=source_language,
             created_at=time.time(),
             track_index=track_index,
+            is_track_fanout=is_track_fanout,
         )
         self._store.save(run)
         return run
@@ -237,6 +239,10 @@ class ArenaService:
         multitrack = len(track_langs) >= 2
         final, src, mixed, mislabel = resolve_source_language(
             det, tag, run.source_language, multitrack=multitrack)
+        # A fan-out leg's language came from the track's ffprobe tag, not a user
+        # pick — relabel "user" → "track" so the herd distinguishes the two.
+        if src == "user" and run.is_track_fanout:
+            src = "track"
         run.source_language = final
         serialized["source_language"] = final
         serialized["source_language_source"] = src
