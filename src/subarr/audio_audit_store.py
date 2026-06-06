@@ -140,10 +140,14 @@ class AudioAuditStore:
         statuses = tuple(statuses)
         if not statuses:
             return []
+        # `placeholders` is only "?,?,…" bind markers (one per status); the
+        # status VALUES are passed as bound params below, never interpolated —
+        # a safe parametrized IN-clause. Bandit's B608 flags any f-string in a
+        # query, so suppress this specific false positive.
         placeholders = ",".join("?" for _ in statuses)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT * FROM audio_lang_audit WHERE status IN ({placeholders}) "
+                f"SELECT * FROM audio_lang_audit WHERE status IN ({placeholders}) "  # nosec B608
                 "ORDER BY checked_at DESC",
                 statuses,
             ).fetchall()
