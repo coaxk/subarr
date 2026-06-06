@@ -456,8 +456,13 @@ def _stale_for_episode(
         if not ep_pattern_hit:
             return False, []
         sidecars = pattern_matches
-    langs_present = _langs_in_sidecars(sidecars)
-    wanted_codes = {(c or "").lower()[:2] for c in (missing_subs or []) if c}
+    # [#118] Normalize BOTH sides to canonical ISO-639-1 before comparing — a
+    # '.ger.srt'/'.deu.srt' sidecar must satisfy a 'de' wanted, and '.eng.srt'
+    # an 'en' wanted. The old raw `[:2]` truncation made 'eng' != 'en' and
+    # 'ger'/'deu' un-matchable, raising phantom gaps for langs already on disk.
+    from .langs import normalize_lang
+    langs_present = {normalize_lang(l) for l in _langs_in_sidecars(sidecars)}
+    wanted_codes = {normalize_lang(c) for c in (missing_subs or []) if c}
     # If no missing-subs language list (shouldn't happen for Bazarr wanted
     # rows but be defensive) → any sidecar counts as stale.
     if not wanted_codes:
@@ -836,7 +841,10 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_unknown = False
         item.audio_source = "plex"
         return
-    langs = [(l or "").lower() for l in (item.audio_langs or [])]
+    # [#118] Normalize audio tags to ISO-639-1 so the English-on-foreign-show
+    # suspect check below catches eng/en-US, not just the bare 'en'/'eng' forms.
+    from .langs import normalize_lang
+    langs = [normalize_lang(l) or "und" for l in (item.audio_langs or [])]
     only_und = bool(langs) and all(l in ("", "und") for l in langs)
     no_data = not langs
     if only_und or no_data:
@@ -850,7 +858,7 @@ def _classify_audio_label(item: CoverageItem,
     if orig and orig != "english":
         non_und = [l for l in langs if l not in ("", "und")]
         # Suspect when EVERY identified track is English on a foreign show.
-        if non_und and all(l in ("en", "eng") for l in non_und):
+        if non_und and all(l == "en" for l in non_und):  # langs are normalized
             item.audio_label_suspect = True
             item.audio_label_notes.append(
                 f"originalLanguage={item.original_language!r} but audio tags "
@@ -1653,7 +1661,10 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     `None` (no probe data) is treated as 'insufficient evidence'."""
     if audio_langs is None:
         return False
-    norm = [(l or "").strip().lower() for l in audio_langs]
+    # [#118] Normalize to ISO-639-1 so eng/en-US collapse to 'en' — otherwise a
+    # region-tagged English track on a foreign show slips the mislabel check.
+    from .langs import normalize_lang
+    norm = [normalize_lang(l) or "und" for l in audio_langs]
     if not norm:
         # Empty audio_langs list = probe ran but found nothing → undetected,
         # which IS a bazarr-blind candidate (Bazarr also has nothing to go on).
@@ -1663,7 +1674,7 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     if not non_und:
         # All und → undetected, treat as candidate.
         return True
-    return all(l in ("en", "eng") for l in non_und)
+    return all(l == "en" for l in non_und)  # norm is ISO-639-1
 
 
 def _is_en_sidecar_for(srt_path: str, file_stem: str) -> bool:

@@ -51,6 +51,10 @@ def normalize_lang(value: str | None) -> str | None:
     s = str(value).strip().lower()
     if not s or s in ("und", "unknown"):
         return s or None
+    # Strip region/script suffixes (en-US → en, pt-BR → pt, zh-Hans → zh) so a
+    # region-tagged code collapses to the same bucket as its bare form. Only the
+    # primary subtag carries the language; no ISO code we map contains a hyphen.
+    s = s.split("-", 1)[0].split("_", 1)[0]
     if s in _NAME_TO_ISO:
         return _NAME_TO_ISO[s]
     if len(s) == 3 and s in _ISO3_TO_ISO1:
