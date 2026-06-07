@@ -294,7 +294,7 @@ class SeriesIntentRequest(BaseModel):
     note: str | None = None
 
 
-@router.put("/audio-lang/series-intent")
+@router.put("/series-intent")
 async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> dict[str, Any]:
     """Declare 'every file under this series prefix is language X'.
     Every subsequent get() for a path under the prefix returns the
@@ -307,21 +307,53 @@ async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> di
         lang_code=req.lang_code,
         note=req.note,
     )
+    # Kick a coalesced coverage refresh so episodes under the prefix flip
+    # green within seconds (mirrors upsert_verification). Best-effort.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        bundle = request.app.state.integrations
+        probe_store = request.app.state.probe_store
+        cov_cache.request_refresh(bundle, probe_store, store)
     return {"ok": True, "series_prefix": req.series_prefix, "lang_code": req.lang_code.lower()}
 
 
-@router.get("/audio-lang/series-intent")
+@router.get("/series-intent")
 async def list_series_intents(request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
-    return {"items": store.list_series_intents()}
+    rows = store.list_series_intents()
+    # Best-effort enrichment from the coverage snapshot: how many files each
+    # rule currently covers, and whether it's a show or a movie. No snapshot
+    # (fresh boot) → count 0, default "show". title is derived client-side.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    snap = cov_cache.get_cached() if cov_cache is not None else None
+    snap_items = snap.items if snap is not None else []
+    enriched = []
+    for row in rows:
+        prefix = row["series_prefix"]
+        count = 0
+        media_type = "show"
+        for it in snap_items:
+            p = it.get("file_canonical_path") or it.get("canonical_path") or ""
+            if p.startswith(prefix):
+                count += 1
+                if it.get("media_type") == "movie":
+                    media_type = "movie"
+        enriched.append({**row, "covered_count": count, "media_type": media_type})
+    return {"items": enriched}
 
 
-@router.delete("/audio-lang/series-intent")
+@router.delete("/series-intent")
 async def delete_series_intent(series_prefix: str, request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
     removed = store.delete_series_intent(series_prefix)
     if not removed:
         raise HTTPException(404, detail=f"no intent declared for {series_prefix}")
+    # Revoking a rule must re-evaluate coverage so inherited episodes revert.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        bundle = request.app.state.integrations
+        probe_store = request.app.state.probe_store
+        cov_cache.request_refresh(bundle, probe_store, store)
     return {"deleted": True, "series_prefix": series_prefix}
 
 

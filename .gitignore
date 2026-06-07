@@ -29,3 +29,6 @@ Thumbs.db
 # SPA without a Node toolchain on consumer machines.
 node_modules/
 .tmp-*
+
+# brainstorming visual companion artifacts
+.superpowers/
