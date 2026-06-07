@@ -588,3 +588,48 @@ async def remove_pending(job_id: str, request: Request) -> dict:
     if not store.remove(job_id):
         raise HTTPException(404, detail=f"pending job {job_id!r} not found")
     return {"deleted": True, "id": job_id}
+
+
+@router.post("/queue/backfill")
+async def backfill_library(request: Request) -> dict:
+    """#116: load the whole verified-gap backlog into the pending queue as
+    low-priority backfill. The feeder then drains it gently at target_depth, so
+    a 500-gap library closes in the background instead of stampeding the GPU.
+    Honours the same auto-queue quality filters; dedups against what's already
+    pending/in-flight (so re-running just tops up). Reads the cached coverage
+    snapshot — run a coverage walk first if it's cold."""
+    from ..backfill import eligible_backfill_items
+    from ..coverage_engine import CoverageItem
+    from .schedule import _COVERAGE_ITEM_FIELDS
+
+    cov = getattr(request.app.state, "coverage_cache", None)
+    snap = cov.get_cached() if cov is not None else None
+    if snap is None:
+        raise HTTPException(
+            409, detail="coverage cache not warm yet — run a coverage walk first")
+
+    items = [
+        CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS})
+        for d in snap.items
+    ]
+    rules = request.app.state.schedule.get_rules()
+    pending = request.app.state.pending_queue
+    prov = request.app.state.provenance
+    in_flight = {e.canonical_path for e in prov.pending()} | pending.active_paths()
+
+    eligible = eligible_backfill_items(items, rules, in_flight_paths=in_flight)
+    enqueued = 0
+    for it in eligible:
+        canonical = it.file_canonical_path or it.canonical_path
+        if not canonical:
+            continue
+        pending.enqueue(canonical, source="backfill",
+                        sonarr_episode_id=it.bazarr_episode_id)
+        enqueued += 1
+
+    counts = pending.count_by_status()
+    return {
+        "enqueued": enqueued,
+        "pending_total": counts.get(STATUS_PENDING, 0),
+        "snapshot_age_s": round(time.time() - snap.generated_at, 1),
+    }

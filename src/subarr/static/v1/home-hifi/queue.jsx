@@ -538,6 +538,36 @@ function PendingPanel() {
   );
 }
 
+// #116: load the whole verified-gap backlog into the pending queue; the feeder
+// drains it gently at target_depth (no GPU stampede).
+function BackfillButton({ onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const run = useCallback(async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/queue/backfill', { method: 'POST', credentials: 'same-origin' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setMsg(d.detail || `HTTP ${r.status}`);
+      else { setMsg(`+${d.enqueued} queued · ${d.pending_total} pending`); onDone && onDone(); }
+    } catch (e) {
+      setMsg('backfill failed');
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(null), 7000);
+    }
+  }, [onDone]);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      {msg && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>{msg}</span>}
+      <button className="btn" disabled={busy} onClick={run}
+        title="Load every verified subtitle gap into the pending queue. The feeder drains them gently in the background (target depth), so a big backlog closes without flooding the GPU.">
+        {busy ? 'Backfilling…' : 'Backfill gaps'}
+      </button>
+    </span>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────
 export function QueuePage() {
   const { data, loading, error, refetch } = useLiveQueue();
@@ -737,6 +767,7 @@ export function QueuePage() {
               <span><StatusDot kind="info" pulse /> active</span>
             )}
           </span>
+          <BackfillButton onDone={() => refetch()} />
           <button className="btn" onClick={() => refetch()}>Refresh</button>
         </div>
       </div>

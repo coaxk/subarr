@@ -87,3 +87,51 @@ def test_unknown_id_404(app_with_stub):
     c = app_with_stub
     assert c.post("/api/queue/pending/nope/promote").status_code == 404
     assert c.delete("/api/queue/pending/nope").status_code == 404
+
+
+# ── #116 backfill endpoint ──────────────────────────────────────────
+
+
+def test_backfill_loads_eligible_gaps_as_backfill(app_with_stub, monkeypatch):
+    from types import SimpleNamespace
+    c = app_with_stub
+    snap = SimpleNamespace(generated_at=0.0, items=[
+        {"media_type": "episode", "title": "Korean Show", "original_language": "Korean",
+         "score": 500, "verification_state": "verified", "monitored": True,
+         "has_sub_on_disk": False, "embedded_en": None,
+         "canonical_path": "TV/K", "file_canonical_path": "TV/K/ep.mkv"},
+        {"media_type": "episode", "title": "English Show", "original_language": "English",
+         "score": 500, "verification_state": "verified", "monitored": True,
+         "canonical_path": "TV/E", "file_canonical_path": "TV/E/ep.mkv"},
+        {"media_type": "episode", "title": "Unprobed", "original_language": "Korean",
+         "score": 500, "verification_state": "unprobed", "monitored": True,
+         "canonical_path": "TV/U", "file_canonical_path": "TV/U/ep.mkv"},
+    ])
+    monkeypatch.setattr(c.app.state.coverage_cache, "get_cached", lambda: snap)
+
+    r = c.post("/api/queue/backfill")
+    assert r.status_code == 200, r.json()
+    d = r.json()
+    assert d["enqueued"] == 1  # only the verified, non-English gap
+
+    jobs = c.app.state.pending_queue.list()
+    assert [j.canonical_path for j in jobs] == ["TV/K/ep.mkv"]
+    assert jobs[0].source == "backfill"
+    assert jobs[0].priority == 0  # backfill bucket — drains after manual/gaps
+
+
+def test_backfill_dedups_already_pending(app_with_stub, monkeypatch):
+    from types import SimpleNamespace
+    c = app_with_stub
+    c.app.state.pending_queue.enqueue("TV/K/ep.mkv", source="gaps")  # already queued
+    snap = SimpleNamespace(generated_at=0.0, items=[
+        {"media_type": "episode", "title": "Korean Show", "original_language": "Korean",
+         "score": 500, "verification_state": "verified", "monitored": True,
+         "has_sub_on_disk": False, "embedded_en": None,
+         "canonical_path": "TV/K", "file_canonical_path": "TV/K/ep.mkv"},
+    ])
+    monkeypatch.setattr(c.app.state.coverage_cache, "get_cached", lambda: snap)
+
+    r = c.post("/api/queue/backfill")
+    assert r.json()["enqueued"] == 0  # already in flight → not re-queued
+    assert len(c.app.state.pending_queue.list()) == 1
