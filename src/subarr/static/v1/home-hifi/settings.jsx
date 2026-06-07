@@ -14,11 +14,14 @@
 // below env and rebuilds the client live (no restart). env-managed fields
 // render read-only with a "managed by env" note (env stays authoritative).
 
-import { SectionCard, StatusDot } from './atoms.jsx';
+import { SectionCard, StatusDot, LangTag } from './atoms.jsx';
 import { RailFooter } from './chrome.jsx';
 // #75: reuse the wizard's form primitives so the in-app credential editor
 // matches onboarding exactly (same input styling + test-result chip).
 import { FormRow, TextInput, TestResult } from './onboarding.jsx';
+import {
+  deriveTitle, groupRulesAlphabetically, activeLadderLetters,
+} from './lang-rules-util.mjs';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -833,7 +836,7 @@ function ProvidersPanel() {
   );
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders }) {
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules }) {
   // #10: render the same persistent GPU/queue/walker footer that the
   // other pages show in SubRail, so the bottom-left vitals are
   // visible everywhere including Settings. Aside becomes a flex
@@ -862,7 +865,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -886,6 +889,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
         <div style={{ padding: '0 16px 6px' }}><span className="label">subarr</span></div>
         {[
           { id: 'providers', label: 'Providers', active: providersActive, onClick: onSelectProviders },
+          { id: 'lang-rules', label: 'Language rules', active: langRulesActive, onClick: onSelectLangRules },
           { id: 'system', label: 'System actions', active: systemActive, onClick: onSelectSystem },
           { id: 'updates', label: 'Updates', active: updatesActive, onClick: onSelectUpdates },
           { id: 'telemetry', label: 'Telemetry', active: telemetryActive, onClick: onSelectTelemetry },
@@ -1868,6 +1872,151 @@ function UpdatesPanel() {
   );
 }
 
+// #226: manage declared series/movie audio-language rules. Lists rules
+// alphabetically (shows + movies unified), with flag chips, type filter,
+// internal scroll, and an A-Z ladder. Declaring happens on the Review page;
+// this surface is view + revoke only.
+function LangRulesPanel() {
+  const [rules, setRules] = useState(null);
+  const [error, setError] = useState(null);
+  const [typeFilter, setTypeFilter] = useState('all'); // all|show|movie
+  const listRef = React.useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/audio-lang/series-intent', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.json();
+      setRules(body.items || []);
+      setError(null);
+    } catch (e) {
+      setError(e);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const revoke = useCallback(async (prefix) => {
+    if (!window.confirm(`Revoke the language rule for "${deriveTitle(prefix)}"?\n\nFuture downloads will no longer inherit it. Existing per-file verifications are kept.`)) return;
+    try {
+      const r = await fetch(`/api/audio-lang/series-intent?series_prefix=${encodeURIComponent(prefix)}`, {
+        method: 'DELETE', credentials: 'same-origin',
+      });
+      // 404 = already gone; treat as success and just refresh.
+      if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('revoke failed', e);
+    }
+    load();
+  }, [load]);
+
+  const filtered = (rules || []).filter((r) =>
+    typeFilter === 'all' ? true : (r.media_type || 'show') === typeFilter);
+  const groups = groupRulesAlphabetically(filtered);
+  const active = activeLadderLetters(filtered);
+  const counts = {
+    all: (rules || []).length,
+    show: (rules || []).filter((r) => (r.media_type || 'show') === 'show').length,
+    movie: (rules || []).filter((r) => r.media_type === 'movie').length,
+  };
+
+  const jumpTo = (letter) => {
+    const el = listRef.current && listRef.current.querySelector(`[data-letter="${letter}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  if (error && !rules) {
+    return (
+      <div style={{ padding: 20, color: 'var(--error-500)' }}>
+        Couldn't load language rules: {String(error.message || error)}
+        <div style={{ marginTop: 12 }}><button className="btn" onClick={load}>Retry</button></div>
+      </div>
+    );
+  }
+  if (!rules) return <div style={{ padding: 20, color: 'var(--fg-2)' }}>Loading language rules…</div>;
+  if (rules.length === 0) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)', maxWidth: 560 }}>
+        No language rules yet. On the <strong>Review</strong> page, tick a whole show or movie,
+        pick its audio language, and check <em>"Remember for future downloads."</em>
+      </div>
+    );
+  }
+
+  const pills = [
+    { id: 'all', label: `All · ${counts.all}` },
+    { id: 'show', label: `📺 Shows · ${counts.show}` },
+    { id: 'movie', label: `🎬 Movies · ${counts.movie}` },
+  ];
+
+  return (
+    <div style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {pills.map((p) => (
+          <span key={p.id} role="button" tabIndex={0}
+            onClick={() => setTypeFilter(p.id)}
+            onKeyDown={(e) => { if (e.key === 'Enter') setTypeFilter(p.id); }}
+            className={`chip ${typeFilter === p.id ? 'violet' : ''}`}
+            style={{ cursor: 'pointer' }}>
+            {p.label}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8, minHeight: 0 }}>
+        <div ref={listRef} style={{ flex: 1, overflowY: 'auto', maxHeight: '62vh', paddingRight: 8 }}>
+          {groups.map((g) => (
+            <div key={g.letter} data-letter={g.letter}>
+              <div style={{
+                fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+                textTransform: 'uppercase', letterSpacing: '0.1em',
+                padding: '8px 0 4px', position: 'sticky', top: 0,
+                background: 'var(--bg-0)',
+              }}>{g.letter}</div>
+              {g.rules.map((r) => (
+                <div key={r.series_prefix} style={{
+                  display: 'flex', alignItems: 'center', gap: 11,
+                  padding: '9px 12px', marginBottom: 6,
+                  background: 'var(--bg-1)', border: 'var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                }}>
+                  <span style={{ width: 18, textAlign: 'center', flex: 'none' }}>
+                    {r.media_type === 'movie' ? '🎬' : '📺'}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{r.title}</div>
+                    <div className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.series_prefix} · {r.covered_count} {r.media_type === 'movie' ? 'file' : 'eps'}
+                    </div>
+                  </div>
+                  <LangTag value={r.lang_code} size={13} />
+                  <button className="btn ghost" onClick={() => revoke(r.series_prefix)}
+                    style={{ color: 'var(--error-500)', flex: 'none' }}>
+                    Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: 'none', width: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, paddingTop: 2 }}>
+          {Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)).map((L) => (
+            <span key={L}
+              role={active.has(L) ? 'button' : undefined}
+              onClick={active.has(L) ? () => jumpTo(L) : undefined}
+              style={{
+                fontSize: 10, lineHeight: 1.25,
+                color: active.has(L) ? 'var(--violet-500)' : 'var(--fg-3)',
+                fontWeight: active.has(L) ? 600 : 400,
+                cursor: active.has(L) ? 'pointer' : 'default',
+              }}>{L}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page wrapper ────────────────────────────────────────────────
 export function SettingsPage() {
   const { data: health, loading, error, refetch } = useLiveHealth();
@@ -1886,7 +2035,7 @@ export function SettingsPage() {
   // the named view rather than dropping the user on the default integration.
   useEffect(() => {
     const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
-    if (['providers', 'telemetry', 'system', 'updates'].includes(hash)) {
+    if (['providers', 'telemetry', 'system', 'updates', 'lang-rules'].includes(hash)) {
       setView(hash);
     }
     // #207: 'integrations' lands on the summary tile grid rather than
@@ -1911,6 +2060,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? ['Settings', 'Telemetry']
     : view === 'updates' ? ['Settings', 'Updates']
     : view === 'providers' ? ['Settings', 'Providers']
+    : view === 'lang-rules' ? ['Settings', 'Language rules']
     : ['Settings'];
 
   const heading = view === 'integration' && selected ? selected.name
@@ -1919,6 +2069,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Telemetry'
     : view === 'updates' ? 'Updates'
     : view === 'providers' ? 'Provider leaderboard'
+    : view === 'lang-rules' ? 'Language rules'
     : 'Settings';
 
   const subhead = view === 'integration' && selected ? 'Live status from the integrations health probe.'
@@ -1927,6 +2078,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Exactly what subarr sends and how to opt in/out.'
     : view === 'updates' ? 'Per-product version checks against GitHub releases.'
     : view === 'providers' ? 'Bazarr provider success rates from your download history.'
+    : view === 'lang-rules' ? 'Declared audio languages for whole shows and movies. New downloads inherit automatically; a per-file correction always overrides.'
     : '';
 
   return (
@@ -1939,6 +2091,7 @@ export function SettingsPage() {
         telemetryActive={view === 'telemetry'} onSelectTelemetry={() => setView('telemetry')}
         updatesActive={view === 'updates'} onSelectUpdates={() => setView('updates')}
         providersActive={view === 'providers'} onSelectProviders={() => setView('providers')}
+        langRulesActive={view === 'lang-rules'} onSelectLangRules={() => setView('lang-rules')}
       />
       <main className="main-canvas" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingBottom: 0 }}>
         <div style={{ flex: 1, padding: '22px 26px 24px', overflow: 'auto' }}>
@@ -1983,6 +2136,7 @@ export function SettingsPage() {
           {view === 'telemetry' && <TelemetryPanel />}
           {view === 'updates' && <UpdatesPanel />}
           {view === 'providers' && <ProvidersPanel />}
+          {view === 'lang-rules' && <LangRulesPanel />}
         </div>
       </main>
     </div>
