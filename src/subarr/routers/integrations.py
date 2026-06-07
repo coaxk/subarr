@@ -234,10 +234,21 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                 },
             }
         if summary_kind == "bazarr_badges":
-            status_task = asyncio.create_task(client.status())
-            badges_task = asyncio.create_task(client.badges())
-            status = await status_task
-            badges = await badges_task
+            # Run both concurrently but retrieve BOTH results even if one
+            # raises — return_exceptions=True means neither task is ever left
+            # with an un-retrieved exception (the old sequential-await left
+            # badges_task dangling when status timed out → "Task exception was
+            # never retrieved" tracebacks on every Bazarr blip).
+            status, badges = await asyncio.gather(
+                client.status(), client.badges(), return_exceptions=True,
+            )
+            if isinstance(status, BaseException):
+                raise status  # IntegrationError → outer handler marks offline
+            if isinstance(badges, BaseException):
+                # Status is fine; only the cosmetic badge counts blipped —
+                # Bazarr is online, just serve it without badges this cycle.
+                log.debug("bazarr badges fetch failed (status OK): %s", badges)
+                badges = {}
             return {
                 "name": name,
                 "online": True,
