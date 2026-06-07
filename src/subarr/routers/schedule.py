@@ -42,6 +42,12 @@ class RulesUpdate(BaseModel):
     skip_stale_disk: bool | None = None
     skip_embedded_en: bool | None = None
     max_per_run: int | None = None
+    settle_minutes: int | None = None  # #117 — was missing, so it never persisted
+    # #66/#116 — feed controls also persisted on the rules (the Queue page's
+    # /queue/control writes these too; accepting them here keeps the rules PUT
+    # a complete round-trip and avoids silently dropping them).
+    queue_target_depth: int | None = None
+    queue_paused: bool | None = None
 
 
 @router.get("/schedule")
