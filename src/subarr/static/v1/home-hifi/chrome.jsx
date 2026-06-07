@@ -40,7 +40,7 @@ function _shallowEqualCounts(a, b) {
 }
 
 async function _fetchChromeCounts() {
-  const [dash, health, queue, schedule, review, updates] = await Promise.all([
+  const [dash, health, queue, schedule, review, updates, tasksHealth] = await Promise.all([
     fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -49,6 +49,9 @@ async function _fetchChromeCounts() {
     // /api/updates is a single cached SQLite read (the actual GitHub poll
     // runs on a 24h background loop) — cheap to fold into the shared tick.
     fetch('/api/updates', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    // #157: background-task health — a single cached read; drives the header
+    // pill + the Health rail badge when a loop silently stops working.
+    fetch('/api/health/tasks', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   const next = {};
   if (dash?.stages) {
@@ -83,6 +86,9 @@ async function _fetchChromeCounts() {
   if (subarrProduct?.has_update && subarrProduct.latest_version) {
     next.subarr_latest = subarrProduct.latest_version;
   }
+  // #157: always set (defaulting false/null) so the shallow-equal dedup stays stable.
+  next.any_task_unhealthy = !!tasksHealth?.any_unhealthy;
+  next.tasks_unhealthy = tasksHealth?.unhealthy_count || null;
   return next;
 }
 
@@ -141,7 +147,7 @@ function railItems(section, counts) {
       //   integration status dots, the page's actual health view).
       // Schedule: the schedule page (coverage_walk cadence + next-run).
       // Audit: provenance activity view.
-      { id: 'health',    label: 'Health',    count: counts.health,    href: '/settings#integrations' },
+      { id: 'health',    label: 'Health',    count: counts.tasks_unhealthy, href: '/health' },
       { id: 'schedule',  label: 'Schedule',  count: counts.schedule,  href: '/rules' },
       { id: 'audit',     label: 'Audit log', count: null,             href: '/file-modal' },
     ];
@@ -250,6 +256,25 @@ export function TopBar({ section = 'overview' }) {
       <div style={{ width: 14 }} />
       <span style={{ width: 1, height: 22, background: 'var(--bg-4)' }} />
       <div style={{ width: 14 }} />
+
+      {counts.any_task_unhealthy && (
+        <a href="/health" title={`${counts.tasks_unhealthy || 'A'} background task${counts.tasks_unhealthy === 1 ? ' is' : 's are'} failing. View Health.`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginRight: 14, padding: '3px 9px',
+            fontSize: 'var(--text-xs)', fontWeight: 600,
+            color: 'var(--error-300, #fca5a5)',
+            background: 'rgba(239,68,68,0.12)',
+            border: '1px solid rgba(239,68,68,0.30)',
+            borderRadius: 999, textDecoration: 'none',
+            transition: 'background var(--dur-fast) var(--ease-out)',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.20)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--error-500, #ef4444)' }} />
+          {counts.tasks_unhealthy ? `${counts.tasks_unhealthy} failing` : 'Task failing'}
+        </a>
+      )}
 
       {counts.update_available && (
         <a href="/settings#updates" title={counts.subarr_latest

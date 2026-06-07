@@ -750,6 +750,7 @@ if _STATIC_DIR.is_dir():
             "/logs":       "logs.html",
             "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
             "/arena":      "arena.html",   # #131: tuning-lab config sweep
+            "/health":     "health.html",  # #157: background-task health
         }
 
         def _make_v1_route(html_file: str):
