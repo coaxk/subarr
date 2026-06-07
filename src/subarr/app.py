@@ -704,6 +704,7 @@ def health_tasks() -> dict:
         "tasks": [t.to_dict() for t in states],
         "any_unhealthy": any(t.is_unhealthy for t in states),
         "unhealthy_count": sum(1 for t in states if t.is_unhealthy),
+        "version": __version__,  # for the "Report a problem" prefill
     }
 
 

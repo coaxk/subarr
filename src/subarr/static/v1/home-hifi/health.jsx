@@ -22,10 +22,44 @@ function fmtInterval(s) {
   return `${Math.round(s / 3600)}h`;
 }
 
-function TaskRow({ t }) {
+const REPO = 'https://github.com/coaxk/subarr';
+
+// Build a prefilled GitHub new-issue URL. We deliberately do NOT auto-embed
+// the traceback (URL-length + it can contain local paths) — the user copies it
+// and pastes it on GitHub, where they can review before posting. Privacy: the
+// user curates exactly what leaves their box.
+function reportUrl(title, body) {
+  return `${REPO}/issues/new?labels=bug&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+}
+
+function taskReportUrl(t, version) {
+  const title = `Background task "${t.task_name}" unhealthy (${t.last_error_type || 'no success'})`;
+  const body =
+    `**Task:** ${t.task_name}${t.expected_interval_s ? ` (every ${fmtInterval(t.expected_interval_s)})` : ''}\n` +
+    `**Error type:** ${t.last_error_type || '(no success recorded yet)'}\n` +
+    `**Consecutive failures:** ${t.consecutive_failures}\n` +
+    `**subarr version:** ${version || '?'}\n\n` +
+    `**What I was doing / steps to reproduce:**\n\n\n` +
+    `**Traceback** (copied from the Health page — please review for any local paths before posting):\n\n` +
+    '```\n(paste the copied traceback here)\n```\n';
+  return reportUrl(title, body);
+}
+
+const linkStyle = {
+  fontSize: 'var(--text-sm)', color: 'var(--violet-400)', textDecoration: 'none',
+};
+
+function TaskRow({ t, version }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
+  const copyTrace = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(t.last_error_detail || '')
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
+  };
   return (
     <React.Fragment>
       <div onClick={() => hasErr && setOpen((o) => !o)}
@@ -71,6 +105,19 @@ function TaskRow({ t }) {
             margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
             fontFamily: 'JetBrains Mono, monospace', fontSize: 11, lineHeight: 1.45, color: 'var(--fg-2)',
           }}>{t.last_error_detail}</pre>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 10 }}>
+            <button onClick={copyTrace} className="btn"
+              style={{ fontSize: 'var(--text-xs)' }}>
+              {copied ? '✓ copied' : 'copy traceback'}
+            </button>
+            <a href={taskReportUrl(t, version)} target="_blank" rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()} style={linkStyle}>
+              Report this on GitHub ↗
+            </a>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              copy the traceback, then paste it into the issue (review for local paths first)
+            </span>
+          </div>
         </div>
       )}
     </React.Fragment>
@@ -79,12 +126,13 @@ function TaskRow({ t }) {
 
 export function HealthPage() {
   const [tasks, setTasks] = useState(null);
+  const [version, setVersion] = useState(null);
   const [err, setErr] = useState(null);
 
   const load = useCallback(() => {
     fetch('/api/health/tasks', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
-      .then((d) => { setTasks(d.tasks || []); setErr(null); })
+      .then((d) => { setTasks(d.tasks || []); setVersion(d.version || null); setErr(null); })
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
@@ -93,11 +141,21 @@ export function HealthPage() {
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-      <div>
-        <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Health</h1>
-        <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)', maxWidth: 760 }}>
-          Background-task supervision. subarr's long-running loops (coverage + dashboard refresh, the scheduler, the completion watcher, the update + subgen checks) each report the outcome of every cycle here, so a loop that quietly stops working shows up red with its error instead of freezing in silence.
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Health</h1>
+          <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)', maxWidth: 760 }}>
+            Background-task supervision. subarr's long-running loops (coverage + dashboard refresh, the scheduler, the completion watcher, the update + subgen checks) each report the outcome of every cycle here, so a loop that quietly stops working shows up red with its error instead of freezing in silence.
+          </div>
         </div>
+        <a href={reportUrl('Bug: ',
+            `**What happened:**\n\n\n**Steps to reproduce:**\n\n\n` +
+            `**subarr version:** ${version || '?'}\n**Environment:** (Docker / Unraid / ...)\n\n` +
+            `_For a background-task failure: open Health, expand the task, copy its traceback, and paste it below._`)}
+          target="_blank" rel="noopener noreferrer" className="btn"
+          style={{ flex: 'none', fontSize: 'var(--text-sm)', textDecoration: 'none' }}>
+          Report a problem ↗
+        </a>
       </div>
 
       {err && <div style={gateNoticeStyle}>Couldn't load task health: {err}</div>}
@@ -111,7 +169,7 @@ export function HealthPage() {
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} />)}
+          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} version={version} />)}
           {tasks && tasks.length === 0 && (
             <div style={{ color: 'var(--fg-3)', padding: 12 }}>No supervised tasks yet.</div>
           )}
