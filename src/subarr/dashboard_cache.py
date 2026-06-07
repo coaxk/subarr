@@ -77,7 +77,8 @@ DEFAULT_INTERVAL_S = 30
 
 
 async def background_refresh_loop(cache: DashboardCache, build_fn,
-                                   interval_s: int = DEFAULT_INTERVAL_S) -> None:
+                                   interval_s: int = DEFAULT_INTERVAL_S,
+                                   health=None) -> None:
     # Warm on boot if empty.
     if cache.get_cached() is None:
         try:
@@ -88,7 +89,11 @@ async def background_refresh_loop(cache: DashboardCache, build_fn,
         await asyncio.sleep(interval_s)
         try:
             await cache.refresh(build_fn)
+            if health:
+                health.record_success("dashboard-cache", expected_interval_s=interval_s)
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            if health:
+                health.record_failure("dashboard-cache", e, expected_interval_s=interval_s)
             log.warning("dashboard cache: background refresh failed: %s", e)

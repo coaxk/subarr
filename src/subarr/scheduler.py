@@ -170,7 +170,13 @@ class Scheduler:
         while not self._stop.is_set():
             try:
                 await self._tick()
+                _h = getattr(self, "_health", None)  # #157 supervision hook
+                if _h:
+                    _h.record_success("scheduler", expected_interval_s=self._tick_s)
             except Exception as e:
+                _h = getattr(self, "_health", None)
+                if _h:
+                    _h.record_failure("scheduler", e, expected_interval_s=self._tick_s)
                 log.exception("scheduler tick failed: %s", e)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._tick_s)

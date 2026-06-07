@@ -381,6 +381,7 @@ async def background_refresh_loop(
     bundle_provider=None,
     probe_walker=None,
     caps_provider=None,
+    health=None,
 ) -> None:
     """Sleep, refresh, repeat. Exits on cancellation.
 
@@ -410,7 +411,11 @@ async def background_refresh_loop(
             await cache.refresh(get_bundle(), probe_store, audio_lang_store,
                                 probe_walker=probe_walker,
                                 caps_provider=caps_provider)
+            if health:
+                health.record_success("coverage-cache", expected_interval_s=interval_s)
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            if health:
+                health.record_failure("coverage-cache", e, expected_interval_s=interval_s)
             log.warning("coverage cache: background refresh failed: %s", e)

@@ -108,9 +108,15 @@ class SubgenWatchdog:
         while not self._stop.is_set():
             try:
                 await self._probe_once()
+                _h = getattr(self, "_health", None)  # #157 supervision hook
+                if _h:
+                    _h.record_success("subgen-watchdog", expected_interval_s=self._interval_s)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                _h = getattr(self, "_health", None)
+                if _h:
+                    _h.record_failure("subgen-watchdog", e, expected_interval_s=self._interval_s)
                 log.warning("subgen watchdog: probe failed: %s", e)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)

@@ -80,6 +80,7 @@ from .arena_store import ArenaStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
+from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
 from .scheduler import Scheduler
 from .subgen_client import SubgenClient
@@ -189,6 +190,18 @@ async def lifespan(app_: FastAPI):
     app_.state.scans = ScanStore(settings.db_path)
     # Anonymous error-class log for telemetry (schema via migration 006).
     app_.state.errors = ErrorStore(settings.db_path)
+    # #157: per-loop health so a silently-crashing background task (the #79
+    # class) surfaces instead of freezing quietly. Each supervised loop records
+    # success/failure per cycle; /api/health/tasks + the header pill read it.
+    app_.state.task_health = TaskHealthStore(settings.db_path)
+    # Seed the roster so all supervised loops show on the Health page from boot
+    # (as "never run yet"), not only after their first cycle. Each loop's first
+    # record_success/failure carries its real cadence and corrects these.
+    for _tname, _tiv in (
+        ("coverage-cache", 300), ("dashboard-cache", 30), ("scheduler", 60),
+        ("completion-watcher", 30), ("update-checker", 86400), ("subgen-watchdog", 30),
+    ):
+        app_.state.task_health.register(_tname, expected_interval_s=_tiv)
     app_.state.runner = ScanRunner(
         store=app_.state.scans,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -251,6 +264,7 @@ async def lifespan(app_: FastAPI):
         bundle_provider=lambda: app_.state.integrations,
         subgen_provider=lambda: app_.state.subgen,
     )
+    app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
     app_.state.ollama = OllamaClient()
@@ -397,6 +411,7 @@ async def lifespan(app_: FastAPI):
         # runtime IGNORE_FORCED_SUBTITLES value.
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
+    app_.state.scheduler._health = app_.state.task_health  # #157 supervision
     app_.state.scheduler.start()
 
     # v1.1 ARCH: start the coverage-cache background refresh loop.
@@ -416,6 +431,7 @@ async def lifespan(app_: FastAPI):
             # #79: resolve subgen caps live so the forced-only-EN gate tracks
             # the watchdog-detected IGNORE_FORCED_SUBTITLES runtime value.
             caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+            health=app_.state.task_health,  # #157
         )
     )
     # Dashboard cache background refresh — passes a build closure that
@@ -425,6 +441,7 @@ async def lifespan(app_: FastAPI):
         dash_refresh_loop(
             cache=app_.state.dashboard_cache,
             build_fn=lambda: _dash_build(app_.state),
+            health=app_.state.task_health,  # #157
         )
     )
 
@@ -459,6 +476,7 @@ async def lifespan(app_: FastAPI):
         db_path=settings.db_path,
         current_version_resolver=current_versions,
     )
+    app_.state.update_checker._health = app_.state.task_health  # #157 supervision
     app_.state.update_checker.start()
 
     # #229: subgen identity watchdog. Periodically re-probes subgen's
@@ -532,6 +550,7 @@ async def lifespan(app_: FastAPI):
         set_caps=_set_caps,
         on_restart=_on_subgen_restart,
     )
+    app_.state.subgen_watchdog._health = app_.state.task_health  # #157 supervision
     app_.state.subgen_watchdog.start()
 
     # Anonymous telemetry — ON by default per v1.0 product decision.
@@ -598,6 +617,7 @@ async def lifespan(app_: FastAPI):
         await app_.state.ollama.aclose()
         app_.state.scans.close()
         app_.state.errors.close()
+        app_.state.task_health.close()  # #157
         app_.state.provenance.close()
         app_.state.schedule.close()
         app_.state.enrichment.close()
@@ -671,6 +691,19 @@ def health() -> dict:
         "version": __version__,
         "media_root": str(settings.media_root),
         "subgen_url": settings.subgen_url,
+    }
+
+
+@app.get("/api/health/tasks")
+def health_tasks() -> dict:
+    """#157: per-loop background-task health. Powers the header pill (any
+    unhealthy) + the Health page (per-task status, last error, traceback)."""
+    th = getattr(app.state, "task_health", None)
+    states = th.states() if th is not None else []
+    return {
+        "tasks": [t.to_dict() for t in states],
+        "any_unhealthy": any(t.is_unhealthy for t in states),
+        "unhealthy_count": sum(1 for t in states if t.is_unhealthy),
     }
 
 

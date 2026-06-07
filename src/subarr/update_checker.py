@@ -171,7 +171,13 @@ class UpdateChecker:
         # then on the configured cadence.
         try:
             await self._poll_all()
+            _h = getattr(self, "_health", None)  # #157: record the boot poll too
+            if _h:
+                _h.record_success("update-checker", expected_interval_s=self._interval_s)
         except Exception as e:
+            _h = getattr(self, "_health", None)
+            if _h:
+                _h.record_failure("update-checker", e, expected_interval_s=self._interval_s)
             log.exception("initial update poll failed: %s", e)
         while not self._stop.is_set():
             try:
@@ -181,7 +187,13 @@ class UpdateChecker:
                 pass
             try:
                 await self._poll_all()
+                _h = getattr(self, "_health", None)  # #157 supervision hook
+                if _h:
+                    _h.record_success("update-checker", expected_interval_s=self._interval_s)
             except Exception as e:
+                _h = getattr(self, "_health", None)
+                if _h:
+                    _h.record_failure("update-checker", e, expected_interval_s=self._interval_s)
                 log.exception("update poll tick failed: %s", e)
 
     async def _poll_all(self) -> None:

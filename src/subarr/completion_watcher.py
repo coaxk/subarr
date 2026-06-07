@@ -119,7 +119,13 @@ class CompletionWatcher:
         while not self._stop.is_set():
             try:
                 await self._tick()
+                _h = getattr(self, "_health", None)  # #157 supervision hook
+                if _h:
+                    _h.record_success("completion-watcher", expected_interval_s=self._interval_s)
             except Exception as e:
+                _h = getattr(self, "_health", None)
+                if _h:
+                    _h.record_failure("completion-watcher", e, expected_interval_s=self._interval_s)
                 log.exception("completion watcher tick failed: %s", e)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
