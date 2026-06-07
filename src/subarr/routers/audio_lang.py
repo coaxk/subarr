@@ -294,7 +294,7 @@ class SeriesIntentRequest(BaseModel):
     note: str | None = None
 
 
-@router.put("/audio-lang/series-intent")
+@router.put("/series-intent")
 async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> dict[str, Any]:
     """Declare 'every file under this series prefix is language X'.
     Every subsequent get() for a path under the prefix returns the
@@ -310,13 +310,13 @@ async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> di
     return {"ok": True, "series_prefix": req.series_prefix, "lang_code": req.lang_code.lower()}
 
 
-@router.get("/audio-lang/series-intent")
+@router.get("/series-intent")
 async def list_series_intents(request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
     return {"items": store.list_series_intents()}
 
 
-@router.delete("/audio-lang/series-intent")
+@router.delete("/series-intent")
 async def delete_series_intent(series_prefix: str, request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
     removed = store.delete_series_intent(series_prefix)
