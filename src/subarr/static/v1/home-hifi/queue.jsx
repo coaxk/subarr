@@ -391,6 +391,153 @@ function SubmitScanForm({ onSubmitted }) {
   );
 }
 
+// ─── #66/#116: pending-queue authority (subarr's backlog before subgen) ──
+function useLivePending(intervalMs = 5000) {
+  const [data, setData] = useState(null);
+  const fetchOnce = useCallback(async () => {
+    try {
+      const r = await fetch('/api/queue/pending', { credentials: 'same-origin' });
+      if (r.ok) setData(await r.json());
+    } catch (e) { /* keep last-good */ }
+  }, []);
+  useEffect(() => {
+    let cancelled = false; let timer = null;
+    const loop = async () => {
+      if (cancelled) return;
+      await fetchOnce();
+      if (!cancelled) timer = setTimeout(loop, intervalMs);
+    };
+    loop();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [intervalMs, fetchOnce]);
+  return { data, refetch: fetchOnce };
+}
+
+const SOURCE_STYLE = {
+  manual:   { fg: '#facc15', label: 'manual' },
+  gaps:     { fg: '#4ade80', label: 'gaps' },
+  auto:     { fg: '#38bdf8', label: 'auto' },
+  backfill: { fg: '#94a3b8', label: 'backfill' },
+};
+
+function PendingControls({ paused, targetDepth, onToggle, onDepth }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <button className={`btn ${paused ? 'violet' : ''}`} onClick={onToggle}
+        title={paused ? 'Resume feeding subgen' : 'Pause — stop sending new jobs to subgen (in-flight keep running)'}
+        style={{ fontSize: 'var(--text-xs)' }}>
+        {paused ? '▶ Resume feed' : '⏸ Pause feed'}
+      </button>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}
+        title="How many jobs subarr keeps subgen working on at once (queued+processing). The rest wait here, reorderable.">
+        target depth
+        <button className="btn" style={{ padding: '0 8px' }}
+          onClick={() => onDepth(Math.max(0, (targetDepth || 0) - 1))}>−</button>
+        <span className="mono" style={{ minWidth: 14, textAlign: 'center' }}>{targetDepth}</span>
+        <button className="btn" style={{ padding: '0 8px' }}
+          onClick={() => onDepth((targetDepth || 0) + 1)}>+</button>
+      </span>
+    </div>
+  );
+}
+
+function PendingRow({ job, idx, total, onPromote, onDemote, onRemove }) {
+  const src = SOURCE_STYLE[job.source] || { fg: 'var(--fg-3)', label: job.source };
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '9px 18px',
+      borderTop: idx === 0 ? 'none' : 'var(--border)',
+    }}>
+      <span className="mono" style={{ width: 22, textAlign: 'right', color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
+        {idx + 1}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        title={job.canonical_path}>
+        {job.canonical_path}
+      </span>
+      {job.audio_language_override && (
+        <span className="chip" style={{ fontSize: 'var(--text-2xs)' }} title="Audio-language override sent to subgen">
+          {job.audio_language_override}
+        </span>
+      )}
+      <span style={{ fontSize: 'var(--text-2xs)', color: src.fg, width: 56, textAlign: 'right' }}>{src.label}</span>
+      <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
+        <button className="btn" title="Move to top" disabled={idx === 0}
+          onClick={() => onPromote(job.id)} style={{ padding: '0 7px' }}>⤒</button>
+        <button className="btn" title="Move to bottom" disabled={idx === total - 1}
+          onClick={() => onDemote(job.id)} style={{ padding: '0 7px' }}>⤓</button>
+        <button className="btn" title="Remove from queue"
+          onClick={() => onRemove(job.id)} style={{ padding: '0 7px' }}>✕</button>
+      </span>
+    </div>
+  );
+}
+
+function PendingPanel() {
+  const { data, refetch } = useLivePending();
+  const pending = (data && data.pending) || [];
+  const paused = !!(data && data.paused);
+  const targetDepth = data ? data.target_depth : 2;
+
+  const control = useCallback(async (body) => {
+    try {
+      await fetch('/api/queue/control', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      refetch();
+    } catch (e) { /* best-effort */ }
+  }, [refetch]);
+
+  const act = useCallback(async (id, verb) => {
+    try {
+      const opts = { method: verb === 'remove' ? 'DELETE' : 'POST', credentials: 'same-origin' };
+      const url = verb === 'remove'
+        ? `/api/queue/pending/${id}`
+        : `/api/queue/pending/${id}/${verb}`;
+      await fetch(url, opts);
+      refetch();
+    } catch (e) { /* best-effort */ }
+  }, [refetch]);
+
+  // Hide the whole panel until we know there's something to manage OR the feed
+  // is paused — keeps the page clean for users who never build a backlog.
+  if (data && pending.length === 0 && !paused) return null;
+
+  return (
+    <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
+      <div style={{ padding: '12px 18px', borderBottom: 'var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span className="label">Pending</span>
+        <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>{pending.length}</span>
+        {paused && (
+          <span className="chip" style={{ fontSize: 'var(--text-2xs)', color: '#facc15' }}>feed paused</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <PendingControls
+          paused={paused} targetDepth={targetDepth}
+          onToggle={() => control({ paused: !paused })}
+          onDepth={(v) => control({ target_depth: v })}
+        />
+      </div>
+      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', padding: '6px 18px', borderBottom: 'var(--border)' }}>
+        subarr's backlog — fed into subgen as it frees up (target depth {targetDepth}). Reorder or remove before they're sent.
+      </div>
+      <div>
+        {pending.length === 0
+          ? <div style={{ padding: '14px 18px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
+              Feed paused — nothing waiting. New jobs will hold here until you resume.
+            </div>
+          : pending.map((job, i) => (
+              <PendingRow key={job.id} job={job} idx={i} total={pending.length}
+                onPromote={(id) => act(id, 'promote')}
+                onDemote={(id) => act(id, 'demote')}
+                onRemove={(id) => act(id, 'remove')} />
+            ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────
 export function QueuePage() {
   const { data, loading, error, refetch } = useLiveQueue();
@@ -599,6 +746,11 @@ export function QueuePage() {
         <div className="label" style={{ marginBottom: 10 }}>Submit a manual scan</div>
         <SubmitScanForm onSubmitted={() => refetch({ silent: false })} />
       </div>
+
+      {/* #66/#116: subarr's pending backlog (reorderable, pausable) — sits
+          above subgen's live Processing/Queued. Self-hides when empty + not
+          paused (no producers routed through it yet → usually empty for now). */}
+      <PendingPanel />
 
       {/* Processing — header padding 12x18 to align with the SUBMIT
           A MANUAL SCAN panel above. No maxHeight: auto-sizes to the
