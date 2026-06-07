@@ -247,6 +247,39 @@ class AudioLangStore:
             for r in rows
         ]
 
+    # ── #140: mis-grouped-series dismiss ────────────────────────────────
+
+    def dismiss_mixed(self, series_path: str, note: str | None = None) -> None:
+        """Mark a series (by its directory path) as a known-legit multilingual
+        show so the #140 mixed-language flag stays quiet on future walks."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO mixed_language_dismissed (series_path, dismissed_at, note) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(series_path) DO UPDATE SET "
+                "  dismissed_at=excluded.dismissed_at, note=excluded.note",
+                (series_path, time.time(), note),
+            )
+
+    def undismiss_mixed(self, series_path: str) -> bool:
+        """Re-enable the mixed-language flag for a series. Returns True if a
+        dismissal existed."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM mixed_language_dismissed WHERE series_path = ?",
+                (series_path,),
+            )
+            return cur.rowcount > 0
+
+    def get_mixed_dismissed_set(self) -> set[str]:
+        """All currently-dismissed series paths — read by build_coverage to
+        suppress the #140 flag."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT series_path FROM mixed_language_dismissed"
+            ).fetchall()
+        return {r[0] for r in rows}
+
     def bulk_for_series(self, series_canonical_prefix: str, lang_code: str,
                          file_paths: list[str], source: str = "user",
                          confidence: float = 1.0,

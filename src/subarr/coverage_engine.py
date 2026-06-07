@@ -72,6 +72,14 @@ class CoverageItem:
     # "settling (Xm left)" from this + the rules' settle_minutes, always live
     # (no stale cached countdown). None when unknown / outside the lookback.
     import_ts: float | None = None
+    # #140: set on EVERY episode of a series whose episodes resolve (high-trust
+    # user/whisper detection) to ≥2 distinct NON-English spoken languages — the
+    # signature of two different shows merged into one Sonarr series (wrong
+    # downloads). `series_mixed_langs` is the sorted set of foreign langs found,
+    # for the "why" breakdown. False for the common, legitimate cases (single
+    # foreign language, or foreign + English dub).
+    series_mixed_languages: bool = False
+    series_mixed_langs: list[str] = field(default_factory=list)
     # v1.1-H: Sonarr calendar says this airs in the next 48h.
     airing_soon: bool = False
     # v1.1-O: audio language data-quality flags.
@@ -160,6 +168,8 @@ class CoverageItem:
             "now_playing": self.now_playing,
             "just_imported": self.just_imported,
             "import_ts": self.import_ts,
+            "series_mixed_languages": self.series_mixed_languages,
+            "series_mixed_langs": self.series_mixed_langs,
             "airing_soon": self.airing_soon,
             "audio_label_suspect": self.audio_label_suspect,
             "audio_label_unknown": self.audio_label_unknown,
@@ -984,6 +994,73 @@ def _refine_audio_sources(items: list, verification_sources: dict) -> None:
             it.audio_source = _map(s)
 
 
+# #140: audio sources we trust enough to feed the mis-grouped detector. ffprobe
+# tags are deliberately excluded — they're the unreliable signal this check
+# exists to see past (subgen/Sonarr/Bazarr already trust the tag; we only
+# believe what subarr LISTENED to via Whisper, or what the user confirmed).
+_HIGH_TRUST_AUDIO_SOURCES = {"user", "whisper"}
+
+
+def _mixed_series_key(item: "CoverageItem") -> str | None:
+    """Stable grouping key for an episode's parent series. Prefer the Sonarr
+    series id; fall back to the series directory path."""
+    if item.bazarr_sonarr_id is not None:
+        return f"sid:{item.bazarr_sonarr_id}"
+    return item.canonical_path or None
+
+
+def _flag_mixed_language_series(
+    items: list, dismissed_series: set[str] | None = None
+) -> int:
+    """#140: flag series that contain ≥2 distinct NON-English high-trust spoken
+    languages — the signature of two different shows merged into one Sonarr
+    series (e.g. S01E04 Korean, S01E16 Russian). Mutates matching episodes'
+    `series_mixed_languages`/`series_mixed_langs`. Returns the count of flagged
+    series (for the sources summary).
+
+    Precision guardrails:
+      - Only high-trust per-episode languages count (user/whisper), never the
+        ffprobe tag — the exact thing that's wrong in a mis-grouped folder.
+      - English is excluded: a foreign show + an English dub is legitimate and
+        common; we fire only on multiple FOREIGN tongues, which a single real
+        show essentially never has.
+      - Per-series user dismiss (by series dir) suppresses known-legit cases
+        (genuine multilingual anthologies).
+    """
+    from collections import defaultdict
+    from .langs import normalize_lang
+
+    dismissed = dismissed_series or set()
+    groups: dict[str, list] = defaultdict(list)
+    for it in items:
+        if it.media_type != "episode":
+            continue
+        key = _mixed_series_key(it)
+        if key:
+            groups[key].append(it)
+
+    flagged = 0
+    for group in groups.values():
+        foreign: set[str] = set()
+        for it in group:
+            if it.audio_source in _HIGH_TRUST_AUDIO_SOURCES and it.audio_langs:
+                code = normalize_lang(it.audio_langs[0])
+                if code and code not in ("und", "en"):
+                    foreign.add(code)
+        if len(foreign) < 2:
+            continue
+        # Dismiss is keyed by the series directory (the stable, user-visible id).
+        series_dir = next((it.canonical_path for it in group if it.canonical_path), None)
+        if series_dir and series_dir in dismissed:
+            continue
+        ordered = sorted(foreign)
+        for it in group:
+            it.series_mixed_languages = True
+            it.series_mixed_langs = ordered
+        flagged += 1
+    return flagged
+
+
 def _import_ts_of(recent: Any, key: int | None) -> float | None:
     """#117: pull the import epoch for `key` from a recent-imports map. The
     map is normally {id: ts}; tolerate a plain set (older callers / tests) by
@@ -1432,6 +1509,18 @@ async def build_coverage(
 
     _disqualify_unsupported(items)
     _refine_audio_sources(items, verification_sources)
+    # #140: mis-grouped-series detection runs LAST — it reads the final
+    # (refined) audio_source per episode. Dismissed series are read from the
+    # store so known-legit multilingual shows stay quiet across walks.
+    mixed_dismissed: set[str] = set()
+    if audio_lang_store is not None:
+        try:
+            mixed_dismissed = audio_lang_store.get_mixed_dismissed_set()
+        except Exception:  # noqa: BLE001 — never let this block a coverage build
+            mixed_dismissed = set()
+    flagged = _flag_mixed_language_series(items, dismissed_series=mixed_dismissed)
+    if flagged:
+        sources.setdefault("coverage", {})["mixed_language_series"] = flagged
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 

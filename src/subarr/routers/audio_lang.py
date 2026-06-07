@@ -325,6 +325,34 @@ async def delete_series_intent(series_prefix: str, request: Request) -> dict[str
     return {"deleted": True, "series_prefix": series_prefix}
 
 
+# ─── #140: mis-grouped-series dismiss ───────────────────────────────
+
+
+class MixedDismissRequest(BaseModel):
+    series_path: str           # the series directory, e.g. "TV/Trigger"
+    note: str | None = None
+
+
+@router.post("/mixed-dismiss")
+async def dismiss_mixed_series(req: MixedDismissRequest, request: Request) -> dict[str, Any]:
+    """Dismiss a #140 mixed-language flag for a series the user knows is a
+    genuinely multilingual show. Suppressed on all future coverage walks until
+    re-enabled."""
+    store = request.app.state.audio_lang
+    store.dismiss_mixed(req.series_path, note=req.note)
+    return {"ok": True, "series_path": req.series_path, "dismissed": True}
+
+
+@router.delete("/mixed-dismiss")
+async def undismiss_mixed_series(series_path: str, request: Request) -> dict[str, Any]:
+    """Re-enable the mixed-language flag for a previously-dismissed series."""
+    store = request.app.state.audio_lang
+    removed = store.undismiss_mixed(series_path)
+    if not removed:
+        raise HTTPException(404, detail=f"no dismissal for {series_path}")
+    return {"deleted": True, "series_path": series_path}
+
+
 def _resolve_canonical_to_fs(canonical: str) -> str:
     """Translate a canonical path (TV/Show/...) into an absolute fs path
     on subarr's container view, with traversal guard."""

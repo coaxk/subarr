@@ -191,6 +191,14 @@ function normalizeRow(item, idx, settleMinutes = 0) {
     // compute a LIVE "settling (Xm left)" countdown on each render.
     import_ts: item.import_ts || null,
     settle_minutes: settleMinutes || 0,
+    // #140 mis-grouped series: flag + the foreign langs found, plus the series
+    // dir (for the dismiss call) and this row's own high-trust detected lang
+    // (for the per-episode "why" breakdown).
+    series_mixed: !!item.series_mixed_languages,
+    series_mixed_langs: item.series_mixed_langs || [],
+    series_path: item.canonical_path || null,
+    detected_lang: ((item.audio_source === 'user' || item.audio_source === 'whisper')
+      && item.audio_langs && item.audio_langs.length) ? item.audio_langs[0] : null,
     // Probe-gate: only 'verified' rows are real, actionable gaps. 'unprobed'
     // and 'probe_failed' are bucketed separately (Analyzing / Couldn't
     // analyze) and never enter the gap table or bulk-select.
@@ -706,6 +714,20 @@ function ScoringBadges({ r }) {
         tip: `Imported recently — auto-transcribe is held for ~${left} more min so Bazarr/providers can land a real sub first. Manual transcribe still works now.`,
       });
     }
+  }
+  // #140: this episode belongs to a series flagged as mixed-language (likely
+  // two different shows merged — wrong downloads). Series-level signal shown
+  // per-row so it's visible in flat view too; the tree view adds a dismissable
+  // notice with the full per-episode breakdown.
+  if (r.series_mixed) {
+    const langs = (r.series_mixed_langs || []).join(', ');
+    badges.push({
+      key: 'mixed',
+      label: '⚠ MIXED SERIES',
+      bg: 'rgba(239,68,68,0.16)',
+      fg: '#f87171',
+      tip: `This series resolves to multiple distinct foreign spoken languages (${langs}) — likely two different shows merged into one Sonarr series (wrong downloads). Check the episodes.`,
+    });
   }
   if (!badges.length) return null;
   return (
@@ -2204,7 +2226,39 @@ function GroupHeader({ depth, label, onClick, expanded, allSelected, indetermina
   );
 }
 
-function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
+// #140: dismissable notice rendered under a show header when the series is
+// flagged mixed-language. Lists the foreign langs + a per-episode breakdown,
+// with a one-click dismiss for genuinely-multilingual shows.
+function MixedSeriesNotice({ show, onDismiss }) {
+  const flagged = show.all.find((r) => r.series_mixed);
+  if (!flagged) return null;
+  const langs = (flagged.series_mixed_langs || []).join(', ');
+  const breakdown = show.all
+    .filter((r) => r.detected_lang)
+    .map((r) => `${r.ep || r.title}: ${r.detected_lang}`)
+    .join(' · ');
+  return (
+    <div style={{
+      margin: '2px 0 6px 44px', padding: '8px 12px',
+      background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)',
+      borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: 12,
+    }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+        <b style={{ color: '#f87171' }}>⚠ Mixed languages — likely mis-grouped.</b>{' '}
+        Episodes resolve to multiple foreign spoken languages (<b>{langs}</b>) — probably
+        two different shows merged into one Sonarr series.
+        {breakdown ? <span style={{ color: 'var(--fg-3)' }}> {' · '}{breakdown}</span> : null}
+      </span>
+      <button className="btn" style={{ fontSize: 'var(--text-xs)', flex: 'none' }}
+        title="This is a genuinely multilingual show — stop flagging it"
+        onClick={(e) => { e.stopPropagation(); onDismiss && onDismiss(flagged.series_path); }}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismissMixed }) {
   const tree = useMemo(() => buildShowTree(rows), [rows]);
   const movies = useMemo(() => rows.filter((r) => r.type === 'mov'), [rows]);
   const [expandedShows, setExpandedShows] = useState(() => new Set());
@@ -2247,6 +2301,13 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing }) {
         rightMeta={`${epCount} eps wanted · ${seasonCount} season${seasonCount === 1 ? '' : 's'}`}
       />
     );
+    // #140: surface the mis-grouped warning at series level (shows even when
+    // the series is collapsed — it's a data-integrity alert worth seeing).
+    if (show.all.some((r) => r.series_mixed)) {
+      out.push(
+        <MixedSeriesNotice key={`mixed-${show.title}`} show={show} onDismiss={onDismissMixed} />
+      );
+    }
     if (!showExpanded) continue;
     const seasonKeys = Array.from(show.seasons.keys()).sort();
     for (const sk of seasonKeys) {
@@ -2433,6 +2494,19 @@ export function CoveragePage() {
   }, []);
 
   const { data, loading, error, refetch } = useLiveCoverage();
+
+  // #140: dismiss a mis-grouped-series flag, then refetch so the notice clears.
+  const dismissMixed = useCallback(async (seriesPath) => {
+    if (!seriesPath) return;
+    try {
+      await fetch('/api/audio-lang/mixed-dismiss', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ series_path: seriesPath }),
+      });
+      refetch();
+    } catch { /* best-effort — the flag reappears next walk if this failed */ }
+  }, [refetch]);
 
   // Deep-link from chrome rail: /coverage#review auto-opens BatchReviewModal.
   useEffect(() => {
@@ -2771,6 +2845,7 @@ export function CoveragePage() {
               toggleRow={toggleRow}
               onQueue={handleRowQueue}
               rowQueuing={rowQueuing}
+              onDismissMixed={dismissMixed}
             />
           )}
         </div>
