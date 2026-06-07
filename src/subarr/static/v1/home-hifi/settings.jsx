@@ -2003,7 +2003,10 @@ function LangRulesPanel() {
           {Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)).map((L) => (
             <span key={L}
               role={active.has(L) ? 'button' : undefined}
+              tabIndex={active.has(L) ? 0 : undefined}
               onClick={active.has(L) ? () => jumpTo(L) : undefined}
+              onKeyDown={active.has(L) ? (e) => { if (e.key === 'Enter') jumpTo(L); } : undefined}
+              aria-label={active.has(L) ? `Jump to ${L}` : undefined}
               style={{
                 fontSize: 10, lineHeight: 1.25,
                 color: active.has(L) ? 'var(--violet-500)' : 'var(--fg-3)',
