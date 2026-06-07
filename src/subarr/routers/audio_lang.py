@@ -329,6 +329,12 @@ async def delete_series_intent(series_prefix: str, request: Request) -> dict[str
     removed = store.delete_series_intent(series_prefix)
     if not removed:
         raise HTTPException(404, detail=f"no intent declared for {series_prefix}")
+    # Revoking a rule must re-evaluate coverage so inherited episodes revert.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        bundle = request.app.state.integrations
+        probe_store = request.app.state.probe_store
+        cov_cache.request_refresh(bundle, probe_store, store)
     return {"deleted": True, "series_prefix": series_prefix}
 
 

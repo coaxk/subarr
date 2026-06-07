@@ -76,3 +76,19 @@ def test_put_series_intent_kicks_coverage_refresh(app_with_stub):
     r = app_with_stub.put(SINGLE, json={"series_prefix": "TV/Cheers/", "lang_code": "eng"})
     assert r.status_code == 200
     assert spy.refresh_calls == 1
+
+
+def test_delete_series_intent_kicks_coverage_refresh(app_with_stub):
+    app_with_stub.app.state.audio_lang.set_series_intent(
+        series_prefix="TV/Cheers/", lang_code="eng")
+    spy = _RefreshSpy()
+    app_with_stub.app.state.coverage_cache = spy
+    r = app_with_stub.delete(SINGLE, params={"series_prefix": "TV/Cheers/"})
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+    assert spy.refresh_calls == 1
+
+
+def test_delete_missing_series_intent_404(app_with_stub):
+    r = app_with_stub.delete(SINGLE, params={"series_prefix": "TV/DoesNotExist/"})
+    assert r.status_code == 404
