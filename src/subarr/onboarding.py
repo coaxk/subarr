@@ -54,6 +54,39 @@ STEP_DONE = 11
 # Maximum step value the API accepts. STEP_DONE marks completion.
 MAX_STEP = STEP_DONE
 
+# ─── Secret handling (security) ─────────────────────────────────────
+# The wizard stashes arr/Plex credentials in progress_json. Those must NEVER
+# leave the server in cleartext (GET /api/onboarding/state is reachable by the
+# UI and, on a no-auth install, by anyone on the LAN). We mask on output and —
+# crucially — refuse to let an echoed-back mask overwrite the stored real value
+# (the resuming wizard re-sends the masked field; without this guard a "Next"
+# click would clobber the saved key with "••••1234"). Mirrors the
+# integrations.py credential-editor masking.
+_SECRET_SUFFIXES = ("_api_key", "_apikey", "_token", "_password", "_secret")
+_MASK = "••••"
+
+
+def _is_secret_key(key: str) -> bool:
+    k = key.lower()
+    return any(k.endswith(s) for s in _SECRET_SUFFIXES)
+
+
+def _mask_secret(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    return _MASK + value[-4:] if len(value) > 4 else _MASK
+
+
+def _is_masked(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(_MASK)
+
+
+def _mask_progress(progress: dict[str, Any]) -> dict[str, Any]:
+    return {
+        k: (_mask_secret(v) if _is_secret_key(k) else v)
+        for k, v in progress.items()
+    }
+
 
 @dataclass
 class OnboardingState:
@@ -68,11 +101,14 @@ class OnboardingState:
         return self.completed_at is not None
 
     def to_dict(self) -> dict[str, Any]:
+        # Secrets are masked here so they never leave the server in cleartext.
+        # Internal callers that need the raw values (e.g. complete() →
+        # _apply_progress_to_settings) read `.progress` directly, not to_dict().
         return {
             "step": self.step,
             "completed_at": self.completed_at,
             "is_complete": self.is_complete,
-            "progress": self.progress,
+            "progress": _mask_progress(self.progress),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -131,6 +167,10 @@ class OnboardingStore:
             for k, v in progress_patch.items():
                 if v is None:
                     state.progress.pop(k, None)
+                elif _is_secret_key(k) and _is_masked(v):
+                    # The resuming wizard echoes back the masked secret it was
+                    # shown — never overwrite the real stored value with a mask.
+                    continue
                 else:
                     state.progress[k] = v
         if unset_keys:

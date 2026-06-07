@@ -68,7 +68,12 @@ class BasicAuthMiddleware:
             log.info("basic auth enabled (user=%s, password=<%d chars>)",
                      user, len(password))
         else:
-            log.info("basic auth DISABLED (SUBARR_USER or SUBARR_PASS empty)")
+            log.warning(
+                "basic auth DISABLED — the API is UNAUTHENTICATED. This is fine "
+                "on a trusted LAN, but do NOT expose subarr to the internet "
+                "without a reverse proxy / auth. Set SUBARR_USER + SUBARR_PASS "
+                "to enable built-in basic auth."
+            )
 
     async def __call__(self, scope, receive, send):
         # Only HTTP requests carry auth (websockets / lifespan pass-through).

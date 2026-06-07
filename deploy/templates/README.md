@@ -118,9 +118,12 @@ your mind any time:
 - [ ] Don't pin `:latest` — use a specific image tag per the file
 - [ ] Set `PUID`/`PGID` to a non-root user (most LinuxServer images
       default to 1000:1000)
-- [ ] Put subarr behind a reverse proxy with auth (Caddy + basicauth,
-      Authelia, etc.) if exposed to anything other than your LAN.
-      Subarr has no built-in auth.
+- [ ] Set `SUBARR_USER` + `SUBARR_PASS` to enable subarr's built-in
+      basic auth. It's OFF by default (unauthenticated API) — fine on a
+      trusted LAN, but never expose subarr to the internet without it
+      (and/or a reverse proxy with auth — Caddy basicauth, Authelia, etc.).
+      Note the API can reach the Docker socket, so an exposed, unauth
+      instance is a real risk — keep it LAN-only or authenticated.
 - [ ] Pin the docker-socket-proxy image to a tag, not `:latest`
 - [ ] If Tier 3, double-check the `:ro` flag is present on each
       config mount. Subarr never needs write access — `:ro` makes

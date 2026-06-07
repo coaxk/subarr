@@ -13,6 +13,7 @@ failure in the health layer would crash the very loop it monitors.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -21,6 +22,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Security: tracebacks are served (unauth-reachable on a no-auth install) via
+# /api/health/tasks, and some integrations carry their credential in the request
+# URL (Tautulli: ?apikey=..., Plex: ?X-Plex-Token=...). httpx embeds the URL in
+# its exception text, so a failed call inside a supervised loop could leak the
+# key into the stored traceback. Redact secret query-string params before store.
+_SECRET_QS = re.compile(
+    r"(?i)(api[_-]?key|apikey|token|x-plex-token|password|passwd|secret|access[_-]?token)=([^&\s'\"]+)"
+)
+
+
+def _redact_secrets(text: str) -> str:
+    return _SECRET_QS.sub(r"\1=<redacted>", text)
 
 # A task is unhealthy after this many failed cycles in a row...
 UNHEALTHY_CONSECUTIVE = 3
@@ -128,9 +142,9 @@ class TaskHealthStore:
         try:
             now = time.time()
             exc_type = type(exc).__name__
-            detail = "".join(
+            detail = _redact_secrets("".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
-            )[-_MAX_DETAIL:]
+            ))[-_MAX_DETAIL:]
             with self._lock:
                 self._conn.execute(
                     "INSERT INTO task_health (task_name, last_error_at, last_error_type, "

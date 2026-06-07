@@ -728,12 +728,11 @@ app.include_router(r_audio_audit.router)
 
 @app.get("/api/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "version": __version__,
-        "media_root": str(settings.media_root),
-        "subgen_url": settings.subgen_url,
-    }
+    # This is the ONE endpoint reachable before auth (allowlisted in auth.py).
+    # Keep it to a liveness signal — don't leak config (media_root / subgen_url)
+    # to an unauthenticated caller. Configured paths/URLs are available behind
+    # auth via the integrations + settings endpoints.
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/api/health/tasks")
