@@ -52,7 +52,7 @@ services:
         max-file: "3"
 
   subgen:
-    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r1   # pin exactly
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r5   # pin exactly (r5 = current; has the v4.10+ arena/per-request caps 1.3.0 uses)
     container_name: subgen
     restart: unless-stopped
     networks:

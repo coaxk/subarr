@@ -108,7 +108,7 @@ services:
         max-file: "3"
 
   subgen:
-    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r1
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r5   # pin exactly (current; v4.10+ caps for the arena/Tuning Lab)
     container_name: subgen
     restart: unless-stopped
     networks:
