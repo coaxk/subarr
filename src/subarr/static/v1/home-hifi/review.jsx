@@ -10,6 +10,7 @@
 
 import { StatusDot } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
+import { distinctSeriesPrefixes } from './lang-rules-util.mjs';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -225,6 +226,9 @@ export function ReviewPage() {
   const [bulkLang, setBulkLang] = useState('fre');
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, errors: 0 });
+  // #226: also declare a durable series/movie language rule so FUTURE
+  // downloads (new episodes, re-grabbed movies) inherit the language.
+  const [rememberFuture, setRememberFuture] = useState(true);
 
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or
@@ -388,11 +392,33 @@ export function ReviewPage() {
       }
     }
     await Promise.all([worker(), worker(), worker(), worker()]);
+    // #226: if requested, declare one durable intent rule per distinct
+    // series/movie in the selection. Best-effort — failures here never fail
+    // the per-file bulk above (the primary action); they bump the error count.
+    if (rememberFuture) {
+      const prefixes = distinctSeriesPrefixes(paths, data?.items || []);
+      for (const prefix of prefixes) {
+        try {
+          const r = await fetch('/api/audio-lang/series-intent', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ series_prefix: prefix, lang_code: bulkLang }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('series-intent declare failed for', prefix, e);
+          errors += 1;
+          setBulkProgress({ done, total: paths.length, errors });
+        }
+      }
+    }
     setBulkRunning(false);
     clearSelection();
     // Refetch in case some verifies failed; ensures the list is honest.
     fetchPending({ silent: true });
-  }, [epSelection, bulkLang, fetchPending, clearSelection]);
+  }, [epSelection, bulkLang, fetchPending, clearSelection, rememberFuture, data]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
@@ -577,6 +603,17 @@ export function ReviewPage() {
               <option key={code} value={code}>{name} ({code})</option>
             ))}
           </select>
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'pointer',
+          }}
+            title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
+            <input type="checkbox" checked={rememberFuture}
+              onChange={(e) => setRememberFuture(e.target.checked)}
+              disabled={bulkRunning}
+              style={{ accentColor: 'var(--violet-500)' }} />
+            Remember for future downloads
+          </label>
           {bulkRunning && (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
               <span className="spinner-ring" style={{ marginRight: 6 }} />
