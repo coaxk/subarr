@@ -28,12 +28,14 @@ class RadarrClient(IntegrationClient):
     async def tags(self) -> list[dict[str, Any]]:
         return await self._get("/api/v3/tag")
 
-    async def recent_imports(self, hours: int = 24) -> set[int]:
-        """v1.1-I: movieIds imported in the last <hours> hours via
-        /history?eventType=3."""
+    async def recent_imports_at(self, hours: int = 24) -> dict[int, float]:
+        """v1.1-I / #117: movieId → import epoch-seconds for files imported in
+        the last <hours> hours via /history?eventType=3 (newest-first). The
+        timestamp powers the #117 settle-window; `recent_imports` derives the
+        plain id set. Repeat imports of one movie keep the most recent."""
         import datetime
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
-        ids: set[int] = set()
+        out: dict[int, float] = {}
         page = 1
         while True:
             data = await self._get(
@@ -55,14 +57,18 @@ class RadarrClient(IntegrationClient):
                     crossed = True
                     break
                 mid = r.get("movieId")
-                if isinstance(mid, int):
-                    ids.add(mid)
+                if isinstance(mid, int) and mid not in out:
+                    out[mid] = dt.timestamp()  # tz-aware → correct UTC epoch
             if crossed or not records:
                 break
             page += 1
             if page > 10:
                 break
-        return ids
+        return out
+
+    async def recent_imports(self, hours: int = 24) -> set[int]:
+        """v1.1-I: movieIds imported in the last <hours> hours."""
+        return set((await self.recent_imports_at(hours)).keys())
 
     async def wanted_missing_ids(self) -> set[int]:
         """v1.1-B: Radarr's authoritative "no file yet" set as radarrMovieId."""

@@ -146,7 +146,7 @@ function langCodeFromName(name) {
   return known[String(name).toLowerCase()] || String(name).slice(0, 3).toLowerCase();
 }
 
-function normalizeRow(item, idx) {
+function normalizeRow(item, idx, settleMinutes = 0) {
   const ep = item.media_type === 'episode' ? formatEpisode(item.episode_number) : '';
   // Score: backend uses 0–1000ish; map to /100 for display (cap 9.9).
   const score = Math.min(9.9, (item.score || 0) / 100);
@@ -187,6 +187,10 @@ function normalizeRow(item, idx) {
     now_playing: !!item.now_playing,
     just_imported: !!item.just_imported,
     airing_soon: !!item.airing_soon,
+    // #117 settle-window: import time + the active window so the badge can
+    // compute a LIVE "settling (Xm left)" countdown on each render.
+    import_ts: item.import_ts || null,
+    settle_minutes: settleMinutes || 0,
     // Probe-gate: only 'verified' rows are real, actionable gaps. 'unprobed'
     // and 'probe_failed' are bucketed separately (Analyzing / Couldn't
     // analyze) and never enter the gap table or bulk-select.
@@ -686,6 +690,22 @@ function ScoringBadges({ r }) {
       fg: '#38bdf8',
       tip: 'Sonarr says this episode airs within 48 hours. +400 score boost — pre-warm the queue.',
     });
+  }
+  // #117 settle-window: freshly-imported gap being held out of auto-queue.
+  // Computed live (Date.now) from import_ts + the active settle window so the
+  // countdown ticks down across renders. Marks the row as deliberate waiting,
+  // not inaction. Manual transcribe still works during the window.
+  if (r.settle_minutes > 0 && r.import_ts) {
+    const left = Math.ceil((r.import_ts + r.settle_minutes * 60 - Date.now() / 1000) / 60);
+    if (left > 0) {
+      badges.push({
+        key: 'settle',
+        label: `SETTLING ${left}m`,
+        bg: 'rgba(148,163,184,0.18)',
+        fg: '#94a3b8',
+        tip: `Imported recently — auto-transcribe is held for ~${left} more min so Bazarr/providers can land a real sub first. Manual transcribe still works now.`,
+      });
+    }
   }
   if (!badges.length) return null;
   return (
@@ -2424,7 +2444,7 @@ export function CoveragePage() {
   // Normalize once per payload.
   const allRows = useMemo(() => {
     if (!data?.items) return null;
-    return data.items.map((it, idx) => normalizeRow(it, idx));
+    return data.items.map((it, idx) => normalizeRow(it, idx, data.settle_minutes || 0));
   }, [data]);
 
   // Apply UI filters. Probe-gate: the gap table is VERIFIED-only — an

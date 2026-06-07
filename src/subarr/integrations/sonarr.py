@@ -74,13 +74,16 @@ class SonarrClient(IntegrationClient):
             json_body=[{"id": episode_file_id, "languages": languages}],
         )
 
-    async def recent_imports(self, hours: int = 24) -> set[int]:
-        """v1.1-I: Episode IDs imported in the last <hours> hours.
-        Walks /history?eventType=3 (downloadFolderImported) until we
-        cross the cutoff. Returns set of sonarrEpisodeId."""
+    async def recent_imports_at(self, hours: int = 24) -> dict[int, float]:
+        """v1.1-I / #117: sonarrEpisodeId → import epoch-seconds for files
+        imported in the last <hours> hours. Walks /history?eventType=3
+        (downloadFolderImported), newest-first, until past the cutoff. The
+        timestamp powers the #117 settle-window; `recent_imports` derives the
+        plain id set from this. On repeat imports of one episode we keep the
+        most recent (records are date-descending, so first seen wins)."""
         import datetime
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
-        ids: set[int] = set()
+        out: dict[int, float] = {}
         page = 1
         while True:
             data = await self._get(
@@ -102,14 +105,18 @@ class SonarrClient(IntegrationClient):
                     crossed = True
                     break
                 eid = r.get("episodeId")
-                if isinstance(eid, int):
-                    ids.add(eid)
+                if isinstance(eid, int) and eid not in out:
+                    out[eid] = dt.timestamp()  # tz-aware → correct UTC epoch
             if crossed or not records:
                 break
             page += 1
             if page > 10:  # safety cap
                 break
-        return ids
+        return out
+
+    async def recent_imports(self, hours: int = 24) -> set[int]:
+        """v1.1-I: Episode IDs imported in the last <hours> hours."""
+        return set((await self.recent_imports_at(hours)).keys())
 
     async def calendar_upcoming(self, hours: int = 48) -> set[int]:
         """v1.1-H: Episode IDs airing within the next <hours> hours.

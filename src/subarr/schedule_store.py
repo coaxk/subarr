@@ -81,6 +81,12 @@ class AutoQueueRules:
     skip_stale_disk: bool = True   # don't auto-queue rows where .srt already on disk
     skip_embedded_en: bool = True  # don't auto-queue rows where probe confirmed EN/EN(SDH)
     max_per_run: int = 50
+    # #117 settle-window: hold a freshly-imported gap out of auto-queue for
+    # this many minutes after Sonarr/Radarr imported it, so Bazarr/providers
+    # get first crack at landing a real sub before subarr burns GPU on a
+    # transcription. 0 = disabled (default — opt-in, no behavior change).
+    # Manual transcribe always bypasses this (it doesn't run through evaluate()).
+    settle_minutes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +100,7 @@ class AutoQueueRules:
             "skip_stale_disk": self.skip_stale_disk,
             "skip_embedded_en": self.skip_embedded_en,
             "max_per_run": self.max_per_run,
+            "settle_minutes": self.settle_minutes,
         }
 
     @classmethod

@@ -11,6 +11,7 @@ underlying flow directly).
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,10 +40,25 @@ class Decision:
         }
 
 
+def settle_seconds_left(item: CoverageItem, settle_minutes: int, now: float) -> int:
+    """#117: seconds remaining in the settle window for this gap, or 0 if it
+    isn't settling (disabled, no import timestamp, or window already elapsed).
+
+    A freshly-imported file is held out of auto-queue for `settle_minutes`
+    after Sonarr/Radarr imported it, giving Bazarr/providers first crack at a
+    real sub. Pure + time-relative so the UI can compute the live "Xm left"
+    from the item's `import_ts` without a stale cached value.
+    """
+    if settle_minutes <= 0 or not item.import_ts:
+        return 0
+    return max(0, int(item.import_ts + settle_minutes * 60 - now))
+
+
 def evaluate(
     items: list[CoverageItem],
     rules: AutoQueueRules,
     in_flight_paths: set[str] | None = None,
+    now: float | None = None,
 ) -> list[Decision]:
     """Apply rules to a list of coverage items.
 
@@ -65,6 +81,7 @@ def evaluate(
     """
     decisions: list[Decision] = []
     in_flight = in_flight_paths or set()
+    now = now if now is not None else time.time()
 
     if rules.mode == MODE_DASHBOARD:
         for item in items:
@@ -88,6 +105,17 @@ def evaluate(
         # skip) — hold it until the probe runs.
         if getattr(item, "verification_state", "verified") != "verified":
             decisions.append(Decision(item, "skip", "unverified — not probed yet"))
+            continue
+        # #117 settle-window: hold freshly-imported gaps so Bazarr/providers
+        # get first crack. Opt-in (settle_minutes=0 → no-op). Manual
+        # transcribe bypasses this entirely (it never reaches evaluate()).
+        left = settle_seconds_left(item, rules.settle_minutes, now)
+        if left > 0:
+            mins = (left + 59) // 60  # ceil to whole minutes
+            decisions.append(Decision(
+                item, "skip",
+                f"settling ({mins}m left) — letting Bazarr/providers land a real sub first",
+            ))
             continue
         skip_reason = _filter_reason(item, rules)
         if skip_reason:

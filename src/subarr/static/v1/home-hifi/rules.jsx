@@ -29,6 +29,7 @@ const DEFAULT_RULES = {
   skip_stale_disk: true,
   skip_embedded_en: true,
   max_per_run: 50,
+  settle_minutes: 0,
 };
 
 // ─── Live data hooks ─────────────────────────────────────────────
@@ -329,6 +330,9 @@ function ModeBuild({ draft, setDraft, scheduleDraft, setScheduleDraft }) {
             hint="Tautulli priority floor (0–1000)" min={0} max={1000} />
           <NumField label="max per run" value={draft.max_per_run} onChange={(v) => set('max_per_run', v)}
             hint="caps queue size per walk" min={1} max={500} />
+          <NumField label="settle minutes" value={draft.settle_minutes ?? 0} onChange={(v) => set('settle_minutes', v ?? 0)}
+            hint="wait this long after import before auto-transcribing (lets Bazarr land a real sub first). 0 = off"
+            min={0} max={1440} />
         </div>
       </Section>
 

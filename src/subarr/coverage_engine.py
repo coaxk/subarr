@@ -67,6 +67,11 @@ class CoverageItem:
     now_playing: bool = False
     # v1.1-I: Sonarr/Radarr imported the file in the last 24h.
     just_imported: bool = False
+    # #117: epoch seconds when Sonarr/Radarr imported this file (from
+    # /history?eventType=3). Drives the settle-window — the frontend computes
+    # "settling (Xm left)" from this + the rules' settle_minutes, always live
+    # (no stale cached countdown). None when unknown / outside the lookback.
+    import_ts: float | None = None
     # v1.1-H: Sonarr calendar says this airs in the next 48h.
     airing_soon: bool = False
     # v1.1-O: audio language data-quality flags.
@@ -154,6 +159,7 @@ class CoverageItem:
             "pending_download": self.pending_download,
             "now_playing": self.now_playing,
             "just_imported": self.just_imported,
+            "import_ts": self.import_ts,
             "airing_soon": self.airing_soon,
             "audio_label_suspect": self.audio_label_suspect,
             "audio_label_unknown": self.audio_label_unknown,
@@ -544,17 +550,21 @@ async def _fetch_wanted_missing(name: str, client, sources: dict) -> set[int]:
         return set()
 
 
-async def _fetch_recent_imports(name: str, client, sources: dict) -> set[int]:
-    """v1.1-I: arr /history?eventType=3 — files imported in last 24h."""
+async def _fetch_recent_imports(name: str, client, sources: dict) -> dict[int, float]:
+    """v1.1-I / #117: arr /history?eventType=3 — {id: import_epoch} for files
+    imported in the last 24h. The map drives both `just_imported` (membership)
+    and the #117 settle-window (the timestamp). Dict keys behave like the old
+    set for `x in recent` checks, so callers need no change. The 24h lookback
+    bounds the effective settle window (fine for sane minute-scale values)."""
     if not client.is_configured():
-        return set()
+        return {}
     try:
-        ids = await client.recent_imports(hours=24)
-        sources.setdefault(name, {})["recent_imports_24h"] = len(ids)
-        return ids
+        imports = await client.recent_imports_at(hours=24)
+        sources.setdefault(name, {})["recent_imports_24h"] = len(imports)
+        return imports
     except IntegrationError as e:
         sources.setdefault(name, {}).setdefault("warnings", []).append(f"history: {e}")
-        return set()
+        return {}
 
 
 async def _fetch_calendar_upcoming(client, sources: dict) -> set[int]:
@@ -974,6 +984,15 @@ def _refine_audio_sources(items: list, verification_sources: dict) -> None:
             it.audio_source = _map(s)
 
 
+def _import_ts_of(recent: Any, key: int | None) -> float | None:
+    """#117: pull the import epoch for `key` from a recent-imports map. The
+    map is normally {id: ts}; tolerate a plain set (older callers / tests) by
+    returning None (no timestamp available → never settling)."""
+    if key is None or not isinstance(recent, dict):
+        return None
+    return recent.get(key)
+
+
 def _score(
     item: CoverageItem,
     signals: dict[str, dict],
@@ -1005,10 +1024,12 @@ def _score(
         s += 800
         reasons.append("just imported (<24h)")
         item.just_imported = True
+        item.import_ts = _import_ts_of(just_imported_eps, item.bazarr_episode_id)
     elif just_imported_movies and item.bazarr_radarr_id in just_imported_movies:
         s += 800
         reasons.append("just imported (<24h)")
         item.just_imported = True
+        item.import_ts = _import_ts_of(just_imported_movies, item.bazarr_radarr_id)
     # v1.1-H: airs within 48h — pre-warm the queue so subs are ready when
     # the episode hits disk.
     if airing_soon_eps and item.bazarr_episode_id in airing_soon_eps:
@@ -1136,8 +1157,8 @@ async def build_coverage(
     radarr_tags = await radarr_tags_task
     sonarr_missing_ids = await sonarr_missing_task   # set[int]
     radarr_missing_ids = await radarr_missing_task   # set[int]
-    sonarr_recent_ids = await sonarr_recent_task     # set[int]
-    radarr_recent_ids = await radarr_recent_task     # set[int]
+    sonarr_recent_ids = await sonarr_recent_task     # dict[int, float] (id→import_ts) #117
+    radarr_recent_ids = await radarr_recent_task     # dict[int, float] (id→import_ts) #117
     airing_soon_ids = await sonarr_calendar_task     # set[int]
     history = await tautulli_task if tautulli_task else []
     activity = await tautulli_activity_task if tautulli_activity_task else {"now_playing_titles": set(), "transcoding_titles": set()}
@@ -1427,7 +1448,7 @@ async def _add_bazarr_blind_synthetic_rows(
     series_srt_index: dict[str, list[str]],
     sonarr_tags: dict[int, str],
     sonarr_missing_ids: set[int],
-    sonarr_recent_ids: set[int],
+    sonarr_recent_ids: dict[int, float],  # id→import_ts (#117)
     airing_soon_ids: set[int],
     activity: dict,
     tt_signals: dict,

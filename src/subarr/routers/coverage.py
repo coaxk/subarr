@@ -146,6 +146,10 @@ async def get_coverage(
     bundle = request.app.state.integrations
     probe_store = request.app.state.probe_store if probe else None
     audio_lang_store = getattr(request.app.state, "audio_lang", None)
+    # #117: current settle window, surfaced so the frontend can render the
+    # live "settling (Xm left)" countdown from each row's import_ts.
+    _sched = getattr(request.app.state, "schedule", None)
+    settle_minutes = _sched.get_rules().settle_minutes if _sched else 0
 
     if cov_cache is not None and not fresh:
         snap = cov_cache.get_cached()
@@ -167,6 +171,7 @@ async def get_coverage(
                 hide_english_audio=hide_english_audio,
                 hide_pending_download=hide_pending_download,
                 only_wanted_langs=only_wanted_langs,
+                settle_minutes=settle_minutes,
             )
 
     # ?fresh=true OR no cache available → synchronous rebuild and store.
@@ -190,6 +195,7 @@ async def get_coverage(
             hide_stale_disk=hide_stale_disk,
             hide_english_audio=hide_english_audio,
             hide_pending_download=hide_pending_download,
+            settle_minutes=settle_minutes,
         )
 
     # Fallback (e.g. boot before warm) — synchronous build, no cache write.
@@ -213,6 +219,7 @@ def _apply_filters_and_pack(
     hide_embedded_en: bool, hide_stale_disk: bool,
     hide_english_audio: bool, hide_pending_download: bool,
     only_wanted_langs: str = "",
+    settle_minutes: int = 0,
 ) -> dict[str, Any]:
     """Shared post-processing: applies the hide_* filters over the items
     list and returns the response body. Mutates `body` (caller passes a
@@ -288,4 +295,8 @@ def _apply_filters_and_pack(
     body.setdefault("cached", True)
     if body.get("cached") and "generated_at" in body:
         body["cache_age_s"] = round(now - body["generated_at"], 1)
+    # #117: the active settle window (minutes). The frontend computes each
+    # row's live "settling (Xm left)" from this + the row's import_ts, so the
+    # countdown is always current rather than baked into the cached snapshot.
+    body["settle_minutes"] = settle_minutes
     return body
