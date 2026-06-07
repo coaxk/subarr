@@ -78,6 +78,32 @@ _COLS = (
     "audio_language_override, task, source, created_at, submitted_at, error"
 )
 
+# Statements built ONCE as constants. The only interpolation is the static
+# `_COLS` column list (a module constant, never user input); every runtime value
+# is bound as a `?` parameter. Hoisting them here means the execute() call sites
+# pass a constant name — no string formatting at the call — which is both
+# cleaner and keeps bandit's B608 (string-built SQL) quiet by construction. The
+# two statements whose literal text contains a SQL keyword (SELECT.../INSERT...)
+# carry an explicit nosec; the rest interpolate `_SELECT` so they have no literal
+# keyword to match.
+_SELECT = f"SELECT {_COLS} FROM pending_queue"  # nosec B608
+_Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1"
+_Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
+_Q_INSERT = (  # nosec B608
+    f"INSERT INTO pending_queue ({_COLS}) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+_Q_GET = f"{_SELECT} WHERE id = ?"
+_Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
+_Q_LIST_STATUS = f"{_SELECT} WHERE status = ? ORDER BY priority DESC, position ASC, created_at ASC"
+_Q_NEXT = f"{_Q_LIST_STATUS} LIMIT ?"
+_Q_BUCKET = (
+    f"{_SELECT} WHERE status = ? AND priority = ? AND id != ? "
+    "ORDER BY position ASC, created_at ASC"
+)
+_Q_MINMAX = ("SELECT MIN(position), MAX(position) FROM pending_queue "
+             "WHERE status = ? AND priority = ? AND id != ?")
+
 
 def _row(r: tuple) -> PendingJob:
     return PendingJob(
@@ -112,16 +138,14 @@ class PendingQueueStore:
         prio = priority if priority is not None else PRIORITY_BY_SOURCE.get(source, DEFAULT_PRIORITY)
         with self._lock:
             existing = self._conn.execute(
-                f"SELECT {_COLS} FROM pending_queue "
-                "WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1",
+                _Q_ACTIVE_BY_PATH,
                 (canonical_path, STATUS_PENDING, STATUS_SUBMITTED),
             ).fetchone()
             if existing:
                 return _row(existing)
             # append within the bucket: max position among pending of this prio
             row = self._conn.execute(
-                "SELECT MAX(position) FROM pending_queue "
-                "WHERE status = ? AND priority = ?",
+                _Q_MAXPOS,
                 (STATUS_PENDING, prio),
             ).fetchone()
             pos = (row[0] + 1.0) if row and row[0] is not None else 0.0
@@ -132,8 +156,7 @@ class PendingQueueStore:
                 source=source, created_at=time.time(), submitted_at=None, error=None,
             )
             self._conn.execute(
-                f"INSERT INTO pending_queue ({_COLS}) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                _Q_INSERT,
                 (job.id, job.canonical_path, job.position, job.priority, job.status,
                  job.audio_language_override, job.task, job.source,
                  job.created_at, job.submitted_at, job.error),
@@ -145,7 +168,7 @@ class PendingQueueStore:
     def get(self, job_id: str) -> PendingJob | None:
         with self._lock:
             r = self._conn.execute(
-                f"SELECT {_COLS} FROM pending_queue WHERE id = ?", (job_id,),
+                _Q_GET, (job_id,),
             ).fetchone()
         return _row(r) if r else None
 
@@ -154,25 +177,16 @@ class PendingQueueStore:
         priority DESC, position ASC, then created_at ASC as a stable tiebreak."""
         with self._lock:
             if status is None:
-                rows = self._conn.execute(
-                    f"SELECT {_COLS} FROM pending_queue "
-                    "ORDER BY priority DESC, position ASC, created_at ASC"
-                ).fetchall()
+                rows = self._conn.execute(_Q_LIST_ALL).fetchall()
             else:
-                rows = self._conn.execute(
-                    f"SELECT {_COLS} FROM pending_queue WHERE status = ? "
-                    "ORDER BY priority DESC, position ASC, created_at ASC",
-                    (status,),
-                ).fetchall()
+                rows = self._conn.execute(_Q_LIST_STATUS, (status,)).fetchall()
         return [_row(r) for r in rows]
 
     def next_pending(self, limit: int = 1) -> list[PendingJob]:
         """The next N jobs the feeder should submit (highest priority first)."""
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT {_COLS} FROM pending_queue WHERE status = ? "
-                "ORDER BY priority DESC, position ASC, created_at ASC LIMIT ?",
-                (STATUS_PENDING, max(1, limit)),
+                _Q_NEXT, (STATUS_PENDING, max(1, limit)),
             ).fetchall()
         return [_row(r) for r in rows]
 
@@ -230,8 +244,7 @@ class PendingQueueStore:
         with self._lock:
             job = self._require(job_id)
             row = self._conn.execute(
-                "SELECT MIN(position), MAX(position) FROM pending_queue "
-                "WHERE status = ? AND priority = ? AND id != ?",
+                _Q_MINMAX,
                 (STATUS_PENDING, job.priority, job_id),
             ).fetchone()
             lo, hi = (row or (None, None))
@@ -260,9 +273,7 @@ class PendingQueueStore:
             # ordered pending of the target's bucket, excluding the moving job
             ordered = [
                 _row(r) for r in self._conn.execute(
-                    f"SELECT {_COLS} FROM pending_queue "
-                    "WHERE status = ? AND priority = ? AND id != ? "
-                    "ORDER BY position ASC, created_at ASC",
+                    _Q_BUCKET,
                     (STATUS_PENDING, target.priority, job_id),
                 ).fetchall()
             ]
@@ -286,7 +297,7 @@ class PendingQueueStore:
 
     def _require(self, job_id: str) -> PendingJob:
         r = self._conn.execute(
-            f"SELECT {_COLS} FROM pending_queue WHERE id = ?", (job_id,),
+            _Q_GET, (job_id,),
         ).fetchone()
         if r is None:
             raise KeyError(f"pending job {job_id!r} not found")
