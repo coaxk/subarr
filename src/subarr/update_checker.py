@@ -6,14 +6,23 @@ surfaces (header pill, Home tile, Settings panel).
 
 Design choices:
 
-- **Polling cadence**: once per 24h. Cheap, well under GitHub's
-  unauthenticated 60-req/h limit. Forced refresh available via
+- **Feed, not API (#158)**: we read the per-repo releases **Atom feed**
+  (`https://github.com/{repo}/releases.atom`), NOT the REST endpoint
+  `api.github.com/repos/{repo}/releases/latest`. The REST API caps
+  *unauthenticated* requests at 60/hour **per IP**, and that budget is
+  shared across ALL of an IP's GitHub traffic — so users behind NAT/CGNAT
+  or running other GitHub-polling tools hit `403 rate limit exceeded` and
+  their update checks silently stop. The Atom feed is served by github.com
+  (the web host, not api.github.com) and is not subject to that limit, so
+  the default unauthenticated path Just Works on busy/shared IPs.
+
+- **Polling cadence**: once per 24h. Forced refresh available via
   POST /api/updates/refresh for admin.
 
 - **State storage**: a single row per product in `update_checks`. Reads
-  hit the DB, not the GitHub API — the UI is fast and offline-tolerant.
+  hit the DB, not GitHub — the UI is fast and offline-tolerant.
 
-- **Privacy**: we send the user's IP to api.github.com when polling
+- **Privacy**: we send the user's IP to github.com when polling
   (unavoidable). No telemetry, no identifiers. Documented in the
   Settings → Updates panel "what we collect" disclosure.
 
@@ -33,13 +42,79 @@ import asyncio
 import logging
 import sqlite3
 import time
+import defusedxml.ElementTree as ET  # XXE / billion-laughs hardened (B314)
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
+# Defensive cap on feed size. A real releases.atom (last ~10 releases with
+# full HTML notes) is a few hundred KB at most; anything past this is
+# pathological, so we refuse to parse it rather than feed ElementTree an
+# unbounded payload. The source is github.com over TLS, but cheap insurance.
+_MAX_FEED_BYTES = 4_000_000
+
+
+def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
+    """Parse a GitHub `releases.atom` feed → the newest release as a dict
+    ``{tag, released_at, notes_url, body}``, or ``None`` when the feed has
+    no entries (repo has no published releases yet) or can't be parsed.
+
+    Tag resolution: prefer the entry's alternate ``<link>`` href
+    (``.../releases/tag/<tag>``), fall back to the ``<id>`` suffix. The
+    entry ``<title>`` is the release *name* (e.g. "subarr 1.2.1 — hotfix"),
+    NOT the tag, so we never use it for the version.
+    """
+    if not xml_text or len(xml_text) > _MAX_FEED_BYTES:
+        return None
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        # Malformed XML, or defusedxml rejecting a DTD/entity/external-ref
+        # (EntitiesForbidden, DTDForbidden, ...). A feed we can't safely
+        # parse is treated as "no info" — never crash the poll loop.
+        return None
+
+    entry = root.find(f"{_ATOM_NS}entry")
+    if entry is None:
+        return None
+
+    notes_url: str | None = None
+    tag: str | None = None
+    # GitHub gives each entry a single alternate link to the release page.
+    for link in entry.findall(f"{_ATOM_NS}link"):
+        href = link.get("href")
+        if href and "/releases/tag/" in href:
+            notes_url = href
+            tag = href.rsplit("/releases/tag/", 1)[1]
+            break
+        if href and notes_url is None:
+            notes_url = href
+    if tag is None:
+        id_el = entry.find(f"{_ATOM_NS}id")
+        if id_el is not None and id_el.text and "/" in id_el.text:
+            tag = id_el.text.rsplit("/", 1)[1]
+
+    released_at: float | None = None
+    updated = entry.find(f"{_ATOM_NS}updated")
+    if updated is not None and updated.text:
+        try:
+            released_at = datetime.fromisoformat(
+                updated.text.strip().replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            pass
+
+    content = entry.find(f"{_ATOM_NS}content")
+    body = content.text if content is not None else None
+
+    return {"tag": tag, "released_at": released_at,
+            "notes_url": notes_url, "body": body}
 
 # Default products subarr tracks. Each row maps to one update_checks row.
 DEFAULT_PRODUCTS = {
@@ -199,10 +274,13 @@ class UpdateChecker:
     async def _poll_all(self) -> None:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url="https://api.github.com",
+                # github.com (the web host), NOT api.github.com — the Atom
+                # feed dodges the 60/hr unauthenticated REST limit (#158).
+                base_url="https://github.com",
                 timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0),
-                headers={"Accept": "application/vnd.github+json",
+                headers={"Accept": "application/atom+xml",
                          "User-Agent": "subarr-update-checker"},
+                follow_redirects=True,  # renamed repos 301 to the new slug
             )
         for product, repo in self._products.items():
             try:
@@ -212,30 +290,29 @@ class UpdateChecker:
                 self._write_error(product, repo, str(e))
 
     async def _poll_one(self, product: str, repo: str) -> None:
-        # GitHub: latest release endpoint. Returns 404 if no releases yet
-        # (or for private repos without auth) — handled as "no update info".
-        r = await self._client.get(f"/repos/{repo}/releases/latest")
+        # GitHub releases Atom feed. Returns 404 for a non-existent/private
+        # repo; an existing repo with no releases returns a feed with zero
+        # <entry> elements (parse_atom_feed → None). Both → "no public
+        # release", same graceful handling as before.
+        r = await self._client.get(f"/{repo}/releases.atom")
         if r.status_code == 404:
-            log.debug("no public release for %s (404 — private repo or no releases)", repo)
+            log.debug("no atom feed for %s (404 — private repo or no releases)", repo)
             self._write_error(product, repo, "no public release")
             return
         r.raise_for_status()
-        body = r.json()
-        latest_tag: str | None = body.get("tag_name")
-        released_at: float | None = None
-        if iso := body.get("published_at"):
-            try:
-                from datetime import datetime
-                released_at = datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
-            except Exception:
-                pass
-        notes_url: str | None = body.get("html_url")
-        release_body: str = (body.get("body") or "").lower()
-        is_breaking = (
-            "breaking" in release_body
-            or "BREAKING" in (body.get("body") or "")
-            or "[breaking]" in release_body
-        )
+
+        parsed = parse_atom_feed(r.text)
+        if parsed is None or not parsed.get("tag"):
+            log.debug("atom feed for %s has no releases yet", repo)
+            self._write_error(product, repo, "no public release")
+            return
+
+        latest_tag: str | None = parsed["tag"]
+        released_at: float | None = parsed["released_at"]
+        notes_url: str | None = parsed["notes_url"]
+        raw_body: str = parsed.get("body") or ""
+        release_body = raw_body.lower()
+        is_breaking = "breaking" in release_body or "[breaking]" in release_body
 
         self._write_state(
             product=product, repo=repo,
