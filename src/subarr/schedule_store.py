@@ -87,6 +87,14 @@ class AutoQueueRules:
     # transcription. 0 = disabled (default — opt-in, no behavior change).
     # Manual transcribe always bypasses this (it doesn't run through evaluate()).
     settle_minutes: int = 0
+    # #66/#116 queue authority: the feeder keeps subgen filled to this many
+    # concurrent jobs (queued+processing, total — foreign work counts) and no
+    # more, so the rest of the backlog stays in subarr's reorderable/pausable
+    # pending queue. `queue_paused` halts the feed (in-flight subgen jobs keep
+    # running). target_depth small (2) keeps reorder meaningful; higher = more
+    # rushes into subgen + less reorderable.
+    queue_target_depth: int = 2
+    queue_paused: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +109,8 @@ class AutoQueueRules:
             "skip_embedded_en": self.skip_embedded_en,
             "max_per_run": self.max_per_run,
             "settle_minutes": self.settle_minutes,
+            "queue_target_depth": self.queue_target_depth,
+            "queue_paused": self.queue_paused,
         }
 
     @classmethod

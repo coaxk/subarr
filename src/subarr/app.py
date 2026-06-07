@@ -59,7 +59,9 @@ from .integrations.ollama import OllamaClient
 from .pending_store import PendingStore
 from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
-from .provenance import ProvenanceStore
+from .pending_feeder import PendingQueueFeeder
+from .pending_queue import PendingQueueStore
+from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
 from .onboarding import OnboardingStore
 from .routers import (
     admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
@@ -200,6 +202,7 @@ async def lifespan(app_: FastAPI):
     for _tname, _tiv in (
         ("coverage-cache", 300), ("dashboard-cache", 30), ("scheduler", 60),
         ("completion-watcher", 30), ("update-checker", 86400), ("subgen-watchdog", 30),
+        ("queue-feeder", 5),  # #66/#116
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
     app_.state.runner = ScanRunner(
@@ -267,6 +270,33 @@ async def lifespan(app_: FastAPI):
     app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()
     app_.state.schedule = ScheduleStore(settings.db_path)
+
+    # #66/#116: queue authority. subarr's pending queue + a depth-aware feeder
+    # that drains it into subgen one job at a time (single-file /batch, reusing
+    # the scan_store/runner/provenance plumbing so completion tracking is
+    # unchanged). Idle until producers route through it (later slice) — starting
+    # it now just activates the supervised loop. target_depth + pause read live
+    # from the auto-queue rules so the API can toggle them without a restart.
+    app_.state.pending_queue = PendingQueueStore(settings.db_path)
+
+    async def _feeder_submit(job) -> None:
+        scan = app_.state.scans.create([job.canonical_path], reverse=False)
+        app_.state.runner.start(scan, audio_language_override=job.audio_language_override)
+        app_.state.provenance.record(
+            canonical_path=job.canonical_path, scan_id=scan.id,
+            source=SOURCE_SUBGENSCAN,
+        )
+
+    app_.state.queue_feeder = PendingQueueFeeder(
+        store=app_.state.pending_queue,
+        subgen_provider=lambda: app_.state.subgen,
+        submit_job=_feeder_submit,
+        target_depth_provider=lambda: app_.state.schedule.get_rules().queue_target_depth,
+        paused_provider=lambda: app_.state.schedule.get_rules().queue_paused,
+    )
+    app_.state.queue_feeder._health = app_.state.task_health  # #157 supervision
+    app_.state.queue_feeder.start()
+
     app_.state.ollama = OllamaClient()
     # #119: last-known ollama reachability, populated by the integrations-
     # health probe (GET /api/integrations/health). None until first probe;
@@ -611,6 +641,10 @@ async def lifespan(app_: FastAPI):
         except (asyncio.CancelledError, AttributeError):
             pass
         await app_.state.watcher.stop()
+        try:
+            await app_.state.queue_feeder.stop()  # #66/#116
+        except (AttributeError, Exception):
+            pass
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         await app_.state.integrations.aclose()
@@ -620,6 +654,10 @@ async def lifespan(app_: FastAPI):
         app_.state.task_health.close()  # #157
         app_.state.provenance.close()
         app_.state.schedule.close()
+        try:
+            app_.state.pending_queue.close()  # #66/#116
+        except (AttributeError, Exception):
+            pass
         app_.state.enrichment.close()
         app_.state.probe_store.close()
         try:
