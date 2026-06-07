@@ -12,17 +12,22 @@ services:
         limits:
           cpus: '1.0'
           memory: 512M
-        reservations:
-          devices:
-          - driver: nvidia
-            count: 1
-            capabilities:
-            - utility
+    # ── Optional GPU — Monitor-tab sparkline only (#162) ───────────────
+    # subarr never transcodes (subgen does that). The ONLY GPU use is
+    # running nvidia-smi for the Monitor tab's GPU sparkline, so it's
+    # entirely optional — leave it off if you have no NVIDIA GPU and subarr
+    # runs fine (the sparkline just shows N/A). To enable, uncomment the
+    # line below + the two NVIDIA_* env vars. This is the portable form
+    # (plain Docker + Unraid); no Swarm-style deploy.devices reservation.
+    # runtime: nvidia
     environment:
       TZ: Australia/Sydney
       PUID: '1000'
       PGID: '1000'
       UMASK: '022'
+      # GPU sparkline (uncomment together with `runtime: nvidia` above):
+      # NVIDIA_VISIBLE_DEVICES: all
+      # NVIDIA_DRIVER_CAPABILITIES: utility   # nvidia-smi only — not compute/video
       SUBARR_PORT: '9922'
       SUBARR_MEDIA_ROOT: /media/library
       SUBGEN_COMPOSE_PATH: /dockercontainers/subgen/compose.yaml
