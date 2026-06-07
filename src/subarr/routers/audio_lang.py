@@ -320,7 +320,26 @@ async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> di
 @router.get("/series-intent")
 async def list_series_intents(request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
-    return {"items": store.list_series_intents()}
+    rows = store.list_series_intents()
+    # Best-effort enrichment from the coverage snapshot: how many files each
+    # rule currently covers, and whether it's a show or a movie. No snapshot
+    # (fresh boot) → count 0, default "show". title is derived client-side.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    snap = cov_cache.get_cached() if cov_cache is not None else None
+    snap_items = snap.items if snap is not None else []
+    enriched = []
+    for row in rows:
+        prefix = row["series_prefix"]
+        count = 0
+        media_type = "show"
+        for it in snap_items:
+            p = it.get("file_canonical_path") or it.get("canonical_path") or ""
+            if p.startswith(prefix):
+                count += 1
+                if it.get("media_type") == "movie":
+                    media_type = "movie"
+        enriched.append({**row, "covered_count": count, "media_type": media_type})
+    return {"items": enriched}
 
 
 @router.delete("/series-intent")
