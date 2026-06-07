@@ -34,14 +34,24 @@ services:
       SUBGEN_URL: http://subgen:9000
       SUBGEN_CONTAINER: subgen
       SUBARR_DB_PATH: /data/subarr.db
+      # Docker access goes through a hardened, READ-ONLY socket-proxy (below) —
+      # subarr never mounts the raw /var/run/docker.sock. The proxy exposes only
+      # container/network/image METADATA (wizard auto-detect, log tail, GPU/
+      # monitor), and refuses every write (no exec, no create, no restart, no
+      # volumes), so compromising subarr cannot pivot to host root. Trade-off:
+      # subarr's in-app subgen auto-restart is disabled under this default —
+      # restart subgen yourself, or mount the raw socket if you accept the risk.
+      DOCKER_HOST: tcp://subarr-docker-proxy:2375
+      SUBARR_DOCKER_PROXY_URL: http://subarr-docker-proxy:2375
+    depends_on:
+    - docker-proxy
     volumes:
     - /mnt/nas/Media:/media/library:ro
-    - /var/run/docker.sock:/var/run/docker.sock
     - /mnt/c/DockerContainers/subgen:/dockercontainers/subgen:ro
     - /mnt/c/DockerContainers/subarr/data:/data
     labels:
+    - maintenance_log=[2026-06-08] Docker via hardened read-only socket-proxy (no raw sock) — removes host-RCE blast radius (security audit follow-up)
     - maintenance_log=[2026-06-01] Queue issues panel disambiguates subgen-skipped rows (sub_exists vs unknown) — sub_exists rows route to Recently done, render in neutral grey
-    - maintenance_log=[2026-05-27] GPU passthrough (utility capability only) for /api/gpu nvidia-smi access
     env_file:
     - .env
     logging:
@@ -49,9 +59,60 @@ services:
       options:
         max-size: 10m
         max-file: '3'
+
+  # ── Hardened Docker API proxy (security) ───────────────────────────
+  # subarr reaches Docker ONLY through this read-only proxy, never the raw
+  # /var/run/docker.sock. Only metadata GETs are allowed (container/network/
+  # image inspect + /info) for the wizard's auto-detect, log tail, and monitor.
+  # Every write is refused — POST/EXEC/DELETE/VOLUMES/BUILD all 0 — so even a
+  # full compromise of subarr cannot exec into containers, create privileged
+  # containers, or otherwise pivot to host root.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: subarr-docker-proxy
+    restart: unless-stopped
+    networks:
+    - safe-bridge
+    environment:
+      CONTAINERS: '1'   # GET container list/inspect/logs (wizard + log tail)
+      NETWORKS: '1'     # GET /networks (wizard discovery)
+      IMAGES: '1'       # GET image labels (version detection)
+      INFO: '1'         # GET /info (reachability)
+      POST: '0'         # no writes — blocks restart, create, kill, update
+      EXEC: '0'         # critical: no shell-into-container (no RCE pivot)
+      DELETE: '0'
+      VOLUMES: '0'
+      BUILD: '0'
+      COMMIT: '0'
+      CONFIGS: '0'
+      DISTRIBUTION: '0'
+      EVENTS: '0'
+      GRPC: '0'
+      NODES: '0'
+      PLUGINS: '0'
+      SECRETS: '0'
+      SERVICES: '0'
+      SESSION: '0'
+      SWARM: '0'
+      SYSTEM: '0'
+      TASKS: '0'
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+    - /run
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
 networks:
   safe-bridge:
     external: true
 
-# [2026-05-27] GPU passthrough added (utility capability only) so /api/gpu can run nvidia-smi for the Monitor tab.
-# [2026-06-01] Queue Issues panel: disambiguate subgen-skipped rows. queue.py now infers sub_exists vs unknown from filesystem; UI routes sub_exists into Recently done with a neutral chip instead of warn-amber under Issues.
+# [2026-06-08] Security: Docker access moved to a read-only tecnativa socket-proxy
+#   (no raw docker.sock mount). Removes the host-RCE blast radius from an exposed/
+#   compromised subarr. Trade-off: in-app subgen auto-restart is disabled under
+#   this default (POST refused); restart subgen manually or mount the raw sock if
+#   you accept the risk. Code-side: secrets masked in onboarding state + tracebacks.
+# [2026-06-01] Queue Issues panel: disambiguate subgen-skipped rows.

@@ -5,6 +5,64 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.3.0] - 2026-06-08
+
+### Added
+- **Queue authority — you control the queue now (#66).** subarr holds its own
+  pending queue in front of subgen and a depth-aware feeder drains it at a set
+  depth instead of flooding. The Queue page gains a **Pending** panel with
+  **promote / demote / reorder + pause/resume + target-depth**. Coverage and
+  auto-queue jobs route through it (throttled); ad-hoc manual submits and
+  requeue stay immediate. subgen's queue is treated as shared — subarr measures
+  total depth and never touches jobs other tools queued.
+- **Throttled library backfill (#116).** A "Backfill gaps" action loads your
+  whole verified-gap backlog at low priority; the feeder drains it gently in the
+  background — steady catch-up, no GPU stampede.
+- **Settle-window (#117).** Optionally hold a freshly-imported gap out of
+  auto-queue for N minutes so Bazarr/providers get first crack at a real sub
+  before subarr transcribes. Opt-in per rule; manual transcribe always bypasses.
+- **Mis-grouped-series detector (#140).** Flags a series whose episodes resolve
+  (high-trust Whisper/user detection) to two or more distinct non-English spoken
+  languages — the signature of two different shows merged into one Sonarr series.
+  Per-series dismiss for genuinely multilingual shows.
+- **Observability — Health page (#157).** Every long-running background loop is
+  now supervised: a loop that silently stops working shows up red with its
+  captured traceback (Health page + header pill) instead of freezing quietly,
+  plus a "report a problem" path.
+
+### Changed
+- **Update checker uses the GitHub releases Atom feed (#158)** instead of the
+  rate-limited REST API — fixes the `403 rate limit exceeded` that stopped update
+  notifications for users behind NAT/CGNAT or busy/shared IPs.
+- **GPU is optional + uses the portable `runtime: nvidia` form (#162).** subarr
+  never transcodes (subgen does) — its only GPU use was nvidia-smi for the
+  Monitor sparkline, so it no longer forces a Swarm-style GPU reservation.
+  Removes a startup snag for GPU-less hosts.
+- **Docker access via a hardened read-only socket-proxy by default.** The example
+  compose no longer mounts the raw docker socket — subarr reaches Docker only
+  through a metadata-only proxy, removing the host-RCE blast radius if subarr is
+  ever exposed/compromised. Trade-off: in-app subgen auto-restart is disabled
+  under this default (mount the raw socket if you want it).
+
+### Fixed
+- `settle_minutes` and the queue feed controls now persist when saved (the rules
+  API was silently dropping fields it didn't declare).
+- The Bazarr-badge probe no longer dumps an "unretrieved task" traceback on a
+  transient Bazarr blip.
+
+### Security
+- **Onboarding state no longer returns *arr/Plex API keys in cleartext.**
+  `GET /api/onboarding/state` now masks `*_api_key` / `*_token` / `*_password`
+  values, with a merge-guard so a resuming wizard can't overwrite a stored key
+  with the mask.
+- **Supervised-task tracebacks redact credential query-string params** (Tautulli
+  `?apikey=`, Plex `?X-Plex-Token=`) before storage, so the Health endpoint can't
+  leak a key.
+- `/api/health` (the one pre-auth endpoint) trimmed to `{status, version}` — no
+  more `media_root` / `subgen_url` leak.
+- Auth-disabled now logs a loud warning; deploy docs document `SUBARR_USER` /
+  `SUBARR_PASS` and the socket exposure risk.
+
 ## [1.2.1] - 2026-06-07
 
 ### Fixed
