@@ -56,6 +56,10 @@ class PendingJob:
     created_at: float
     submitted_at: float | None
     error: str | None
+    # #66/#116 slice 6: carried so the feeder can write full provenance
+    # (completion_watcher needs series_id to fire Bazarr's scan-disk task).
+    series_id: int | None = None
+    sonarr_episode_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,12 +74,15 @@ class PendingJob:
             "created_at": self.created_at,
             "submitted_at": self.submitted_at,
             "error": self.error,
+            "series_id": self.series_id,
+            "sonarr_episode_id": self.sonarr_episode_id,
         }
 
 
 _COLS = (
     "id, canonical_path, position, priority, status, "
-    "audio_language_override, task, source, created_at, submitted_at, error"
+    "audio_language_override, task, source, created_at, submitted_at, error, "
+    "series_id, sonarr_episode_id"
 )
 
 # Statements built ONCE as constants. The only interpolation is the static
@@ -91,7 +98,7 @@ _Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LI
 _Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
 _Q_INSERT = (  # nosec B608
     f"INSERT INTO pending_queue ({_COLS}) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _Q_GET = f"{_SELECT} WHERE id = ?"
 _Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
@@ -110,6 +117,7 @@ def _row(r: tuple) -> PendingJob:
         id=r[0], canonical_path=r[1], position=r[2], priority=r[3], status=r[4],
         audio_language_override=r[5], task=r[6], source=r[7],
         created_at=r[8], submitted_at=r[9], error=r[10],
+        series_id=r[11], sonarr_episode_id=r[12],
     )
 
 
@@ -131,7 +139,9 @@ class PendingQueueStore:
     def enqueue(self, canonical_path: str, *, source: str = "manual",
                 priority: int | None = None,
                 audio_language_override: str | None = None,
-                task: str | None = None) -> PendingJob:
+                task: str | None = None,
+                series_id: int | None = None,
+                sonarr_episode_id: int | None = None) -> PendingJob:
         """Add a job, or return the existing ACTIVE one for this path (dedup —
         we never double-queue a file that's already pending or in subgen).
         New jobs append to the end of their priority bucket."""
@@ -154,12 +164,14 @@ class PendingQueueStore:
                 priority=prio, status=STATUS_PENDING,
                 audio_language_override=audio_language_override, task=task,
                 source=source, created_at=time.time(), submitted_at=None, error=None,
+                series_id=series_id, sonarr_episode_id=sonarr_episode_id,
             )
             self._conn.execute(
                 _Q_INSERT,
                 (job.id, job.canonical_path, job.position, job.priority, job.status,
                  job.audio_language_override, job.task, job.source,
-                 job.created_at, job.submitted_at, job.error),
+                 job.created_at, job.submitted_at, job.error,
+                 job.series_id, job.sonarr_episode_id),
             )
             return job
 
@@ -189,6 +201,17 @@ class PendingQueueStore:
                 _Q_NEXT, (STATUS_PENDING, max(1, limit)),
             ).fetchall()
         return [_row(r) for r in rows]
+
+    def active_paths(self) -> set[str]:
+        """Canonical paths currently pending or submitted — used by producers
+        (scheduler/coverage) to avoid re-queuing what's already in flight in
+        the pending queue (provenance only covers already-submitted jobs)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path FROM pending_queue WHERE status IN (?, ?)",
+                (STATUS_PENDING, STATUS_SUBMITTED),
+            ).fetchall()
+        return {r[0] for r in rows}
 
     def count_by_status(self) -> dict[str, int]:
         with self._lock:

@@ -116,29 +116,27 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         log=log,
     )
 
-    # Enqueue via the existing scan store + runner.
-    store = request.app.state.scans
-    runner = request.app.state.runner
-    scan = store.create([canonical], reverse=req.reverse)
-    runner.start(scan, audio_language_override=audio_language_override)
-
-    # Provenance: record the submission so the completion watcher can
-    # detect when subgen finishes + trigger Bazarr's scan-disk task.
-    provenance = request.app.state.provenance
-    ledger_id = provenance.record(
-        canonical_path=canonical,
-        scan_id=scan.id,
-        source=SOURCE_SUBGENSCAN,
+    # #66/#116 slice 6: route through the pending queue (throttled), instead of
+    # flooding subgen directly. The feeder drains it to subgen at target depth
+    # and writes provenance then — so series_id/sonarr_episode_id are carried on
+    # the pending row for completion_watcher's Bazarr trigger. Dedup is built
+    # into enqueue() (an already-pending/submitted path returns the same job).
+    pending = request.app.state.pending_queue
+    job = pending.enqueue(
+        canonical,
+        source="gaps",
+        audio_language_override=audio_language_override,
         series_id=series_id,
         sonarr_episode_id=req.sonarr_episode_id,
     )
 
     return {
-        "id": scan.id,
+        "id": job.id,
+        "pending_id": job.id,
+        "queued_to": "pending",
         "canonical_path": canonical,
         "resolved_via": resolved_via,
-        "status": scan.status,
+        "status": job.status,
         "is_file": target.is_file(),
         "series_id": series_id,
-        "ledger_id": ledger_id,
     }

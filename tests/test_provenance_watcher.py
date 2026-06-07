@@ -45,22 +45,30 @@ def planted_episode_file():
 
 
 @pytest.mark.integrations_stub(sonarr_handler=_sonarr_resolver_handler)
-def test_coverage_queue_writes_provenance_row(app_with_stub, planted_episode_file):
+def test_coverage_queue_routes_to_pending_with_provenance_identity(app_with_stub, planted_episode_file):
+    # #66/#116 s6: coverage/queue now routes through the pending queue rather
+    # than writing provenance directly. The provenance identity (series_id +
+    # sonarr_episode_id) it resolves must ride on the pending job so the feeder
+    # can write a full ledger row when it drains the job to subgen.
     r = app_with_stub.post("/api/coverage/queue", json={"sonarr_episode_id": 9001})
     assert r.status_code == 202
     body = r.json()
     assert body["series_id"] == 42
-    assert body["ledger_id"] is not None
+    assert body["queued_to"] == "pending"
 
-    # The ledger should have a row with completed_at=None.
-    store = app_with_stub.app.state.provenance
-    rows = store.query_by_path("TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv")
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.sonarr_episode_id == 9001
-    assert row.series_id == 42
-    assert row.completed_at is None
-    assert row.source == "subgenscan"
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list()
+            if j.canonical_path == "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"]
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.status == "pending"
+    assert job.source == "gaps"
+    assert job.series_id == 42
+    assert job.sonarr_episode_id == 9001
+
+    # Provenance is NOT written yet — that's the feeder's job at drain time.
+    rows = app_with_stub.app.state.provenance.query_by_path(
+        "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv")
+    assert rows == []
 
 
 # ───── /api/provenance/{path} ────────────────────────────────────────────
@@ -121,8 +129,13 @@ def _subgen_empty_queue(req: httpx.Request) -> httpx.Response:
 @pytest.mark.integrations_stub(sonarr_handler=_sonarr_resolver_handler,
                                 bazarr_handler=_bazarr_history_handler)
 def test_watcher_marks_completed_and_triggers_bazarr(app_with_stub, planted_episode_file):
-    # Seed via coverage/queue so the ledger row has series_id.
-    app_with_stub.post("/api/coverage/queue", json={"sonarr_episode_id": 9001})
+    # Seed the ledger directly (the feeder writes provenance at drain time now;
+    # this test exercises the WATCHER, so plant the in-flight row it polls).
+    app_with_stub.app.state.provenance.record(
+        canonical_path="TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv",
+        scan_id="test-scan", source="subgenscan",
+        series_id=42, sonarr_episode_id=9001,
+    )
 
     # Drive a single watcher tick synchronously.
     watcher = app_with_stub.app.state.watcher
@@ -152,7 +165,11 @@ def _subgen_still_processing(req: httpx.Request) -> httpx.Response:
 @pytest.mark.subgen(handler=_subgen_still_processing)
 @pytest.mark.integrations_stub(sonarr_handler=_sonarr_resolver_handler)
 def test_watcher_leaves_in_flight_alone(app_with_stub, planted_episode_file):
-    app_with_stub.post("/api/coverage/queue", json={"sonarr_episode_id": 9001})
+    app_with_stub.app.state.provenance.record(
+        canonical_path="TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv",
+        scan_id="test-scan", source="subgenscan",
+        series_id=42, sonarr_episode_id=9001,
+    )
 
     watcher = app_with_stub.app.state.watcher
     asyncio.run(watcher._tick())

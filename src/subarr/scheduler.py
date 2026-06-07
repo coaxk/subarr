@@ -113,6 +113,7 @@ class Scheduler:
         provenance: ProvenanceStore = None,
         probe_walker: ProbeWalker | None = None,
         pending_store: PendingStore | None = None,
+        pending_queue=None,  # #66/#116 slice 6: route auto-queue through the feeder
         tick_s: int = TICK_S,
         bundle_provider=None,
         caps_provider=None,
@@ -133,6 +134,7 @@ class Scheduler:
         self._provenance = provenance
         self._probe_walker = probe_walker
         self._pending = pending_store
+        self._pending_queue = pending_queue
         self._tick_s = tick_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -356,6 +358,11 @@ class Scheduler:
         # Bazarr's wanted list doesn't shrink until it sees the .srt on
         # disk; until then the same rows keep matching.
         in_flight = {e.canonical_path for e in self._provenance.pending()}
+        # #66/#116 slice 6: also treat pending-queue jobs (not yet submitted to
+        # subgen, so not in provenance) as in-flight, so a walk doesn't re-queue
+        # what's already waiting in the feeder.
+        if self._pending_queue is not None:
+            in_flight |= self._pending_queue.active_paths()
         decisions = evaluate(report.items, rules, in_flight_paths=in_flight)
         queue_decisions = [d for d in decisions if d.action == "queue"]
 
@@ -499,6 +506,13 @@ class Scheduler:
         if not target.exists():
             return None, f"{title}: {canonical!r} missing on disk"
 
+        # #66/#116 slice 6: route through the pending queue (feeder drains it).
+        if self._pending_queue is not None:
+            job = self._pending_queue.enqueue(
+                canonical, source="gaps", series_id=series_id,
+                sonarr_episode_id=sonarr_ep_id,
+            )
+            return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
         self._runner.start(scan)
         self._provenance.record(
@@ -541,6 +555,15 @@ class Scheduler:
         if not target.exists():
             return None, f"{item.title}: {canonical!r} missing on disk"
 
+        # #66/#116 slice 6: route through the pending queue (the feeder drains
+        # to subgen at target depth + writes provenance). Falls back to direct
+        # submission if no pending_queue is wired (older callers / tests).
+        if self._pending_queue is not None:
+            job = self._pending_queue.enqueue(
+                canonical, source="auto", series_id=series_id,
+                sonarr_episode_id=item.bazarr_episode_id,
+            )
+            return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
         self._runner.start(scan)
         self._provenance.record(

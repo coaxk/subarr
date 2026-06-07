@@ -203,15 +203,13 @@ def test_coverage_queue_forwards_audio_language_override_when_verified(
     r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
     assert r.status_code == 202, r.json()
 
-    # Let the scan runner dispatch the /batch call (async task spawned in start()).
-    import time
-    for _ in range(40):
-        if _BATCH_PARAMS_CAPTURE:
-            break
-        time.sleep(0.05)
-
-    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
-    assert _BATCH_PARAMS_CAPTURE[0].get("audio_language_override") == "fre"
+    # #66/#116 s6: coverage/queue routes through the pending queue. The resolved
+    # override rides on the pending job; the feeder forwards it to subgen at
+    # drain time. So assert it's stored on the job, not POSTed immediately.
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list()
+            if j.canonical_path == canonical]
+    assert jobs, "coverage/queue did not enqueue a pending job"
+    assert jobs[0].audio_language_override == "fre"
 
 
 @pytest.mark.subgen(handler=_capturing_subgen_handler)
@@ -230,14 +228,10 @@ def test_coverage_queue_omits_override_for_english_verifications(
     r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
     assert r.status_code == 202
 
-    import time
-    for _ in range(40):
-        if _BATCH_PARAMS_CAPTURE:
-            break
-        time.sleep(0.05)
-
-    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
-    assert "audio_language_override" not in _BATCH_PARAMS_CAPTURE[0]
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list()
+            if j.canonical_path == canonical]
+    assert jobs, "coverage/queue did not enqueue a pending job"
+    assert jobs[0].audio_language_override is None
 
 
 @pytest.mark.subgen(handler=_capturing_subgen_handler)
@@ -252,11 +246,7 @@ def test_coverage_queue_omits_override_when_no_verification(
     r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
     assert r.status_code == 202
 
-    import time
-    for _ in range(40):
-        if _BATCH_PARAMS_CAPTURE:
-            break
-        time.sleep(0.05)
-
-    assert _BATCH_PARAMS_CAPTURE, "scan_runner never POSTed to /batch"
-    assert "audio_language_override" not in _BATCH_PARAMS_CAPTURE[0]
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list()
+            if j.canonical_path == canonical]
+    assert jobs, "coverage/queue did not enqueue a pending job"
+    assert jobs[0].audio_language_override is None

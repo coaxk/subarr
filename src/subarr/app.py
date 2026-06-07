@@ -282,9 +282,12 @@ async def lifespan(app_: FastAPI):
     async def _feeder_submit(job) -> None:
         scan = app_.state.scans.create([job.canonical_path], reverse=False)
         app_.state.runner.start(scan, audio_language_override=job.audio_language_override)
+        # Full provenance (series_id carried on the job) so completion_watcher
+        # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).
         app_.state.provenance.record(
             canonical_path=job.canonical_path, scan_id=scan.id,
             source=SOURCE_SUBGENSCAN,
+            series_id=job.series_id, sonarr_episode_id=job.sonarr_episode_id,
         )
 
     app_.state.queue_feeder = PendingQueueFeeder(
@@ -437,6 +440,7 @@ async def lifespan(app_: FastAPI):
         provenance=app_.state.provenance,
         probe_walker=app_.state.probe_walker,
         pending_store=app_.state.pending,
+        pending_queue=app_.state.pending_queue,  # #66/#116 slice 6
         # #79: live caps so the coverage_walk forced-only-EN gate tracks the
         # runtime IGNORE_FORCED_SUBTITLES value.
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
