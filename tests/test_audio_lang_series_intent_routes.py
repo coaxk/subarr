@@ -55,3 +55,24 @@ def test_put_then_get_roundtrips_at_single_path(app_with_stub):
 
     items = app_with_stub.get(SINGLE).json()["items"]
     assert any(it.get("series_prefix") == "TV/Cheers/" for it in items)
+
+
+class _RefreshSpy:
+    """Stand-in for coverage_cache that records request_refresh calls and
+    serves an empty snapshot."""
+    def __init__(self):
+        self.refresh_calls = 0
+
+    def request_refresh(self, *args, **kwargs):
+        self.refresh_calls += 1
+
+    def get_cached(self):
+        return None
+
+
+def test_put_series_intent_kicks_coverage_refresh(app_with_stub):
+    spy = _RefreshSpy()
+    app_with_stub.app.state.coverage_cache = spy
+    r = app_with_stub.put(SINGLE, json={"series_prefix": "TV/Cheers/", "lang_code": "eng"})
+    assert r.status_code == 200
+    assert spy.refresh_calls == 1

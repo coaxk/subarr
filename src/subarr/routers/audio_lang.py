@@ -307,6 +307,13 @@ async def upsert_series_intent(req: SeriesIntentRequest, request: Request) -> di
         lang_code=req.lang_code,
         note=req.note,
     )
+    # Kick a coalesced coverage refresh so episodes under the prefix flip
+    # green within seconds (mirrors upsert_verification). Best-effort.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        bundle = request.app.state.integrations
+        probe_store = request.app.state.probe_store
+        cov_cache.request_refresh(bundle, probe_store, store)
     return {"ok": True, "series_prefix": req.series_prefix, "lang_code": req.lang_code.lower()}
 
 
