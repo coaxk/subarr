@@ -490,3 +490,101 @@ async def clear_history(req: ClearRequest, request: Request) -> dict:
     cutoff = (time.time() - req.older_than_s) if req.older_than_s else None
     n = store.delete_where_status_in(req.statuses, older_than=cutoff)
     return {"deleted": n, "statuses": req.statuses, "older_than_s": req.older_than_s}
+
+
+# ─── #66/#116: pending-queue authority (mutation + control) ──────────
+#
+# The pending queue is subarr's own backlog in front of subgen (pending_queue
+# store + feeder). Pending rows are fully ours → reorder/promote/demote/remove.
+# Once a row is 'submitted' it lives in subgen's queue → mutation is rejected
+# (409); cancel it via /queue/cancel like any subgen item. pause/target_depth
+# live on the auto-queue rules so the feeder reads them live (no restart).
+from ..pending_queue import STATUS_PENDING  # noqa: E402
+
+
+class PendingMoveRequest(BaseModel):
+    before_id: str | None = None
+    after_id: str | None = None
+
+
+class QueueControlRequest(BaseModel):
+    paused: bool | None = None
+    target_depth: int | None = None
+
+
+@router.get("/queue/pending")
+async def list_pending(request: Request) -> dict:
+    """The pending backlog (reorderable) + what subarr currently has submitted
+    to subgen, plus the live feed controls."""
+    store = request.app.state.pending_queue
+    rules = request.app.state.schedule.get_rules()
+    return {
+        "pending": [j.to_dict() for j in store.list(status=STATUS_PENDING)],
+        "submitted": [j.to_dict() for j in store.list(status="submitted")],
+        "counts": store.count_by_status(),
+        "paused": rules.queue_paused,
+        "target_depth": rules.queue_target_depth,
+    }
+
+
+@router.post("/queue/control")
+async def set_queue_control(req: QueueControlRequest, request: Request) -> dict:
+    """Toggle the feed (pause/resume) and/or set the target depth. Persisted on
+    the auto-queue rules; the feeder picks it up on its next tick."""
+    schedule = request.app.state.schedule
+    rules = schedule.get_rules()
+    if req.paused is not None:
+        rules.queue_paused = bool(req.paused)
+    if req.target_depth is not None:
+        rules.queue_target_depth = max(0, int(req.target_depth))
+    schedule.set_rules(rules)
+    return {"paused": rules.queue_paused, "target_depth": rules.queue_target_depth}
+
+
+def _require_pending(store, job_id: str):
+    """Fetch a job and ensure it's still pending (not yet handed to subgen).
+    Submitted rows can't be reordered — they're subgen's now (409)."""
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail=f"pending job {job_id!r} not found")
+    if job.status != STATUS_PENDING:
+        raise HTTPException(
+            409,
+            detail=(f"job {job_id!r} is {job.status} — already handed to subgen; "
+                    "reorder only applies to pending jobs (cancel it instead)."),
+        )
+    return job
+
+
+@router.post("/queue/pending/{job_id}/move")
+async def move_pending(job_id: str, req: PendingMoveRequest, request: Request) -> dict:
+    store = request.app.state.pending_queue
+    _require_pending(store, job_id)
+    if not (req.before_id or req.after_id):
+        raise HTTPException(400, detail="provide before_id or after_id")
+    try:
+        return store.move(job_id, before_id=req.before_id, after_id=req.after_id).to_dict()
+    except KeyError as e:
+        raise HTTPException(404, detail=str(e))
+
+
+@router.post("/queue/pending/{job_id}/promote")
+async def promote_pending(job_id: str, request: Request) -> dict:
+    store = request.app.state.pending_queue
+    _require_pending(store, job_id)
+    return store.promote(job_id).to_dict()
+
+
+@router.post("/queue/pending/{job_id}/demote")
+async def demote_pending(job_id: str, request: Request) -> dict:
+    store = request.app.state.pending_queue
+    _require_pending(store, job_id)
+    return store.demote(job_id).to_dict()
+
+
+@router.delete("/queue/pending/{job_id}")
+async def remove_pending(job_id: str, request: Request) -> dict:
+    store = request.app.state.pending_queue
+    if not store.remove(job_id):
+        raise HTTPException(404, detail=f"pending job {job_id!r} not found")
+    return {"deleted": True, "id": job_id}
