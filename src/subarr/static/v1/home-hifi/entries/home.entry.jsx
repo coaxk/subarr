@@ -7,6 +7,7 @@ import {
   HostStrip,
   NextRunActivitySplit,
   WelcomeCard,
+  AfterCarePanel,
   useLiveDashboard,
 } from '../dashboard.jsx';
 import { fmtTime } from '../atoms.jsx';
@@ -33,6 +34,7 @@ function App() {
           <PageHeader now={now} />
           <WelcomeCard />
           <StagesRow data={live && live.stages} />
+          <AfterCarePanel />
           <HostStrip
             integrations={live && live.integrations}
             gpu={live && live.gpu}

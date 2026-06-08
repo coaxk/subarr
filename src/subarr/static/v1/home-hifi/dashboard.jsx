@@ -1,6 +1,7 @@
 // Home dashboard body — stages, host telemetry, next run + activity.
 
 import { Sparkline, Delta, StatusDot, Glyph, genSpark } from './atoms.jsx';
+import { useLiveChromeCounts } from './chrome.jsx';
 
 // Hooks come from the global React (CDN). Under the old in-browser
 // Babel pipeline this destructure lived in atoms.jsx and leaked across
@@ -929,6 +930,50 @@ export function WelcomeCard() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── Aftercare panel ─────────────────────────────────────────────
+// #156: compact attention banner shown when post-transcription review
+// items are waiting. Reads aftercare_count from the shared chrome
+// counts singleton — no second poller. Hidden when count is 0.
+export function AfterCarePanel() {
+  const counts = useLiveChromeCounts();
+  const count = counts.aftercare_count || 0;
+  if (!count) return null;
+  const label = count === 1 ? '1 job needs review' : `${count} jobs need review`;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      gap: 16,
+      background: 'linear-gradient(90deg, rgba(139,92,246,0.12), rgba(139,92,246,0.06))',
+      border: '1px solid rgba(139,92,246,0.35)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '10px 16px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <StatusDot kind="violet" pulse />
+        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--fg-0)' }}>
+          {label}
+        </span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+          — post-transcription quality review is ready
+        </span>
+      </div>
+      <a href="/aftercare" style={{
+        fontSize: 'var(--text-xs)', fontWeight: 600,
+        color: 'var(--violet-400)',
+        textDecoration: 'none',
+        whiteSpace: 'nowrap',
+        padding: '4px 10px',
+        border: '1px solid rgba(139,92,246,0.40)',
+        borderRadius: 'var(--radius-md)',
+        background: 'rgba(139,92,246,0.10)',
+        transition: 'background var(--dur-fast)',
+      }}>
+        Review →
+      </a>
     </div>
   );
 }
