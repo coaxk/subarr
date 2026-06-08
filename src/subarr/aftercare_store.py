@@ -82,6 +82,9 @@ class AfterCareStore:
             )
             return cur.rowcount > 0
 
+    def close(self) -> None:
+        self._conn.close()
+
     @staticmethod
     def _row_to_dict(r: sqlite3.Row) -> dict[str, Any]:
         return {

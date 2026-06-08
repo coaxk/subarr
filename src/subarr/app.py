@@ -79,6 +79,7 @@ from . import arena_explain as _arena_explain
 from .arena import AsrRunner
 from .arena_service import ArenaService
 from .arena_store import ArenaStore
+from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
@@ -430,6 +431,8 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.onboarding = OnboardingStore(settings.db_path)
+    # #156: per-job aftercare results (readability scores, flags, review state).
+    app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         # Resolve the bundle live so onboarding can swap clients without
@@ -670,6 +673,10 @@ async def lifespan(app_: FastAPI):
             pass
         app_.state.pending.close()
         app_.state.onboarding.close()
+        try:
+            app_.state.aftercare.close()  # #156
+        except (AttributeError, Exception):
+            pass
         app_.state.docker.close()
 
 
