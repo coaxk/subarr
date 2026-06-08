@@ -43,6 +43,7 @@ const PAGES = [
   'review',
   'arena',
   'health',
+  'aftercare',
 ];
 
 const watch = process.argv.includes('--watch');

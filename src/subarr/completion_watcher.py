@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 
+from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
@@ -64,7 +67,8 @@ class CompletionWatcher:
                  provenance: ProvenanceStore = None,
                  interval_s: int = WATCHER_INTERVAL_S,
                  caps_provider=None, plex: PlexClient | None = None,
-                 bundle_provider=None, subgen_provider=None):
+                 bundle_provider=None, subgen_provider=None,
+                 aftercare_store=None):
         # Clients are resolved live so onboarding can swap them on
         # app.state without restarting the watcher. When a bundle_provider
         # is given, bazarr + plex come from the live bundle; otherwise the
@@ -85,6 +89,7 @@ class CompletionWatcher:
         # landing on disk so provenance entries can still auto-complete.
         self._caps_provider = caps_provider or (lambda: None)
         self._warned_no_queue = False
+        self._aftercare = aftercare_store
 
     @property
     def _subgen(self):
@@ -193,6 +198,7 @@ class CompletionWatcher:
         best-effort write-backs.
         """
         self._provenance.mark_completed(entry.id)
+        self._run_aftercare(entry)
         log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
         # v1.1-G: try direct multipart upload first (closes the loop
         # tightly + no race vs. Bazarr's filesystem scan). Falls back
@@ -334,6 +340,27 @@ class CompletionWatcher:
                 "by Plex's next periodic scan)",
                 video_canonical, e,
             )
+
+    def _run_aftercare(self, entry) -> None:
+        """#156: judge the produced subtitle and record the result. Best-effort
+        - a failure here must NEVER block completion / the loop."""
+        if not getattr(self, "_aftercare", None):
+            return
+        try:
+            srt_path = self._find_srt_sidecar(entry.canonical_path)
+            if not srt_path:
+                return
+            text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
+            ev = evaluate_subtitle(text)
+            self._aftercare.record(
+                canonical_path=entry.canonical_path,
+                completed_at=time.time(),
+                evaluation=ev,
+                source=getattr(entry, "source", None) or "subgenscan",
+            )
+        except Exception as e:  # noqa: BLE001 - aftercare must never break completion
+            log.warning("aftercare judging failed for %s: %s",
+                        getattr(entry, "canonical_path", "?"), e)
 
     def _find_srt_sidecar(self, video_canonical: str) -> str | None:
         """Locate the .srt subgen wrote next to the video. Subgen's default

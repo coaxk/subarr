@@ -64,7 +64,8 @@ from .pending_queue import PendingQueueStore
 from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
 from .onboarding import OnboardingStore
 from .routers import (
-    admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
+    admin, aftercare as r_aftercare, arbiter as r_arbiter, arena as r_arena,
+    arr_mediainfo as r_arr_mediainfo,
     audio_audit as r_audio_audit,
     audio_lang as r_audio_lang,
     bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
@@ -79,6 +80,7 @@ from . import arena_explain as _arena_explain
 from .arena import AsrRunner
 from .arena_service import ArenaService
 from .arena_store import ArenaStore
+from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .error_store import ErrorStore
@@ -256,6 +258,9 @@ async def lifespan(app_: FastAPI):
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
+    # #156: construct aftercare store before CompletionWatcher so it can be
+    # passed in directly (watcher judges each completed job's .srt on the fly).
+    app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.watcher = CompletionWatcher(
         provenance=app_.state.provenance,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -266,6 +271,7 @@ async def lifespan(app_: FastAPI):
         # full library scan).
         bundle_provider=lambda: app_.state.integrations,
         subgen_provider=lambda: app_.state.subgen,
+        aftercare_store=app_.state.aftercare,
     )
     app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()
@@ -670,6 +676,10 @@ async def lifespan(app_: FastAPI):
             pass
         app_.state.pending.close()
         app_.state.onboarding.close()
+        try:
+            app_.state.aftercare.close()  # #156
+        except (AttributeError, Exception):
+            pass
         app_.state.docker.close()
 
 
@@ -724,6 +734,7 @@ app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
 app.include_router(r_arena.router)
 app.include_router(r_audio_audit.router)
+app.include_router(r_aftercare.router)
 
 
 @app.get("/api/health")
@@ -793,6 +804,7 @@ if _STATIC_DIR.is_dir():
             "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
             "/arena":      "arena.html",   # #131: tuning-lab config sweep
             "/health":     "health.html",  # #157: background-task health
+            "/aftercare":  "aftercare.html",  # #156: job aftercare review
         }
 
         def _make_v1_route(html_file: str):
