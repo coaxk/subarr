@@ -9,6 +9,16 @@ The operations path (Gaps/Library → queue → subgen → done) assumes "file e
 
 This is **Track A** = L1 readability + L2 failure-flags + the three UX surfaces. L3 (positive QE score) and L4 (comparative) are explicitly deferred — see Follow-ups.
 
+## Scoring: provenance & what it means (read before building)
+
+**The score is 100% subarr's own judges, computed from the produced `.srt` content — Bazarr is never consulted.** Bazarr assigns a *flat* score to anything Whisper-generated (it has no provider-match to grade against), so it cannot tell a great sub from garbage. That blind spot is the entire reason aftercare exists.
+
+**Critical honesty limits of the Track A composite** (verified in `tournament.score_entrant`):
+- It measures **failure-mode absence + readability**, NOT translation accuracy. With no `source_text`, `qe_adequacy` is `None` and `composite = 100 − (repeat/canned/silence/coverage penalties) − capped readability penalty`. A fluent, well-timed subtitle of the **wrong language** still scores ~100. Semantic accuracy is the **positive-quality-gap** — math can't see meaning. The trustworthy positive 0–100 *accuracy* grade is **L3 (#123, LaBSE QE)** and is deliberately deferred so we never "cry wolf" with a confident grade we can't back.
+- **`silence_text_ratio` and `uncovered_speech_ratio` require VAD speech-ranges**, which Track A does not compute (it would mean a VAD pass on the audio — heavier, breaks "instant / never-block"). They return 0 and are **inert** in Track A. So Track A's real, trustworthy detectors are: **readability (L1, CPS/CPL/overlap/duration) + looping (`repeated_line_ratio`) + canned-hallucination (`canned_phrase_hits`)**.
+
+**Consequence for the UI:** lead with the high-precision **failure flags** we can trust. Clean jobs are presented as **"no problems detected"** (structural checks passed) — never a confident positive grade like "94/100 = great". The numeric composite is stored (for #95 + L3) and drives the flag threshold + sort, but is shown only as a muted, honestly-labelled "structural score (readability + failure checks — not accuracy)", if shown at all. The confident quality grade arrives with L3.
+
 ## Principles
 
 - **Never block the job.** Judging is best-effort (`try/except`) inside the completion path; a judge failure must never stop the Bazarr write-back or the loop. (Mirrors the #79 silent-loop lesson: supervise, never let aftercare crash a background loop.)
@@ -24,10 +34,12 @@ subgen completes a job
    │
 CompletionWatcher.complete_entry(entry)          # completion_watcher.py
    ├─ provenance.mark_completed(entry.id)         # (unchanged)
-   ├─ [NEW] aftercare judging (best-effort, sync, CPU-only, ms):
+   ├─ [NEW] aftercare judging (best-effort, sync, CPU-only, ms; .srt-only):
    │     srt_path = self._find_srt_sidecar(entry.canonical_path)   # already exists
    │     if srt_path:
    │         text  = Path(srt_path).read_text(encoding='utf-8', errors='replace')
+   │         # No speech_ranges (VAD) and no source_text (QE) in Track A → the
+   │         # active signals are readability + repeats + canned only.
    │         card  = tournament.score_entrant(Entrant(label=canonical, srt_text=text))
    │         flagged = _is_flagged(card)
    │         aftercare_store.record(canonical_path, completed_at, card, flagged, source)
@@ -38,13 +50,13 @@ Same hook serves the webhook-push path (`complete_by_canonical` → `complete_en
 
 ## Flag bar (Balanced)
 
-A job is `flagged` when **any** of:
+A job is `flagged` when **any** of the **Track-A-available** signals trip:
 - `canned_phrase_hits > 0` (Whisper hallucination phrases), OR
 - `repeated_line_ratio > 0.20` (looping), OR
 - any **critical** readability issue (`cps > 25`, or `overlap`), OR
-- `composite < 65`.
+- `composite < 65` (structural rollup of the above — catches an accumulation of minor readability issues).
 
-Thresholds live as module-level constants in the aftercare module (`AFTERCARE_COMPOSITE_MIN = 65`, `AFTERCARE_REPEAT_MAX = 0.20`) so they're tunable without touching logic. `_is_flagged(card) -> bool` is a pure function (unit-tested in isolation).
+Note these are all derivable from the `.srt` alone (no VAD, no source). `silence_text` / `uncovered_speech` are **not** in the Track A bar — they're inert without VAD (deferred, see Follow-ups). Thresholds live as module-level constants (`AFTERCARE_COMPOSITE_MIN = 65`, `AFTERCARE_REPEAT_MAX = 0.20`) so they're tunable without touching logic. `_is_flagged(card) -> bool` is a pure function (unit-tested in isolation).
 
 ## Persistence
 
@@ -83,8 +95,9 @@ Registered in `app.py` alongside the other routers.
 ## Frontend (existing patterns only)
 
 - **`aftercare.jsx`** + `entries/aftercare.entry.jsx` + `aftercare.html`; `/aftercare` route in `_V1_SCREENS`. Mirrors `health.jsx`: polls `GET /api/aftercare/results` (~8–10s), renders a row per result, expand-on-click for detail. Uses hi-fi tokens (`--bg-*`, `--fg-*`, `--violet-500`, `--error-500`), `StatusDot`/`chip` atoms.
-  - Row: color-coded score badge (red `<50` / amber `50–79` / green `≥80` via tokens), filename, flag chips (`N% repeats`, `N canned`, `N CPS criticals`, `silence-text`), actions Acknowledge / Requeue / 🎧 (reuses `AudioReviewModal`), expand ▾.
-  - Expanded: the offending cues (canned/repeat/CPS/overlap lines with timestamps) + footer (composite, cue_count, completed-ago, source).
+  - Row leads with **status + flags, not a positive grade**. Flagged rows: a red/amber severity dot + the specific flag chips (`N% repeats`, `N canned`, `N CPS criticals`). Clean rows (in the "all" view): a muted green **"no problems detected"** — NOT a confident "94/100". Filename, actions Acknowledge / Requeue / 🎧 (reuses `AudioReviewModal`), expand ▾.
+  - The numeric composite, if shown at all, is muted + labelled "structural score (readability + failure checks — not accuracy)" with a tooltip noting the accuracy grade arrives with L3 (#123). Never the headline.
+  - Expanded: the offending cues (canned/repeat/CPS/overlap lines with timestamps) + footer (cue_count, completed-ago, source). Flag chips are the trustworthy signal; the composite is secondary.
   - `flagged | all` toggle (the hybrid view).
 - **Header pill** (`chrome.jsx`): add `/api/aftercare/pending` to the `_fetchChromeCounts` `Promise.all`; set `next.aftercare_count`; render a pill in `TopBar` mirroring the Health pill (links to `/aftercare`); add an Operations sub-rail item with the count.
 - **Dashboard panel** (`dashboard.jsx`): small `AfterCarePanel` between the stage tiles and activity feed, renders only when `aftercare_count > 0` ("N jobs need review →" → `/aftercare`).
@@ -104,10 +117,10 @@ Registered in `app.py` alongside the other routers.
 | Deferred | Tracked by |
 |---|---|
 | "Open in Tuning Lab" row action (find a better config) | **#165** |
-| L3 — positive quality score (e.g. 72/100) | **#123** (QE summit) |
+| **Positive accuracy grade (the confident 0–100 quality score)** | **#123** (LaBSE QE / summit) — Track A shows flags + "no problems detected", not a grade |
 | L4 — comparative ("community-best for Korean") | **#64 / #67 / #68** (federated) |
 | Clean-job data → federated/passive tuning | **#95** (aftercare is its user-facing surface) |
-| VAD speech-ranges in the silence-text signal | available later; Track A passes `speech_ranges=None` |
+| **Silence-text + uncovered-speech flags (need a VAD pass on the audio)** | builds on silero VAD (**#111**); inert in Track A (`speech_ranges=None`). Fast-follow — run VAD async/throttled at completion, then these L2 flags light up. |
 
 The store records **every** result (composite + signals + readability) from day one, so L3/L4 layer on without reshaping the schema.
 
