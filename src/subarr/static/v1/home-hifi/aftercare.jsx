@@ -168,6 +168,47 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
   );
 }
 
+// Collapsible legend explaining the status dots + flag chips. Errors here are
+// the deterministic failure-modes the judges detect — not accuracy.
+function Legend() {
+  const dotItem = (kind, label, desc) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <StatusDot kind={kind} />
+      <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>{label}</span>
+      <span style={{ color: 'var(--fg-3)' }}>— {desc}</span>
+    </span>
+  );
+  const chipItem = (label, color, desc) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span className="chip" style={{ fontSize: 'var(--text-2xs)', flex: 'none', color }}>{label}</span>
+      <span style={{ color: 'var(--fg-3)' }}>— {desc}</span>
+    </span>
+  );
+  return (
+    <details style={{ fontSize: 'var(--text-xs)' }}>
+      <summary style={{ cursor: 'pointer', color: 'var(--fg-2)', userSelect: 'none' }}>
+        What do the flags mean?
+      </summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 4px 4px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px' }}>
+          {dotItem('error', 'serious', 'score under 50, a critical readability issue, or a hallucination')}
+          {dotItem('warn', 'flagged', 'a structural problem worth a look')}
+          {dotItem('ok', 'clean', 'no problems detected')}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px' }}>
+          {chipItem('repeats', 'var(--error-500)', 'looping — the same line repeated (Whisper got stuck)')}
+          {chipItem('canned', 'var(--error-500)', 'hallucinated boilerplate, e.g. "Thanks for watching" over silence')}
+          {chipItem('CPS issues', 'var(--warn-500)', 'reading speed too fast — characters-per-second over the limit')}
+          {chipItem('overlap', 'var(--warn-500)', 'cues overlap in time — two subtitles on screen at once')}
+        </div>
+        <div style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}>
+          These are deterministic failure-mode checks, not a translation-accuracy grade.
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function AftercarePage() {
   const [view, setView] = useState('flagged');
   const [data, setData] = useState(null);
@@ -250,6 +291,8 @@ export function AftercarePage() {
             {p.label}
           </span>
         ))}
+        <span style={{ flex: 1 }} />
+        <Legend />
       </div>
 
       {/* Content card */}
