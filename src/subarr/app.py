@@ -64,7 +64,8 @@ from .pending_queue import PendingQueueStore
 from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
 from .onboarding import OnboardingStore
 from .routers import (
-    admin, arbiter as r_arbiter, arena as r_arena, arr_mediainfo as r_arr_mediainfo,
+    admin, aftercare as r_aftercare, arbiter as r_arbiter, arena as r_arena,
+    arr_mediainfo as r_arr_mediainfo,
     audio_audit as r_audio_audit,
     audio_lang as r_audio_lang,
     bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
@@ -733,6 +734,7 @@ app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
 app.include_router(r_arena.router)
 app.include_router(r_audio_audit.router)
+app.include_router(r_aftercare.router)
 
 
 @app.get("/api/health")
@@ -802,6 +804,7 @@ if _STATIC_DIR.is_dir():
             "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
             "/arena":      "arena.html",   # #131: tuning-lab config sweep
             "/health":     "health.html",  # #157: background-task health
+            "/aftercare":  "aftercare.html",  # #156: job aftercare review
         }
 
         def _make_v1_route(html_file: str):
