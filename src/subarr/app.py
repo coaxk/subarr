@@ -257,6 +257,9 @@ async def lifespan(app_: FastAPI):
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
     app_.state.provenance = ProvenanceStore(settings.db_path)
+    # #156: construct aftercare store before CompletionWatcher so it can be
+    # passed in directly (watcher judges each completed job's .srt on the fly).
+    app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.watcher = CompletionWatcher(
         provenance=app_.state.provenance,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -267,6 +270,7 @@ async def lifespan(app_: FastAPI):
         # full library scan).
         bundle_provider=lambda: app_.state.integrations,
         subgen_provider=lambda: app_.state.subgen,
+        aftercare_store=app_.state.aftercare,
     )
     app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()
@@ -431,8 +435,6 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.onboarding = OnboardingStore(settings.db_path)
-    # #156: per-job aftercare results (readability scores, flags, review state).
-    app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
         # Resolve the bundle live so onboarding can swap clients without
