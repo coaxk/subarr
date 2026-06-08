@@ -98,6 +98,68 @@ class ProbeError(RuntimeError):
     pass
 
 
+@dataclass
+class TrackMismatch:
+    """#159: the default audio track isn't the show's original language, and a
+    track that IS the original language exists. `native_audio_ordinal` is the
+    1-based position among AUDIO tracks (what mkvpropedit's `track:aN` wants),
+    NOT the global ffprobe stream index."""
+    default_lang: str            # normalized ISO-639-1 of the current default track
+    native_lang: str             # normalized ISO-639-1 of the original-language track
+    native_audio_ordinal: int    # 1-based audio-track ordinal for mkvpropedit track:aN
+    native_stream_index: int     # global ffprobe stream index (reference only)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def detect_default_track_mismatch(
+    audio: "list[AudioStream]", original_language: str | None
+) -> "TrackMismatch | None":
+    """#159: detect a default-audio-track / original-language mismatch that
+    causes double-translated subs (e.g. Russian show, German dub is default,
+    Russian original is track 2 → Whisper transcribes the German dub).
+
+    Fires only when ALL hold (mirrors the issue's gate):
+      - original_language is known and non-English,
+      - there are ≥2 separate audio streams with ≥2 distinct *tagged* languages
+        (bilingual-in-one-track does NOT count — needs separate streams),
+      - the default track (disposition.default, else the first audio stream) has
+        a KNOWN language that differs from original_language, AND
+      - a separate track tagged with original_language exists.
+
+    Returns a TrackMismatch (carrying the 1-based audio ordinal of the native
+    track for mkvpropedit) or None. Pure — no I/O."""
+    from .langs import normalize_lang
+    orig = normalize_lang(original_language)
+    if not orig or orig in ("en", "und"):
+        return None
+    streams = list(audio or [])
+    if len(streams) < 2:
+        return None
+    norm = [(a, normalize_lang(a.language)) for a in streams]
+    tagged = [(a, n) for a, n in norm if n and n not in ("und",)]
+    if len({n for _, n in tagged}) < 2:
+        return None  # need ≥2 distinct tagged languages across separate streams
+    # Default track: prefer disposition.default, else the first audio stream.
+    default_stream = next((a for a in streams if a.default), streams[0])
+    default_lang = normalize_lang(default_stream.language)
+    # Require a KNOWN default language that differs — never guess on an untagged
+    # default (that's an "unknown" case, not a confident mismatch).
+    if not default_lang or default_lang == "und" or default_lang == orig:
+        return None
+    # First audio track tagged with the original language → the swap target.
+    for ordinal, a in enumerate(streams, start=1):
+        if normalize_lang(a.language) == orig:
+            return TrackMismatch(
+                default_lang=default_lang,
+                native_lang=orig,
+                native_audio_ordinal=ordinal,
+                native_stream_index=int(a.index),
+            )
+    return None
+
+
 def _classify_subtitle(stream: dict) -> SubtitleStream:
     disp = stream.get("disposition") or {}
     tags = stream.get("tags") or {}

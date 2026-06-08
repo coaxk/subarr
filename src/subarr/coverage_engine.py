@@ -141,6 +141,15 @@ class CoverageItem:
     # gap. When the cap is on, this stays False and the forced-only row is a
     # normal partial-coverage gap.
     forced_only_subgen_will_skip: bool = False
+    # #159: the default/first audio track isn't the show's original language but
+    # a track that IS exists — transcribing the default double-translates a dub
+    # (e.g. Russian show, German dub default, original Russian on track 2). The
+    # Review flow offers a one-click mkvpropedit default-track swap. Only set for
+    # .mkv files where a swap target exists; cleared for user-dismissed files.
+    default_track_mismatch: bool = False
+    mismatch_default_track_lang: str | None = None   # current default track lang (ISO-639-1)
+    mismatch_native_track_lang: str | None = None    # the original language (ISO-639-1)
+    mismatch_native_audio_ordinal: int | None = None  # 1-based audio ordinal for the swap
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +191,10 @@ class CoverageItem:
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
             "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
+            "default_track_mismatch": self.default_track_mismatch,
+            "mismatch_default_track_lang": self.mismatch_default_track_lang,
+            "mismatch_native_track_lang": self.mismatch_native_track_lang,
+            "mismatch_native_audio_ordinal": self.mismatch_native_audio_ordinal,
         }
 
 
@@ -727,6 +740,7 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
                                   user_verifications=user_verifications,
                                   plex_hints=plex_hints,
                                   whisper_verifications=whisper_verifications)
+            _apply_track_mismatch(item, probe)
             item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
@@ -765,6 +779,7 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
                           user_verifications=user_verifications,
                           plex_hints=plex_hints,
                           whisper_verifications=whisper_verifications)
+    _apply_track_mismatch(item, probe)
     item.verification_state = "verified"
 
 
@@ -891,6 +906,29 @@ def _classify_audio_label(item: CoverageItem,
             and not item.audio_label_suspect
             and any(l not in ("", "und") for l in langs)):
         item.audio_source = "ffprobe"
+
+
+def _apply_track_mismatch(item: CoverageItem, probe) -> None:
+    """#159: flag a default-audio-track / original-language mismatch on .mkv
+    files where a swap target exists. Dismissed files are cleared in a later
+    central pass (mirrors the #140 mixed-dismiss handling)."""
+    from .media_probe import detect_default_track_mismatch
+    fp = item.file_canonical_path or ""
+    if not fp.lower().endswith(".mkv"):
+        return  # the mkvpropedit default-flag swap is Matroska-only
+    m = detect_default_track_mismatch(probe.audio, item.original_language)
+    if m is None:
+        return
+    item.default_track_mismatch = True
+    item.mismatch_default_track_lang = m.default_lang
+    item.mismatch_native_track_lang = m.native_lang
+    item.mismatch_native_audio_ordinal = m.native_audio_ordinal
+    item.audio_label_notes.append(
+        f"default audio track is {m.default_lang!r} but this is a "
+        f"{(item.original_language or m.native_lang)!r} title — the original-"
+        f"language track (a{m.native_audio_ordinal}) should be default to avoid "
+        f"double-translated subtitles"
+    )
 
 
 class _SeriesIntentLookup(dict):
@@ -1521,6 +1559,18 @@ async def build_coverage(
     flagged = _flag_mixed_language_series(items, dismissed_series=mixed_dismissed)
     if flagged:
         sources.setdefault("coverage", {})["mixed_language_series"] = flagged
+    # #159: clear the default-track mismatch flag for files the user dismissed
+    # (e.g. an intentional dub default). Detection runs in _attach_probe_*; the
+    # dismissal lives in the store and is applied centrally here.
+    if audio_lang_store is not None:
+        try:
+            tm_dismissed = audio_lang_store.get_track_mismatch_dismissed_set()
+        except Exception:  # noqa: BLE001 — never let this block a coverage build
+            tm_dismissed = set()
+        if tm_dismissed:
+            for it in items:
+                if it.default_track_mismatch and it.file_canonical_path in tm_dismissed:
+                    it.default_track_mismatch = False
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 
