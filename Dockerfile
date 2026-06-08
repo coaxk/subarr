@@ -5,8 +5,11 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # Debian slim keeps them together. Pin to `ffmpeg` (not `ffprobe`) for that
 # reason. Adds ~150MB to the image but it's the canonical install path and
 # the probe subsystem (v1.1 batch 1 hotfix) needs it.
+# mkvtoolnix provides `mkvpropedit` for the #159 default-audio-track swap — an
+# in-place Matroska header edit (no remux) that makes a show's original-language
+# track the default so subgen stops transcribing a dub into double-translated subs.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

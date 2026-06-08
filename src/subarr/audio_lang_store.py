@@ -280,6 +280,38 @@ class AudioLangStore:
             ).fetchall()
         return {r[0] for r in rows}
 
+    # ── #159: default-track mismatch dismiss (keyed by FILE path) ────────
+
+    def dismiss_track_mismatch(self, file_path: str, note: str | None = None) -> None:
+        """Mark a file's default audio track as an intentional choice so the
+        #159 track-mismatch prompt stays quiet on future coverage walks."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO track_mismatch_dismissed (file_path, dismissed_at, note) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(file_path) DO UPDATE SET "
+                "  dismissed_at=excluded.dismissed_at, note=excluded.note",
+                (file_path, time.time(), note),
+            )
+
+    def undismiss_track_mismatch(self, file_path: str) -> bool:
+        """Re-enable the #159 prompt for a file. True if a dismissal existed."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM track_mismatch_dismissed WHERE file_path = ?",
+                (file_path,),
+            )
+            return cur.rowcount > 0
+
+    def get_track_mismatch_dismissed_set(self) -> set[str]:
+        """All currently-dismissed file paths — read by build_coverage to
+        suppress the #159 flag."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT file_path FROM track_mismatch_dismissed"
+            ).fetchall()
+        return {r[0] for r in rows}
+
     def bulk_for_series(self, series_canonical_prefix: str, lang_code: str,
                          file_paths: list[str], source: str = "user",
                          confidence: float = 1.0,

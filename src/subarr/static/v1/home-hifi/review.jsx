@@ -89,7 +89,66 @@ function CheckBox({ checked, indeterminate, onChange, label }) {
   );
 }
 
-function EpisodeRow({ item, selected, onToggle, onOpen }) {
+// #159: a default-audio-track mismatch row — distinct from the language-verify
+// rows. The fix isn't "pick a language" (we already know it); it's a one-click
+// in-place swap of the default audio track to the show's original language, so
+// subgen stops transcribing a dub into double-translated subs.
+function TrackMismatchRow({ item, busy, onSwap, onDismiss, onOpen }) {
+  const path = item.file_canonical_path || item.canonical_path;
+  const def = (item.mismatch_default_track_lang || '?').toUpperCase();
+  const native = (item.mismatch_native_track_lang || item.original_language || '?').toUpperCase();
+  const ord = item.mismatch_native_audio_ordinal;
+  const why = `This is a ${item.original_language || native} title, but the default audio `
+    + `track is ${def}. Transcribing the default double-translates the dub `
+    + `(${native}→${def}→subtitle) and loses fidelity. The original ${native} audio is `
+    + `track a${ord}. Make it the default? (in-place, lossless, reversible)`;
+  const detail = {
+    title: item.title, ep: item.episode_number || '',
+    _canonical_path: path, audio: (item.audio_langs || []).join(',') || 'und',
+    original_language: item.original_language,
+    audio_label_notes: item.notes ? [item.notes] : [],
+  };
+  return (
+    <div role="row" data-testid="review-row-mismatch" title={why} style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '8px 16px 8px 32px',
+      borderBottom: '1px solid var(--bg-3)',
+      background: 'rgba(245,158,11,0.05)',
+    }}>
+      <span title={why} aria-label="default audio track mismatch"
+        style={{ fontSize: 'var(--text-sm)' }}>⇄</span>
+      <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)', width: 70 }}>
+        {item.episode_number || '—'}
+      </span>
+      <span className="mono" title={path} style={{
+        fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: 1, minWidth: 0,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {path.split('/').slice(-1)[0]}
+      </span>
+      <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warn-500, #f59e0b)' }}>
+        default {def} → should be {native} (a{ord})
+      </span>
+      <button onClick={() => onOpen(detail)} className="btn ghost sm"
+        title="Listen first" aria-label={`Listen to ${item.title}`}
+        style={{ padding: '0 6px', fontSize: 'var(--text-2xs)' }}>🎧</button>
+      <button onClick={() => onDismiss(item)} disabled={busy} className="btn ghost sm"
+        title="Keep the current default track (don't ask again for this file)"
+        style={{ padding: '0 8px', fontSize: 'var(--text-2xs)' }}>Dismiss</button>
+      <button onClick={() => onSwap(item)} disabled={busy} className="btn primary sm"
+        title={why}
+        style={{ padding: '0 10px', fontSize: 'var(--text-2xs)' }}>
+        {busy ? '…' : `⇄ Make ${native} default`}
+      </button>
+    </div>
+  );
+}
+
+function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss }) {
+  if (item.flag === 'track_mismatch') {
+    return <TrackMismatchRow item={item} busy={busy} onSwap={onSwap}
+                             onDismiss={onDismiss} onOpen={onOpen} />;
+  }
   const audio = (item.audio_langs || []).join(',') || 'und';
   const detail = {
     title: item.title,
@@ -140,11 +199,15 @@ function EpisodeRow({ item, selected, onToggle, onOpen }) {
 }
 
 function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelectAll,
-                      epSelection, onToggleEp, onOpenEp }) {
+                      epSelection, onToggleEp, onOpenEp, busyPath, onSwap, onDismiss }) {
   const eps = series.items;
-  const epIds = eps.map((e) => e.file_canonical_path || e.canonical_path);
+  // Track-mismatch rows have their own swap/dismiss actions — they're NOT part
+  // of the bulk language-assign selection, so exclude them from select-all.
+  const epIds = eps
+    .filter((e) => e.flag !== 'track_mismatch')
+    .map((e) => e.file_canonical_path || e.canonical_path);
   const checkedCount = epIds.filter((id) => epSelection.has(id)).length;
-  const allChecked = checkedCount === epIds.length;
+  const allChecked = epIds.length > 0 && checkedCount === epIds.length;
   const indeterminate = checkedCount > 0 && !allChecked;
   return (
     <>
@@ -188,7 +251,10 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
                       item={it}
                       selected={epSelection.has(id)}
                       onToggle={() => onToggleEp(id)}
-                      onOpen={onOpenEp} />
+                      onOpen={onOpenEp}
+                      busy={busyPath === id}
+                      onSwap={onSwap}
+                      onDismiss={onDismiss} />
         );
       })}
     </>
@@ -299,13 +365,69 @@ export function ReviewPage() {
 
   const clearSelection = useCallback(() => setEpSelection(new Set()), []);
 
+  // #159: per-file track-mismatch actions (swap / dismiss). busyPath disables
+  // the row's buttons while a request is in flight.
+  const [busyPath, setBusyPath] = useState(null);
+
+  const swapTrack = useCallback(async (item) => {
+    const path = item.file_canonical_path || item.canonical_path;
+    const native = (item.mismatch_native_track_lang || item.original_language || 'original').toUpperCase();
+    const def = (item.mismatch_default_track_lang || '?').toUpperCase();
+    if (!window.confirm(
+      `Make the ${native} audio track the default for this file?\n\n`
+      + `The default is currently ${def}. subarr will flip the default-track flag in place `
+      + `(instant, lossless, reversible — no re-encode). subgen will then transcribe the `
+      + `original ${native} audio instead of the ${def} dub, and Plex/players will default to it too.`
+    )) return;
+    setBusyPath(path);
+    try {
+      const r = await fetch('/api/audio-lang/track-mismatch-swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ file_canonical_path: path }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('track swap failed', e);
+      window.alert(`Track swap failed: ${e.message || e}`);
+    } finally {
+      setBusyPath(null);
+      fetchPending({ silent: true });
+    }
+  }, [fetchPending]);
+
+  const dismissTrack = useCallback(async (item) => {
+    const path = item.file_canonical_path || item.canonical_path;
+    setBusyPath(path);
+    try {
+      await fetch('/api/audio-lang/track-mismatch-dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ file_canonical_path: path }),
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('track-mismatch dismiss failed', e);
+    } finally {
+      setBusyPath(null);
+      fetchPending({ silent: true });
+    }
+  }, [fetchPending]);
+
   // Filter + group by series.
   const { groups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
-    const counts = { all: allItems.length, suspect: 0, unknown: 0 };
+    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0 };
     for (const it of allItems) {
       if (it.flag === 'suspect') counts.suspect += 1;
       else if (it.flag === 'unknown') counts.unknown += 1;
+      else if (it.flag === 'track_mismatch') counts.track_mismatch += 1;
     }
     const s = search.trim().toLowerCase();
     const filtered = allItems.filter((it) => {
@@ -424,6 +546,7 @@ export function ReviewPage() {
     { id: 'all',     label: `all (${totalCounts.all})` },
     { id: 'suspect', label: `suspect (${totalCounts.suspect})` },
     { id: 'unknown', label: `unknown (${totalCounts.unknown})` },
+    { id: 'track_mismatch', label: `track mismatch (${totalCounts.track_mismatch})` },
   ];
   const selectedCount = epSelection.size;
 
@@ -436,8 +559,10 @@ export function ReviewPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Review</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-            Files where subarr wants you to confirm the audio language. Pick a series, tick whole shows
-            for bulk assignment, or click 🎧 to listen first.
+            Files where subarr wants you to confirm the audio language, plus files whose default
+            audio track isn't the show's original language (⇄ track mismatch — one-click swap to
+            stop double-translated subs). Pick a series, tick whole shows for bulk assignment,
+            or click 🎧 to listen first.
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -567,6 +692,9 @@ export function ReviewPage() {
               onToggleSelectAll={toggleSelectAll}
               onToggleEp={toggleEp}
               onOpenEp={openReview}
+              busyPath={busyPath}
+              onSwap={swapTrack}
+              onDismiss={dismissTrack}
             />
           ))}
         </div>

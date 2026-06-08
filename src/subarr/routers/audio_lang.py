@@ -385,6 +385,119 @@ async def undismiss_mixed_series(series_path: str, request: Request) -> dict[str
     return {"deleted": True, "series_path": series_path}
 
 
+# ─── #159: default-audio-track mismatch — dismiss + in-place swap ────
+
+
+class TrackMismatchDismissRequest(BaseModel):
+    file_canonical_path: str
+    note: str | None = None
+
+
+@router.post("/track-mismatch-dismiss")
+async def dismiss_track_mismatch(
+    req: TrackMismatchDismissRequest, request: Request
+) -> dict[str, Any]:
+    """Dismiss the #159 default-track prompt for a file whose default audio the
+    user wants to keep as-is. Suppressed on future walks until re-enabled."""
+    store = request.app.state.audio_lang
+    store.dismiss_track_mismatch(req.file_canonical_path, note=req.note)
+    return {"ok": True, "file_canonical_path": req.file_canonical_path, "dismissed": True}
+
+
+@router.delete("/track-mismatch-dismiss")
+async def undismiss_track_mismatch(
+    file_canonical_path: str, request: Request
+) -> dict[str, Any]:
+    """Re-enable the #159 prompt for a previously-dismissed file."""
+    store = request.app.state.audio_lang
+    removed = store.undismiss_track_mismatch(file_canonical_path)
+    if not removed:
+        raise HTTPException(404, detail=f"no dismissal for {file_canonical_path}")
+    return {"deleted": True, "file_canonical_path": file_canonical_path}
+
+
+class TrackSwapRequest(BaseModel):
+    file_canonical_path: str
+
+
+@router.post("/track-mismatch-swap")
+async def track_mismatch_swap(
+    req: TrackSwapRequest, request: Request
+) -> dict[str, Any]:
+    """#159: make the original-language audio track the sole default, in place,
+    via mkvpropedit (instant, lossless, reversible). The server RE-VALIDATES the
+    mismatch against a live probe + the coverage row's originalLanguage — the
+    client only names the file, never the track index."""
+    from pathlib import Path
+    from ..media_probe import detect_default_track_mismatch, probe
+    from ..track_swap import TrackSwapError, swap_default_audio_track
+
+    file_path = req.file_canonical_path
+    if not file_path.lower().endswith(".mkv"):
+        raise HTTPException(400, detail="track swap is only supported for .mkv files")
+
+    # 1. Confirm subarr actually flagged this file + get the authoritative
+    #    originalLanguage from the coverage snapshot (don't act on hearsay).
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    row = None
+    if cov_cache is not None:
+        snap = cov_cache.get_cached()
+        if snap is not None:
+            for it in snap.items:
+                if (it.get("file_canonical_path") == file_path
+                        and it.get("default_track_mismatch")):
+                    row = it
+                    break
+    if row is None:
+        raise HTTPException(404, detail="no flagged track mismatch for this file")
+    original_language = row.get("original_language")
+
+    # 2. Resolve fs path (traversal guard) + re-probe live to get current tracks.
+    fs = _resolve_canonical_to_fs(file_path)
+    try:
+        result = await probe(Path(fs))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, detail=f"probe failed: {e}")
+    m = detect_default_track_mismatch(result.audio, original_language)
+    if m is None:
+        return {"ok": True, "swapped": False, "detail": "already correct"}
+
+    # 3. Swap: make the native-language track the sole default audio track.
+    audio_ordinals = list(range(1, len(result.audio) + 1))
+    try:
+        await swap_default_audio_track(fs, m.native_audio_ordinal, audio_ordinals)
+    except TrackSwapError as e:
+        raise HTTPException(500, detail=str(e))
+
+    # 4. Re-probe + refresh the cache so the row clears immediately.
+    try:
+        st = Path(fs).stat()
+        fresh = await probe(Path(fs))
+        fresh.canonical_path = file_path
+        request.app.state.probe_store.upsert(
+            canonical_path=file_path, mtime=st.st_mtime, size=st.st_size, result=fresh,
+        )
+    except Exception:  # noqa: BLE001 — best-effort cache freshness
+        pass
+    if cov_cache is not None:
+        try:
+            cov_cache.request_refresh(
+                request.app.state.integrations,
+                request.app.state.probe_store,
+                request.app.state.audio_lang,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "ok": True,
+        "swapped": True,
+        "file_canonical_path": file_path,
+        "made_default_track": f"a{m.native_audio_ordinal}",
+        "native_lang": m.native_lang,
+        "previous_default_lang": m.default_lang,
+    }
+
+
 def _resolve_canonical_to_fs(canonical: str) -> str:
     """Translate a canonical path (TV/Show/...) into an absolute fs path
     on subarr's container view, with traversal guard."""
@@ -477,11 +590,21 @@ async def pending_review(request: Request) -> dict[str, Any]:
     pending = []
     for it in items_source:
         file_path = it.get("file_canonical_path")
-        # Skip if already verified
-        if file_path and file_path in verifications:
-            continue
         flag = None
-        if it.get("audio_label_suspect"):
+        extra: dict[str, Any] = {}
+        # #159: track mismatch is checked FIRST and is exempt from the
+        # already-verified skip — it's about which audio track is *default*
+        # (double-translation), orthogonal to verifying the audio language.
+        if it.get("default_track_mismatch"):
+            flag = "track_mismatch"
+            extra = {
+                "mismatch_default_track_lang": it.get("mismatch_default_track_lang"),
+                "mismatch_native_track_lang": it.get("mismatch_native_track_lang"),
+                "mismatch_native_audio_ordinal": it.get("mismatch_native_audio_ordinal"),
+            }
+        elif file_path and file_path in verifications:
+            continue  # language already verified and not a track mismatch
+        elif it.get("audio_label_suspect"):
             flag = "suspect"
         elif it.get("audio_label_unknown"):
             flag = "unknown"
@@ -496,6 +619,7 @@ async def pending_review(request: Request) -> dict[str, Any]:
             "audio_langs": it.get("audio_langs"),
             "flag": flag,
             "notes": it.get("audio_label_notes"),
+            **extra,
         })
     return {"count": len(pending), "items": pending[:200]}
 
