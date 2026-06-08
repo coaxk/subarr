@@ -103,6 +103,12 @@ services:
       TRANSCRIBE_DEVICE: cuda
       MODEL_PATH: /subgen/models
       COMPUTE_TYPE: float16
+      # [2026-06-09] Subtitle segmentation tuned via the #168 regroup arena
+      # (4 audio languages x 6 configs, full files). Winner = "v2-strongpad":
+      # pads sub-1.5s cues by +.3s/+.7s into surrounding gaps. Halves the
+      # %-of-cues-over-25-CPS vs split-only on every language and eliminates
+      # sub-0.5s micro-cues. Override or remove to use subgen's default.
+      CUSTOM_REGROUP: 'cm_sp=.* /。/?/？_sg=.5_mg=.3++84_p=.3+.7+1.5_sl=42++++++1'
     volumes:
       - ./subgen-models:/subgen/models
       - ${MEDIA_ROOT:?set MEDIA_ROOT to your library root}:/media
