@@ -40,9 +40,10 @@ class AfterCareStore:
                 ),
             )
 
-    # latest-per-path: a row is "current" iff no newer row exists for its path.
+    # latest-per-path: the most recently INSERTED row for a path (monotonic id
+    # avoids the equal-timestamp ambiguity that MAX(completed_at) had).
     _LATEST = (
-        "a.completed_at = (SELECT MAX(b.completed_at) FROM aftercare_results b "
+        "a.id = (SELECT MAX(b.id) FROM aftercare_results b "
         "WHERE b.canonical_path = a.canonical_path)"
     )
 
@@ -74,13 +75,22 @@ class AfterCareStore:
         return self._row_to_dict(r) if r else None
 
     def mark_reviewed(self, result_id: int) -> bool:
+        """Mark a result reviewed. Idempotent: returns True if the row exists
+        (re-acking a reviewed row is a no-op that still returns True); returns
+        False only when no such id exists. Preserves the original review time."""
         with self._lock:
-            cur = self._conn.execute(
-                "UPDATE aftercare_results SET reviewed_at = ? "
-                "WHERE id = ? AND reviewed_at IS NULL",
-                (time.time(), result_id),
-            )
-            return cur.rowcount > 0
+            row = self._conn.execute(
+                "SELECT reviewed_at FROM aftercare_results WHERE id = ?",
+                (result_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["reviewed_at"] is None:
+                self._conn.execute(
+                    "UPDATE aftercare_results SET reviewed_at = ? WHERE id = ?",
+                    (time.time(), result_id),
+                )
+            return True
 
     def close(self) -> None:
         self._conn.close()
@@ -98,4 +108,5 @@ class AfterCareStore:
             "signals": json.loads(r["signals_json"]) if r["signals_json"] else None,
             "source": r["source"],
             "reviewed_at": r["reviewed_at"],
+            "created_at": r["created_at"],
         }

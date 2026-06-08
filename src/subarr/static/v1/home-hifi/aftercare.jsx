@@ -19,7 +19,7 @@ function flagChips(item) {
   const s = item.signals || {}, c = (item.readability || {}).counts || {};
   if ((s.repeated_line_ratio || 0) > 0) out.push(`${Math.round(s.repeated_line_ratio * 100)}% repeats`);
   if ((s.canned_phrase_hits || 0) > 0) out.push(`${s.canned_phrase_hits} canned`);
-  if (c.cps) out.push(`${c.cps} CPS`);
+  if (c.cps) out.push(`${c.cps} CPS issue${c.cps === 1 ? '' : 's'}`);
   if (c.overlap) out.push(`${c.overlap} overlap`);
   return out;
 }

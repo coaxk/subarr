@@ -41,4 +41,7 @@ def test_acknowledge(client):
     rid = client.get("/api/aftercare/results?view=flagged").json()["items"][0]["id"]
     assert client.post(f"/api/aftercare/{rid}/acknowledge").json()["ok"] is True
     assert client.get("/api/aftercare/pending").json() == {"count": 0}
-    assert client.post(f"/api/aftercare/{rid}/acknowledge").status_code == 404
+    # idempotent: re-acking an existing (already-reviewed) id is OK, not 404
+    assert client.post(f"/api/aftercare/{rid}/acknowledge").status_code == 200
+    # 404 only for a genuinely absent id
+    assert client.post("/api/aftercare/999999/acknowledge").status_code == 404
