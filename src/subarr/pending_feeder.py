@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from .paths import canonical_to_subgen_batch
 from .pending_queue import PendingQueueStore, STATUS_ERROR
@@ -32,6 +33,13 @@ log = logging.getLogger(__name__)
 
 FEEDER_INTERVAL_S = 5.0
 DEFAULT_TARGET_DEPTH = 2
+# How long a just-submitted job reserves a depth slot while subgen hasn't yet
+# surfaced it in /queue. subgen's /batch is async (it scans the folder before
+# the job appears), so without this reservation the feeder re-fills the same
+# slot every tick and overshoots the target depth. The slot is released as soon
+# as the job appears in subgen's queue, or after this grace window (covers a
+# very short job that completed before it ever showed up).
+INFLIGHT_GRACE_S = 30.0
 
 
 def _subgen_paths(q: dict) -> set[str]:
@@ -68,6 +76,10 @@ class PendingQueueFeeder:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._health = None  # set by app lifespan (#157)
+        # subgen-space paths submitted but not yet surfaced in subgen's /queue,
+        # → monotonic submit time. Counted toward effective depth so we don't
+        # re-fill a slot subgen hasn't reported yet (the over-feed race).
+        self._inflight: dict[str, float] = {}
 
     @property
     def _subgen(self):
@@ -128,8 +140,18 @@ class PendingQueueFeeder:
             log.debug("queue feeder: subgen queue unreadable, skipping tick: %s", e)
             return 0
 
-        effective = _effective_depth(q)
         subgen_paths = _subgen_paths(q)
+        now = time.monotonic()
+        # Release in-flight reservations that have surfaced in subgen's queue
+        # (handed off to _effective_depth) or aged past the grace window.
+        self._inflight = {
+            p: t for p, t in self._inflight.items()
+            if p not in subgen_paths and (now - t) < INFLIGHT_GRACE_S
+        }
+        # Effective depth = subgen's reported depth PLUS our not-yet-surfaced
+        # submissions, so a tick landing in the /batch→/queue lag window doesn't
+        # re-fill a slot it already filled (the over-feed race).
+        effective = _effective_depth(q) + len(self._inflight)
         target = max(0, int(self._target_depth()))
         submitted = 0
 
@@ -143,6 +165,7 @@ class PendingQueueFeeder:
             # adopt as submitted instead of double-queueing.
             if sg_path in subgen_paths:
                 self._store.mark_submitted(job.id)
+                self._inflight.pop(sg_path, None)
                 subgen_paths.discard(sg_path)
                 effective += 1
                 submitted += 1
@@ -155,6 +178,7 @@ class PendingQueueFeeder:
                 self._store.set_status(job.id, STATUS_ERROR, error=str(e)[:500])
                 continue  # don't consume a depth slot; move to the next job
             self._store.mark_submitted(job.id)
+            self._inflight[sg_path] = now   # reserve the slot until subgen surfaces it
             effective += 1
             submitted += 1
         return submitted

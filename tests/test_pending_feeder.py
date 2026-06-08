@@ -145,3 +145,63 @@ async def test_empty_pending_no_submit(store):
     rec = SubmitRecorder()
     n = await _feeder(store, FakeSubgen(), rec, target=3).tick()
     assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_no_overfeed_while_subgen_lags(store):
+    # subgen's /batch is async — submitted jobs don't appear in /queue right
+    # away. The feeder must count its own in-flight submissions so a second tick
+    # (still seeing an empty subgen queue) doesn't re-fill the same slots and
+    # overshoot target depth. This is the over-feed race (Processing+2 Queued
+    # instead of Processing+1 Queued+1 Pending).
+    for i in range(5):
+        store.enqueue(f"TV/e{i}.mkv", source="gaps")
+    lagging = FakeSubgen()  # always reports empty (nothing surfaced yet)
+    rec = SubmitRecorder()
+    feeder = _feeder(store, lagging, rec, target=2)
+    n1 = await feeder.tick()
+    n2 = await feeder.tick()
+    n3 = await feeder.tick()
+    assert n1 == 2                       # first tick fills to target
+    assert n2 == 0 and n3 == 0           # no over-feed despite empty /queue
+    assert len(rec.calls) == 2
+    assert store.count_by_status().get(STATUS_SUBMITTED) == 2
+
+
+@pytest.mark.asyncio
+async def test_inflight_reservation_released_when_job_surfaces(store):
+    # Once a submitted job appears in subgen's queue, its in-flight reservation
+    # is released (handed off to the real depth count) — no double-counting, and
+    # a freed slot is refilled.
+    store.enqueue("TV/a.mkv", source="gaps")
+    store.enqueue("TV/b.mkv", source="gaps")
+    store.enqueue("TV/c.mkv", source="gaps")
+    sub = FakeSubgen()
+    rec = SubmitRecorder()
+    feeder = _feeder(store, sub, rec, target=2)
+    assert await feeder.tick() == 2                      # submit a, b → inflight {a,b}
+    sub._queued = [{"path": canonical_to_subgen_batch("TV/a.mkv")}]  # a surfaces
+    assert await feeder.tick() == 0                      # depth1(a)+inflight1(b)=2
+    sub._queued = [{"path": canonical_to_subgen_batch("TV/b.mkv")}]  # a done, b surfaced
+    assert await feeder.tick() == 1                      # depth1(b)+inflight0 → submit c
+    assert rec.calls == ["TV/a.mkv", "TV/b.mkv", "TV/c.mkv"]
+
+
+@pytest.mark.asyncio
+async def test_inflight_reservation_expires_after_grace(store, monkeypatch):
+    # A submitted job that never surfaces (e.g. completed faster than a tick)
+    # must release its slot after the grace window, or the feeder under-feeds
+    # forever.
+    import subarr.pending_feeder as pf
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(pf.time, "monotonic", lambda: clock["t"])
+    store.enqueue("TV/a.mkv", source="gaps")
+    store.enqueue("TV/b.mkv", source="gaps")
+    sub = FakeSubgen()  # always empty
+    rec = SubmitRecorder()
+    feeder = _feeder(store, sub, rec, target=1)
+    assert await feeder.tick() == 1          # submit a → inflight {a}
+    assert await feeder.tick() == 0          # a still reserved → no submit
+    clock["t"] += pf.INFLIGHT_GRACE_S + 1     # age past grace
+    assert await feeder.tick() == 1          # a's slot released → submit b
+    assert rec.calls == ["TV/a.mkv", "TV/b.mkv"]
