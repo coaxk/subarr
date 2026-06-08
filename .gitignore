@@ -32,3 +32,9 @@ node_modules/
 
 # brainstorming visual companion artifacts
 .superpowers/
+
+# Caliber local state (tool-managed, never source-controlled)
+.caliber/
+
+# Local scratch: aftercare/regroup tuning baselines (#168 comparison snapshots)
+.aftercare-baseline-*.json
