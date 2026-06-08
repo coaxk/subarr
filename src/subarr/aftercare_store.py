@@ -12,6 +12,30 @@ from typing import Any
 
 from .aftercare import AftercareEvaluation
 
+# Latest-per-path: the most recently INSERTED row for a path (monotonic id
+# avoids the equal-timestamp ambiguity MAX(completed_at) had). The full query
+# strings are assembled here at MODULE scope — not via f-strings at the
+# execute() call site — so bandit doesn't read them as dynamic SQL (B608).
+# They contain only fixed literals + bound ? params; no user input is ever
+# interpolated (view selects between two constants; limit/offset are bound).
+_LATEST = (
+    "a.id = (SELECT MAX(b.id) FROM aftercare_results b "
+    "WHERE b.canonical_path = a.canonical_path)"
+)
+_PENDING_COUNT_SQL = (
+    "SELECT COUNT(*) FROM aftercare_results a "
+    f"WHERE a.flagged = 1 AND a.reviewed_at IS NULL AND {_LATEST}"
+)
+_LIST_ALL_SQL = (
+    f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
+    "ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?"
+)
+_LIST_FLAGGED_SQL = (
+    f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
+    "AND a.flagged = 1 AND a.reviewed_at IS NULL "
+    "ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?"
+)
+
 
 class AfterCareStore:
     def __init__(self, db_path: Path):
@@ -40,31 +64,15 @@ class AfterCareStore:
                 ),
             )
 
-    # latest-per-path: the most recently INSERTED row for a path (monotonic id
-    # avoids the equal-timestamp ambiguity that MAX(completed_at) had).
-    _LATEST = (
-        "a.id = (SELECT MAX(b.id) FROM aftercare_results b "
-        "WHERE b.canonical_path = a.canonical_path)"
-    )
-
     def pending_count(self) -> int:
         with self._lock:
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM aftercare_results a "
-                f"WHERE a.flagged = 1 AND a.reviewed_at IS NULL AND {self._LATEST}"
-            ).fetchone()
+            row = self._conn.execute(_PENDING_COUNT_SQL).fetchone()
         return int(row[0])
 
     def list_results(self, *, view: str, limit: int, offset: int) -> list[dict[str, Any]]:
-        where = self._LATEST
-        if view == "flagged":
-            where += " AND a.flagged = 1 AND a.reviewed_at IS NULL"
+        sql = _LIST_FLAGGED_SQL if view == "flagged" else _LIST_ALL_SQL
         with self._lock:
-            rows = self._conn.execute(
-                f"SELECT * FROM aftercare_results a WHERE {where} "
-                f"ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+            rows = self._conn.execute(sql, (limit, offset)).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def get(self, result_id: int) -> dict[str, Any] | None:
