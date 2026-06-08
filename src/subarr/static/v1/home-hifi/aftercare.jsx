@@ -68,7 +68,7 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
           {item.flagged && chips.length > 0 && chips.map((chip, i) => (
             <span key={i} className="chip"
               style={{ fontSize: 'var(--text-2xs)', flex: 'none',
-                color: kind === 'error' ? 'var(--error-400, #f87171)' : 'var(--warn-400, #fbbf24)' }}>
+                color: kind === 'error' ? 'var(--error-500)' : 'var(--warn-500)' }}>
               {chip}
             </span>
           ))}
@@ -134,7 +134,7 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
               {item.readability.issues.map((issue, i) => (
                 <div key={i} style={{
                   fontFamily: 'JetBrains Mono, monospace', fontSize: 11, lineHeight: 1.6,
-                  color: issue.severity === 'critical' ? 'var(--error-400, #f87171)' : 'var(--fg-2)',
+                  color: issue.severity === 'critical' ? 'var(--error-500)' : 'var(--fg-2)',
                   padding: '1px 0',
                 }}>
                   #{issue.cue} {issue.kind}/{issue.severity}: {issue.detail}
