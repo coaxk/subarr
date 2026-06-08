@@ -31,6 +31,22 @@ async def results(
 ) -> dict[str, Any]:
     store = request.app.state.aftercare
     items = store.list_results(view=view, limit=limit, offset=offset)
+    # Best-effort enrich each row with the show's language from the in-memory
+    # coverage snapshot (per-language is the tuning axis — drives the flag + the
+    # #168 loop). No schema cost; read-time lookup against the cached snapshot.
+    cc = getattr(request.app.state, "coverage_cache", None)
+    snap = cc.get_cached() if cc is not None else None
+    if snap is not None:
+        from ..langs import normalize_lang
+        lang_by_path: dict[str, str | None] = {}
+        for it in snap.items:
+            fp = it.get("file_canonical_path")
+            if fp:
+                raw = it.get("original_language") or next(
+                    (a for a in (it.get("audio_langs") or []) if a), None)
+                lang_by_path[fp] = normalize_lang(raw)
+        for row in items:
+            row["language"] = lang_by_path.get(row.get("canonical_path"))
     return {"count": len(items), "view": view, "items": items}
 
 

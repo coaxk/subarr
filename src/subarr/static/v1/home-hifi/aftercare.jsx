@@ -7,6 +7,20 @@ import { AudioReviewModal } from './coverage.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
+// ISO-639-1 → representative country flag. Languages aren't countries, so a few
+// (en/es/pt/ca) pick the most common flag; unknown falls back to a white flag.
+const LANG_FLAG = {
+  en: '🇬🇧', es: '🇪🇸', fr: '🇫🇷', de: '🇩🇪', it: '🇮🇹', pt: '🇵🇹', nl: '🇳🇱',
+  ru: '🇷🇺', uk: '🇺🇦', pl: '🇵🇱', cs: '🇨🇿', sk: '🇸🇰', hr: '🇭🇷', sr: '🇷🇸',
+  bg: '🇧🇬', sl: '🇸🇮', el: '🇬🇷', tr: '🇹🇷', he: '🇮🇱', ar: '🇸🇦', fa: '🇮🇷',
+  hi: '🇮🇳', ko: '🇰🇷', ja: '🇯🇵', zh: '🇨🇳', th: '🇹🇭', vi: '🇻🇳', id: '🇮🇩',
+  ro: '🇷🇴', hu: '🇭🇺', ca: '🇪🇸', sv: '🇸🇪', no: '🇳🇴', nn: '🇳🇴', da: '🇩🇰',
+  fi: '🇫🇮', is: '🇮🇸',
+};
+function langFlag(code) {
+  return code ? (LANG_FLAG[code] || '🏳️') : '';
+}
+
 function badgeKind(item) {
   if (!item.flagged) return 'ok';
   const crit = (item.readability?.issues || []).some(i => i.severity === 'critical');
@@ -53,6 +67,17 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
           <StatusDot kind={kind} />
         </span>
 
+        {/* Country flag + language code (the tuning axis) */}
+        {item.language && (
+          <span title={`audio language: ${item.language}`}
+            style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, width: 46 }}>
+            <span style={{ fontSize: 'var(--text-sm)' }}>{langFlag(item.language)}</span>
+            <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', textTransform: 'uppercase' }}>
+              {item.language}
+            </span>
+          </span>
+        )}
+
         {/* Filename + flag chips */}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
           <span
@@ -78,6 +103,23 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
             </span>
           )}
         </span>
+
+        {/* Source tag */}
+        {item.source && (
+          <span className="chip" title="how this job was queued"
+            style={{ flex: 'none', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+            {item.source}
+          </span>
+        )}
+
+        {/* Composite (structural — muted, flagged only) */}
+        {item.flagged && (
+          <span title="structural score — not a transcription-accuracy grade"
+            style={{ flex: 'none', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+              fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>
+            {Math.round(item.composite)}
+          </span>
+        )}
 
         {/* Completed timestamp */}
         <span style={{ flex: 'none', fontSize: 'var(--text-sm)', color: 'var(--fg-3)', width: 90, textAlign: 'right' }}
