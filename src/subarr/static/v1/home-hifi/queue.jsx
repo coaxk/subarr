@@ -778,11 +778,6 @@ export function QueuePage() {
         <SubmitScanForm onSubmitted={() => refetch({ silent: false })} />
       </div>
 
-      {/* #66/#116: subarr's pending backlog (reorderable, pausable) — sits
-          above subgen's live Processing/Queued. Self-hides when empty + not
-          paused (no producers routed through it yet → usually empty for now). */}
-      <PendingPanel />
-
       {/* Processing — header padding 12x18 to align with the SUBMIT
           A MANUAL SCAN panel above. No maxHeight: auto-sizes to the
           number of concurrent transcribes (bounded by CONCURRENT_
@@ -843,6 +838,12 @@ export function QueuePage() {
           </AsyncState>
         </div>
       </div>
+
+      {/* #66/#116: subarr's pending backlog (reorderable, pausable) — sits
+          BELOW subgen's live Processing/Queued so the active trio reads
+          Processing → Queued → Pending top-to-bottom. Self-hides when empty +
+          not paused (no producers routed through it yet → usually empty for now). */}
+      <PendingPanel />
 
       {/* #229: Lost on restart — subgen restarted before transcription
           completed. Surfaced separately from Issues because the failure

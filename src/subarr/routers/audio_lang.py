@@ -477,8 +477,14 @@ async def pending_review(request: Request) -> dict[str, Any]:
     pending = []
     for it in items_source:
         file_path = it.get("file_canonical_path")
-        # Skip if already verified
-        if file_path and file_path in verifications:
+        canonical = it.get("canonical_path")
+        # Skip if already verified. Check BOTH keys: the bulk-verify UI stores
+        # under `file_canonical_path || canonical_path`, so a row whose
+        # file_canonical_path is None (Bazarr-synthetic / series-level rows) is
+        # verified under canonical_path — checking only file_path let those rows
+        # persist in the list forever after applying a language.
+        if (file_path and file_path in verifications) or \
+           (canonical and canonical in verifications):
             continue
         flag = None
         if it.get("audio_label_suspect"):
