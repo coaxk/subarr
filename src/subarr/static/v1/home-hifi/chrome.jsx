@@ -40,7 +40,7 @@ function _shallowEqualCounts(a, b) {
 }
 
 async function _fetchChromeCounts() {
-  const [dash, health, queue, schedule, review, updates, tasksHealth] = await Promise.all([
+  const [dash, health, queue, schedule, review, updates, tasksHealth, aftercareData] = await Promise.all([
     fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -52,6 +52,8 @@ async function _fetchChromeCounts() {
     // #157: background-task health — a single cached read; drives the header
     // pill + the Health rail badge when a loop silently stops working.
     fetch('/api/health/tasks', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    // #156: job aftercare — pending post-transcription review items.
+    fetch('/api/aftercare/pending', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   const next = {};
   if (dash?.stages) {
@@ -89,6 +91,8 @@ async function _fetchChromeCounts() {
   // #157: always set (defaulting false/null) so the shallow-equal dedup stays stable.
   next.any_task_unhealthy = !!tasksHealth?.any_unhealthy;
   next.tasks_unhealthy = tasksHealth?.unhealthy_count || null;
+  // #156: aftercare pending count — always set so shallow-equal dedup stays stable.
+  next.aftercare_count = aftercareData?.count || 0;
   return next;
 }
 
@@ -152,17 +156,19 @@ function railItems(section, counts) {
       { id: 'audit',     label: 'Audit log', count: null,             href: '/file-modal' },
     ];
     case 'operations': return [
-      { id: 'coverage', label: 'Coverage', count: counts.coverage, href: '/coverage' },
-      { id: 'queue',    label: 'Queue',    count: counts.queue,    href: '/queue' },
+      { id: 'coverage',  label: 'Coverage',  count: counts.coverage,       href: '/coverage' },
+      { id: 'queue',     label: 'Queue',     count: counts.queue,          href: '/queue' },
       // Review: dedicated audio-language verification queue page. User
       // sees the full list + picks which file to verify, no forced cycle.
       // (Previous /coverage#review hack auto-opened batch modal; replaced
       // 2026-05-31 with the standalone /review page.)
-      { id: 'review',   label: 'Review',   count: counts.review,   href: '/review' },
-      { id: 'arena',    label: 'Tuning Lab', count: null,          href: '/arena' },
-      { id: 'activity', label: 'Activity', count: null,            href: '/file-modal' },
-      { id: 'logs',     label: 'Logs',     count: null,            href: '/logs' },
-      { id: 'rules',    label: 'Rules',    count: counts.rules,    href: '/rules' },
+      { id: 'review',    label: 'Review',    count: counts.review,         href: '/review' },
+      // #156: job aftercare — post-transcription quality review for recent jobs.
+      { id: 'aftercare', label: 'Aftercare', count: counts.aftercare_count || null, href: '/aftercare' },
+      { id: 'arena',     label: 'Tuning Lab', count: null,                 href: '/arena' },
+      { id: 'activity',  label: 'Activity',  count: null,                  href: '/file-modal' },
+      { id: 'logs',      label: 'Logs',      count: null,                  href: '/logs' },
+      { id: 'rules',     label: 'Rules',     count: counts.rules,          href: '/rules' },
     ];
     case 'library': return [
       // The Library page renders its own breadcrumbs + tree; the rail
@@ -273,6 +279,25 @@ export function TopBar({ section = 'overview' }) {
           onMouseLeave={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--error-500, #ef4444)' }} />
           {counts.tasks_unhealthy ? `${counts.tasks_unhealthy} failing` : 'Task failing'}
+        </a>
+      )}
+
+      {counts.aftercare_count > 0 && (
+        <a href="/aftercare" title={`${counts.aftercare_count} job${counts.aftercare_count === 1 ? '' : 's'} awaiting aftercare review.`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginRight: 14, padding: '3px 9px',
+            fontSize: 'var(--text-xs)', fontWeight: 600,
+            color: 'var(--violet-300, #c4b5fd)',
+            background: 'var(--violet-500-a12, rgba(139,92,246,0.12))',
+            border: '1px solid var(--violet-500-a30, rgba(139,92,246,0.30))',
+            borderRadius: 999, textDecoration: 'none',
+            transition: 'background var(--dur-fast) var(--ease-out)',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--violet-500-a20, rgba(139,92,246,0.20))')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--violet-500-a12, rgba(139,92,246,0.12))')}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--violet-400, #a78bfa)' }} />
+          Aftercare · {counts.aftercare_count}
         </a>
       )}
 
