@@ -500,6 +500,21 @@ function PendingPanel() {
     } catch (e) { /* best-effort */ }
   }, [refetch]);
 
+  // #169: reorder via /move (relative to a target row) rather than
+  // promote/demote — those reorder only WITHIN a priority bucket, so a lone
+  // manual job (its own bucket) couldn't move at all. /move adopts the target's
+  // priority, so to-top/to-bottom work across the whole list and an explicit
+  // reorder overrides the default source priority.
+  const move = useCallback(async (id, body) => {
+    try {
+      await fetch(`/api/queue/pending/${id}/move`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      refetch();
+    } catch (e) { /* best-effort */ }
+  }, [refetch]);
+
   // Hide the whole panel until we know there's something to manage OR the feed
   // is paused — keeps the page clean for users who never build a backlog.
   if (data && pending.length === 0 && !paused) return null;
@@ -529,8 +544,8 @@ function PendingPanel() {
             </div>
           : pending.map((job, i) => (
               <PendingRow key={job.id} job={job} idx={i} total={pending.length}
-                onPromote={(id) => act(id, 'promote')}
-                onDemote={(id) => act(id, 'demote')}
+                onPromote={(id) => move(id, { before_id: pending[0].id })}
+                onDemote={(id) => move(id, { after_id: pending[pending.length - 1].id })}
                 onRemove={(id) => act(id, 'remove')} />
             ))}
       </div>
