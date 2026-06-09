@@ -4,6 +4,7 @@ shared-queue back-off + dedup, submit-failure isolation, priority order.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -209,3 +210,32 @@ async def test_inflight_reservation_expires_after_grace(store, monkeypatch):
     clock["t"] += pf.INFLIGHT_GRACE_S + 1  # age past grace
     assert await feeder.tick() == 1  # a's slot released → submit b
     assert rec.calls == ["TV/a.mkv", "TV/b.mkv"]
+
+
+@pytest.mark.asyncio
+async def test_kick_triggers_prompt_tick_despite_long_interval(store):
+    # #169: with a long interval the loop would normally sleep between ticks;
+    # kick() must wake it so a freshly-enqueued manual job is fed within a tick,
+    # not interval_s later.
+    rec = SubmitRecorder()
+    feeder = _feeder(store, FakeSubgen(), rec)
+    feeder._interval_s = 60.0  # only a kick can produce a 2nd tick in-window
+    feeder.start()
+    try:
+        await asyncio.sleep(0.05)  # first tick runs (pending empty → nothing)
+        store.enqueue("TV/a.mkv", source="manual")
+        feeder.kick()
+        await asyncio.sleep(0.05)  # kick wakes the loop → feeds the job
+        assert rec.calls == ["TV/a.mkv"]
+    finally:
+        await feeder.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_wakes_loop_without_waiting_out_interval(store):
+    # stop() must not block on the (long) interval wait.
+    feeder = _feeder(store, FakeSubgen(), SubmitRecorder())
+    feeder._interval_s = 60.0
+    feeder.start()
+    await asyncio.sleep(0.05)
+    await asyncio.wait_for(feeder.stop(), timeout=1.0)

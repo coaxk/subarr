@@ -80,6 +80,9 @@ class PendingQueueFeeder:
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # #169: set by kick() to wake the loop for an immediate tick (a manual
+        # submit / requeue just enqueued) instead of waiting out interval_s.
+        self._wake = asyncio.Event()
         self._health = None  # set by app lifespan (#157)
         # subgen-space paths submitted but not yet surfaced in subgen's /queue,
         # → monotonic submit time. Counted toward effective depth so we don't
@@ -98,8 +101,16 @@ class PendingQueueFeeder:
         self._stop.clear()
         self._task = asyncio.create_task(self._loop(), name="subarr-queue-feeder")
 
+    def kick(self) -> None:
+        """Wake the feeder for an immediate tick instead of waiting up to
+        interval_s. Called when a producer enqueues urgent work (manual submit /
+        requeue, #169) so it starts as soon as there's a depth slot — manual is
+        the top priority bucket, so it's fed first."""
+        self._wake.set()
+
     async def stop(self) -> None:
         self._stop.set()
+        self._wake.set()  # break the interval wait so the loop notices stop now
         if self._task is not None:
             self._task.cancel()
             try:
@@ -111,6 +122,9 @@ class PendingQueueFeeder:
     async def _loop(self) -> None:
         log.info("queue feeder started (interval=%ss)", self._interval_s)
         while not self._stop.is_set():
+            # Clear BEFORE the tick so a kick() arriving mid-tick still triggers
+            # the next iteration (no missed wake).
+            self._wake.clear()
             try:
                 await self.tick()
                 _h = getattr(self, "_health", None)
@@ -121,8 +135,11 @@ class PendingQueueFeeder:
                 if _h:
                     _h.record_failure("queue-feeder", e, expected_interval_s=self._interval_s)
                 log.exception("queue feeder tick failed: %s", e)
+            if self._stop.is_set():
+                break
+            # Sleep until interval_s elapses OR kick() wakes us early.
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
+                await asyncio.wait_for(self._wake.wait(), timeout=self._interval_s)
             except asyncio.TimeoutError:
                 pass
         log.info("queue feeder stopped")

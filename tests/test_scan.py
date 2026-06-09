@@ -1,24 +1,15 @@
-"""Tests for POST /api/scan + GET /api/scan/{id} + SSE events."""
+"""POST /api/scan — since #169 this routes submissions through the pending
+queue (manual priority) instead of submitting to subgen immediately, so manual
+submits are governed by the same advanced queue as everything else. The /{id}
+status + SSE endpoints remain for feeder-created scans (no longer returned to
+manual callers — they watch the Queue page).
+"""
 
 from __future__ import annotations
 
-import json
 import time
 
-import httpx
-import pytest
-
-
-def _wait_done(client, scan_id: str, timeout: float = 5.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = client.get(f"/api/scan/{scan_id}")
-        assert r.status_code == 200
-        body = r.json()
-        if body["status"] in {"done", "error"}:
-            return body
-        time.sleep(0.05)
-    raise AssertionError(f"scan {scan_id} did not finish within {timeout}s")
+from subarr.pending_queue import STATUS_PENDING, STATUS_SUBMITTED
 
 
 def test_scan_rejects_unknown_path(app_with_stub):
@@ -26,113 +17,69 @@ def test_scan_rejects_unknown_path(app_with_stub):
     assert r.status_code == 404
 
 
-def test_scan_accepts_individual_file_path(app_with_stub):
-    """The Scan tab's file-leaf checkboxes pass an individual .mkv path
-    rather than a directory. Subgen's v4.1 transcribe_existing has the
-    `if os.path.isfile(path)` branch so this works end-to-end."""
-    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show/ep.mkv"]})
-    assert r.status_code == 202
-    scan_id = r.json()["id"]
-    final = _wait_done(app_with_stub, scan_id)
-    assert final["status"] == "done"
-    assert final["paths"] == ["TV/Show/ep.mkv"]
-
-
 def test_scan_rejects_traversal(app_with_stub):
     r = app_with_stub.post("/api/scan", json={"paths": ["../etc"]})
     assert r.status_code == 400
 
 
-def test_scan_happy_path(app_with_stub):
-    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show"], "reverse": True})
+def test_scan_rejects_empty_path(app_with_stub):
+    r = app_with_stub.post("/api/scan", json={"paths": [" "]})
+    assert r.status_code == 400
+
+
+def test_scan_routes_to_pending_not_immediate(app_with_stub):
+    """A valid manual submit is enqueued (source=manual), not run immediately.
+    The response is the new pending contract — no scan_id."""
+    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show/ep.mkv"]})
     assert r.status_code == 202
-    scan = r.json()
-    assert scan["status"] == "pending"
-    assert scan["reverse"] is True
-
-    final = _wait_done(app_with_stub, scan["id"])
-    assert final["status"] == "done"
-    assert len(final["results"]) == 1
-    assert final["results"][0]["status"] == "ok"
-    assert final["results"][0]["subgen_status_code"] == 200
-    assert final["results"][0]["subgen_body"]["walked"] == 1
+    body = r.json()
+    assert body["status"] == "pending"
+    assert body["enqueued"] == ["TV/Show/ep.mkv"]
+    assert body["count"] == 1
+    assert "id" not in body  # no immediate scan_id any more
+    # it really landed in subarr's queue (pending or already drained → submitted)
+    assert "TV/Show/ep.mkv" in app_with_stub.app.state.pending_queue.active_paths()
 
 
-def _empty_handler(req: httpx.Request) -> httpx.Response:
-    # /status + /queue must respond so the capability probe sees a
-    # subarr-subgen build. The test point is /batch behaviour.
-    if req.url.path == "/status":
-        return httpx.Response(
-            200,
-            json={
-                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
-            },
-        )
-    if req.url.path == "/queue":
-        return httpx.Response(
-            200,
-            json={
-                "queued": [],
-                "processing": [],
-                "queued_count": 0,
-                "processing_count": 0,
-                "idle": True,
-                "version": "test",
-            },
-        )
-    if req.url.path == "/batch":
-        return httpx.Response(
-            404,
-            json={
-                "walked": 0,
-                "queued": 0,
-                "skipped": 0,
-                "already_in_queue": 0,
-                "no_audio": 0,
-                "pending_language_detect": 0,
-                "path": req.url.params.get("directory"),
-                "reverse": False,
-            },
-        )
-    return httpx.Response(404)
+def _set_paused(app, paused: bool) -> None:
+    rules = app.state.schedule.get_rules()
+    rules.queue_paused = paused
+    app.state.schedule.set_rules(rules)
 
 
-@pytest.mark.subgen(handler=_empty_handler)
-def test_scan_marks_empty_when_subgen_returns_404(app_with_stub):
-    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show"]})
-    final = _wait_done(app_with_stub, r.json()["id"])
-    assert final["status"] == "done"
-    assert final["results"][0]["status"] == "empty"
+def test_scan_enqueues_as_manual_priority(app_with_stub):
+    """Manual is the top priority bucket so it drains ahead of gaps/backfill."""
+    _set_paused(app_with_stub.app, True)  # hold the feeder so the row stays pending
+    try:
+        app_with_stub.post("/api/scan", json={"paths": ["TV/Show/ep.mkv"]})
+        jobs = app_with_stub.app.state.pending_queue.list(status=STATUS_PENDING)
+        ours = [j for j in jobs if j.canonical_path == "TV/Show/ep.mkv"]
+        assert ours and ours[0].source == "manual"
+    finally:
+        _set_paused(app_with_stub.app, False)
+
+
+def test_scan_multiple_paths_all_enqueued(app_with_stub):
+    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show", "TV/Show/ep.mkv"]})
+    assert r.status_code == 202
+    assert r.json()["count"] == 2
+    active = app_with_stub.app.state.pending_queue.active_paths()
+    assert {"TV/Show", "TV/Show/ep.mkv"} <= active
+
+
+def test_scan_flows_through_feeder_to_subgen(app_with_stub):
+    """End-to-end: the kicked feeder picks the manual job up and submits it."""
+    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show/ep.mkv"]})
+    job_id = r.json()["jobs"][0]
+    pending = app_with_stub.app.state.pending_queue
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        job = pending.get(job_id)
+        if job and job.status == STATUS_SUBMITTED:
+            break
+        time.sleep(0.05)
+    assert pending.get(job_id).status == STATUS_SUBMITTED
 
 
 def test_scan_status_unknown_returns_404(app_with_stub):
     assert app_with_stub.get("/api/scan/does-not-exist").status_code == 404
-
-
-def test_scan_sse_emits_events_until_done(app_with_stub):
-    """Stream should connect, snapshot the scan state, and close cleanly once
-    the scan is in a terminal state. If the snapshot already shows 'done' the
-    stream returns after one event — that's correct behaviour, not a bug."""
-    r = app_with_stub.post("/api/scan", json={"paths": ["TV/Show"]})
-    scan_id = r.json()["id"]
-    _wait_done(app_with_stub, scan_id)
-
-    with app_with_stub.stream("GET", f"/api/scan/{scan_id}/events") as resp:
-        assert resp.status_code == 200
-        events: list[tuple[str, dict]] = []
-        current_event = None
-        for chunk in resp.iter_lines():
-            if not chunk:
-                continue
-            if chunk.startswith("event:"):
-                current_event = chunk.split(":", 1)[1].strip()
-            elif chunk.startswith("data:"):
-                payload = json.loads(chunk.split(":", 1)[1].strip())
-                events.append((current_event, payload))
-
-    assert events, "SSE stream produced no events"
-    snapshot_event, snapshot_data = events[0]
-    assert snapshot_event == "snapshot"
-    assert snapshot_data["id"] == scan_id
-    assert snapshot_data["status"] == "done"
-    assert snapshot_data["results"][0]["status"] == "ok"
