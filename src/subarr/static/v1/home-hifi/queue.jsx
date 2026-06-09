@@ -441,7 +441,7 @@ function PendingControls({ paused, targetDepth, onToggle, onDepth }) {
   );
 }
 
-function PendingRow({ job, idx, total, onPromote, onDemote, onRemove }) {
+function PendingRow({ job, idx, total, onMoveUp, onMoveDown, onRemove }) {
   const src = SOURCE_STYLE[job.source] || { fg: 'var(--fg-3)', label: job.source };
   return (
     <div style={{
@@ -462,10 +462,10 @@ function PendingRow({ job, idx, total, onPromote, onDemote, onRemove }) {
       )}
       <span style={{ fontSize: 'var(--text-2xs)', color: src.fg, width: 56, textAlign: 'right' }}>{src.label}</span>
       <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
-        <button className="btn" title="Move to top" disabled={idx === 0}
-          onClick={() => onPromote(job.id)} style={{ padding: '0 7px' }}>⤒</button>
-        <button className="btn" title="Move to bottom" disabled={idx === total - 1}
-          onClick={() => onDemote(job.id)} style={{ padding: '0 7px' }}>⤓</button>
+        <button className="btn" title="Move up" disabled={idx === 0}
+          onClick={() => onMoveUp(job.id)} style={{ padding: '0 7px' }}>↑</button>
+        <button className="btn" title="Move down" disabled={idx === total - 1}
+          onClick={() => onMoveDown(job.id)} style={{ padding: '0 7px' }}>↓</button>
         <button className="btn" title="Remove from queue"
           onClick={() => onRemove(job.id)} style={{ padding: '0 7px' }}>✕</button>
       </span>
@@ -500,11 +500,11 @@ function PendingPanel() {
     } catch (e) { /* best-effort */ }
   }, [refetch]);
 
-  // #169: reorder via /move (relative to a target row) rather than
-  // promote/demote — those reorder only WITHIN a priority bucket, so a lone
-  // manual job (its own bucket) couldn't move at all. /move adopts the target's
-  // priority, so to-top/to-bottom work across the whole list and an explicit
-  // reorder overrides the default source priority.
+  // #169: step-wise reorder via /move relative to the adjacent row (up = before
+  // the row above, down = after the row below). promote/demote reorder only
+  // WITHIN a priority bucket, so a lone manual job (its own bucket) couldn't
+  // move at all. /move adopts the target's priority, so up/down cross buckets
+  // one step at a time and an explicit reorder overrides default source priority.
   const move = useCallback(async (id, body) => {
     try {
       await fetch(`/api/queue/pending/${id}/move`, {
@@ -544,8 +544,8 @@ function PendingPanel() {
             </div>
           : pending.map((job, i) => (
               <PendingRow key={job.id} job={job} idx={i} total={pending.length}
-                onPromote={(id) => move(id, { before_id: pending[0].id })}
-                onDemote={(id) => move(id, { after_id: pending[pending.length - 1].id })}
+                onMoveUp={(id) => move(id, { before_id: pending[i - 1].id })}
+                onMoveDown={(id) => move(id, { after_id: pending[i + 1].id })}
                 onRemove={(id) => act(id, 'remove')} />
             ))}
       </div>
