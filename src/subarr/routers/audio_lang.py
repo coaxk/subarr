@@ -460,6 +460,26 @@ async def dismiss_track_mismatch(req: TrackMismatchDismissRequest, request: Requ
     return {"ok": True, "file_canonical_path": req.file_canonical_path, "dismissed": True}
 
 
+class TrackMismatchDismissBulkRequest(BaseModel):
+    file_canonical_paths: list[str]
+    note: str | None = None
+
+
+@router.post("/track-mismatch-dismiss-bulk")
+async def dismiss_track_mismatch_bulk(
+    req: TrackMismatchDismissBulkRequest, request: Request
+) -> dict[str, Any]:
+    """#170: dismiss the #159 prompt for many files at once — e.g. "dismiss all
+    track-mismatches in this show". The bulk language-assign path deliberately
+    excludes track-mismatch rows (they need swap/dismiss, not a language), so
+    this is how a user clears a backlog of them without per-row clicks."""
+    store = request.app.state.audio_lang
+    paths = [p for p in (req.file_canonical_paths or []) if p]
+    for p in paths:
+        store.dismiss_track_mismatch(p, note=req.note)
+    return {"ok": True, "dismissed": len(paths)}
+
+
 @router.delete("/track-mismatch-dismiss")
 async def undismiss_track_mismatch(file_canonical_path: str, request: Request) -> dict[str, Any]:
     """Re-enable the #159 prompt for a previously-dismissed file."""
@@ -623,6 +643,11 @@ async def pending_review(request: Request) -> dict[str, Any]:
     coverage end-to-end. Returns instantly (was 60-90s)."""
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
+    # #170: apply the track-mismatch dismiss at READ time too. build_coverage
+    # bakes it out only when it regenerates the snapshot; this endpoint reads the
+    # cached snapshot, so without this a dismissed row reappears until the next
+    # full walk. Mirrors how `verifications` is already applied live below.
+    tm_dismissed = audio_lang_store.get_track_mismatch_dismissed_set()
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     items_source: list[dict[str, Any]] = []
     if cov_cache is not None:
@@ -653,6 +678,8 @@ async def pending_review(request: Request) -> dict[str, Any]:
         # already-verified skip — it's about which audio track is *default*
         # (double-translation), orthogonal to verifying the audio language.
         if it.get("default_track_mismatch"):
+            if file_path and file_path in tm_dismissed:
+                continue  # user dismissed this track-mismatch — honor it live
             flag = "track_mismatch"
             extra = {
                 "mismatch_default_track_lang": it.get("mismatch_default_track_lang"),

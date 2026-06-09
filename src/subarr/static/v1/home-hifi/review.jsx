@@ -420,6 +420,34 @@ export function ReviewPage() {
     }
   }, [fetchPending]);
 
+  // #170: dismiss many track-mismatch prompts at once. Bulk language-apply
+  // deliberately excludes track-mismatch rows (they need swap/dismiss, not a
+  // language), so this is how a backlog of them gets cleared without per-row
+  // clicks — the exact pain that prompted #170.
+  const dismissTrackBulk = useCallback(async (items) => {
+    const paths = items.map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean);
+    if (!paths.length) return;
+    if (!window.confirm(
+      `Dismiss ${paths.length} track-mismatch prompt${paths.length === 1 ? '' : 's'}? `
+      + `They'll be hidden until re-enabled.`
+    )) return;
+    setBusyPath('__bulk__');
+    try {
+      await fetch('/api/audio-lang/track-mismatch-dismiss-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ file_canonical_paths: paths }),
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('bulk track-mismatch dismiss failed', e);
+    } finally {
+      setBusyPath(null);
+      fetchPending({ silent: true });
+    }
+  }, [fetchPending]);
+
   // Filter + group by series.
   const { groups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
@@ -639,6 +667,23 @@ export function ReviewPage() {
           {groups.length} {groups.length === 1 ? 'series' : 'series'}, {groups.reduce((s, g) => s + g.items.length, 0)} files
         </span>
       </div>
+
+      {/* #170: track-mismatch rows can't be cleared by the bulk language-apply
+          (which excludes them). Surface a bulk dismiss + explain the split. */}
+      {filter === 'track_mismatch' && groups.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 2px 10px' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+            These need a track swap (fix the default track) or a dismiss — bulk language-apply doesn't touch them.
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="btn" disabled={busyPath === '__bulk__'}
+            onClick={() => dismissTrackBulk(groups.flatMap((g) => g.items))}>
+            {busyPath === '__bulk__'
+              ? 'Dismissing…'
+              : `Dismiss all visible (${groups.reduce((s, g) => s + g.items.length, 0)})`}
+          </button>
+        </div>
+      )}
 
       {/* List */}
       <div className="panel" style={{
