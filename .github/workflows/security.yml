@@ -25,21 +25,25 @@ on:
     - cron: "0 7 * * 1"
   workflow_dispatch:
 
+# Least-privilege at the workflow level. The SARIF-uploading jobs (bandit,
+# semgrep, trivy) elevate to security-events: write + actions: read themselves
+# (actions: read is required by codeql-action/upload-sarif to read run metadata,
+# else it fails "Resource not accessible by integration").
 permissions:
   contents: read
-  security-events: write
-  pull-requests: read
-  # actions: read is required by codeql-action/upload-sarif so it can
-  # read the workflow run metadata. Without it the SARIF upload step
-  # fails with "Resource not accessible by integration".
-  actions: read
 
 jobs:
   bandit:
     name: bandit (Python static analysis)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload-sarif (best-effort)
+      actions: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with: { python-version: "3.11" }
       - run: pip install bandit[sarif]
@@ -69,8 +73,12 @@ jobs:
   pip-audit:
     name: pip-audit (dep CVEs)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # no SARIF upload — stays minimal
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with: { python-version: "3.11" }
       - run: pip install pip-audit
@@ -90,10 +98,20 @@ jobs:
   semgrep:
     name: semgrep (pattern security)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload-sarif (best-effort)
+      actions: read
     container:
-      image: semgrep/semgrep:latest
+      # Pinned by digest (v1.142.0). trivy-action's Mar-2026 tag-poisoning is
+      # exactly why mutable tags on security tooling are a risk. dependabot's
+      # github-actions ecosystem keeps container images current; bump manually
+      # if a newer rule set is wanted sooner.
+      image: semgrep/semgrep@sha256:03402a5040a88a570dec58375ef1a19fa777dd61575afdc7d5527ddf308dd765
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - name: semgrep ci
         env:
           SEMGREP_RULES: >-
@@ -113,8 +131,14 @@ jobs:
     name: trivy (container image CVEs)
     runs-on: ubuntu-latest
     needs: []
+    permissions:
+      contents: read
+      security-events: write # upload-sarif (best-effort)
+      actions: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
       - name: build image (no push)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7

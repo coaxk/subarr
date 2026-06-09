@@ -1,8 +1,10 @@
-# Lint + test gate. Fills two gaps: ruff was configured but never enforced in
-# CI, and pytest only ran in release.yml (on push/tags), not on PRs.
-#   - lint:  ruff check + ruff format --check on every push + PR
-#   - test:  full pytest suite on PRs (pushes to main are covered by release.yml
-#            before publish, so we don't double-run the suite there)
+# Lint + test + workflow-security gate.
+#   - lint:    ruff check + ruff format --check on every push + PR
+#   - test:    full pytest suite on PRs (pushes to main run it in release.yml
+#              before publish, so we don't double-run the suite there)
+#   - zizmor:  GitHub Actions security audit (pinned actions, least-privilege
+#              permissions, cache-poisoning, unpinned images) — blocking, so the
+#              workflows can't silently regress into the hardening we just did.
 name: ci
 
 on:
@@ -18,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.12'
@@ -33,9 +37,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.12'
           cache: pip
       - run: pip install -e .[dev]
       - run: PYTHONPATH=src pytest -q --tb=line
+
+  zizmor:
+    # Blocking workflow-security audit — a non-functional gate is worse than
+    # none (cf. the dead rebase-test detector). Pinned to match local runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - run: pip install zizmor==1.25.2
+      - run: zizmor --persona=regular .github/workflows/
+        env:
+          GH_TOKEN: ${{ github.token }}

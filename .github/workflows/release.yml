@@ -6,9 +6,9 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
+# Least-privilege default; the publish job elevates to packages: write itself.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   # Tag pushes block on tests + drift check first. Main-branch pushes also
@@ -18,12 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.12'
-          cache: 'pip'
       - run: pip install -e .[dev]
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      # release.yml runs only on trusted push/tags (never PRs), so there is no
+      # PR→privileged-cache poisoning vector; setup-node isn't configured to
+      # cache here anyway (no `cache:` input).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6 # zizmor: ignore[cache-poisoning]
         with:
           node-version: '20'
       - run: npm ci || npm install
@@ -35,8 +39,13 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the image to GHCR
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
