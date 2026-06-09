@@ -5,6 +5,29 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [Unreleased]
+
+### Fixed
+- **Bazarr error paths raised `NameError` instead of `IntegrationError`** —
+  `bazarr.py` raised `IntegrationError` in 14 paths without importing it. Any
+  Bazarr failure (HTTP error, not-configured) would have thrown the wrong
+  exception.
+- **Per-episode Bazarr history lookup threw `TypeError` at runtime** — a
+  duplicate `episodes_history`/`movies_history` definition shadowed the general
+  one, so `provenance.py`'s `episodes_history(sonarr_episode_id=…)` call failed.
+  Both now covered by regression tests.
+
+### Changed
+- **Repo quality hardening.** Enforced `ruff check` + `ruff format` as a CI gate
+  and pre-commit hook (previously configured but never run); added a pytest gate
+  on pull requests; hash-pinned all GitHub Actions to commit SHAs (dependabot
+  keeps them current). Both bugs above were surfaced by enabling the lint gate.
+
+### Thanks
+- **u/MrSlaw** (r/bazarr) for a thorough, accurate review of the repo's lint
+  state and CI/supply-chain hardening — directly prompted the changes above,
+  including catching the duplicate-method bug.
+
 ## [1.3.0] - 2026-06-08
 
 ### Added
