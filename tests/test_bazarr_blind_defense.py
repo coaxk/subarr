@@ -22,7 +22,6 @@ from __future__ import annotations
 import pytest
 import httpx
 
-from subarr.coverage_engine import build_coverage
 
 
 # Minimal fixtures — sonarr returns one foreign + one english series.

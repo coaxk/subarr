@@ -33,10 +33,7 @@ from __future__ import annotations
 import base64
 import logging
 import secrets
-from typing import Awaitable, Callable
 
-from fastapi import Request, Response
-from fastapi.responses import Response as FastAPIResponse
 
 log = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 """#156: aftercare judging fires (best-effort) on job completion."""
 from __future__ import annotations
 
-import pytest
 
 from subarr.aftercare_store import AfterCareStore
 from subarr.completion_watcher import CompletionWatcher

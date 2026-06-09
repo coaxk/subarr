@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from .config import settings
-from .media_probe import ProbeError, parse_ffprobe_json, probe
+from .media_probe import ProbeError, probe
 from .paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
 from .probe_store import ProbeStore
 

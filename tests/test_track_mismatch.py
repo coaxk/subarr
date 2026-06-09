@@ -1,7 +1,6 @@
 """#159: default-audio-track / original-language mismatch detection + swap."""
 from __future__ import annotations
 
-import pytest
 
 from subarr.media_probe import AudioStream, detect_default_track_mismatch
 

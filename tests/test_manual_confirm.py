@@ -147,7 +147,7 @@ def test_reject_all_finalises_without_enqueue(manconf_setup):
 def test_approve_selected_subset(manconf_setup):
     # Same one-row walk; approve only its decision id explicitly.
     walk_id = manconf_setup.post("/api/schedule/coverage_walk/run-now?wait=true").json()["pending_walk_id"]
-    pending = manconf_setup.get(f"/api/schedule/pending").json()
+    pending = manconf_setup.get("/api/schedule/pending").json()
     decision_id = pending["walks"][0]["decisions"][0]["id"]
 
     r = manconf_setup.post(

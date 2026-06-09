@@ -10,7 +10,6 @@ This is the architectural payoff for the bazarr-blind defense: not just
 """
 from __future__ import annotations
 
-import pytest
 
 
 def test_iso_code_to_sonarr_name_maps_common_languages():

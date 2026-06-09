@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import settings
+from . import IntegrationError
 from .base import IntegrationClient
 
 
@@ -116,17 +117,6 @@ class BazarrClient(IntegrationClient):
         non-'Good' status indicates throttle/down. UI surfaces this as
         live availability."""
         d = await self._get("/api/providers")
-        return d.get("data", []) if isinstance(d, dict) else []
-
-    async def episodes_history(self, *, length: int = 1000) -> list[dict[str, Any]]:
-        """v1.1-J: Pull subtitle download history. Each row carries
-        provider, score, action, language, blacklisted, dont_matches
-        — the raw material for the success leaderboard."""
-        d = await self._get("/api/episodes/history", params={"length": length})
-        return d.get("data", []) if isinstance(d, dict) else []
-
-    async def movies_history(self, *, length: int = 1000) -> list[dict[str, Any]]:
-        d = await self._get("/api/movies/history", params={"length": length})
         return d.get("data", []) if isinstance(d, dict) else []
 
     async def candidate_episode_subtitles(

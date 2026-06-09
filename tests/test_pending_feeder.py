@@ -103,7 +103,7 @@ async def test_dedups_path_already_in_subgen(store):
     # the same file is already queued on subgen (foreign-submitted)
     subgen = FakeSubgen(queued=[{"path": sg_path}])
     rec = SubmitRecorder()
-    n = await _feeder(store, subgen, rec, target=2).tick()
+    await _feeder(store, subgen, rec, target=2).tick()
     # adopted as submitted, NOT re-sent through submit_job
     assert rec.calls == []
     assert store.get(job.id).status == STATUS_SUBMITTED
@@ -114,7 +114,7 @@ async def test_submit_failure_isolated_and_marks_error(store):
     store.enqueue("TV/bad.mkv", source="gaps")
     store.enqueue("TV/good.mkv", source="gaps")
     rec = SubmitRecorder(fail_paths={"TV/bad.mkv"})
-    n = await _feeder(store, FakeSubgen(), rec, target=2).tick()
+    await _feeder(store, FakeSubgen(), rec, target=2).tick()
     # bad one errors (doesn't consume a slot), good one still submits
     assert "TV/good.mkv" in rec.calls
     statuses = {j.canonical_path: j.status for j in store.list()}

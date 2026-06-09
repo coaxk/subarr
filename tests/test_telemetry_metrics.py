@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 
 def _migrated_db(tmp_path):
@@ -42,7 +41,6 @@ def test_error_store_record_and_counts(tmp_path):
 
 def test_error_store_stores_only_class_name(tmp_path):
     """Anonymity: keys must be bare class identifiers (no messages/paths)."""
-    import re
     from subarr.error_store import ErrorStore
     es = ErrorStore(_migrated_db(tmp_path))
     es.record("ValueError")

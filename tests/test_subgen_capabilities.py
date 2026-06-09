@@ -18,12 +18,11 @@ Plus edge cases:
 
 from __future__ import annotations
 
-import json
 
 import httpx
 import pytest
 
-from subarr.subgen_client import SubgenCapabilities, SubgenClient, SubgenUnavailable
+from subarr.subgen_client import SubgenCapabilities, SubgenClient
 
 
 def _make_client(mock_transport: httpx.MockTransport) -> SubgenClient:

@@ -9,7 +9,6 @@ Covers the findings from the adversarial audit:
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 from subarr.migrate import run_migrations
 

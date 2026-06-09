@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from subarr.arena import (
-    AggregateRow, ArenaUnsupported, AsrRunner, ClipResult, ConfigVariant,
+    ArenaUnsupported, AsrRunner, ClipResult, ConfigVariant,
     _aggregate, _confidence, run_arena,
 )
 from subarr.subgen_client import SubgenCapabilities, SubgenClient

@@ -18,7 +18,6 @@ import time
 
 import pytest
 
-from subarr import coverage_cache
 from subarr.coverage_cache import CoverageCache
 
 

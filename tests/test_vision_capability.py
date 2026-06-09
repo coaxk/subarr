@@ -17,7 +17,6 @@ import pytest
 from subarr.integrations.ollama import (
     _VISION_FAMILIES,
     OllamaClient,
-    OllamaError,
     _is_vision_capable,
 )
 

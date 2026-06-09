@@ -230,7 +230,8 @@ class OllamaClient:
         and the caller MUST surface that as "vision pre-filter
         unavailable" rather than treating it as a runtime failure —
         every other ollama feature still works with the text model."""
-        import base64, httpx
+        import base64
+        import httpx
         if not self._configured:
             raise OllamaError("ollama not configured")
         # #232: pick the vision model BEFORE fetching the image, so we

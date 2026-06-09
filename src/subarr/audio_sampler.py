@@ -28,7 +28,6 @@ import logging
 import re
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
 from typing import AsyncIterator
 
 from . import vad

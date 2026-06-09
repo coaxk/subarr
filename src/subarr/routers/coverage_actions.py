@@ -23,8 +23,6 @@ from ..config import settings
 from ..integrations import IntegrationError
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..audio_lang_store import resolve_audio_language_override
-from ..provenance import SOURCE_SUBGENSCAN
-from ..scan_store import PATH_STATUS_PENDING
 
 router = APIRouter(prefix="/api", tags=["coverage"])
 log = logging.getLogger(__name__)

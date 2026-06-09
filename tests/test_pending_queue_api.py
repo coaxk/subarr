@@ -3,7 +3,6 @@ reorder (promote/demote/move), remove, and the submitted-row guard.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def _enqueue(client, path, source="gaps"):

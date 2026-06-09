@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .coverage_engine import CoverageItem
-from .schedule_store import AutoQueueRules, MODE_AUTO_RULES, MODE_DASHBOARD, MODE_MANUAL_CONFIRM
+from .schedule_store import AutoQueueRules, MODE_DASHBOARD
 
 log = logging.getLogger(__name__)
 

@@ -25,6 +25,7 @@ so corrections of individual mixed-track episodes still work.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -374,8 +375,7 @@ def resolve_audio_language_override(
     `caller` is just a log-tag so the line answers "which submission path
     forwarded this?" (`coverage_queue` vs `requeue`).
     """
-    import logging as _logging
-    _log = log or _logging.getLogger(__name__)
+    _log = log or logging.getLogger(__name__)
 
     if store is None:
         return None

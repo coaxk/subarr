@@ -17,7 +17,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from ..enrichment import EnrichmentResult, enrich_one
+from ..enrichment import enrich_one
 from ..integrations.ollama import OllamaError
 from ..subgen_client import SubgenUnavailable
 

@@ -102,10 +102,8 @@ async def _propagate_to_sonarr(
         return {"attempted": True, "ok": False,
                 "detail": "Sonarr not configured"}
 
-    # Find the episodeFile id for this canonical_path. We do this by
-    # walking the in-process episode-file path map the coverage cache
-    # populates. Fall back to a direct Sonarr lookup if cache empty.
-    arr_path = settings.arr_path_prefix.rstrip("/") + "/" + canonical_path.strip("/")
+    # Find the episodeFile id for this canonical_path by walking the
+    # in-process episode-file path map the coverage cache populates.
     ep_file_id: int | None = None
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     if cov_cache is not None:
@@ -428,7 +426,6 @@ async def track_mismatch_swap(
     via mkvpropedit (instant, lossless, reversible). The server RE-VALIDATES the
     mismatch against a live probe + the coverage row's originalLanguage — the
     client only names the file, never the track index."""
-    from pathlib import Path
     from ..media_probe import detect_default_track_mismatch, probe
     from ..track_swap import TrackSwapError, swap_default_audio_track
 

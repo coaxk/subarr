@@ -1,8 +1,6 @@
 """Tests for /api/probe + /api/probe/walk + /api/bazarr/sync-disk."""
 from __future__ import annotations
 
-import asyncio
-import json
 
 import httpx
 import pytest

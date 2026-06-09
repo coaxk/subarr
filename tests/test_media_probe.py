@@ -1,7 +1,6 @@
 """Tests for media_probe (ffprobe wrapper + classification helpers)."""
 from __future__ import annotations
 
-import json
 
 
 # Canned ffprobe JSON fixtures (real shapes observed against live subgen).

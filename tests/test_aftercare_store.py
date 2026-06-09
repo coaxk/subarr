@@ -1,9 +1,7 @@
 """#156 aftercare store + migration."""
 from __future__ import annotations
 
-import time
 
-import pytest
 
 
 def _migrated_db(tmp_path):
