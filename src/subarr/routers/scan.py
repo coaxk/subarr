@@ -10,13 +10,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..paths import PathOutsideRootError, canonical_to_fs
-from ..provenance import SOURCE_SUBGENSCAN
 
 router = APIRouter(prefix="/api", tags=["scan"])
 
 
 class ScanRequest(BaseModel):
     paths: list[str] = Field(..., min_length=1)
+    # #169: kept for API compatibility but no longer meaningful — submissions
+    # now route through the pending queue one file at a time, so per-scan
+    # processing order is governed by queue priority/position, not this flag.
     reverse: bool = False
 
 
@@ -39,7 +41,6 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
             raise HTTPException(400, detail=f"not a file or directory: {raw!r}")
         cleaned.append(p)
 
-    store = request.app.state.scans
     runner = request.app.state.runner
 
     # Compat-mode gate: refuse the scan upfront if subgen lacks /batch.
@@ -63,22 +64,23 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
             )
         raise
 
-    scan = store.create(cleaned, reverse=req.reverse)
-    runner.start(scan)
-
-    # Provenance: record each submitted path so /api/provenance can find it.
-    # series_id is unknown here (Scan-tab picks don't carry one) — the
-    # completion watcher will still mark completed_at, but won't trigger
-    # Bazarr scan-disk for these. That's correct: manual Scan-tab picks are
-    # power-user surgery; Coverage-tab queues are the Bazarr-aware path.
-    provenance = request.app.state.provenance
-    for p in cleaned:
-        provenance.record(
-            canonical_path=p,
-            scan_id=scan.id,
-            source=SOURCE_SUBGENSCAN,
-        )
-    return {"id": scan.id, "paths": scan.paths, "status": scan.status, "reverse": scan.reverse}
+    # #169: route through the pending queue instead of submitting immediately,
+    # so manual submits are governed by the same advanced queue (visible,
+    # throttled, reorderable) as everything else instead of stampeding subgen.
+    # Manual is the top priority bucket → the feeder feeds it first; kick() wakes
+    # the feeder now instead of waiting out its interval. The feeder owns
+    # scan-row creation + provenance at submit time (series_id stays unknown for
+    # Scan-tab picks — power-user surgery, not the Bazarr-aware path). enqueue()
+    # dedups against anything already pending/in-flight for the same path.
+    pending = request.app.state.pending_queue
+    jobs = [pending.enqueue(p, source="manual") for p in cleaned]
+    request.app.state.queue_feeder.kick()
+    return {
+        "enqueued": [j.canonical_path for j in jobs],
+        "jobs": [j.id for j in jobs],
+        "count": len(jobs),
+        "status": "pending",
+    }
 
 
 @router.get("/scan/{scan_id}")

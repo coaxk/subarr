@@ -30,7 +30,6 @@ from pydantic import BaseModel
 from ..audio_lang_store import resolve_audio_language_override
 from ..config import settings
 from ..paths import PathOutsideRootError, canonical_to_fs
-from ..provenance import SOURCE_SUBGENSCAN
 from ..scan_store import (
     PATH_STATUS_ERROR,
     PATH_STATUS_OK,
@@ -446,9 +445,11 @@ async def cancel_queued(req: CancelRequest, request: Request) -> dict:
 
 @router.post("/queue/requeue", status_code=202)
 async def requeue(req: RequeueRequest, request: Request) -> dict:
-    """Resubmit a single path to subgen via the scan runner. Creates a
-    fresh scan_store row so the new attempt appears in history with its
-    own outcome — original row is untouched (audit trail preserved)."""
+    """Resubmit a single path through the pending queue (#169). Routes via the
+    same advanced queue as everything else (manual priority → fed first), rather
+    than submitting immediately. The feeder creates the scan_store history row +
+    records provenance at submit time, so the new attempt still appears in
+    history with its own outcome and the original row is untouched."""
     canonical = (req.path or "").strip().strip("/")
     if not canonical:
         raise HTTPException(400, detail="path required")
@@ -470,17 +471,16 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
         caller="requeue",
         log=log,
     )
-    store = request.app.state.scans
-    runner = request.app.state.runner
-    scan = store.create([canonical], reverse=req.reverse)
-    runner.start(scan, audio_language_override=audio_language_override)
-    provenance = request.app.state.provenance
-    provenance.record(
-        canonical_path=canonical,
-        scan_id=scan.id,
-        source=SOURCE_SUBGENSCAN,
+    # #169: route through the pending queue like manual submit. enqueue carries
+    # the #229 audio_language_override on the row; the feeder applies it at
+    # submit time and records provenance. Manual priority + kick() = near-
+    # immediate. enqueue dedups if the path is already pending/in-flight.
+    pending = request.app.state.pending_queue
+    job = pending.enqueue(
+        canonical, source="manual", audio_language_override=audio_language_override
     )
-    return {"id": scan.id, "path": canonical, "status": scan.status}
+    request.app.state.queue_feeder.kick()
+    return {"job": job.id, "path": canonical, "status": "pending"}
 
 
 @router.delete("/queue/scan/{scan_id}")
