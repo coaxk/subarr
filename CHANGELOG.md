@@ -5,28 +5,52 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
-## [Unreleased]
+## [1.4.0] - 2026-06-09
+
+### Added
+- **Job Aftercare (#156).** A post-transcription quality review: every finished
+  job is judged for failures + readability and surfaced on a dedicated Aftercare
+  page (plus a header pill and a dashboard panel) with a country flag, language,
+  source tag, composite score, and a legend. Requeue from the row. Honest by
+  design — it flags problems, it never hands out a confident grade.
+- **Default-audio-track mismatch detection + one-click fix (#159, #170).**
+  Detects when a file's *default* audio track isn't the original language (the
+  setup that makes Whisper double-translate) and surfaces it in Review with an
+  in-place track swap (`mkvpropedit`, lossless) or dismiss — single or bulk.
+  Dismissals are applied at read time so cleared rows stay cleared.
+- **Queue authority over every submission (#169).** Manual scans and requeues
+  now route through the pending queue like coverage + backfill — visible,
+  throttled to target depth, reorderable (step-wise up/down) — instead of
+  bypassing it and flooding subgen. Manual stays near-instant (top priority + an
+  immediate feeder kick).
+
+### Changed
+- **Verified subtitle segmentation baked into the subgen image (r8 /
+  "strongpad").** The regroup config tuned in the segmentation arena is now the
+  `subarr-subgen` image default — roughly halves hard-to-read high-CPS cues and
+  eliminates sub-half-second micro-cues, validated across multiple languages.
+  Overridable.
+- **Repo quality hardening.** Enforced `ruff check` + `ruff format` as a CI gate
+  and a pre-commit hook (previously configured but never run); added a pytest
+  gate on pull requests; hash-pinned all GitHub Actions to commit SHAs
+  (dependabot keeps them current); added a blocking `zizmor` workflow-security
+  gate. Enabling the lint gate surfaced the two bugs below.
 
 ### Fixed
 - **Bazarr error paths raised `NameError` instead of `IntegrationError`** —
-  `bazarr.py` raised `IntegrationError` in 14 paths without importing it. Any
-  Bazarr failure (HTTP error, not-configured) would have thrown the wrong
-  exception.
+  `bazarr.py` raised it in 14 paths without importing it.
 - **Per-episode Bazarr history lookup threw `TypeError` at runtime** — a
   duplicate `episodes_history`/`movies_history` definition shadowed the general
-  one, so `provenance.py`'s `episodes_history(sonarr_episode_id=…)` call failed.
-  Both now covered by regression tests.
-
-### Changed
-- **Repo quality hardening.** Enforced `ruff check` + `ruff format` as a CI gate
-  and pre-commit hook (previously configured but never run); added a pytest gate
-  on pull requests; hash-pinned all GitHub Actions to commit SHAs (dependabot
-  keeps them current). Both bugs above were surfaced by enabling the lint gate.
+  one. Both now covered by regression tests.
+- Pending-queue feeder over-feed race (#116).
+- `settle_minutes` and queue controls now persist (#117).
+- Bazarr status/badges blip no longer dumps tracebacks; queue panel order
+  (Processing → Queued → Pending) and review verify-skip edge cases.
 
 ### Thanks
 - **u/MrSlaw** (r/bazarr) for a thorough, accurate review of the repo's lint
-  state and CI/supply-chain hardening — directly prompted the changes above,
-  including catching the duplicate-method bug.
+  state and CI/supply-chain hardening — directly prompted the hardening pass and
+  caught the duplicate-method bug.
 
 ## [1.3.0] - 2026-06-08
 
