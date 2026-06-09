@@ -8,6 +8,7 @@ gap list is silently empty. Eager-probe closes that gap: after each
 coverage build we probe exactly the unprobed rows' files, regardless of
 probe_roots config.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,15 +18,17 @@ import pytest
 
 # ---- target selection -------------------------------------------------
 
+
 def test_eager_probe_targets_picks_only_unprobed_deduped():
     from subarr.coverage_cache import eager_probe_targets
+
     items = [
         {"canonical_path": "TV/A/a.mkv", "verification_state": "verified"},
         {"canonical_path": "TV/B/b.mkv", "verification_state": "unprobed"},
         {"canonical_path": "TV/B/b.mkv", "verification_state": "unprobed"},  # dup
         {"canonical_path": "TV/C/c.mkv", "verification_state": "probe_failed"},
-        {"canonical_path": "", "verification_state": "unprobed"},   # no path
-        {"verification_state": "unprobed"},                         # missing key
+        {"canonical_path": "", "verification_state": "unprobed"},  # no path
+        {"verification_state": "unprobed"},  # missing key
     ]
     # only B is unprobed-with-path; probe_failed is excluded (already tried)
     assert eager_probe_targets(items) == ["TV/B/b.mkv"]
@@ -33,10 +36,8 @@ def test_eager_probe_targets_picks_only_unprobed_deduped():
 
 def test_eager_probe_targets_caps():
     from subarr.coverage_cache import eager_probe_targets
-    items = [
-        {"canonical_path": f"TV/X/{i}.mkv", "verification_state": "unprobed"}
-        for i in range(50)
-    ]
+
+    items = [{"canonical_path": f"TV/X/{i}.mkv", "verification_state": "unprobed"} for i in range(50)]
     assert len(eager_probe_targets(items, cap=10)) == 10
 
 
@@ -46,9 +47,10 @@ def test_eager_probe_targets_skips_non_file_paths():
     probe. Probing the folder just errors ("not a file") and manufactures
     false 'couldn't analyze' rows — so they must be excluded."""
     from subarr.coverage_cache import eager_probe_targets
+
     items = [
-        {"canonical_path": "TV/Klovn", "verification_state": "unprobed"},          # folder
-        {"canonical_path": "TV/Klovn/", "verification_state": "unprobed"},         # folder w/ slash
+        {"canonical_path": "TV/Klovn", "verification_state": "unprobed"},  # folder
+        {"canonical_path": "TV/Klovn/", "verification_state": "unprobed"},  # folder w/ slash
         {"canonical_path": "TV/Show/S01E01.mkv", "verification_state": "unprobed"},  # real file
         {"canonical_path": "Movies/Film (2024)", "verification_state": "unprobed"},  # folder
         {"canonical_path": "Movies/Film (2024)/film.mp4", "verification_state": "unprobed"},  # file
@@ -58,11 +60,13 @@ def test_eager_probe_targets_skips_non_file_paths():
 
 # ---- ProbeWalker.probe_paths -----------------------------------------
 
+
 @pytest.fixture
 def walker(subarr_env, tmp_path):
     from subarr.migrate import run_migrations
     from subarr.probe_store import ProbeStore
     from subarr.probe_walker import ProbeWalker
+
     db = tmp_path / "probe.db"
     run_migrations(db)  # schema is migration-owned now (no init_schema)
     store = ProbeStore(db)
@@ -71,6 +75,7 @@ def walker(subarr_env, tmp_path):
 
 def _make_file(canonical: str, data: bytes = b"data"):
     from subarr.config import settings
+
     p = settings.media_root / canonical
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
@@ -116,8 +121,11 @@ def test_probe_paths_skips_already_cached(walker, monkeypatch):
     p = _make_file("TV/A/a.mkv")
     st = p.stat()
     from subarr.media_probe import ProbeResult
+
     store.upsert(
-        canonical_path="TV/A/a.mkv", mtime=st.st_mtime, size=st.st_size,
+        canonical_path="TV/A/a.mkv",
+        mtime=st.st_mtime,
+        size=st.st_size,
         result=ProbeResult(canonical_path="TV/A/a.mkv"),
     )
     _stub_probe(monkeypatch)
@@ -169,6 +177,7 @@ def test_probe_paths_dedupes_concurrent_walk(walker, monkeypatch):
 
 # ---- CoverageCache.refresh eager-probe trigger -----------------------
 
+
 class _FakeReport:
     def __init__(self, items):
         self._items = items
@@ -188,38 +197,54 @@ def _patch_build(monkeypatch, items):
 
 def test_refresh_fires_eager_probe_for_unprobed(subarr_env, tmp_path, monkeypatch):
     from subarr.coverage_cache import CoverageCache
-    _patch_build(monkeypatch, [
-        {"canonical_path": "TV/A/a.mkv", "verification_state": "unprobed", "media_type": "episode"},
-        {"canonical_path": "TV/B/b.mkv", "verification_state": "verified", "media_type": "episode"},
-    ])
+
+    _patch_build(
+        monkeypatch,
+        [
+            {"canonical_path": "TV/A/a.mkv", "verification_state": "unprobed", "media_type": "episode"},
+            {"canonical_path": "TV/B/b.mkv", "verification_state": "verified", "media_type": "episode"},
+        ],
+    )
 
     calls = []
 
     class FakeWalker:
         async def probe_paths(self, paths, **k):
             calls.append(list(paths))
+
             class _S:
                 id = "x"
                 status = "done"
+
             return _S()
 
     from subarr.migrate import run_migrations
+
     db = tmp_path / "cov.db"
     run_migrations(db)
     cache = CoverageCache(db)
-    asyncio.run(cache.refresh(
-        bundle=None, probe_store=None, audio_lang_store=None,
-        probe_walker=FakeWalker(),
-    ))
+    asyncio.run(
+        cache.refresh(
+            bundle=None,
+            probe_store=None,
+            audio_lang_store=None,
+            probe_walker=FakeWalker(),
+        )
+    )
     assert calls == [["TV/A/a.mkv"]]
 
 
 def test_refresh_no_walker_does_not_crash(subarr_env, tmp_path, monkeypatch):
     from subarr.coverage_cache import CoverageCache
-    _patch_build(monkeypatch, [
-        {"canonical_path": "TV/A/a.mkv", "verification_state": "unprobed", "media_type": "episode"},
-    ])
+
+    _patch_build(
+        monkeypatch,
+        [
+            {"canonical_path": "TV/A/a.mkv", "verification_state": "unprobed", "media_type": "episode"},
+        ],
+    )
     from subarr.migrate import run_migrations
+
     db = tmp_path / "cov.db"
     run_migrations(db)
     cache = CoverageCache(db)
@@ -233,9 +258,13 @@ def test_eager_probe_targets_prefers_file_canonical_path():
     file_canonical_path, eager-probe must target THAT (a real video file),
     not the folder-level canonical_path (which the file-only guard skips)."""
     from subarr.coverage_cache import eager_probe_targets
+
     items = [
-        {"canonical_path": "TV/Klovn", "file_canonical_path": "TV/Klovn/Season 1/S01E01.mkv",
-         "verification_state": "unprobed"},
+        {
+            "canonical_path": "TV/Klovn",
+            "file_canonical_path": "TV/Klovn/Season 1/S01E01.mkv",
+            "verification_state": "unprobed",
+        },
         {"canonical_path": "TV/ILied", "verification_state": "unprobed"},  # folder only → skipped
     ]
     assert eager_probe_targets(items) == ["TV/Klovn/Season 1/S01E01.mkv"]

@@ -17,6 +17,7 @@ Per-row actions:
 - DELETE /api/queue/scan/{scan_id}   — drop one scan from history
 - POST /api/queue/clear              — bulk-purge by status (done/error/skipped)
 """
+
 from __future__ import annotations
 
 import logging
@@ -53,8 +54,16 @@ _DEFAULT_HISTORY_WINDOW_S = 24 * 3600
 # subgen skipped because ANY of these sits next to it (not only .srt) was
 # previously mislabeled 'unknown' (#89). Kept in sync with subgen's set.
 _SUBTITLE_SIDECAR_EXTS = (
-    ".srt", ".vtt", ".sub", ".ass", ".ssa",
-    ".idx", ".sbv", ".pgs", ".ttml", ".lrc",
+    ".srt",
+    ".vtt",
+    ".sub",
+    ".ass",
+    ".ssa",
+    ".idx",
+    ".sbv",
+    ".pgs",
+    ".ttml",
+    ".lrc",
 )
 
 
@@ -124,8 +133,7 @@ def _infer_skip_reason(canonical_path: str) -> str:
             name = sibling.name
             # Match `<stem>.<ext>`, `<stem>.<lang>.<ext>`,
             # `<stem>.<lang>.<flag>.<ext>` for any subtitle sidecar ext.
-            if name.startswith(stem + ".") and \
-                    name.lower().endswith(_SUBTITLE_SIDECAR_EXTS):
+            if name.startswith(stem + ".") and name.lower().endswith(_SUBTITLE_SIDECAR_EXTS):
                 return "sub_exists"
     except OSError:
         return "unknown"
@@ -133,7 +141,9 @@ def _infer_skip_reason(canonical_path: str) -> str:
 
 
 def _path_outcome_chip(
-    status: str, body: dict | None, error: str | None,
+    status: str,
+    body: dict | None,
+    error: str | None,
     canonical_path: str | None = None,
 ) -> dict:
     """Derive a single 'outcome' shape per scan path for the UI:
@@ -146,37 +156,40 @@ def _path_outcome_chip(
     audio-lang skip list).
     """
     if status == PATH_STATUS_RUNNING:
-        return {"category": "running", "label": "running",
-                "detail": "scan_runner forwarding to subgen"}
+        return {"category": "running", "label": "running", "detail": "scan_runner forwarding to subgen"}
     if status == PATH_STATUS_OK:
         queued = (body or {}).get("queued", 0) if isinstance(body, dict) else 0
-        return {"category": "ok", "label": "queued",
-                "detail": f"subgen queued {queued}" if queued else "subgen accepted"}
+        return {
+            "category": "ok",
+            "label": "queued",
+            "detail": f"subgen queued {queued}" if queued else "subgen accepted",
+        }
     if status == PATH_STATUS_SKIPPED:
         skip_reason = _infer_skip_reason(canonical_path) if canonical_path else "unknown"
         if skip_reason == "sub_exists":
             label = "sub already exists"
-            detail = ("matching .srt already on disk — subgen had nothing to "
-                      "do. Not an issue.")
+            detail = "matching .srt already on disk — subgen had nothing to do. Not an issue."
         else:
             label = "skipped"
-            detail = (error
-                      or "subgen walked but queued nothing — likely "
-                         "audio-language match. Check your skip-language "
-                         "list if this surprised you.")
-        return {"category": "skipped", "label": label,
-                "detail": detail, "skip_reason": skip_reason}
+            detail = (
+                error
+                or "subgen walked but queued nothing — likely "
+                "audio-language match. Check your skip-language "
+                "list if this surprised you."
+            )
+        return {"category": "skipped", "label": label, "detail": detail, "skip_reason": skip_reason}
     if status == PATH_STATUS_ERROR:
-        return {"category": "error", "label": "failed",
-                "detail": error or "submission errored"}
+        return {"category": "error", "label": "failed", "detail": error or "submission errored"}
     if status == PATH_STATUS_ORPHANED:
         # #229 phase 2: subgen restarted between subarr's accept and the
         # .srt landing on disk. Surface in its own category so the Queue
         # UI can route to a "Lost on restart" bucket and show a prominent
         # requeue button rather than burying these in Recently-done.
-        return {"category": "orphaned", "label": "lost on restart",
-                "detail": error or
-                "subgen restarted before transcription completed"}
+        return {
+            "category": "orphaned",
+            "label": "lost on restart",
+            "detail": error or "subgen restarted before transcription completed",
+        }
     return {"category": "pending", "label": status, "detail": ""}
 
 
@@ -207,8 +220,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     docker_ops = request.app.state.docker
 
     # LIVE (subgen). Soft-fail: if subgen is down, history is still useful.
-    live: dict = {"processing": [], "queued": [],
-                  "processing_count": 0, "queued_count": 0}
+    live: dict = {"processing": [], "queued": [], "processing_count": 0, "queued_count": 0}
     try:
         q = await client.queue()
         live.update(q)
@@ -226,8 +238,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     _media_prefix = settings.subgen_media_prefix.rstrip("/") + "/"
 
     def _is_library_job(t: object) -> bool:
-        return (isinstance(t, dict) and isinstance(t.get("path"), str)
-                and t["path"].startswith(_media_prefix))
+        return isinstance(t, dict) and isinstance(t.get("path"), str) and t["path"].startswith(_media_prefix)
 
     live["processing"] = [t for t in (live.get("processing") or []) if _is_library_job(t)]
     live["queued"] = [t for t in (live.get("queued") or []) if _is_library_job(t)]
@@ -270,21 +281,26 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
             if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
                 continue
             outcome = _path_outcome_chip(
-                r.status, r.subgen_body, r.error, canonical_path=r.path,
+                r.status,
+                r.subgen_body,
+                r.error,
+                canonical_path=r.path,
             )
             cat = outcome["category"]
             if cat in counts:
                 counts[cat] += 1
-            history.append({
-                "scan_id": scan.id,
-                "created_at": scan.created_at,
-                "scan_status": scan.status,
-                "path": r.path,
-                "outcome": outcome,
-                "started_at": r.started_at,
-                "finished_at": r.finished_at,
-                "subgen_status_code": r.subgen_status_code,
-            })
+            history.append(
+                {
+                    "scan_id": scan.id,
+                    "created_at": scan.created_at,
+                    "scan_status": scan.status,
+                    "path": r.path,
+                    "outcome": outcome,
+                    "started_at": r.started_at,
+                    "finished_at": r.finished_at,
+                    "subgen_status_code": r.subgen_status_code,
+                }
+            )
 
     return {
         **live,
@@ -295,6 +311,7 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
 
 
 # ─── subgen push completion (#87) ────────────────────────────────────────
+
 
 class SubgenCompletedWebhook(BaseModel):
     """Payload subgen POSTs to WEBHOOK_URL_COMPLETED on task finish.
@@ -310,6 +327,7 @@ class SubgenCompletedWebhook(BaseModel):
     so a future subgen field never 422s the hook. extra="allow" keeps
     unknown keys visible for logging without breaking validation.
     """
+
     model_config = {"extra": "allow"}
 
     file: str | None = None
@@ -320,7 +338,8 @@ class SubgenCompletedWebhook(BaseModel):
 
 @router.post("/subgen/webhook/completed")
 async def subgen_webhook_completed(
-    payload: SubgenCompletedWebhook, request: Request,
+    payload: SubgenCompletedWebhook,
+    request: Request,
 ) -> dict:
     """Push-based completion receiver (#87) — the low-latency alternative
     to polling subgen's /queue. Operators point subgen's
@@ -335,6 +354,7 @@ async def subgen_webhook_completed(
     already completed the entry, this is a benign no-op (matched=0).
     """
     from ..config import settings as _settings
+
     if not _settings.subgen_webhook_enabled:
         # Operator opted out of push; tell subgen we received it so it
         # doesn't log a delivery failure, but do nothing (polling drives).
@@ -351,12 +371,16 @@ async def subgen_webhook_completed(
         log.info("subgen completion webhook carried unknown fields: %s", extra)
 
     from ..paths import subgen_to_canonical
+
     canonical = subgen_to_canonical(payload.file)
     watcher = request.app.state.watcher
     matched = await watcher.complete_by_canonical(canonical)
     log.info(
         "subgen completion webhook: event=%s file=%s canonical=%s matched=%d",
-        payload.event, payload.file, canonical, matched,
+        payload.event,
+        payload.file,
+        canonical,
+        matched,
     )
     return {
         "accepted": True,
@@ -367,6 +391,7 @@ async def subgen_webhook_completed(
 
 
 # ─── Per-row actions ─────────────────────────────────────────────────────
+
 
 class RequeueRequest(BaseModel):
     # Canonical path under media_root. We don't requeue by scan_id because
@@ -451,7 +476,9 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
     runner.start(scan, audio_language_override=audio_language_override)
     provenance = request.app.state.provenance
     provenance.record(
-        canonical_path=canonical, scan_id=scan.id, source=SOURCE_SUBGENSCAN,
+        canonical_path=canonical,
+        scan_id=scan.id,
+        source=SOURCE_SUBGENSCAN,
     )
     return {"id": scan.id, "path": canonical, "status": scan.status}
 
@@ -484,8 +511,7 @@ async def clear_history(req: ClearRequest, request: Request) -> dict:
     valid = {SCAN_STATUS_DONE, SCAN_STATUS_ERROR}
     bad = [s for s in req.statuses if s not in valid]
     if bad:
-        raise HTTPException(400, detail=f"invalid statuses: {bad}; "
-                                        f"allowed: {sorted(valid)}")
+        raise HTTPException(400, detail=f"invalid statuses: {bad}; allowed: {sorted(valid)}")
     store = request.app.state.scans
     cutoff = (time.time() - req.older_than_s) if req.older_than_s else None
     n = store.delete_where_status_in(req.statuses, older_than=cutoff)
@@ -550,8 +576,10 @@ def _require_pending(store, job_id: str):
     if job.status != STATUS_PENDING:
         raise HTTPException(
             409,
-            detail=(f"job {job_id!r} is {job.status} — already handed to subgen; "
-                    "reorder only applies to pending jobs (cancel it instead)."),
+            detail=(
+                f"job {job_id!r} is {job.status} — already handed to subgen; "
+                "reorder only applies to pending jobs (cancel it instead)."
+            ),
         )
     return job
 
@@ -605,13 +633,9 @@ async def backfill_library(request: Request) -> dict:
     cov = getattr(request.app.state, "coverage_cache", None)
     snap = cov.get_cached() if cov is not None else None
     if snap is None:
-        raise HTTPException(
-            409, detail="coverage cache not warm yet — run a coverage walk first")
+        raise HTTPException(409, detail="coverage cache not warm yet — run a coverage walk first")
 
-    items = [
-        CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS})
-        for d in snap.items
-    ]
+    items = [CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS}) for d in snap.items]
     rules = request.app.state.schedule.get_rules()
     pending = request.app.state.pending_queue
     prov = request.app.state.provenance
@@ -623,8 +647,7 @@ async def backfill_library(request: Request) -> dict:
         canonical = it.file_canonical_path or it.canonical_path
         if not canonical:
             continue
-        pending.enqueue(canonical, source="backfill",
-                        sonarr_episode_id=it.bazarr_episode_id)
+        pending.enqueue(canonical, source="backfill", sonarr_episode_id=it.bazarr_episode_id)
         enqueued += 1
 
     counts = pending.count_by_status()

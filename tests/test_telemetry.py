@@ -63,7 +63,7 @@ def test_install_id_generated_on_first_boot(db_path: Path):
     c = _make_collector(db_path)
     st = c.state()
     assert len(st.install_id) == 32  # uuid4().hex
-    assert st.opted_in is True       # v1.0 default
+    assert st.opted_in is True  # v1.0 default
     assert st.last_ping_at is None
 
 
@@ -97,8 +97,14 @@ def test_opt_in_after_opt_out(db_path: Path):
 
 def test_payload_contains_expected_fields(db_path: Path):
     stats = {
-        "integrations": {"bazarr": True, "sonarr": True, "radarr": False,
-                         "tautulli": False, "plex": False, "ollama": True},
+        "integrations": {
+            "bazarr": True,
+            "sonarr": True,
+            "radarr": False,
+            "tautulli": False,
+            "plex": False,
+            "ollama": True,
+        },
         "library_bucket": "1k-10k",
         "scheduler_enabled": True,
         "scheduler_mode": "manual_confirm",
@@ -130,8 +136,18 @@ def test_payload_never_includes_forbidden_fields(db_path: Path):
     test surfaces it."""
     c = _make_collector(db_path)
     d = c.build_payload().to_dict()
-    forbidden = {"path", "title", "ip", "api_key", "url", "hostname",
-                 "email", "username", "password", "token"}
+    forbidden = {
+        "path",
+        "title",
+        "ip",
+        "api_key",
+        "url",
+        "hostname",
+        "email",
+        "username",
+        "password",
+        "token",
+    }
     for key in d.keys():
         for f in forbidden:
             assert f not in key.lower(), f"forbidden field name leaked: {key}"
@@ -208,6 +224,7 @@ async def test_send_now_posts_to_endpoint(db_path: Path):
     assert captured["url"].endswith("/ping")
     # Body is the JSON payload
     import json as _json
+
     body = _json.loads(captured["body"])
     assert body["subarr_version"] == "v1.0.0"
     # last_ping_at recorded
@@ -307,6 +324,7 @@ def test_ollama_not_configured_when_defaulted_url_but_unreachable(db_path: Path)
     unreachable → NOT reported configured (the #119 fix). bool(ollama_url)
     would have been True here on every install."""
     from subarr.config import settings
+
     assert settings.ollama_url  # the default string is non-empty (pre-fix bug)
     state = _fake_app_state(db_path, SimpleNamespace(reachable=False))
     provider = make_default_stats_provider(state)

@@ -8,6 +8,7 @@ Precision guardrails under test:
   - a single foreign language never flags
   - per-series dismiss (by series dir) suppresses
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,9 +22,13 @@ from subarr.migrate import run_migrations
 
 def _ep(title, lang, *, source="whisper", sid=1, path="TV/Trigger", epnum="1x01"):
     return CoverageItem(
-        media_type="episode", title=title, canonical_path=path,
-        bazarr_sonarr_id=sid, episode_number=epnum,
-        audio_langs=[lang] if lang else [], audio_source=source,
+        media_type="episode",
+        title=title,
+        canonical_path=path,
+        bazarr_sonarr_id=sid,
+        episode_number=epnum,
+        audio_langs=[lang] if lang else [],
+        audio_source=source,
     )
 
 
@@ -49,21 +54,28 @@ def test_foreign_plus_english_dub_not_flagged():
 
 def test_ffprobe_tags_ignored():
     # Two foreign langs but only from the unreliable ffprobe tag → ignored.
-    items = [_ep("Show", "kor", source="ffprobe", epnum="1x01"),
-             _ep("Show", "rus", source="ffprobe", epnum="1x02")]
+    items = [
+        _ep("Show", "kor", source="ffprobe", epnum="1x01"),
+        _ep("Show", "rus", source="ffprobe", epnum="1x02"),
+    ]
     assert _flag_mixed_language_series(items) == 0
 
 
 def test_user_source_counts():
-    items = [_ep("Show", "kor", source="user", epnum="1x01"),
-             _ep("Show", "jpn", source="whisper", epnum="1x02")]
+    items = [
+        _ep("Show", "kor", source="user", epnum="1x01"),
+        _ep("Show", "jpn", source="whisper", epnum="1x02"),
+    ]
     assert _flag_mixed_language_series(items) == 1
 
 
 def test_normalizes_language_variants():
     # 'eng' must normalize to English (excluded); 'kor'/'ko' collapse to one.
-    items = [_ep("Show", "ko", epnum="1x01"), _ep("Show", "kor", epnum="1x02"),
-             _ep("Show", "eng", epnum="1x03")]
+    items = [
+        _ep("Show", "ko", epnum="1x01"),
+        _ep("Show", "kor", epnum="1x02"),
+        _ep("Show", "eng", epnum="1x03"),
+    ]
     # only one distinct foreign (Korean) + English → not mixed
     assert _flag_mixed_language_series(items) == 0
 
@@ -83,17 +95,26 @@ def test_dismissed_series_suppressed():
 
 def test_groups_by_sonarr_id_not_title():
     # Same title, different series ids → not grouped together.
-    items = [_ep("Dup", "kor", sid=1, path="TV/Dup (2001)"),
-             _ep("Dup", "rus", sid=2, path="TV/Dup (2020)")]
+    items = [_ep("Dup", "kor", sid=1, path="TV/Dup (2001)"), _ep("Dup", "rus", sid=2, path="TV/Dup (2020)")]
     assert _flag_mixed_language_series(items) == 0
 
 
 def test_movies_ignored():
     movies = [
-        CoverageItem(media_type="movie", title="M1", canonical_path="Movies/M1",
-                     audio_langs=["kor"], audio_source="whisper"),
-        CoverageItem(media_type="movie", title="M2", canonical_path="Movies/M2",
-                     audio_langs=["rus"], audio_source="whisper"),
+        CoverageItem(
+            media_type="movie",
+            title="M1",
+            canonical_path="Movies/M1",
+            audio_langs=["kor"],
+            audio_source="whisper",
+        ),
+        CoverageItem(
+            media_type="movie",
+            title="M2",
+            canonical_path="Movies/M2",
+            audio_langs=["rus"],
+            audio_source="whisper",
+        ),
     ]
     assert _flag_mixed_language_series(movies) == 0
 

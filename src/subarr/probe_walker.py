@@ -8,6 +8,7 @@ result. Emits progress events through an asyncio.Queue so /api/probe/walk/
 One walker instance per app. Multiple concurrent walks supported via
 walk_id keys.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -81,7 +82,10 @@ class ProbeWalker:
             if existing.root == root_canonical and existing.status == "running":
                 log.info(
                     "start_walk: walk %s for root=%r already running (%d/%d processed) — reusing",
-                    existing.id, root_canonical, existing.processed, existing.total_files,
+                    existing.id,
+                    root_canonical,
+                    existing.processed,
+                    existing.total_files,
                 )
                 return existing
 
@@ -136,10 +140,8 @@ class ProbeWalker:
             # enumeration (seconds → minutes on a real library). Offload so
             # /api/health and dashboard polls keep responding while we walk.
             def _enumerate_videos():
-                return [
-                    p for p in root_fs.rglob("*")
-                    if p.is_file() and p.suffix.lower() in VIDEO_EXTS
-                ]
+                return [p for p in root_fs.rglob("*") if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
+
             video_files = await asyncio.to_thread(_enumerate_videos)
             state.total_files = len(video_files)
             log.info("probe walk %s: %d files under %s", state.id, state.total_files, state.root)
@@ -167,7 +169,11 @@ class ProbeWalker:
             state.finished_at = time.time()
             log.info(
                 "probe walk %s done: %d files, %d cached, %d probed, %d errors",
-                state.id, state.total_files, state.cached_hits, state.probed, len(state.errors),
+                state.id,
+                state.total_files,
+                state.cached_hits,
+                state.probed,
+                len(state.errors),
             )
         except asyncio.CancelledError:
             state.status = "cancelled"
@@ -179,8 +185,7 @@ class ProbeWalker:
             state.errors.append({"error": repr(e)})
             state.finished_at = time.time()
 
-    async def _probe_and_record(self, state: WalkState, canonical: str,
-                                p: Path, st: Any) -> None:
+    async def _probe_and_record(self, state: WalkState, canonical: str, p: Path, st: Any) -> None:
         """Probe one resolved file and upsert on success / record_failure on
         error. Caller holds the concurrency sem and has done the cached
         check. Always bumps state.processed. Shared by the root walk and the
@@ -190,7 +195,8 @@ class ProbeWalker:
             result.canonical_path = canonical
             self._store.upsert(
                 canonical_path=canonical,
-                mtime=st.st_mtime, size=st.st_size,
+                mtime=st.st_mtime,
+                size=st.st_size,
                 result=result,
             )
             state.probed += 1
@@ -222,7 +228,9 @@ class ProbeWalker:
             if existing.root == self._EAGER_LABEL and existing.status == "running":
                 log.info(
                     "probe_paths: eager walk %s already running (%d/%d) — reusing",
-                    existing.id, existing.processed, existing.total_files,
+                    existing.id,
+                    existing.processed,
+                    existing.total_files,
                 )
                 return existing
 
@@ -237,9 +245,7 @@ class ProbeWalker:
         walk_id = uuid.uuid4().hex[:16]
         state = WalkState(walk_id, self._EAGER_LABEL)
         self._walks[walk_id] = state
-        task = asyncio.create_task(
-            self._run_targeted(state, paths), name=f"probe-eager-{walk_id}"
-        )
+        task = asyncio.create_task(self._run_targeted(state, paths), name=f"probe-eager-{walk_id}")
         self._tasks[walk_id] = task
         task.add_done_callback(lambda t, wid=walk_id: self._tasks.pop(wid, None))
         return state
@@ -276,7 +282,11 @@ class ProbeWalker:
             state.finished_at = time.time()
             log.info(
                 "eager probe %s done: %d files, %d cached, %d probed, %d errors",
-                state.id, state.total_files, state.cached_hits, state.probed, len(state.errors),
+                state.id,
+                state.total_files,
+                state.cached_hits,
+                state.probed,
+                len(state.errors),
             )
         except asyncio.CancelledError:
             state.status = "cancelled"

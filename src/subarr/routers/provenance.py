@@ -8,6 +8,7 @@ Combines three sources to answer 'who wrote this sub, when, with what?':
 GET /api/provenance/recent → last 50 ledger entries (for a future
 'Activity' panel in the UI).
 """
+
 from __future__ import annotations
 
 import logging

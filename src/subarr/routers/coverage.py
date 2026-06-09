@@ -9,6 +9,7 @@ audio_langs, suggest_bazarr_rescan). Default is True now — the cache
 lookup is cheap and the embedded-EN reconciliation is the v1.1 hotfix's
 whole point.
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,7 +23,7 @@ from ..coverage_engine import CoverageReport, build_coverage
 router = APIRouter(prefix="/api", tags=["coverage"])
 log = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 60   # legacy, used by ?fresh handling fallback
+_CACHE_TTL_SECONDS = 60  # legacy, used by ?fresh handling fallback
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
@@ -48,7 +49,10 @@ async def refresh_coverage(request: Request) -> dict[str, Any]:
     # debounced to settings.coverage_refresh_min_interval_s. We no longer
     # reject when a build is in flight — the request is coalesced instead.
     cov_cache.request_refresh(
-        bundle, probe_store, audio_lang_store, probe_walker=probe_walker,
+        bundle,
+        probe_store,
+        audio_lang_store,
+        probe_walker=probe_walker,
     )
     snap = cov_cache.get_cached()
     return {
@@ -165,7 +169,8 @@ async def get_coverage(
             # Apply the filter chain over the cached items so the user-
             # selected hide_* flags still take effect without rebuilding.
             return _apply_filters_and_pack(
-                body, now=time.time(),
+                body,
+                now=time.time(),
                 hide_embedded_en=hide_embedded_en,
                 hide_stale_disk=hide_stale_disk,
                 hide_english_audio=hide_english_audio,
@@ -177,7 +182,10 @@ async def get_coverage(
     # ?fresh=true OR no cache available → synchronous rebuild and store.
     if cov_cache is not None and fresh:
         snap = await cov_cache.refresh(
-            bundle, probe_store, audio_lang_store, use_tautulli=tautulli,
+            bundle,
+            probe_store,
+            audio_lang_store,
+            use_tautulli=tautulli,
             probe_walker=getattr(request.app.state, "probe_walker", None),
             caps_provider=lambda: getattr(request.app.state, "subgen_caps", None),
         )
@@ -190,7 +198,8 @@ async def get_coverage(
             "refreshing": False,
         }
         return _apply_filters_and_pack(
-            body, now=time.time(),
+            body,
+            now=time.time(),
             hide_embedded_en=hide_embedded_en,
             hide_stale_disk=hide_stale_disk,
             hide_english_audio=hide_english_audio,
@@ -200,13 +209,16 @@ async def get_coverage(
 
     # Fallback (e.g. boot before warm) — synchronous build, no cache write.
     report: CoverageReport = await build_coverage(
-        bundle, use_tautulli=tautulli, probe_store=probe_store,
+        bundle,
+        use_tautulli=tautulli,
+        probe_store=probe_store,
         audio_lang_store=audio_lang_store,
         subgen_caps=getattr(request.app.state, "subgen_caps", None),
     )
     body = report.to_dict()
     return _apply_filters_and_pack(
-        body, now=time.time(),
+        body,
+        now=time.time(),
         hide_embedded_en=hide_embedded_en,
         hide_stale_disk=hide_stale_disk,
         hide_english_audio=hide_english_audio,
@@ -215,9 +227,13 @@ async def get_coverage(
 
 
 def _apply_filters_and_pack(
-    body: dict[str, Any], *, now: float,
-    hide_embedded_en: bool, hide_stale_disk: bool,
-    hide_english_audio: bool, hide_pending_download: bool,
+    body: dict[str, Any],
+    *,
+    now: float,
+    hide_embedded_en: bool,
+    hide_stale_disk: bool,
+    hide_english_audio: bool,
+    hide_pending_download: bool,
     only_wanted_langs: str = "",
     settle_minutes: int = 0,
 ) -> dict[str, Any]:
@@ -226,9 +242,7 @@ def _apply_filters_and_pack(
     fresh dict copy)."""
     wanted_lang_set: set[str] = set()
     if only_wanted_langs:
-        wanted_lang_set = {
-            t.strip().lower() for t in only_wanted_langs.split(",") if t.strip()
-        }
+        wanted_lang_set = {t.strip().lower() for t in only_wanted_langs.split(",") if t.strip()}
     if hide_embedded_en or hide_stale_disk or hide_english_audio or hide_pending_download or wanted_lang_set:
         items = body["items"]
         kept = []

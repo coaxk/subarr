@@ -18,6 +18,7 @@ WIRING (the documented next step, NOT built here — needs care + live tests):
   - tick: call select_backfill_batch() on the scheduler cadence, enqueue the
     returned gaps, surface progress ("backfilling: N gaps, M in flight").
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -70,7 +71,10 @@ def eligible_backfill_items(items, rules, in_flight_paths=None):
     from .schedule_store import MODE_AUTO_RULES
 
     eval_rules = dataclasses.replace(
-        rules, mode=MODE_AUTO_RULES, max_per_run=10_000_000, settle_minutes=0,
+        rules,
+        mode=MODE_AUTO_RULES,
+        max_per_run=10_000_000,
+        settle_minutes=0,
     )
     decisions = evaluate(items, eval_rules, in_flight_paths=in_flight_paths)
     return [d.item for d in decisions if d.action == "queue"]

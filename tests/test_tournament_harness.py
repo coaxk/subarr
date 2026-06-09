@@ -5,11 +5,13 @@ sweep, existing library subs, etc.) + the clip's VAD speech ranges, rank them
 with the validated tournament judge and render a scorecard. This is what turns
 "we have a validated judge" into "we can run a real comparison".
 """
+
 from __future__ import annotations
 
 
 def _h():
     from subarr import tournament_harness as h
+
     return h
 
 

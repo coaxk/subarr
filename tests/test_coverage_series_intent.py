@@ -8,6 +8,7 @@ series whose new episode has no per-file verification row was NOT auto-applied
 during classification. This wires the intent-aware lookup into build_coverage's
 user_verifications so a matching new episode resolves as user-verified.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,6 +18,7 @@ import pytest
 def store(tmp_path):
     from subarr.migrate import run_migrations
     from subarr.audio_lang_store import AudioLangStore
+
     db = tmp_path / "audio_lang.db"
     run_migrations(db)
     yield AudioLangStore(db)
@@ -24,10 +26,15 @@ def store(tmp_path):
 
 def _ep(canonical, file_canonical):
     from subarr.coverage_engine import CoverageItem
+
     return CoverageItem(
-        media_type="episode", title="Cheers", canonical_path=canonical,
-        episode_number="1x9", file_canonical_path=file_canonical,
-        audio_langs=["und"], original_language="english",
+        media_type="episode",
+        title="Cheers",
+        canonical_path=canonical,
+        episode_number="1x9",
+        file_canonical_path=file_canonical,
+        audio_langs=["und"],
+        original_language="english",
     )
 
 
@@ -52,7 +59,8 @@ def test_classify_marks_new_episode_verified_from_series_intent(store):
     """End-to-end through the classifier: a declared series turns an
     un-tagged (und) new episode into an audio-verified row."""
     from subarr.coverage_engine import (
-        _build_verification_lookup, _classify_audio_label,
+        _build_verification_lookup,
+        _classify_audio_label,
     )
 
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
@@ -73,8 +81,7 @@ def test_per_file_verification_still_wins_over_intent(store):
     from subarr.coverage_engine import _build_verification_lookup
 
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
-    store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv",
-                 lang_code="fre")
+    store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv", lang_code="fre")
     user_verifications, _ = _build_verification_lookup(store)
 
     assert user_verifications["TV/Cheers/Season 1/Cheers.S01E05.mkv"] == "fre"
@@ -92,6 +99,7 @@ def test_unrelated_path_not_matched(store):
 
 def test_no_store_yields_empty_lookups():
     from subarr.coverage_engine import _build_verification_lookup
+
     uv, vs = _build_verification_lookup(None)
     assert uv == {}
     assert vs == {}

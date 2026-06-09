@@ -1,4 +1,5 @@
 """GET /api/logs/events — SSE stream of subgen container logs."""
+
 from __future__ import annotations
 
 import asyncio

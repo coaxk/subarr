@@ -228,7 +228,8 @@ def test_empty_apikey_in_config_ignored(tmp_path: Path):
     d = tmp_path / "sonarr"
     d.mkdir()
     (d / "config.xml").write_text(
-        "<Config><ApiKey></ApiKey></Config>", encoding="utf-8",
+        "<Config><ApiKey></ApiKey></Config>",
+        encoding="utf-8",
     )
     r = extract_for_service("sonarr", subarr_env={}, config_dir=d)
     assert r.key is None
@@ -277,7 +278,8 @@ def test_extract_all_runs_every_service(tmp_path: Path):
 
 def test_extracted_key_masking():
     k = ExtractedKey(
-        service="bazarr", api_key="1234567890abcdef1234567890abcdef",
+        service="bazarr",
+        api_key="1234567890abcdef1234567890abcdef",
         source="config file",
     )
     assert k.masked == "••••cdef"
@@ -288,8 +290,10 @@ def test_extracted_key_to_dict_omits_raw_key():
     """to_dict() returns masked_key not the raw key — critical for
     API responses that surface this info."""
     k = ExtractedKey(
-        service="bazarr", api_key="secretkey1234",
-        source="config file", source_detail="/host-configs/bazarr/config.yaml",
+        service="bazarr",
+        api_key="secretkey1234",
+        source="config file",
+        source_detail="/host-configs/bazarr/config.yaml",
     )
     d = k.to_dict()
     assert "api_key" not in d

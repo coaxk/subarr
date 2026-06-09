@@ -2,6 +2,7 @@
 falls back to silencedetect otherwise. Pins the WIRING (which path runs),
 mocking the ffprobe / silence / VAD I/O so no media or model is needed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +11,7 @@ import asyncio
 def _mods():
     from subarr import audio_sampler as a
     from subarr import vad
+
     return a, vad
 
 

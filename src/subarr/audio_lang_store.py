@@ -22,6 +22,7 @@ S01E03 — but the API offers a bulk_for_series helper that the UI calls
 after a single confirm ("apply to all Flics episodes?"). Stored per file
 so corrections of individual mixed-track episodes still work.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,15 +71,23 @@ class AudioLangStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
-            str(db_path), check_same_thread=False, isolation_level=None,
+            str(db_path),
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
 
-    def upsert(self, *, canonical_path: str, lang_code: str,
-               source: str = "user", confidence: float = 1.0,
-               verified_by: str | None = None,
-               evidence: dict | None = None) -> None:
+    def upsert(
+        self,
+        *,
+        canonical_path: str,
+        lang_code: str,
+        source: str = "user",
+        confidence: float = 1.0,
+        verified_by: str | None = None,
+        evidence: dict | None = None,
+    ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audio_lang_verifications "
@@ -89,8 +98,12 @@ class AudioLangStore:
                 "  confidence=excluded.confidence, verified_at=excluded.verified_at, "
                 "  verified_by=excluded.verified_by, evidence=excluded.evidence",
                 (
-                    canonical_path, lang_code.lower(), source, confidence,
-                    time.time(), verified_by,
+                    canonical_path,
+                    lang_code.lower(),
+                    source,
+                    confidence,
+                    time.time(),
+                    verified_by,
                     json.dumps(evidence) if evidence else None,
                 ),
             )
@@ -105,8 +118,12 @@ class AudioLangStore:
             ).fetchone()
         if row:
             return AudioLangVerification(
-                canonical_path=row[0], lang_code=row[1], source=row[2],
-                confidence=row[3], verified_at=row[4], verified_by=row[5],
+                canonical_path=row[0],
+                lang_code=row[1],
+                source=row[2],
+                confidence=row[3],
+                verified_at=row[4],
+                verified_by=row[5],
                 evidence=json.loads(row[6]) if row[6] else None,
             )
         # #226: fall through to series intent — every episode of a
@@ -168,11 +185,17 @@ class AudioLangStore:
             ).fetchall()
         out = []
         for r in rows:
-            out.append(AudioLangVerification(
-                canonical_path=r[0], lang_code=r[1], source=r[2],
-                confidence=r[3], verified_at=r[4], verified_by=r[5],
-                evidence=json.loads(r[6]) if r[6] else None,
-            ))
+            out.append(
+                AudioLangVerification(
+                    canonical_path=r[0],
+                    lang_code=r[1],
+                    source=r[2],
+                    confidence=r[3],
+                    verified_at=r[4],
+                    verified_by=r[5],
+                    evidence=json.loads(r[6]) if r[6] else None,
+                )
+            )
         return out
 
     # ─── #226: series-level intent ──────────────────────────────────
@@ -199,10 +222,16 @@ class AudioLangStore:
                 best_len = len(prefix)
         return best
 
-    def set_series_intent(self, *, series_prefix: str, lang_code: str,
-                          source: str = "user", confidence: float = 1.0,
-                          declared_by: str | None = None,
-                          note: str | None = None) -> None:
+    def set_series_intent(
+        self,
+        *,
+        series_prefix: str,
+        lang_code: str,
+        source: str = "user",
+        confidence: float = 1.0,
+        declared_by: str | None = None,
+        note: str | None = None,
+    ) -> None:
         """Record an intent declaration. Must end with '/' to disambiguate
         adjacent series — caller responsibility."""
         if not series_prefix.endswith("/"):
@@ -217,8 +246,7 @@ class AudioLangStore:
                 "  lang_code=excluded.lang_code, source=excluded.source, "
                 "  confidence=excluded.confidence, declared_at=excluded.declared_at, "
                 "  declared_by=excluded.declared_by, note=excluded.note",
-                (series_prefix, lang_code.lower(), source, confidence,
-                 time.time(), declared_by, note),
+                (series_prefix, lang_code.lower(), source, confidence, time.time(), declared_by, note),
             )
 
     def delete_series_intent(self, series_prefix: str) -> bool:
@@ -241,9 +269,13 @@ class AudioLangStore:
             ).fetchall()
         return [
             {
-                "series_prefix": r[0], "lang_code": r[1], "source": r[2],
-                "confidence": r[3], "declared_at": r[4],
-                "declared_by": r[5], "note": r[6],
+                "series_prefix": r[0],
+                "lang_code": r[1],
+                "source": r[2],
+                "confidence": r[3],
+                "declared_at": r[4],
+                "declared_by": r[5],
+                "note": r[6],
             }
             for r in rows
         ]
@@ -276,9 +308,7 @@ class AudioLangStore:
         """All currently-dismissed series paths — read by build_coverage to
         suppress the #140 flag."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT series_path FROM mixed_language_dismissed"
-            ).fetchall()
+            rows = self._conn.execute("SELECT series_path FROM mixed_language_dismissed").fetchall()
         return {r[0] for r in rows}
 
     # ── #159: default-track mismatch dismiss (keyed by FILE path) ────────
@@ -308,15 +338,18 @@ class AudioLangStore:
         """All currently-dismissed file paths — read by build_coverage to
         suppress the #159 flag."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT file_path FROM track_mismatch_dismissed"
-            ).fetchall()
+            rows = self._conn.execute("SELECT file_path FROM track_mismatch_dismissed").fetchall()
         return {r[0] for r in rows}
 
-    def bulk_for_series(self, series_canonical_prefix: str, lang_code: str,
-                         file_paths: list[str], source: str = "user",
-                         confidence: float = 1.0,
-                         verified_by: str | None = None) -> int:
+    def bulk_for_series(
+        self,
+        series_canonical_prefix: str,
+        lang_code: str,
+        file_paths: list[str],
+        source: str = "user",
+        confidence: float = 1.0,
+        verified_by: str | None = None,
+    ) -> int:
         """Apply a verification to every file under a series. Returns
         number of rows upserted. UI calls this after the user confirms
         "apply to all Flics episodes?"."""
@@ -325,8 +358,11 @@ class AudioLangStore:
             if not p.startswith(series_canonical_prefix):
                 continue
             self.upsert(
-                canonical_path=p, lang_code=lang_code, source=source,
-                confidence=confidence, verified_by=verified_by,
+                canonical_path=p,
+                lang_code=lang_code,
+                source=source,
+                confidence=confidence,
+                verified_by=verified_by,
             )
             n += 1
         return n
@@ -392,30 +428,44 @@ def resolve_audio_language_override(
 
     if not src:
         _log.warning(
-            "%s: REFUSING override=%s for %s — verification has no "
-            "source field (corrupt store entry?)",
-            caller, lang, canonical,
+            "%s: REFUSING override=%s for %s — verification has no source field (corrupt store entry?)",
+            caller,
+            lang,
+            canonical,
         )
         return None
     if conf < _MIN_CONFIDENCE:
         _log.warning(
             "%s: REFUSING override=%s for %s — confidence %.2f < %.2f "
             "(source=%s). Let subgen detect from audio instead.",
-            caller, lang, canonical, conf, _MIN_CONFIDENCE, src,
+            caller,
+            lang,
+            canonical,
+            conf,
+            _MIN_CONFIDENCE,
+            src,
         )
         return None
 
     evidence_keys = list((verification.evidence or {}).keys())
     if lang in _RISKY_LANGS:
         _log.info(
-            "%s: forwarding RISKY override=%s for %s "
-            "(source=%s, conf=%.2f, evidence=%s)",
-            caller, lang, canonical, src, conf, evidence_keys,
+            "%s: forwarding RISKY override=%s for %s (source=%s, conf=%.2f, evidence=%s)",
+            caller,
+            lang,
+            canonical,
+            src,
+            conf,
+            evidence_keys,
         )
     else:
         _log.info(
-            "%s: forwarding audio_language_override=%s for %s "
-            "(source=%s, conf=%.2f, evidence=%s)",
-            caller, lang, canonical, src, conf, evidence_keys,
+            "%s: forwarding audio_language_override=%s for %s (source=%s, conf=%.2f, evidence=%s)",
+            caller,
+            lang,
+            canonical,
+            src,
+            conf,
+            evidence_keys,
         )
     return lang

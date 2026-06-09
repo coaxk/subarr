@@ -10,6 +10,7 @@ processing_count > 0 or idle == false, requests with ?gate=true return
 gate=true by default; manual 'Enrich now' actions can override with
 gate=false.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,7 +44,7 @@ async def _gpu_busy(request: Request) -> str | None:
     except SubgenUnavailable:
         return None
     if (q.get("processing_count") or 0) > 0:
-        proc = (q.get("processing") or [])
+        proc = q.get("processing") or []
         path = proc[0].get("path") if proc else "?"
         return f"subgen busy: {q.get('processing_count')} transcribing ({path})"
     return None
@@ -69,8 +70,7 @@ async def health(request: Request) -> dict:
 
 
 @router.post("/lang")
-async def enrich_lang(req: EnrichOneRequest, request: Request,
-                       gate: bool = Query(True)) -> dict:
+async def enrich_lang(req: EnrichOneRequest, request: Request, gate: bool = Query(True)) -> dict:
     if gate:
         busy = await _gpu_busy(request)
         if busy:
@@ -88,15 +88,18 @@ async def enrich_lang(req: EnrichOneRequest, request: Request,
 
 
 @router.post("/lang/bulk")
-async def enrich_lang_bulk(req: EnrichBulkRequest, request: Request,
-                            gate: bool = Query(True),
-                            free_vram_after: bool = Query(
-                                True,
-                                description="v1.1-D: unload the Ollama model after "
-                                            "the batch finishes, freeing VRAM for subgen. "
-                                            "Set False if another enrichment batch is "
-                                            "queued back-to-back.",
-                            )) -> dict:
+async def enrich_lang_bulk(
+    req: EnrichBulkRequest,
+    request: Request,
+    gate: bool = Query(True),
+    free_vram_after: bool = Query(
+        True,
+        description="v1.1-D: unload the Ollama model after "
+        "the batch finishes, freeing VRAM for subgen. "
+        "Set False if another enrichment batch is "
+        "queued back-to-back.",
+    ),
+) -> dict:
     if gate:
         busy = await _gpu_busy(request)
         if busy:
@@ -133,12 +136,14 @@ async def unload_model(request: Request) -> dict:
     after = None
     try:
         from .gpu import gpu_status
+
         before = await gpu_status()
     except Exception:
         pass
     await ollama.unload()
     try:
         from .gpu import gpu_status
+
         after = await gpu_status()
     except Exception:
         pass

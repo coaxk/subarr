@@ -39,15 +39,24 @@ def _make_client(mock_transport: httpx.MockTransport) -> SubgenClient:
 async def test_patched_subgen_full_capabilities():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
-            return httpx.Response(200, json={
-                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (docker)",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (docker)",
+                },
+            )
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "queued_count": 0, "processing_count": 0,
-                "idle": True, "version": "2026.05.3",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "queued_count": 0,
+                    "processing_count": 0,
+                    "idle": True,
+                    "version": "2026.05.3",
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))
@@ -65,11 +74,15 @@ async def test_patched_subgen_full_capabilities():
 @pytest.mark.asyncio
 async def test_vanilla_subgen_compat_mode():
     """Vanilla subgen: /status works, /queue 404s."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
-            return httpx.Response(200, json={
-                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (docker)",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (docker)",
+                },
+            )
         if request.url.path == "/queue":
             return httpx.Response(404, text="Not Found")
         return httpx.Response(404)
@@ -89,6 +102,7 @@ async def test_vanilla_subgen_compat_mode():
 @pytest.mark.asyncio
 async def test_unreachable_subgen():
     """Network error → unreachable, everything False."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
 
@@ -108,6 +122,7 @@ async def test_queue_200_but_junk_body_treated_as_missing():
     """If /queue returns 200 but the body lacks queued/processing keys,
     it's not our shape — treat as vanilla. Defensive against a future
     upstream that adds /queue with a different contract."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "Subgen 2026.99.0"})
@@ -129,6 +144,7 @@ async def test_queue_200_but_junk_body_treated_as_missing():
 async def test_unparseable_version_doesnt_crash():
     """/status with a weird version string still returns reachable=True
     with version=None — version extraction is best-effort."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "unrecognised format"})
@@ -148,6 +164,7 @@ async def test_unparseable_version_doesnt_crash():
 @pytest.mark.asyncio
 async def test_status_5xx_returns_unreachable():
     """Subgen up but in error → treat as unreachable for capability purposes."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
             return httpx.Response(503, text="overloaded")
@@ -162,8 +179,11 @@ async def test_status_5xx_returns_unreachable():
 
 def test_capabilities_to_dict_includes_compat_mode():
     caps = SubgenCapabilities(
-        reachable=True, version="2026.05.3",
-        has_queue=False, has_batch=False, is_subarr_subgen=False,
+        reachable=True,
+        version="2026.05.3",
+        has_queue=False,
+        has_batch=False,
+        is_subarr_subgen=False,
     )
     d = caps.to_dict()
     assert d["compat_mode"] is True

@@ -25,6 +25,7 @@ response, then `resolve_source_language(detect, tag, None, multitrack=...)` make
 the call. We only DERIVE a status string from its (mixed, mislabel) flags +
 multitrack + whether anything was detected.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,10 +61,10 @@ _TIER2_CONF_RISKY = 0.45
 
 @dataclass
 class AuditState:
-    status: str = "running"          # running | done | cancelled | error
+    status: str = "running"  # running | done | cancelled | error
     total: int = 0
-    processed: int = 0               # files visited (incl. resumed-skips)
-    found: int = 0                   # actionable findings (mislabel/bilingual/multitrack)
+    processed: int = 0  # files visited (incl. resumed-skips)
+    found: int = 0  # actionable findings (mislabel/bilingual/multitrack)
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     error: str | None = None
@@ -82,8 +83,7 @@ class AuditState:
         }
 
 
-def _derive_status(detect: dict | None, mixed: bool, mislabel: bool,
-                   multitrack: bool) -> str:
+def _derive_status(detect: dict | None, mixed: bool, mislabel: bool, multitrack: bool) -> str:
     """Map the classifier's flags onto an audit bucket. Precedence:
     multitrack (the file is genuinely multi-track — the detect only saw one
     stream) → mislabel (Whisper unanimously disagrees with the tag) → bilingual
@@ -103,10 +103,17 @@ def _derive_status(detect: dict | None, mixed: bool, mislabel: bool,
 
 
 class AudioAuditWalker:
-    def __init__(self, subgen, audit_store, *, worklist: Callable[..., list],
-                 probe_store=None, busy_check: Callable[[], bool] | None = None,
-                 audio_lang=None,
-                 to_subgen: Callable[[str], str] = canonical_to_subgen_batch):
+    def __init__(
+        self,
+        subgen,
+        audit_store,
+        *,
+        worklist: Callable[..., list],
+        probe_store=None,
+        busy_check: Callable[[], bool] | None = None,
+        audio_lang=None,
+        to_subgen: Callable[[str], str] = canonical_to_subgen_batch,
+    ):
         self._subgen = subgen
         self._store = audit_store
         # worklist(scope) -> [(canonical_path, tag_lang, mtime), ...]. Resolved
@@ -177,7 +184,7 @@ class AudioAuditWalker:
         except Exception:
             return []
         out = []
-        for a in (getattr(pr, "audio", None) or []):
+        for a in getattr(pr, "audio", None) or []:
             code = (getattr(a, "language", None) or "").strip().lower()
             if code and code != "und" and code not in out:
                 out.append(code)
@@ -199,9 +206,12 @@ class AudioAuditWalker:
                     existing = self._store.get(canonical_path)
                 except Exception:
                     existing = None
-                if (existing is not None and mtime is not None
-                        and existing.mtime is not None
-                        and abs(existing.mtime - mtime) <= 1):
+                if (
+                    existing is not None
+                    and mtime is not None
+                    and existing.mtime is not None
+                    and abs(existing.mtime - mtime) <= 1
+                ):
                     state.processed += 1
                     continue
 
@@ -219,8 +229,12 @@ class AudioAuditWalker:
 
             state.status = "done"
             state.finished_at = time.time()
-            log.info("audio-audit done: %d files, %d findings, %d errors",
-                     state.processed, state.found, len(state.errors))
+            log.info(
+                "audio-audit done: %d files, %d findings, %d errors",
+                state.processed,
+                state.found,
+                len(state.errors),
+            )
         except asyncio.CancelledError:
             state.status = "cancelled"
             state.finished_at = time.time()
@@ -237,14 +251,14 @@ class AudioAuditWalker:
         except Exception:
             return False
 
-    async def _audit_one(self, state: AuditState, canonical_path: str,
-                         tag_lang: str | None, mtime: float | None) -> None:
+    async def _audit_one(
+        self, state: AuditState, canonical_path: str, tag_lang: str | None, mtime: float | None
+    ) -> None:
         resp = await self._subgen.detect_language_robust(self._to_subgen(canonical_path))
         detect = parse_robust_detect(resp)
         track_langs = self._track_langs(canonical_path)
         multitrack = len(track_langs) >= 2
-        lang, _src, mixed, mislabel = resolve_source_language(
-            detect, tag_lang, None, multitrack=multitrack)
+        lang, _src, mixed, mislabel = resolve_source_language(detect, tag_lang, None, multitrack=multitrack)
         status = _derive_status(detect, mixed, mislabel, multitrack)
         detected_lang = (detect or {}).get("language")
         det = detect or {}
@@ -266,20 +280,21 @@ class AudioAuditWalker:
         # verification so coverage shows it and the override gate can act —
         # NEVER as `user` truth, so it stays visible for the user to confirm and
         # never silently parrots a wrong auto-guess (risky scripts go sub-gate).
-        if (status == "mislabel" and detected_lang
-                and self._audio_lang is not None):
-            conf = (_TIER2_CONF_RISKY if detected_lang in _RISKY_LANGS
-                    else _TIER2_CONF)
+        if status == "mislabel" and detected_lang and self._audio_lang is not None:
+            conf = _TIER2_CONF_RISKY if detected_lang in _RISKY_LANGS else _TIER2_CONF
             try:
                 self._audio_lang.upsert(
                     canonical_path=(canonical_path or "").lstrip("/"),
-                    lang_code=detected_lang, source="whisper-robust",
+                    lang_code=detected_lang,
+                    source="whisper-robust",
                     confidence=conf,
-                    evidence={"via": "library-audit",
-                              "heard": list(det.get("languages_heard") or []),
-                              "n_agreeing": det.get("n_agreeing"),
-                              "n_total": det.get("n_total"),
-                              "tag_was": tag_lang},
+                    evidence={
+                        "via": "library-audit",
+                        "heard": list(det.get("languages_heard") or []),
+                        "n_agreeing": det.get("n_agreeing"),
+                        "n_total": det.get("n_total"),
+                        "tag_was": tag_lang,
+                    },
                 )
             except Exception:  # best-effort — the audit row is the required part
                 pass

@@ -11,6 +11,7 @@ Two concerns under test:
 2. The per-series .srt rglob fan-out must run with bounded concurrency
    (parallel, but capped) rather than strictly one-at-a-time.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ def cache(tmp_path):
 def _patch_build(monkeypatch, *, calls: list, delay: float = 0.05):
     """Patch build_coverage so refresh() does a cheap fake build that
     records each invocation and sleeps `delay` to simulate work."""
+
     async def _fake_build(bundle, **kwargs):
         calls.append(time.monotonic())
         await asyncio.sleep(delay)
@@ -36,9 +38,11 @@ def _patch_build(monkeypatch, *, calls: list, delay: float = 0.05):
         class _Report:
             def to_dict(self):
                 return {"items": [], "totals": {}, "sources": {}}
+
         return _Report()
 
     import subarr.coverage_engine as ce
+
     monkeypatch.setattr(ce, "build_coverage", _fake_build)
 
 
@@ -97,6 +101,7 @@ def test_request_refresh_respects_min_interval(cache, monkeypatch):
 def test_min_interval_default_from_config(monkeypatch, tmp_path):
     """The debounce window defaults from settings.coverage_refresh_min_interval_s."""
     from subarr import config
+
     c = CoverageCache(tmp_path / "c.db")
     # Default knob present and applied.
     assert c.min_interval_s == config.load().coverage_refresh_min_interval_s
@@ -144,8 +149,6 @@ def test_srt_index_handles_empty_and_dedupes(monkeypatch):
 
     monkeypatch.setattr(ce, "_scan_for_srt_recursive", _scan)
     # Duplicate + empty dirs must be deduped and skipped.
-    result = asyncio.run(
-        ce._build_srt_index_parallel(["a", "a", "", "b"], cap=4)
-    )
+    result = asyncio.run(ce._build_srt_index_parallel(["a", "a", "", "b"], cap=4))
     assert set(result.keys()) == {"a", "b"}
     assert sorted(seen) == ["a", "b"]

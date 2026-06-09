@@ -1,4 +1,5 @@
 """Tests for GET /api/queue (subgen v4.2 proxy)."""
+
 from __future__ import annotations
 
 import httpx
@@ -17,14 +18,17 @@ def test_queue_idle_default(app_with_stub):
 
 def _busy_handler(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [{"path": "/media/library/TV/A/file2.mkv", "type": "transcribe"}],
-            "processing": [{"path": "/media/library/TV/A/file1.mkv", "type": "transcribe"}],
-            "queued_count": 1,
-            "processing_count": 1,
-            "idle": False,
-            "version": "2026.05.3",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [{"path": "/media/library/TV/A/file2.mkv", "type": "transcribe"}],
+                "processing": [{"path": "/media/library/TV/A/file1.mkv", "type": "transcribe"}],
+                "queued_count": 1,
+                "processing_count": 1,
+                "idle": False,
+                "version": "2026.05.3",
+            },
+        )
     return httpx.Response(404)
 
 
@@ -44,17 +48,20 @@ def _arena_mixed_handler(req: httpx.Request) -> httpx.Response:
     # (NOT under the media prefix). The arena job must NOT count toward the main
     # queue or appear in its lists.
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [],
-            "processing": [
-                {"path": "/media/library/TV/A/file1.mkv", "type": "transcribe"},
-                {"path": "/tmp/subgen-upload-abc123.wav", "type": "transcribe"},
-            ],
-            "queued_count": 0,
-            "processing_count": 2,
-            "idle": False,
-            "version": "2026.05.3",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [],
+                "processing": [
+                    {"path": "/media/library/TV/A/file1.mkv", "type": "transcribe"},
+                    {"path": "/tmp/subgen-upload-abc123.wav", "type": "transcribe"},
+                ],
+                "queued_count": 0,
+                "processing_count": 2,
+                "idle": False,
+                "version": "2026.05.3",
+            },
+        )
     return httpx.Response(404)
 
 
@@ -71,14 +78,17 @@ def test_queue_excludes_arena_asr_upload_jobs(app_with_stub):
 
 def _one_queued_handler(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [{"path": "/media/library/TV/Dup/dupfile.mkv", "type": "transcribe"}],
-            "processing": [],
-            "queued_count": 1,
-            "processing_count": 0,
-            "idle": False,
-            "version": "2026.05.3",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [{"path": "/media/library/TV/Dup/dupfile.mkv", "type": "transcribe"}],
+                "processing": [],
+                "queued_count": 1,
+                "processing_count": 0,
+                "idle": False,
+                "version": "2026.05.3",
+            },
+        )
     return httpx.Response(404)
 
 
@@ -89,6 +99,7 @@ def test_inflight_queued_path_not_duplicated_in_history(app_with_stub):
     queued section, not also in history/Recently-done. Regression for the
     double-listing where 40+ queued files showed in both places."""
     from subarr.scan_store import PATH_STATUS_OK
+
     c = app_with_stub
     store = c.app.state.scans
     scan = store.create(["TV/Dup/dupfile.mkv"], reverse=False)
@@ -98,8 +109,9 @@ def test_inflight_queued_path_not_duplicated_in_history(app_with_stub):
 
     body = c.get("/api/queue").json()
     assert any("dupfile.mkv" in t["path"] for t in body["queued"])
-    assert not any("dupfile.mkv" in h["path"] for h in body["history"]), \
+    assert not any("dupfile.mkv" in h["path"] for h in body["history"]), (
         "in-flight queued path must not also appear in history"
+    )
 
 
 def _down_handler(req: httpx.Request) -> httpx.Response:
@@ -144,6 +156,7 @@ def _cancel_handler(req):
 def test_cancel_passes_subgen_path_verbatim(app_with_stub):
     import dataclasses
     from subarr.subgen_client import SubgenCapabilities
+
     c = app_with_stub
     base = c.app.state.subgen_caps or SubgenCapabilities()
     c.app.state.subgen_caps = dataclasses.replace(base, queue_cancel=True)

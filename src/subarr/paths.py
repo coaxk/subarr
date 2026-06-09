@@ -4,6 +4,7 @@ Four representations exist (see docs/design-notes.md). The GUI holds the canonic
 form — relative-to-media-root, forward-slash, no leading slash — and converts at
 boundaries.
 """
+
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
@@ -87,7 +88,7 @@ def subgen_to_canonical(subgen_path: str) -> str:
     p = (subgen_path or "").strip()
     prefix = settings.subgen_media_prefix.rstrip("/")
     if prefix and p.startswith(prefix + "/"):
-        return p[len(prefix) + 1:].strip("/")
+        return p[len(prefix) + 1 :].strip("/")
     if prefix and p == prefix:
         return ""
     return p.strip("/")

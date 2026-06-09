@@ -10,6 +10,7 @@ Lives in the same subarr.db file as the scan store / provenance ledger;
 separate connection so background walks don't contend with HTTP-request
 writes.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,8 +40,9 @@ class ProbeStore:
         with self._lock:
             self._conn.close()
 
-    def get(self, canonical_path: str, mtime: float | None = None,
-            size: int | None = None) -> ProbeResult | None:
+    def get(
+        self, canonical_path: str, mtime: float | None = None, size: int | None = None
+    ) -> ProbeResult | None:
         """If mtime/size supplied, returns the cached entry only if both
         match; mismatch is treated as cache miss (caller re-probes).
         If mtime/size are None, returns whatever is cached (used by the
@@ -73,8 +75,9 @@ class ProbeStore:
         result.subtitles = [SubtitleStream(**s) for s in subs if isinstance(s, dict)]
         return result
 
-    def upsert(self, *, canonical_path: str, mtime: float, size: int,
-               result: ProbeResult, source: str = "ffprobe") -> None:
+    def upsert(
+        self, *, canonical_path: str, mtime: float, size: int, result: ProbeResult, source: str = "ffprobe"
+    ) -> None:
         """Upsert a probe row. `source` defaults to 'ffprobe' to preserve
         v1.0 behavior.
 
@@ -100,10 +103,14 @@ class ProbeStore:
                 "  sub_json=excluded.sub_json, probed_at=excluded.probed_at, "
                 "  source=excluded.source",
                 (
-                    canonical_path, mtime, size, result.duration_s,
+                    canonical_path,
+                    mtime,
+                    size,
+                    result.duration_s,
                     json.dumps([a.to_dict() for a in result.audio]),
                     json.dumps([s.to_dict() for s in result.subtitles]),
-                    time.time(), source,
+                    time.time(),
+                    source,
                 ),
             )
             # A successful probe clears any prior failure so a recovered file
@@ -130,9 +137,7 @@ class ProbeStore:
 
     def failed_paths(self) -> set[str]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT canonical_path FROM probe_failures"
-            ).fetchall()
+            rows = self._conn.execute("SELECT canonical_path FROM probe_failures").fetchall()
         return {r[0] for r in rows}
 
     def get_failure(self, canonical_path: str) -> dict | None:
@@ -144,23 +149,18 @@ class ProbeStore:
             ).fetchone()
         if not row:
             return None
-        return {"canonical_path": row[0], "error": row[1],
-                "failed_at": row[2], "attempts": row[3]}
+        return {"canonical_path": row[0], "error": row[1], "failed_at": row[2], "attempts": row[3]}
 
     def count_by_source(self) -> dict[str, int]:
         """v1.1-A: telemetry for the arr_mediainfo win. Counts
         {'ffprobe': N, 'arr_mediainfo': M}."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT source, COUNT(*) FROM media_probe GROUP BY source"
-            ).fetchall()
+            rows = self._conn.execute("SELECT source, COUNT(*) FROM media_probe GROUP BY source").fetchall()
         return {r[0]: r[1] for r in rows}
 
     def all_paths(self) -> list[str]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT canonical_path FROM media_probe"
-            ).fetchall()
+            rows = self._conn.execute("SELECT canonical_path FROM media_probe").fetchall()
         return [r[0] for r in rows]
 
     def all_entries(self) -> list[ProbeResult]:

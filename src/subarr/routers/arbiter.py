@@ -14,6 +14,7 @@ Score threshold guidance: Bazarr providers report scores 0–360, where:
 We surface the top 5 and let the user decide. UI can default-recommend
 "take it" if best score >= 300.
 """
+
 from __future__ import annotations
 
 import logging
@@ -75,7 +76,8 @@ async def list_candidates(
         else:
             r["tier"] = "weak"
     return {
-        "count": len(rows), "language": language,
+        "count": len(rows),
+        "language": language,
         "candidates": rows[:20],
         "filtered_self_whisper": filtered_self_whisper,
     }

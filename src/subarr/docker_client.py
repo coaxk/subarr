@@ -6,6 +6,7 @@ extract progress lines. Nothing else. This keeps the docker.sock security
 tradeoff (root-equivalent) honest — no user input ever flows into Docker
 SDK calls.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -100,6 +101,7 @@ class DockerOps:
         Keyed by the truncated name subgen emits in the bracket; the
         queue-merge step in routers/queue.py matches it against
         os.path.basename of each processing-task path."""
+
         def _do() -> dict[str, dict]:
             client = self._get()
             try:

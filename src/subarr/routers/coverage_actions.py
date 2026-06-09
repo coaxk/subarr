@@ -12,6 +12,7 @@ the same way Sonarr's do (the wanted row has the movie itself, which
 IS the single video file). For movies the canonical path is already
 file-level, so no resolution needed.
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,7 +42,7 @@ def _strip_arr_prefix(arr_path: str) -> str:
     prefix = settings.arr_path_prefix
     s = arr_path or ""
     if prefix and s.startswith(prefix):
-        s = s[len(prefix):]
+        s = s[len(prefix) :]
     return s.strip("/")
 
 

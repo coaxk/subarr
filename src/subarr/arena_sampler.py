@@ -18,6 +18,7 @@ would hide the exact failure mode the lab exists to find — hence the strata.
 `select_windows` is pure + unit-tested; `build_sample` shells ffmpeg + VAD
 (needs the runtime, live-verified).
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,17 +30,16 @@ from . import vad
 
 log = logging.getLogger(__name__)
 
-WINDOW_S = 30.0          # length of each strata window (matches Tier-B: all clips were 30s)
-MAX_WINDOWS = 3          # speech + boundary + silence
-_MIN_SILENCE_GAP = 6.0   # only treat a gap this long as a "silence" strata
+WINDOW_S = 30.0  # length of each strata window (matches Tier-B: all clips were 30s)
+MAX_WINDOWS = 3  # speech + boundary + silence
+_MIN_SILENCE_GAP = 6.0  # only treat a gap this long as a "silence" strata
 
 
 def _clamp_start(start: float, duration: float, win: float) -> float:
     return round(max(0.0, min(start, max(0.0, duration - win))), 2)
 
 
-def select_windows(ranges: list[tuple[float, float]], duration: float,
-                   win: float = WINDOW_S) -> list[dict]:
+def select_windows(ranges: list[tuple[float, float]], duration: float, win: float = WINDOW_S) -> list[dict]:
     """Pick up to 3 strata window starts: dense-speech, speech→silence
     boundary, and the longest silence/music gap. Pure (no I/O) so it's
     unit-testable. De-dups windows whose starts are within half a window.
@@ -87,11 +87,16 @@ def select_windows(ranges: list[tuple[float, float]], duration: float,
 
 
 def _duration_s(path: str) -> float:
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", path],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
-    ).stdout.decode().strip()
+    out = (
+        subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
     return float(out)
 
 
@@ -99,9 +104,26 @@ def _cut_clip(fs_path: str, start: float, length: float, out_path: str, track: i
     """Extract one window → 16 kHz mono wav (audio-only keeps the upload tiny).
     `track` selects the Nth audio stream (0-based) for multi-track files (an
     original + a dub get swept separately, each from its own track)."""
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-ss", str(start), "-i", fs_path, "-t", str(length),
-           "-map", f"0:a:{track}", "-ar", "16000", "-ac", "1", out_path]
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(start),
+        "-i",
+        fs_path,
+        "-t",
+        str(length),
+        "-map",
+        f"0:a:{track}",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        out_path,
+    ]
     subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
 
 
@@ -121,11 +143,15 @@ def build_samples(fs_path: str, *, out_dir: str | None = None, track: int = 0) -
     ranges = vad.normalize_speech_ranges(raw) if raw else []
     duration = _duration_s(fs_path)
     windows = select_windows(ranges, duration)
-    log.info("arena sampler: %s → %d separate strata clips (%s)", Path(fs_path).name,
-             len(windows), ", ".join(w["kind"] for w in windows))
+    log.info(
+        "arena sampler: %s → %d separate strata clips (%s)",
+        Path(fs_path).name,
+        len(windows),
+        ", ".join(w["kind"] for w in windows),
+    )
 
     base = Path(out_dir or tempfile.gettempdir())
-    key = abs(hash((fs_path, duration, track))) % 10**8   # track in key so multi-track clips don't collide
+    key = abs(hash((fs_path, duration, track))) % 10**8  # track in key so multi-track clips don't collide
     clips: list[dict] = []
     for i, w in enumerate(windows):
         clip_path = str(base / f"arena-sample-{key}-t{track}-{i}-{w['kind']}.wav")

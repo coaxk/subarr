@@ -2,6 +2,7 @@
 subgen. Covers enqueue+dedup, priority buckets, feeder ordering, status
 transitions, removal, and reorder (promote/demote/move incl. cross-bucket).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -66,9 +67,9 @@ def test_submitted_still_dedups(store):
 
 def test_feeder_order_priority_then_position(store):
     store.enqueue("TV/back.mkv", source="backfill")  # prio 0
-    store.enqueue("TV/gap1.mkv", source="gaps")      # prio 1
-    store.enqueue("TV/gap2.mkv", source="gaps")      # prio 1
-    store.enqueue("TV/man.mkv", source="manual")     # prio 2
+    store.enqueue("TV/gap1.mkv", source="gaps")  # prio 1
+    store.enqueue("TV/gap2.mkv", source="gaps")  # prio 1
+    store.enqueue("TV/man.mkv", source="manual")  # prio 2
     order = _ids(store.list(status=STATUS_PENDING))
     # manual first, then gaps in insert order, then backfill last
     assert order == ["TV/man.mkv", "TV/gap1.mkv", "TV/gap2.mkv", "TV/back.mkv"]

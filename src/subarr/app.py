@@ -1,4 +1,5 @@
 """FastAPI app entry point."""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +50,7 @@ class RevalidatingStaticFiles(StaticFiles):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
 
+
 from . import __version__
 from .completion_watcher import CompletionWatcher
 from .config import settings
@@ -64,17 +66,38 @@ from .pending_queue import PendingQueueStore
 from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
 from .onboarding import OnboardingStore
 from .routers import (
-    admin, aftercare as r_aftercare, arbiter as r_arbiter, arena as r_arena,
+    admin,
+    aftercare as r_aftercare,
+    arbiter as r_arbiter,
+    arena as r_arena,
     arr_mediainfo as r_arr_mediainfo,
     audio_audit as r_audio_audit,
     audio_lang as r_audio_lang,
-    bazarr_sync, blacklist as r_blacklist, browse, coverage, coverage_actions,
-    discovery as r_discovery, household as r_household,
-    providers as r_providers, vision as r_vision,
-    enrichment as r_enrichment, gpu, home as r_home, integrations, logs, mode,
-    onboarding as r_onboarding, probe as r_probe, provenance as r_provenance,
-    queue, scan, schedule as r_schedule, sidecar as r_sidecar,
-    telemetry as r_telemetry, updates as r_updates, vad as r_vad,
+    bazarr_sync,
+    blacklist as r_blacklist,
+    browse,
+    coverage,
+    coverage_actions,
+    discovery as r_discovery,
+    household as r_household,
+    providers as r_providers,
+    vision as r_vision,
+    enrichment as r_enrichment,
+    gpu,
+    home as r_home,
+    integrations,
+    logs,
+    mode,
+    onboarding as r_onboarding,
+    probe as r_probe,
+    provenance as r_provenance,
+    queue,
+    scan,
+    schedule as r_schedule,
+    sidecar as r_sidecar,
+    telemetry as r_telemetry,
+    updates as r_updates,
+    vad as r_vad,
 )
 from . import arena_explain as _arena_explain
 from .arena import AsrRunner
@@ -108,6 +131,7 @@ def _arena_fallback_lang(app_, media_path):
 
     Returns an ISO-639-1 code, or None (→ the herd's 'undetermined' bucket)."""
     from .langs import normalize_lang
+
     canon = (media_path or "").strip().lstrip("/")
     # Tier 0: a user's manual audio-lang verification (incl. one set via the
     # tuning-lab "set language" action) — ground truth, so a corrected file's
@@ -124,7 +148,7 @@ def _arena_fallback_lang(app_, media_path):
     try:
         store = getattr(app_.state, "probe_store", None)
         pr = store.get(canon) if store is not None else None
-        for a in (getattr(pr, "audio", None) or []):
+        for a in getattr(pr, "audio", None) or []:
             code = normalize_lang(getattr(a, "language", None) or "")
             if code and code != "und":
                 return code
@@ -134,9 +158,9 @@ def _arena_fallback_lang(app_, media_path):
     try:
         cc = getattr(app_.state, "coverage_cache", None)
         snap = cc.get_cached() if cc is not None else None
-        for it in (getattr(snap, "items", None) or []):
+        for it in getattr(snap, "items", None) or []:
             if it.get("file_canonical_path") == canon or it.get("canonical_path") == canon:
-                for al in (it.get("audio_langs") or []):
+                for al in it.get("audio_langs") or []:
                     code = normalize_lang(al)
                     if code and code != "und":
                         return code
@@ -151,11 +175,12 @@ def _arena_audio_tracks(app_, media_path):
     a dub), which the Tuning Lab can only sweep ONE track of — surfaced as a
     'multitrack' advisory distinct from single-track bilingual content."""
     from .langs import normalize_lang
+
     out = []
     try:
         store = getattr(app_.state, "probe_store", None)
         pr = store.get((media_path or "").strip().lstrip("/")) if store is not None else None
-        for a in (getattr(pr, "audio", None) or []):
+        for a in getattr(pr, "audio", None) or []:
             out.append(normalize_lang(getattr(a, "language", None) or "") or None)
     except Exception:
         return []
@@ -171,10 +196,10 @@ async def lifespan(app_: FastAPI):
     # so a half-deployed wheel can still self-heal. Remove the
     # init_schema() calls after v1.0 ships.
     from .migrate import run_migrations
+
     applied = run_migrations(settings.db_path)
     if applied:
-        log.info("schema migrations applied this boot: %s",
-                 [m.name for m in applied])
+        log.info("schema migrations applied this boot: %s", [m.name for m in applied])
     app_.state.subgen = SubgenClient()
     # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth
@@ -202,8 +227,12 @@ async def lifespan(app_: FastAPI):
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.
     for _tname, _tiv in (
-        ("coverage-cache", 300), ("dashboard-cache", 30), ("scheduler", 60),
-        ("completion-watcher", 30), ("update-checker", 86400), ("subgen-watchdog", 30),
+        ("coverage-cache", 300),
+        ("dashboard-cache", 30),
+        ("scheduler", 60),
+        ("completion-watcher", 30),
+        ("update-checker", 86400),
+        ("subgen-watchdog", 30),
         ("queue-feeder", 5),  # #66/#116
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
@@ -230,11 +259,13 @@ async def lifespan(app_: FastAPI):
     # Prune sweeps older than the retention window on boot (0/negative disables).
     if settings.arena_retention_days > 0:
         import time as _time
+
         _cutoff = _time.time() - settings.arena_retention_days * 86400
         _pruned = app_.state.arena_store.prune_older_than(_cutoff)
         if _pruned:
-            log.info("arena: pruned %d sweep(s) older than %d days on boot",
-                     _pruned, settings.arena_retention_days)
+            log.info(
+                "arena: pruned %d sweep(s) older than %d days on boot", _pruned, settings.arena_retention_days
+            )
     app_.state.arena = ArenaService(
         app_.state.arena_store,
         build_runner=lambda run: AsrRunner(
@@ -246,7 +277,8 @@ async def lifespan(app_: FastAPI):
         # ollama EXPLAINS the result in plain language (not scoring). Resolved
         # live so an onboarding ollama-config swap is picked up without restart.
         explainer=lambda result, media_path: _arena_explain.explain(
-            result, media_path, getattr(app_.state, "ollama", None)),
+            result, media_path, getattr(app_.state, "ollama", None)
+        ),
         # Fallback source language when Whisper robust detection is inconclusive:
         # the file's KNOWN audio language from the ffprobe tag (probe_store).
         # Resolved live (probe_store is created later in lifespan; this closure
@@ -291,9 +323,11 @@ async def lifespan(app_: FastAPI):
         # Full provenance (series_id carried on the job) so completion_watcher
         # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).
         app_.state.provenance.record(
-            canonical_path=job.canonical_path, scan_id=scan.id,
+            canonical_path=job.canonical_path,
+            scan_id=scan.id,
             source=SOURCE_SUBGENSCAN,
-            series_id=job.series_id, sonarr_episode_id=job.sonarr_episode_id,
+            series_id=job.series_id,
+            sonarr_episode_id=job.sonarr_episode_id,
         )
 
     app_.state.queue_feeder = PendingQueueFeeder(
@@ -314,13 +348,16 @@ async def lifespan(app_: FastAPI):
     app_.state.ollama_probe_result = None
     # v1.1-O Layer 4: user audio-language verifications (manual review queue).
     from .audio_lang_store import AudioLangStore
+
     app_.state.audio_lang = AudioLangStore(settings.db_path)
     # v1.1 ARCH: coverage cache + background refresh (kills 60-90s page loads).
     from .coverage_cache import CoverageCache, background_refresh_loop
+
     app_.state.coverage_cache = CoverageCache(settings.db_path)
     app_.state.coverage_cache.load()  # warm in-memory mirror; table via migrations
     # v1.1 ARCH: dashboard cache (30s refresh, in-memory only).
     from .dashboard_cache import DashboardCache, background_refresh_loop as dash_refresh_loop
+
     app_.state.dashboard_cache = DashboardCache()
     app_.state.enrichment = EnrichmentStore(settings.db_path)
     app_.state.probe_store = ProbeStore(settings.db_path)
@@ -338,6 +375,7 @@ async def lifespan(app_: FastAPI):
         # Best-effort: a missing/unreadable file just gets None (always re-checked).
         try:
             from .paths import canonical_to_fs as _c2fs
+
             return _c2fs(canonical).stat().st_mtime
         except Exception:
             return None
@@ -348,7 +386,7 @@ async def lifespan(app_: FastAPI):
         cc = getattr(app_.state, "coverage_cache", None)
         snap = cc.get_cached() if cc is not None else None
         out = {}
-        for it in ((snap.items if snap is not None else None) or []):
+        for it in (snap.items if snap is not None else None) or []:
             c = it.get("file_canonical_path") or it.get("canonical_path")
             audio = it.get("audio_langs") or []
             if c and audio:
@@ -365,7 +403,7 @@ async def lifespan(app_: FastAPI):
             return []
         out = []
         seen = set()
-        for it in (snap.items or []):
+        for it in snap.items or []:
             c = it.get("file_canonical_path") or it.get("canonical_path")
             audio = it.get("audio_langs") or []
             if not c or not audio or c in seen:
@@ -383,6 +421,7 @@ async def lifespan(app_: FastAPI):
         # multitrack still detected, mislabel needs a tag to disagree with).
         import os
         from .paths import VIDEO_EXTS, fs_to_canonical
+
         root = settings.media_root
         tag_map = _coverage_tag_map()
         out = []
@@ -399,6 +438,7 @@ async def lifespan(app_: FastAPI):
                 fp = os.path.join(dirpath, fn)
                 try:
                     from pathlib import Path as _P
+
                     c = fs_to_canonical(_P(fp))
                 except Exception:
                     continue
@@ -420,8 +460,7 @@ async def lifespan(app_: FastAPI):
         if arena is None:
             return False
         try:
-            return any(r.status in ("running", "queued", "pending")
-                       for r in arena.list())
+            return any(r.status in ("running", "queued", "pending") for r in arena.list())
         except Exception:
             return False
 
@@ -477,6 +516,7 @@ async def lifespan(app_: FastAPI):
     # Dashboard cache background refresh — passes a build closure that
     # reuses the existing /api/home/dashboard internals.
     from .routers.home import _build_dashboard as _dash_build
+
     app_.state.dashboard_cache_task = asyncio.create_task(
         dash_refresh_loop(
             cache=app_.state.dashboard_cache,
@@ -508,6 +548,7 @@ async def lifespan(app_: FastAPI):
     else:
         _subgen_current = None
     from .update_checker import UpdateChecker
+
     current_versions = {
         "subarr": __version__,
         "subarr-subgen": _subgen_current,
@@ -555,6 +596,7 @@ async def lifespan(app_: FastAPI):
             # its queue, it was a blip, not a real restart — don't orphan
             # them. A genuine restart leaves subgen's queue empty.
             import os as _os
+
             live_basenames: set[str] = set()
             try:
                 q = await app_.state.subgen.queue()
@@ -564,17 +606,19 @@ async def lifespan(app_: FastAPI):
             except Exception as e:
                 log.debug("orphan reconcile: subgen queue fetch failed: %s", e)
             n = scans.mark_orphaned_before(
-                cutoff, completed_paths=completed, live_basenames=live_basenames,
+                cutoff,
+                completed_paths=completed,
+                live_basenames=live_basenames,
             )
             log.warning(
                 "subgen restart reconciliation: %d in-flight scan_store "
                 "entries marked ORPHANED (provenance confirms %d completed "
                 "in last 24h, preserved as ok)",
-                n, len(completed),
+                n,
+                len(completed),
             )
         except Exception as e:
-            log.error("subgen restart reconciliation failed: %s", e,
-                      exc_info=True)
+            log.error("subgen restart reconciliation failed: %s", e, exc_info=True)
 
     def _get_caps():
         return getattr(app_.state, "subgen_caps", None)
@@ -597,6 +641,7 @@ async def lifespan(app_: FastAPI):
     # Opt-out one-click in Settings. Stats published publicly at
     # subarr.com/stats so users see what we see.
     from .telemetry import TelemetryCollector, make_default_stats_provider
+
     app_.state.telemetry = TelemetryCollector(
         db_path=settings.db_path,
         endpoint=settings.telemetry_endpoint,
@@ -612,6 +657,7 @@ async def lifespan(app_: FastAPI):
     # gracefully falls back to manual entry when unavailable.
     if settings.docker_proxy_url or settings.docker_socket_path:
         from .docker_discovery import DockerDiscovery
+
         app_.state.docker_discovery = DockerDiscovery(
             base_url=settings.docker_proxy_url or None,
             unix_socket=settings.docker_socket_path or None,
@@ -769,6 +815,7 @@ if _STATIC_DIR.is_dir():
     # 1-week revalidated cache to match the other version-stable favicons.
     _FAVICON_PNG = _STATIC_DIR / "v1" / "favicon-32.png"
     if _FAVICON_PNG.is_file():
+
         @app.get("/favicon.ico", include_in_schema=False)
         def favicon() -> FileResponse:
             return FileResponse(
@@ -792,24 +839,25 @@ if _STATIC_DIR.is_dir():
         # The pretty URL is the source of truth for cross-screen links in
         # chrome.jsx; the underlying .html file is an implementation detail.
         _V1_SCREENS = {
-            "/home":       "home.html",
-            "/coverage":   "coverage.html",
+            "/home": "home.html",
+            "/coverage": "coverage.html",
             "/onboarding": "onboarding.html",
-            "/rules":      "rules.html",
-            "/settings":   "settings.html",
+            "/rules": "rules.html",
+            "/settings": "settings.html",
             "/file-modal": "file-modal.html",
-            "/queue":      "queue.html",
-            "/library":    "library.html",
-            "/logs":       "logs.html",
-            "/review":     "review.html",  # v1.1.1: dedicated audio-lang review queue
-            "/arena":      "arena.html",   # #131: tuning-lab config sweep
-            "/health":     "health.html",  # #157: background-task health
-            "/aftercare":  "aftercare.html",  # #156: job aftercare review
+            "/queue": "queue.html",
+            "/library": "library.html",
+            "/logs": "logs.html",
+            "/review": "review.html",  # v1.1.1: dedicated audio-lang review queue
+            "/arena": "arena.html",  # #131: tuning-lab config sweep
+            "/health": "health.html",  # #157: background-task health
+            "/aftercare": "aftercare.html",  # #156: job aftercare review
         }
 
         def _make_v1_route(html_file: str):
             def _v1_screen():
                 return RedirectResponse(url=f"/static/v1/{html_file}", status_code=302)
+
             return _v1_screen
 
         for _path, _html in _V1_SCREENS.items():
@@ -844,6 +892,7 @@ else:
     @app.get("/")
     def index_missing() -> dict:
         from fastapi import HTTPException
+
         raise HTTPException(503, detail=f"frontend not packaged — expected static dir at {_STATIC_DIR}")
 
 

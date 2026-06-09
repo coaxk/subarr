@@ -65,12 +65,13 @@ PING_INTERVAL_S = 86400  # 24 hours
 @dataclass
 class TelemetryPayload:
     """The literal JSON we send. Easy to inspect + test."""
+
     install_id: str
     sent_at: float
     subarr_version: str
     python_version: str
     os_arch: str
-    subgen_kind: str               # 'subarr-subgen' | 'vanilla' | 'unreachable'
+    subgen_kind: str  # 'subarr-subgen' | 'vanilla' | 'unreachable'
     subgen_version: str | None
     integrations: dict[str, bool]
     library_bucket: str
@@ -138,8 +139,8 @@ class TelemetryCollector:
         *,
         endpoint: str | None = None,
         subarr_version: str = "0.0.0",
-        stats_provider=None,             # callable() -> dict (subarr-side stats)
-        subgen_caps_provider=None,       # callable() -> caps-or-None
+        stats_provider=None,  # callable() -> dict (subarr-side stats)
+        subgen_caps_provider=None,  # callable() -> caps-or-None
         interval_s: int = PING_INTERVAL_S,
     ):
         self._db_path = db_path
@@ -271,8 +272,9 @@ class TelemetryCollector:
                 headers={"User-Agent": f"subarr-telemetry/{self._subarr_version}"},
             )
         try:
-            r = await self._client.post(self._endpoint, content=payload_json,
-                                         headers={"Content-Type": "application/json"})
+            r = await self._client.post(
+                self._endpoint, content=payload_json, headers={"Content-Type": "application/json"}
+            )
             if r.status_code >= 400:
                 err = f"HTTP {r.status_code}"
                 self._record_attempt(payload_json, error=err, transmit=True)
@@ -289,14 +291,11 @@ class TelemetryCollector:
     def _ensure_row(self) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
         try:
-            existing = conn.execute(
-                "SELECT 1 FROM telemetry_state WHERE id = 1"
-            ).fetchone()
+            existing = conn.execute("SELECT 1 FROM telemetry_state WHERE id = 1").fetchone()
             if not existing:
                 install_id = uuid.uuid4().hex
                 conn.execute(
-                    "INSERT INTO telemetry_state (id, install_id, opted_in, created_at) "
-                    "VALUES (1, ?, 1, ?)",
+                    "INSERT INTO telemetry_state (id, install_id, opted_in, created_at) VALUES (1, ?, 1, ?)",
                     (install_id, time.time()),
                 )
                 log.info("telemetry: generated install_id=%s (opted in by default)", install_id)
@@ -427,12 +426,12 @@ def make_default_stats_provider(app_state) -> Any:
         ollama_probe = getattr(app_state, "ollama_probe_result", None)
         ollama_reachable = bool(ollama_probe and getattr(ollama_probe, "reachable", False))
         integrations = {
-            "bazarr":   bool(settings.bazarr_api_key),
-            "sonarr":   bool(settings.sonarr_api_key),
-            "radarr":   bool(settings.radarr_api_key),
+            "bazarr": bool(settings.bazarr_api_key),
+            "sonarr": bool(settings.sonarr_api_key),
+            "radarr": bool(settings.radarr_api_key),
             "tautulli": bool(settings.tautulli_api_key),
-            "plex":     bool(settings.plex_token),
-            "ollama":   ollama_reachable,
+            "plex": bool(settings.plex_token),
+            "ollama": ollama_reachable,
         }
 
         # Docker tier inferred from config presence
@@ -440,8 +439,12 @@ def make_default_stats_provider(app_state) -> Any:
             # Tier 3 if any config-dir env var set; Tier 2 otherwise.
             tier3_signals = any(
                 os.environ.get(v)
-                for v in ("SUBARR_BAZARR_CONFIG_DIR", "SUBARR_SONARR_CONFIG_DIR",
-                          "SUBARR_RADARR_CONFIG_DIR", "SUBARR_TAUTULLI_CONFIG_DIR")
+                for v in (
+                    "SUBARR_BAZARR_CONFIG_DIR",
+                    "SUBARR_SONARR_CONFIG_DIR",
+                    "SUBARR_RADARR_CONFIG_DIR",
+                    "SUBARR_TAUTULLI_CONFIG_DIR",
+                )
             )
             docker_tier = 3 if tier3_signals else 2
         else:

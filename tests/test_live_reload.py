@@ -28,6 +28,7 @@ def _imports():
     from subarr.scheduler import Scheduler
     from subarr.completion_watcher import CompletionWatcher
     from subarr.scan_runner import ScanRunner
+
     return Scheduler, CompletionWatcher, ScanRunner
 
 
@@ -102,6 +103,7 @@ def test_subgen_watchdog_resolves_subgen_via_provider():
     the boot client, _rebuild_runtime_clients closing the old client would
     pin caps to 'unreachable' forever."""
     from subarr.subgen_watchdog import SubgenWatchdog
+
     s1, s2 = object(), object()
     cur = {"s": s1}
     w = SubgenWatchdog(
@@ -137,9 +139,7 @@ async def test_rebuild_runtime_clients_swaps_and_closes():
             self.closed = True
 
     old_b, old_s, old_o = FakeClient(), FakeClient(), FakeClient()
-    state = SimpleNamespace(
-        integrations=old_b, subgen=old_s, ollama=old_o, subgen_caps="stale"
-    )
+    state = SimpleNamespace(integrations=old_b, subgen=old_s, ollama=old_o, subgen_caps="stale")
     # reprobe=False keeps the test hermetic (no network to subgen).
     await _rebuild_runtime_clients(state, reprobe=False)
 

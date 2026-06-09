@@ -21,6 +21,7 @@ The default 5-second sample length is enough to hear several words of
 dialog reliably; we use the middle of the chosen non-silent region as
 the start position to put the words in the centre.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +48,9 @@ def _vad_enabled() -> bool:
     """User master switch (#111). Read at call time via the config module so a
     live settings reload is honoured (provider pattern). Default on."""
     from . import config
+
     return bool(getattr(config.settings, "vad_enabled", False))
+
 
 _SILENCE_START_RE = re.compile(r"silence_start:\s*([\d.]+)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*([\d.]+)")
@@ -56,11 +59,11 @@ _SILENCE_END_RE = re.compile(r"silence_end:\s*([\d.]+)")
 @dataclass
 class DialogPositions:
     duration_s: float
-    positions: list[float]   # start times (s) — middles of longest non-silent regions
-    silence_ranges: list[tuple[float, float]]   # debug / UI reasoning
-    detected_at: float       # epoch
-    audio_tracks: int        # count of audio streams in file
-    method: str = "silencedetect"   # "vad" (silero speech) | "silencedetect"
+    positions: list[float]  # start times (s) — middles of longest non-silent regions
+    silence_ranges: list[tuple[float, float]]  # debug / UI reasoning
+    detected_at: float  # epoch
+    audio_tracks: int  # count of audio streams in file
+    method: str = "silencedetect"  # "vad" (silero speech) | "silencedetect"
 
 
 # In-memory cache keyed by (canonical_path, track) so repeat opens are
@@ -73,11 +76,16 @@ _CACHE_CAP = 200
 async def _ffprobe_duration_and_tracks(path: str) -> tuple[float, int]:
     """Returns (duration_seconds, audio_track_count)."""
     proc = await asyncio.create_subprocess_exec(
-        _FFPROBE, "-v", "error",
-        "-show_entries", "format=duration:stream=index,codec_type",
-        "-of", "default=noprint_wrappers=1",
+        _FFPROBE,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration:stream=index,codec_type",
+        "-of",
+        "default=noprint_wrappers=1",
         path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     out, _ = await proc.communicate()
     text = out.decode("utf-8", "replace")
@@ -94,10 +102,14 @@ async def _ffprobe_duration_and_tracks(path: str) -> tuple[float, int]:
     return duration, audio_count
 
 
-async def _silencedetect(path: str, track: int = 0,
-                         noise_db: float = -30.0, min_silence: float = 1.0,
-                         scan_timeout_s: float = 15.0,
-                         scan_window_s: float = 1200.0) -> list[tuple[float, float]]:
+async def _silencedetect(
+    path: str,
+    track: int = 0,
+    noise_db: float = -30.0,
+    min_silence: float = 1.0,
+    scan_timeout_s: float = 15.0,
+    scan_window_s: float = 1200.0,
+) -> list[tuple[float, float]]:
     """Returns list of (silence_start, silence_end) tuples.
     Skips silence shorter than min_silence seconds.
 
@@ -114,13 +126,24 @@ async def _silencedetect(path: str, track: int = 0,
     Bumped default timeout 90s → 15s so the modal fails fast and falls
     back to even-spaced positions rather than hanging."""
     cmd = [
-        _FFMPEG, "-hide_banner", "-nostdin",
-        "-t", f"{scan_window_s:.0f}",
-        "-i", path,
-        "-map", f"0:a:{track}",
-        "-ar", "8000", "-ac", "1",
-        "-af", f"silencedetect=noise={noise_db}dB:d={min_silence}",
-        "-f", "null", "-",
+        _FFMPEG,
+        "-hide_banner",
+        "-nostdin",
+        "-t",
+        f"{scan_window_s:.0f}",
+        "-i",
+        path,
+        "-map",
+        f"0:a:{track}",
+        "-ar",
+        "8000",
+        "-ac",
+        "1",
+        "-af",
+        f"silencedetect=noise={noise_db}dB:d={min_silence}",
+        "-f",
+        "null",
+        "-",
     ]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -159,8 +182,7 @@ async def _silencedetect(path: str, track: int = 0,
     return list(zip(starts[:n], ends[:n]))
 
 
-def _non_silent_ranges(duration: float, silence: list[tuple[float, float]]
-                       ) -> list[tuple[float, float]]:
+def _non_silent_ranges(duration: float, silence: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """Compute speech ranges as the complement of silence ranges within
     [0, duration]. Silence list is assumed sorted ascending by start."""
     if not silence:
@@ -178,8 +200,7 @@ def _non_silent_ranges(duration: float, silence: list[tuple[float, float]]
     return out
 
 
-def _pick_positions(non_silent: list[tuple[float, float]], n: int,
-                    sample_len: float = 5.0) -> list[float]:
+def _pick_positions(non_silent: list[tuple[float, float]], n: int, sample_len: float = 5.0) -> list[float]:
     """Pick N start positions from the longest non-silent ranges,
     ordered to spread across the runtime (so user samples beginning /
     middle / end-ish rather than all from one cluster)."""
@@ -187,7 +208,7 @@ def _pick_positions(non_silent: list[tuple[float, float]], n: int,
         return []
     # Sort by length desc, take top N candidates, then re-sort by start
     # so the UI sample buttons appear in temporal order.
-    sized = sorted(non_silent, key=lambda r: r[1] - r[0], reverse=True)[:n * 2]
+    sized = sorted(non_silent, key=lambda r: r[1] - r[0], reverse=True)[: n * 2]
     sized.sort(key=lambda r: r[0])
     out: list[float] = []
     for start, end in sized:
@@ -206,9 +227,11 @@ def _pick_positions(non_silent: list[tuple[float, float]], n: int,
     return out
 
 
-async def find_dialog_positions(path: str, track: int = 0, n: int = 3,
-                                use_cache: bool = True) -> DialogPositions:
+async def find_dialog_positions(
+    path: str, track: int = 0, n: int = 3, use_cache: bool = True
+) -> DialogPositions:
     import time
+
     key = (path, track)
     if use_cache and key in _position_cache:
         return _position_cache[key]
@@ -262,22 +285,32 @@ async def find_dialog_positions(path: str, track: int = 0, n: int = 3,
     return result
 
 
-async def extract_sample(path: str, start_s: float, duration_s: float = 5.0,
-                         track: int = 0) -> AsyncIterator[bytes]:
+async def extract_sample(
+    path: str, start_s: float, duration_s: float = 5.0, track: int = 0
+) -> AsyncIterator[bytes]:
     """Yield MP3 bytes for the requested audio window. Caller streams
     to client. Uses libmp3lame at 64k for size; browsers play it natively.
 
     Track is the audio stream index (0 = first audio track)."""
     cmd = [
-        _FFMPEG, "-hide_banner", "-nostdin",
-        "-ss", f"{max(0.0, start_s):.2f}",
-        "-i", path,
-        "-t", f"{max(0.5, duration_s):.2f}",
+        _FFMPEG,
+        "-hide_banner",
+        "-nostdin",
+        "-ss",
+        f"{max(0.0, start_s):.2f}",
+        "-i",
+        path,
+        "-t",
+        f"{max(0.5, duration_s):.2f}",
         "-vn",
-        "-map", f"0:a:{track}",
-        "-c:a", "libmp3lame",
-        "-b:a", "64k",
-        "-f", "mp3",
+        "-map",
+        f"0:a:{track}",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        "-f",
+        "mp3",
         "-",
     ]
     proc = await asyncio.create_subprocess_exec(

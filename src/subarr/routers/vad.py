@@ -5,6 +5,7 @@ small (~2MB) silero model on the user's explicit opt-in (onboarding
 checkbox). Download is from a pinned URL, SHA256-verified, written
 atomically — see `vad.pull_model`.
 """
+
 from __future__ import annotations
 
 import asyncio

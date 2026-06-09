@@ -88,8 +88,7 @@ def reset(request: Request) -> dict[str, Any]:
 
 
 @router.post("/onboarding/test/{service}")
-async def test_connection(service: str, body: TestRequest,
-                          request: Request) -> dict[str, Any]:
+async def test_connection(service: str, body: TestRequest, request: Request) -> dict[str, Any]:
     """Verify a (url, api_key) reaches the named service.
 
     Returns a structured result with:
@@ -125,6 +124,7 @@ async def _test_bazarr(body: TestRequest) -> dict[str, Any]:
     settings, but the wizard needs to test arbitrary URLs before
     committing them to settings. Same /api endpoints + headers."""
     import httpx
+
     base = body.url.rstrip("/")
     headers = {"X-API-KEY": body.api_key or ""}
     async with httpx.AsyncClient(base_url=base, headers=headers, timeout=15.0) as c:
@@ -142,7 +142,8 @@ async def _test_bazarr(body: TestRequest) -> dict[str, Any]:
         except Exception:
             pass
     return {
-        "ok": True, "version": version,
+        "ok": True,
+        "version": version,
         "detail": f"{len(eps)} wanted episodes · {len(movs)} wanted movies",
         "error": None,
     }
@@ -157,15 +158,16 @@ async def _test_sonarr(body: TestRequest) -> dict[str, Any]:
     # only thing the wizard actually needs to gate "Continue" on.
     # The series count surfaces later via the Coverage page anyway.
     import httpx
+
     headers = {"X-Api-Key": body.api_key or ""}
-    async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
-                                   headers=headers, timeout=15.0) as c:
+    async with httpx.AsyncClient(base_url=body.url.rstrip("/"), headers=headers, timeout=15.0) as c:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
     version = status.get("version")
     return {
-        "ok": True, "version": version,
+        "ok": True,
+        "version": version,
         "detail": f"Sonarr {version or 'connected'}",
         "error": None,
     }
@@ -175,15 +177,16 @@ async def _test_radarr(body: TestRequest) -> dict[str, Any]:
     # #138: same as _test_sonarr — dropped GET /api/v3/movie. Equivalent
     # large-library timeout for Radarr installs with 10k+ movies.
     import httpx
+
     headers = {"X-Api-Key": body.api_key or ""}
-    async with httpx.AsyncClient(base_url=body.url.rstrip("/"),
-                                   headers=headers, timeout=15.0) as c:
+    async with httpx.AsyncClient(base_url=body.url.rstrip("/"), headers=headers, timeout=15.0) as c:
         r = await c.get("/api/v3/system/status")
         r.raise_for_status()
         status = r.json()
     version = status.get("version")
     return {
-        "ok": True, "version": version,
+        "ok": True,
+        "version": version,
         "detail": f"Radarr {version or 'connected'}",
         "error": None,
     }
@@ -191,15 +194,22 @@ async def _test_radarr(body: TestRequest) -> dict[str, Any]:
 
 async def _test_tautulli(body: TestRequest) -> dict[str, Any]:
     import httpx
+
     async with httpx.AsyncClient(base_url=body.url.rstrip("/"), timeout=15.0) as c:
-        r = await c.get("/api/v2", params={
-            "apikey": body.api_key or "", "cmd": "get_history", "length": "1",
-        })
+        r = await c.get(
+            "/api/v2",
+            params={
+                "apikey": body.api_key or "",
+                "cmd": "get_history",
+                "length": "1",
+            },
+        )
         r.raise_for_status()
         body_json = r.json()
-        rows = (body_json.get("response", {}).get("data", {}).get("data") or [])
+        rows = body_json.get("response", {}).get("data", {}).get("data") or []
     return {
-        "ok": True, "version": None,
+        "ok": True,
+        "version": None,
         "detail": f"{len(rows)} recent play row(s) reachable",
         "error": None,
     }
@@ -207,15 +217,16 @@ async def _test_tautulli(body: TestRequest) -> dict[str, Any]:
 
 async def _test_subgen(body: TestRequest) -> dict[str, Any]:
     from ..subgen_client import SubgenClient
+
     c = SubgenClient(base_url=body.url)
     try:
         caps = await c.probe_capabilities()
         if not caps.reachable:
-            return {"ok": False, "version": None,
-                    "detail": None, "error": "subgen not reachable at this URL"}
+            return {"ok": False, "version": None, "detail": None, "error": "subgen not reachable at this URL"}
         kind = "subarr-subgen" if caps.is_subarr_subgen else "vanilla (compat mode)"
         return {
-            "ok": True, "version": caps.version,
+            "ok": True,
+            "version": caps.version,
             "detail": f"{kind} — has_queue={caps.has_queue} has_batch={caps.has_batch}",
             "error": None,
         }
@@ -229,15 +240,16 @@ async def _test_plex(body: TestRequest) -> dict[str, Any]:
     the live health probe applies. Token may arrive in `token` (preferred)
     or `api_key` (generic credential field)."""
     from ..integrations.plex import PlexClient
+
     token = body.token or body.api_key or ""
     c = PlexClient(base_url=body.url, token=token)
     if not c.is_configured():
-        return {"ok": False, "version": None, "detail": None,
-                "error": "Plex URL and token are both required"}
+        return {"ok": False, "version": None, "detail": None, "error": "Plex URL and token are both required"}
     status = await c.status()
     version = status.get("version")
     return {
-        "ok": True, "version": version,
+        "ok": True,
+        "version": version,
         "detail": f"Plex {version or 'connected'}",
         "error": None,
     }
@@ -245,12 +257,14 @@ async def _test_plex(body: TestRequest) -> dict[str, Any]:
 
 async def _test_ollama(body: TestRequest) -> dict[str, Any]:
     from ..integrations.ollama import OllamaClient
+
     c = OllamaClient(base_url=body.url, model="any")  # model arg is irrelevant for /api/tags
     try:
         tags = await c.tags()
         models = tags.get("models") or []
         return {
-            "ok": True, "version": None,
+            "ok": True,
+            "version": None,
             "detail": f"{len(models)} models installed",
             "error": None,
         }
@@ -314,15 +328,40 @@ async def auto_detect(request: Request) -> dict[str, Any]:
 # write to /tmp here; the literal exists so we can refuse to surface
 # /tmp as a "media candidate" in the onboarding wizard.
 _SKIP_MOUNT_PREFIXES = (
-    "/proc", "/sys", "/dev", "/run", "/tmp",  # nosec B108
-    "/etc/", "/var/log", "/usr/", "/lib", "/bin", "/sbin",
-    "/.", "/boot",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/tmp",  # nosec B108
+    "/etc/",
+    "/var/log",
+    "/usr/",
+    "/lib",
+    "/bin",
+    "/sbin",
+    "/.",
+    "/boot",
 )
 # Mount source types that are NEVER the user's media volume.
 _SKIP_FS_TYPES = {
-    "overlay", "tmpfs", "proc", "sysfs", "devpts", "cgroup", "cgroup2",
-    "mqueue", "ramfs", "pstore", "bpf", "tracefs", "debugfs", "securityfs",
-    "configfs", "fusectl", "autofs", "rpc_pipefs",
+    "overlay",
+    "tmpfs",
+    "proc",
+    "sysfs",
+    "devpts",
+    "cgroup",
+    "cgroup2",
+    "mqueue",
+    "ramfs",
+    "pstore",
+    "bpf",
+    "tracefs",
+    "debugfs",
+    "securityfs",
+    "configfs",
+    "fusectl",
+    "autofs",
+    "rpc_pipefs",
 }
 
 
@@ -397,14 +436,16 @@ def detect_mounts() -> dict[str, Any]:
                 except (PermissionError, OSError):
                     top_entries = []
                     item_count = None
-                candidates.append({
-                    "path": mountpoint,
-                    "fs_type": fs_type,
-                    "source": source,
-                    "priority": priority,
-                    "top_entries": top_entries,
-                    "item_count": item_count,
-                })
+                candidates.append(
+                    {
+                        "path": mountpoint,
+                        "fs_type": fs_type,
+                        "source": source,
+                        "priority": priority,
+                        "top_entries": top_entries,
+                        "item_count": item_count,
+                    }
+                )
     except OSError as e:
         return {
             "available": False,
@@ -413,11 +454,13 @@ def detect_mounts() -> dict[str, Any]:
         }
 
     # Sort by priority + then "looks more like a media root" (has subdirs).
-    candidates.sort(key=lambda c: (
-        c["priority"],
-        -(c["item_count"] or 0),
-        c["path"],
-    ))
+    candidates.sort(
+        key=lambda c: (
+            c["priority"],
+            -(c["item_count"] or 0),
+            c["path"],
+        )
+    )
 
     return {
         "available": True,
@@ -440,6 +483,7 @@ def probe_paths(body: ProbePathsRequest, request: Request) -> dict[str, Any]:
         return {"ok": False, "error": f"not a directory: {root}"}
 
     from ..paths import VIDEO_EXTS
+
     samples: list[str] = []
     total = 0
     try:
@@ -529,20 +573,21 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     wizard finishes (the wizard's final step shows a copy-paste
     snippet of the values they entered)."""
     from ..config import settings, env_is_set
+
     mapping = {
-        "media_root":       ("media_root", Path),
-        "arr_path_prefix":  ("arr_path_prefix", str),
-        "bazarr_url":       ("bazarr_url", str),
-        "bazarr_api_key":   ("bazarr_api_key", str),
-        "sonarr_url":       ("sonarr_url", str),
-        "sonarr_api_key":   ("sonarr_api_key", str),
-        "radarr_url":       ("radarr_url", str),
-        "radarr_api_key":   ("radarr_api_key", str),
-        "tautulli_url":     ("tautulli_url", str),
+        "media_root": ("media_root", Path),
+        "arr_path_prefix": ("arr_path_prefix", str),
+        "bazarr_url": ("bazarr_url", str),
+        "bazarr_api_key": ("bazarr_api_key", str),
+        "sonarr_url": ("sonarr_url", str),
+        "sonarr_api_key": ("sonarr_api_key", str),
+        "radarr_url": ("radarr_url", str),
+        "radarr_api_key": ("radarr_api_key", str),
+        "tautulli_url": ("tautulli_url", str),
         "tautulli_api_key": ("tautulli_api_key", str),
-        "subgen_url":       ("subgen_url", str),
-        "ollama_url":       ("ollama_url", str),
-        "ollama_model":     ("ollama_model", str),
+        "subgen_url": ("subgen_url", str),
+        "ollama_url": ("ollama_url", str),
+        "ollama_model": ("ollama_model", str),
     }
     for src_key, (settings_attr, coerce) in mapping.items():
         if src_key in progress and progress[src_key]:
@@ -554,8 +599,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
             # Trade-off: a wizard edit to an env-set field won't take effect
             # live — env wins until the operator updates env + restarts.
             if env_is_set(settings_attr):
-                log.debug("clobber-guard: kept env-set %s (ignored wizard value)",
-                          settings_attr)
+                log.debug("clobber-guard: kept env-set %s (ignored wizard value)", settings_attr)
                 continue
             try:
                 # Settings is a frozen dataclass — plain setattr raises
@@ -563,8 +607,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
                 # freeze for this deliberate runtime patch.
                 object.__setattr__(settings, settings_attr, coerce(progress[src_key]))
             except Exception as e:
-                log.warning("settings flush: %s=%r failed: %s",
-                            settings_attr, progress[src_key], e)
+                log.warning("settings flush: %s=%r failed: %s", settings_attr, progress[src_key], e)
 
 
 async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:

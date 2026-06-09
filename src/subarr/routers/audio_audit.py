@@ -8,6 +8,7 @@ The walker is OPT-IN (never auto-started) and GPU-polite (yields to live tuning-
 lab sweeps), so starting it is safe even mid-sweep — it just trickles in the
 background and pauses while sweeps run.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -54,9 +55,9 @@ def _verified_paths(request: Request) -> set[str]:
         # `whisper-robust` auto-verification must NOT hide the finding (else it
         # would self-erase everything it writes) — the user still gets to
         # confirm or correct it.
-        return {(p or "").lstrip("/")
-                for p, src in store.get_all_sources_as_lookup().items()
-                if src == "user"}
+        return {
+            (p or "").lstrip("/") for p, src in store.get_all_sources_as_lookup().items() if src == "user"
+        }
     except Exception:
         return set()
 
@@ -67,8 +68,9 @@ async def get_audit(request: Request) -> dict:
     store = request.app.state.audio_audit_store
     state = walker.get_state()
     verified = _verified_paths(request)
-    findings = [f.to_dict() for f in store.list_findings()
-                if (f.canonical_path or "").lstrip("/") not in verified]
+    findings = [
+        f.to_dict() for f in store.list_findings() if (f.canonical_path or "").lstrip("/") not in verified
+    ]
     return {
         "state": state.to_dict() if state is not None else None,
         "findings": findings,

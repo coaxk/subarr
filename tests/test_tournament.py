@@ -9,11 +9,13 @@ Rubric here is the v1 PROPOSAL (tunable) — these tests pin the *behaviour*
 (clean beats sloppy, broken SRT is disqualified, faster wins a tie), not the
 exact weights.
 """
+
 from __future__ import annotations
 
 
 def _t():
     from subarr import tournament as t
+
     return t
 
 
@@ -37,14 +39,14 @@ def test_empty_output_wins_on_a_silence_clip():
     quiet = t.score_entrant(t.Entrant(label="quiet", srt_text="", speech_ranges=SILENCE_CLIP))
     halluc = t.score_entrant(t.Entrant(label="halluc", srt_text=HALLUCINATION, speech_ranges=SILENCE_CLIP))
     assert not quiet.disqualified
-    assert quiet.composite >= 90.0           # correctly silent = clean pass
+    assert quiet.composite >= 90.0  # correctly silent = clean pass
     assert quiet.composite > halluc.composite  # and it beats the hallucination
 
 
 def test_hallucination_on_silence_is_penalised():
     t = _t()
     halluc = t.score_entrant(t.Entrant(label="halluc", srt_text=HALLUCINATION, speech_ranges=SILENCE_CLIP))
-    assert halluc.composite < 50.0           # text on a known-silent clip is hallucination
+    assert halluc.composite < 50.0  # text on a known-silent clip is hallucination
 
 
 def test_empty_still_disqualified_when_clip_has_speech():
@@ -63,10 +65,12 @@ def test_empty_still_disqualified_when_no_vad_data():
 
 def test_clean_beats_sloppy():
     t = _t()
-    result = t.run_tournament([
-        t.Entrant(label="sloppy", srt_text=SLOPPY),
-        t.Entrant(label="clean", srt_text=CLEAN),
-    ])
+    result = t.run_tournament(
+        [
+            t.Entrant(label="sloppy", srt_text=SLOPPY),
+            t.Entrant(label="clean", srt_text=CLEAN),
+        ]
+    )
     assert result.winner_label == "clean"
     # ranked best-first
     assert result.scorecards[0].entrant_label == "clean"
@@ -75,10 +79,12 @@ def test_clean_beats_sloppy():
 
 def test_broken_srt_is_disqualified_and_last():
     t = _t()
-    result = t.run_tournament([
-        t.Entrant(label="clean", srt_text=CLEAN),
-        t.Entrant(label="broken", srt_text=BROKEN),
-    ])
+    result = t.run_tournament(
+        [
+            t.Entrant(label="clean", srt_text=CLEAN),
+            t.Entrant(label="broken", srt_text=BROKEN),
+        ]
+    )
     broken = next(s for s in result.scorecards if s.entrant_label == "broken")
     assert broken.disqualified is True
     assert broken.composite == 0
@@ -89,10 +95,12 @@ def test_broken_srt_is_disqualified_and_last():
 def test_faster_entrant_wins_a_readability_tie():
     t = _t()
     # identical output → readability ties → speed is the tiebreak
-    result = t.run_tournament([
-        t.Entrant(label="slow", srt_text=CLEAN, gen_time_s=120.0),
-        t.Entrant(label="fast", srt_text=CLEAN, gen_time_s=20.0),
-    ])
+    result = t.run_tournament(
+        [
+            t.Entrant(label="slow", srt_text=CLEAN, gen_time_s=120.0),
+            t.Entrant(label="fast", srt_text=CLEAN, gen_time_s=20.0),
+        ]
+    )
     assert result.winner_label == "fast"
 
 

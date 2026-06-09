@@ -9,6 +9,7 @@ Deliberately dependency-free (stdlib only) and fail-soft: a missing or
 corrupt file reads as "no overrides", never raising — config must always
 load.
 """
+
 from __future__ import annotations
 
 import json
@@ -47,7 +48,7 @@ def _write(data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True), "utf-8")
-    tmp.replace(p)   # atomic on POSIX
+    tmp.replace(p)  # atomic on POSIX
 
 
 def save_override(key: str, value) -> None:

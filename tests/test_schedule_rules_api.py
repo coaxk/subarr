@@ -2,6 +2,7 @@
 a new AutoQueueRules field that isn't mirrored in the RulesUpdate request model
 is silently dropped by Pydantic and never persists.
 """
+
 from __future__ import annotations
 
 

@@ -13,6 +13,7 @@ None — and stores nothing — when there's no real majority, so we never recor
 guess. (Slice 1: detect + persist. The classification override + UI are #90
 slices 2–3.)
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,9 +24,9 @@ from .paths import canonical_to_subgen_batch
 log = logging.getLogger(__name__)
 
 
-async def verify_audio_language(subgen, store, canonical_path: str, *,
-                                to_subgen=canonical_to_subgen_batch,
-                                min_agreement: float = 0.5):
+async def verify_audio_language(
+    subgen, store, canonical_path: str, *, to_subgen=canonical_to_subgen_batch, min_agreement: float = 0.5
+):
     """Detect + persist a file's spoken language. Returns (iso_lang, confidence)
     on a clear majority, else None (nothing stored). Gate the caller on
     capabilities.robust_language_detection; this degrades to None on any error."""
@@ -41,6 +42,7 @@ async def verify_audio_language(subgen, store, canonical_path: str, *,
     if not lang or lang == "und" or not n_total or (n_agree / n_total) < min_agreement:
         return None  # no real majority — never store a guess
     confidence = round(n_agree / n_total, 2)
-    store.upsert(canonical_path=canonical_path, lang_code=lang, source="whisper",
-                 confidence=confidence, evidence=resp)
+    store.upsert(
+        canonical_path=canonical_path, lang_code=lang, source="whisper", confidence=confidence, evidence=resp
+    )
     return (lang, confidence)

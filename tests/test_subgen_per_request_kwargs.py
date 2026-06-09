@@ -9,6 +9,7 @@ container restart per variant). subarr must:
   2. Forward batch(kwargs={...}) as ?kwargs=<json> — and omit it entirely
      when not given (backward-compatible: vanilla/older subgen never sees it).
 """
+
 from __future__ import annotations
 
 import json
@@ -22,7 +23,8 @@ from subarr.subgen_client import SubgenClient
 def _make_client(mock_transport: httpx.MockTransport) -> SubgenClient:
     c = SubgenClient(base_url="http://fake-subgen:9000")
     c._client = httpx.AsyncClient(
-        base_url="http://fake-subgen:9000", transport=mock_transport,
+        base_url="http://fake-subgen:9000",
+        transport=mock_transport,
     )
     return c
 
@@ -31,14 +33,21 @@ def _make_client(mock_transport: httpx.MockTransport) -> SubgenClient:
 async def test_capability_detected_from_queue_block():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
-            return httpx.Response(200, json={
-                "version": "Subgen 2026.05.3, stable-ts 0.7.0 (docker)",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "version": "Subgen 2026.05.3, stable-ts 0.7.0 (docker)",
+                },
+            )
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "capabilities": {"per_request_kwargs": True},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "capabilities": {"per_request_kwargs": True},
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))
@@ -52,14 +61,19 @@ async def test_capability_detected_from_queue_block():
 @pytest.mark.asyncio
 async def test_capability_absent_defaults_false():
     """v4.7 and earlier: no per_request_kwargs flag → False, not crash."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "Subgen 2026.05.3 (docker)"})
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "capabilities": {"audio_language_override": True},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "capabilities": {"audio_language_override": True},
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))

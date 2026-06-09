@@ -9,6 +9,7 @@ Gracefully degrades when nvidia-smi is missing (CPU-only host, container
 without GPU passthrough): returns {online: false, error: ...} with HTTP 200
 so the GUI can render a "no GPU" panel instead of erroring the whole tab.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,7 +45,8 @@ _GPU_FIELDS = (
 
 async def _run_smi(exe: str, args: list[str]) -> str:
     proc = await asyncio.create_subprocess_exec(
-        exe, *args,
+        exe,
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -109,7 +111,9 @@ async def gpu_status() -> dict[str, Any]:
     }
 
     try:
-        proc_csv = await _run_smi(exe, ["--query-compute-apps=pid,process_name,used_memory", "--format=csv,nounits,noheader"])
+        proc_csv = await _run_smi(
+            exe, ["--query-compute-apps=pid,process_name,used_memory", "--format=csv,nounits,noheader"]
+        )
         for line in proc_csv.strip().splitlines():
             cols = [c.strip() for c in line.split(",")]
             if len(cols) < 3:
@@ -118,11 +122,13 @@ async def gpu_status() -> dict[str, Any]:
                 pid = int(cols[0])
             except ValueError:
                 continue
-            result["processes"].append({
-                "pid": pid,
-                "name": cols[1] or "unknown",
-                "memory_mib": _parse_float(cols[2]) or 0.0,
-            })
+            result["processes"].append(
+                {
+                    "pid": pid,
+                    "name": cols[1] or "unknown",
+                    "memory_mib": _parse_float(cols[2]) or 0.0,
+                }
+            )
     except Exception as e:
         log.debug("compute-apps query failed (non-fatal): %s", e)
 

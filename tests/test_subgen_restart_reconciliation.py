@@ -18,6 +18,7 @@ import pytest
 
 # ─── Layer 2: evidence-based orphaning ──────────────────────────────
 
+
 def test_mark_orphaned_excludes_live_subgen_queue(tmp_path):
     from subarr.migrate import run_migrations
     from subarr.scan_store import ScanStore, PATH_STATUS_OK, PATH_STATUS_ORPHANED
@@ -31,9 +32,7 @@ def test_mark_orphaned_excludes_live_subgen_queue(tmp_path):
     s.save(scan)
 
     # keep.mkv is still sitting in subgen's live queue → must be preserved.
-    n = s.mark_orphaned_before(
-        time.time() + 10, completed_paths=set(), live_basenames={"keep.mkv"}
-    )
+    n = s.mark_orphaned_before(time.time() + 10, completed_paths=set(), live_basenames={"keep.mkv"})
     got = s.get(scan.id)
     st = {r.path: r.status for r in got.results}
     assert st["TV/Lose/lose.mkv"] == PATH_STATUS_ORPHANED
@@ -43,16 +42,23 @@ def test_mark_orphaned_excludes_live_subgen_queue(tmp_path):
 
 # ─── Layer 1: sustained-unreachability before a bounce ──────────────
 
+
 def _reachable():
     from subarr.subgen_client import SubgenCapabilities
+
     return SubgenCapabilities(
-        reachable=True, version="2026.05.3", has_queue=True, has_batch=True,
-        is_subarr_subgen=True, subarr_subgen_patch_rev="v4.7",
+        reachable=True,
+        version="2026.05.3",
+        has_queue=True,
+        has_batch=True,
+        is_subarr_subgen=True,
+        subarr_subgen_patch_rev="v4.7",
     )
 
 
 def _unreachable():
     from subarr.subgen_client import SubgenCapabilities
+
     return SubgenCapabilities.unreachable()
 
 
@@ -69,6 +75,7 @@ class _SeqSubgen:
 
 def _watchdog(subgen, on_restart):
     from subarr.subgen_watchdog import SubgenWatchdog
+
     box = {"caps": _reachable()}  # reachable baseline
     return SubgenWatchdog(
         subgen_provider=lambda: subgen,

@@ -5,6 +5,7 @@ because they vary in length and the schema would otherwise need a second table
 just for ordering. JSON columns are cheap and queries against them are rare
 (only the scan_id GET hits them).
 """
+
 from __future__ import annotations
 
 import json
@@ -26,11 +27,11 @@ SCAN_STATUS_CANCELLED = "cancelled"
 
 PATH_STATUS_PENDING = "pending"
 PATH_STATUS_RUNNING = "running"
-PATH_STATUS_OK = "ok"           # subgen accepted + queued at least one file
+PATH_STATUS_OK = "ok"  # subgen accepted + queued at least one file
 PATH_STATUS_SKIPPED = "skipped"  # subgen walked + skipped all (e.g. embedded EN
-                                 # already present, audio language matches
-                                 # SKIP_IF_AUDIO_LANGUAGES, etc.)
-PATH_STATUS_EMPTY = "empty"      # subgen returned 404 / walked == 0
+# already present, audio language matches
+# SKIP_IF_AUDIO_LANGUAGES, etc.)
+PATH_STATUS_EMPTY = "empty"  # subgen returned 404 / walked == 0
 PATH_STATUS_ERROR = "error"
 # #229: subgen restarted between our submission (PATH_STATUS_OK) and the
 # .srt landing on disk. Subgen's in-memory queue evaporated, so the work
@@ -187,17 +188,23 @@ class ScanStore:
             ).fetchall()
         return [
             Scan(
-                id=row[0], created_at=row[1], status=row[2],
-                reverse=bool(row[3]), current_index=row[4],
+                id=row[0],
+                created_at=row[1],
+                status=row[2],
+                reverse=bool(row[3]),
+                current_index=row[4],
                 paths=json.loads(row[5]),
                 results=[PathResult.from_dict(d) for d in json.loads(row[6])],
             )
             for row in rows
         ]
 
-    def mark_orphaned_before(self, cutoff_epoch: float,
-                             completed_paths: set[str] | None = None,
-                             live_basenames: set[str] | None = None) -> int:
+    def mark_orphaned_before(
+        self,
+        cutoff_epoch: float,
+        completed_paths: set[str] | None = None,
+        live_basenames: set[str] | None = None,
+    ) -> int:
         """#229 reconciliation: walk all scans created before cutoff_epoch,
         find PathResult rows with status=PATH_STATUS_OK that aren't in the
         completed_paths set (paths confirmed done via provenance.completed_at),
@@ -218,22 +225,20 @@ class ScanStore:
         n_reclassified = 0
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, current_index, results_json FROM scans "
-                "WHERE created_at < ?",
+                "SELECT id, current_index, results_json FROM scans WHERE created_at < ?",
                 (cutoff_epoch,),
             ).fetchall()
             for scan_id, current_index, results_json in rows:
                 results = [PathResult.from_dict(d) for d in json.loads(results_json)]
                 changed = False
                 for r in results:
-                    if (r.status == PATH_STATUS_OK
-                            and r.path not in completed
-                            and os.path.basename(r.path) not in live):
+                    if (
+                        r.status == PATH_STATUS_OK
+                        and r.path not in completed
+                        and os.path.basename(r.path) not in live
+                    ):
                         r.status = PATH_STATUS_ORPHANED
-                        r.error = (
-                            "subgen restarted before transcription completed — "
-                            "click ↻ requeue to retry"
-                        )
+                        r.error = "subgen restarted before transcription completed — click ↻ requeue to retry"
                         changed = True
                         n_reclassified += 1
                 if changed:
@@ -249,8 +254,7 @@ class ScanStore:
             cur = self._conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
             return cur.rowcount > 0
 
-    def delete_where_status_in(self, statuses: list[str],
-                               older_than: float | None = None) -> int:
+    def delete_where_status_in(self, statuses: list[str], older_than: float | None = None) -> int:
         """Bulk-purge scans matching a status list (e.g. ['done', 'error',
         'skipped']). Optional age cutoff (epoch) restricts to old rows."""
         if not statuses:

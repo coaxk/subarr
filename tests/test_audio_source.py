@@ -3,6 +3,7 @@
 The coverage row exposes audio_source so the UI can show HOW confident it is:
 user (you) > whisper (machine detect) > plex (your pick) > ffprobe (file tag).
 """
+
 from __future__ import annotations
 
 from subarr.coverage_engine import (
@@ -57,8 +58,7 @@ def test_whisper_agreeing_with_tag_sets_no_mismatch():
 
 def test_whisper_beats_plex_and_tautulli_picks():
     it = _item(audio_langs=["rus"], original_language="Russian", file_canonical_path="TV/Show/ep.mkv")
-    _classify_audio_label(it, whisper_verifications={"TV/Show/ep.mkv": "ko"},
-                          tautulli_hints={"show": "rus"})
+    _classify_audio_label(it, whisper_verifications={"TV/Show/ep.mkv": "ko"}, tautulli_hints={"show": "rus"})
     assert it.audio_source == "whisper" and it.audio_langs == ["ko"]
 
 
@@ -113,8 +113,8 @@ def test_refine_maps_store_source_to_badge_tier():
     _refine_audio_sources(items, sources)
     assert items[0].audio_source == "user"
     assert items[1].audio_source == "whisper"
-    assert items[2].audio_source == "whisper"   # auto-high-conf = a machine detect
-    assert items[3].audio_source == "ffprobe"   # untouched (not in store)
+    assert items[2].audio_source == "whisper"  # auto-high-conf = a machine detect
+    assert items[3].audio_source == "ffprobe"  # untouched (not in store)
 
 
 def test_refine_series_intent_counts_as_user():

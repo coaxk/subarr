@@ -1,4 +1,5 @@
 """Admin endpoints: container restart, Plex library refresh."""
+
 from __future__ import annotations
 
 import logging
@@ -71,6 +72,7 @@ async def plex_partial_scan(req: PartialScanRequest, request: Request) -> dict:
     if not plex.is_configured():
         raise HTTPException(503, detail="Plex not configured (PLEX_URL/PLEX_TOKEN)")
     from pathlib import Path
+
     p = req.path
     # Treat anything that isn't absolute as canonical-relative-to-media_root.
     if not p.startswith("/"):

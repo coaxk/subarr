@@ -8,6 +8,7 @@ needed.
 GPU-idle gating happens at the caller level (the enrichment endpoint
 checks /api/queue idle first). This client is just the transport.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,8 +37,8 @@ _OLLAMA_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=3.0)
 # with one of these is a fair candidate. Order = preference: qwen2.5vl
 # is current best-in-class for our specific job (thumb classification).
 _VISION_FAMILIES = (
-    "qwen2.5vl",      # current default + recommended
-    "qwen2-vl",       # predecessor, still common
+    "qwen2.5vl",  # current default + recommended
+    "qwen2-vl",  # predecessor, still common
     "llama3.2-vision",
     "llava",
     "bakllava",
@@ -55,9 +56,13 @@ def _is_vision_capable(model_name: str) -> bool:
 
 
 class OllamaClient:
-    def __init__(self, base_url: str | None = None, model: str | None = None,
-                 vision_model: str | None = None,
-                 timeout: httpx.Timeout | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        vision_model: str | None = None,
+        timeout: httpx.Timeout | None = None,
+    ):
         self._base_url = (base_url or settings.ollama_url).rstrip("/")
         self._model = model or settings.ollama_model
         # #232: explicit vision-model knob. "auto" defers picking until
@@ -93,10 +98,16 @@ class OllamaClient:
             raise OllamaError(f"ollama /api/tags status {r.status_code}")
         return r.json()
 
-    async def generate(self, prompt: str, *, system: str | None = None,
-                        temperature: float = 0.0, num_predict: int = 64,
-                        keep_alive: str | int | None = None,
-                        format_schema: dict | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        temperature: float = 0.0,
+        num_predict: int = 64,
+        keep_alive: str | int | None = None,
+        format_schema: dict | None = None,
+    ) -> str:
         """POST /api/generate with stream=false. Returns the generated text.
 
         Low temperature for deterministic ISO-code outputs.
@@ -217,8 +228,13 @@ class OllamaClient:
         self.reset_vision_cache()
 
     async def vision_describe(
-        self, *, image_url: str | None = None, image_b64: str | None = None,
-        prompt: str, model: str | None = None, num_predict: int = 256,
+        self,
+        *,
+        image_url: str | None = None,
+        image_b64: str | None = None,
+        prompt: str,
+        model: str | None = None,
+        num_predict: int = 256,
     ) -> str:
         """v1.1-K: vision-capable Ollama call. Pass either a URL we fetch
         and base64-encode, or pre-encoded base64.
@@ -232,6 +248,7 @@ class OllamaClient:
         every other ollama feature still works with the text model."""
         import base64
         import httpx
+
         if not self._configured:
             raise OllamaError("ollama not configured")
         # #232: pick the vision model BEFORE fetching the image, so we

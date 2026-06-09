@@ -14,6 +14,7 @@ Conventions:
 - All clients use a single shared httpx.AsyncClient created at app
   lifespan and closed on shutdown.
 """
+
 from __future__ import annotations
 
 

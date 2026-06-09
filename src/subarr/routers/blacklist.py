@@ -11,6 +11,7 @@ Auto-detection (offset >1s vs audio) ships in v1.1.1 alongside the Layer 3
 Whisper endpoint, since reliable detection needs speech-segment knowledge.
 For v1.1 this is manual / UI-driven.
 """
+
 from __future__ import annotations
 
 import logging

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 def _imp():
     from subarr.routers.vision import _image_url_allowed
+
     return _image_url_allowed
 
 

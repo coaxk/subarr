@@ -1,4 +1,5 @@
 """Schedule + auto-queue rules HTTP API."""
+
 from __future__ import annotations
 
 import asyncio
@@ -158,17 +159,18 @@ async def preview(request: Request) -> dict[str, Any]:
     snap = cov_cache.get_cached() if cov_cache is not None else None
     if snap is not None:
         items = [
-            CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS})
-            for d in snap.items
+            CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS}) for d in snap.items
         ]
 
         class _Report:
             pass
+
         report = _Report()
         report.items = items
     else:
         report = await build_coverage(
-            bundle, use_tautulli=True,
+            bundle,
+            use_tautulli=True,
             subgen_caps=getattr(request.app.state, "subgen_caps", None),
         )
     decisions = evaluate(report.items, rules)

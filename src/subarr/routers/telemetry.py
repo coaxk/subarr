@@ -29,7 +29,7 @@ def telemetry_state(request: Request) -> dict[str, Any]:
     last_err_at = st.last_error_at
     last_ok_at = st.last_ping_at
     if st.last_error and last_err_at is not None:
-        healthy = (last_ok_at is not None and last_ok_at >= last_err_at)
+        healthy = last_ok_at is not None and last_ok_at >= last_err_at
     else:
         # No known error, OR error pre-dates migration 005 so we have
         # no timestamp for it — treat as healthy iff we ever sent

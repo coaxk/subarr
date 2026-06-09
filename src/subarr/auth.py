@@ -45,9 +45,7 @@ log = logging.getLogger(__name__)
 _BYPASS_EXACT = {
     "/api/health",
 }
-_BYPASS_PREFIXES = (
-    "/static/",
-)
+_BYPASS_PREFIXES = ("/static/",)
 
 
 class BasicAuthMiddleware:
@@ -62,8 +60,7 @@ class BasicAuthMiddleware:
         self._password = password
         self._enabled = bool(user and password)
         if self._enabled:
-            log.info("basic auth enabled (user=%s, password=<%d chars>)",
-                     user, len(password))
+            log.info("basic auth enabled (user=%s, password=<%d chars>)", user, len(password))
         else:
             log.warning(
                 "basic auth DISABLED — the API is UNAUTHENTICATED. This is fine "
@@ -95,7 +92,7 @@ class BasicAuthMiddleware:
         if not auth_hdr.startswith("Basic "):
             return False
         try:
-            decoded = base64.b64decode(auth_hdr[len("Basic "):]).decode("utf-8")
+            decoded = base64.b64decode(auth_hdr[len("Basic ") :]).decode("utf-8")
         except Exception:
             return False
         if ":" not in decoded:
@@ -108,18 +105,22 @@ class BasicAuthMiddleware:
 
     @staticmethod
     async def _challenge(send) -> None:
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"www-authenticate", b'Basic realm="subarr", charset="UTF-8"'),
-                (b"content-type", b"text/plain; charset=utf-8"),
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"Authentication required.\n",
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"www-authenticate", b'Basic realm="subarr", charset="UTF-8"'),
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"Authentication required.\n",
+            }
+        )
 
 
 def is_path_bypassed(path: str) -> bool:

@@ -10,6 +10,7 @@ store and service share it without a circular import; re-exported from
 arena_service for stable imports). The store mirrors ErrorStore/ScanStore:
 single connection + lock + WAL, schema owned by migrations (no init here).
 """
+
 from __future__ import annotations
 
 import json
@@ -34,9 +35,9 @@ def _json_default(o):
     """Coerce numpy-style scalars/arrays (the QE judge emits float32) so a
     stray non-builtin number can never crash persistence and strand a run in
     'running'. Duck-typed — no hard numpy import in this base module."""
-    if hasattr(o, "item"):       # numpy scalar
+    if hasattr(o, "item"):  # numpy scalar
         return o.item()
-    if hasattr(o, "tolist"):     # numpy array
+    if hasattr(o, "tolist"):  # numpy array
         return o.tolist()
     raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
@@ -45,12 +46,12 @@ def _json_default(o):
 class ArenaRun:
     id: str
     media_path: str
-    variants: list[dict[str, Any]]          # [{label, kwargs}]
+    variants: list[dict[str, Any]]  # [{label, kwargs}]
     source_language: str | None = None
-    status: str = "pending"                  # pending | queued | running | done | error
+    status: str = "pending"  # pending | queued | running | done | error
     source_text: str | None = None
     outcomes: list[dict[str, Any]] = field(default_factory=list)
-    result: dict[str, Any] | None = None     # serialized TournamentResult
+    result: dict[str, Any] | None = None  # serialized TournamentResult
     error: str | None = None
     created_at: float = 0.0
     # Audio-stream ordinal this sweep transcribes (multi-track files fan out one
@@ -73,7 +74,7 @@ class ArenaRun:
         return {
             "id": self.id,
             "media_path": self.media_path,
-            "source_language": self.source_language,   # [#23] for the table + per-lang grouping
+            "source_language": self.source_language,  # [#23] for the table + per-lang grouping
             # how the language was decided: "whisper" (robust majority), "user"
             # (set at submit), or "tagged" (fell back to the file's known audio
             # language when Whisper was inconclusive). Lets the UI mark a
@@ -143,11 +144,20 @@ class ArenaStore:
                      outcomes=excluded.outcomes, result=excluded.result,
                      winner=excluded.winner, error=excluded.error,
                      updated_at=excluded.updated_at""",
-                (run.id, run.media_path, run.source_language, run.status, run.source_text,
-                 json.dumps(run.variants, default=_json_default),
-                 json.dumps(run.outcomes, default=_json_default),
-                 json.dumps(run.result, default=_json_default) if run.result is not None else None,
-                 winner, run.error, run.created_at, time.time()),
+                (
+                    run.id,
+                    run.media_path,
+                    run.source_language,
+                    run.status,
+                    run.source_text,
+                    json.dumps(run.variants, default=_json_default),
+                    json.dumps(run.outcomes, default=_json_default),
+                    json.dumps(run.result, default=_json_default) if run.result is not None else None,
+                    winner,
+                    run.error,
+                    run.created_at,
+                    time.time(),
+                ),
             )
 
     def get(self, run_id: str) -> ArenaRun | None:
@@ -158,7 +168,8 @@ class ArenaStore:
     def list(self, limit: int = 200) -> list[ArenaRun]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM arena_runs ORDER BY created_at DESC LIMIT ?", (limit,),
+                "SELECT * FROM arena_runs ORDER BY created_at DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         return [_row_to_run(r) for r in rows]
 
@@ -171,18 +182,18 @@ class ArenaStore:
         """[#26] Group completed, language-detected sweeps by source language →
         per-recipe stats. The 'herd' foundation for per-language presets +
         federated #124."""
-        runs = [r for r in self.list(limit=1000)
-                if r.status == "done" and r.source_language and r.result]
+        runs = [r for r in self.list(limit=1000) if r.status == "done" and r.source_language and r.result]
         return aggregate_runs_by_language(runs)
 
     def aggregate_global_leaderboard(
-        self, *, min_languages: int = LEADERBOARD_MIN_LANGUAGES,
+        self,
+        *,
+        min_languages: int = LEADERBOARD_MIN_LANGUAGES,
     ) -> list[dict[str, Any]]:
         """[#146] Overall recipe ranking (mean of per-language means). Same
         completed-sweep filter as aggregate_by_language; delegates to the pure
         module function."""
-        runs = [r for r in self.list(limit=1000)
-                if r.status == "done" and r.source_language and r.result]
+        runs = [r for r in self.list(limit=1000) if r.status == "done" and r.source_language and r.result]
         return aggregate_global_leaderboard(runs, min_languages=min_languages)
 
     def prune_older_than(self, cutoff_epoch: float) -> int:
@@ -192,9 +203,7 @@ class ArenaStore:
         mirrors scan_store.delete_where_status_in's age-cutoff DELETE; called on
         boot from the app lifespan (idx_arena_runs_created keeps it cheap)."""
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM arena_runs WHERE created_at < ?", (cutoff_epoch,)
-            )
+            cur = self._conn.execute("DELETE FROM arena_runs WHERE created_at < ?", (cutoff_epoch,))
             return cur.rowcount or 0
 
     def reconcile_interrupted(self) -> int:
@@ -255,9 +264,9 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
     langs: dict[str, dict] = {}
     for (lang, _path), f in files.items():
         file_means = {label: rec["_sum"] / rec["n"] for label, rec in f["_rec"].items() if rec["n"]}
-        if f["_winvotes"]:                       # the file's winner = its per-sweep majority
+        if f["_winvotes"]:  # the file's winner = its per-sweep majority
             file_winner = max(f["_winvotes"].items(), key=lambda kv: kv[1])[0]
-        elif file_means:                         # all ties → best mean is the de-facto winner
+        elif file_means:  # all ties → best mean is the de-facto winner
             file_winner = max(file_means.items(), key=lambda kv: kv[1])[0]
         else:
             file_winner = None
@@ -273,9 +282,15 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
 
     out = []
     for b in langs.values():
-        recipes = [{"label": rec["label"], "files": rec["files"], "wins": rec["wins"],
-                    "mean_composite": round(rec["_sum"] / rec["files"], 2) if rec["files"] else 0.0}
-                   for rec in b["_rec"].values()]
+        recipes = [
+            {
+                "label": rec["label"],
+                "files": rec["files"],
+                "wins": rec["wins"],
+                "mean_composite": round(rec["_sum"] / rec["files"], 2) if rec["files"] else 0.0,
+            }
+            for rec in b["_rec"].values()
+        ]
         # Rank by WINS (consistency across this language's files), tie-broken by
         # mean composite. The top row is the per-language *default recommendation*
         # — for a config you apply to all content, the one that ranks #1 most
@@ -283,12 +298,16 @@ def aggregate_runs_by_language(runs) -> list[dict[str, Any]]:
         # but loses elsewhere. Score is shown alongside for the specialist nuance
         # (the UI explains wins-vs-score). (#26/#141 ranking note)
         recipes.sort(key=lambda x: (x["wins"], x["mean_composite"]), reverse=True)
-        out.append({"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes})
+        out.append(
+            {"language": b["language"], "files": b["files"], "sweeps": b["sweeps"], "recipes": recipes}
+        )
     out.sort(key=lambda x: (x["files"], x["sweeps"]), reverse=True)
     return out
 
 
-def aggregate_global_leaderboard(runs, *, min_languages: int = LEADERBOARD_MIN_LANGUAGES) -> list[dict[str, Any]]:
+def aggregate_global_leaderboard(
+    runs, *, min_languages: int = LEADERBOARD_MIN_LANGUAGES
+) -> list[dict[str, Any]]:
     """[#146] Roll the per-language herd up one level into a single overall
     recipe ranking — the 'recipe leaderboard'.
 
@@ -314,21 +333,31 @@ def aggregate_global_leaderboard(runs, *, min_languages: int = LEADERBOARD_MIN_L
     recipes: dict[str, dict] = {}
     for bucket in by_lang:
         lang = bucket["language"]
-        if lang == "und":          # not a real language — never counts
+        if lang == "und":  # not a real language — never counts
             continue
         for r in bucket["recipes"]:
             label = r["label"]
-            entry = recipes.setdefault(label, {
-                "label": label, "_means": [], "_detail": [],
-                "total_wins": 0, "total_files": 0,
-            })
+            entry = recipes.setdefault(
+                label,
+                {
+                    "label": label,
+                    "_means": [],
+                    "_detail": [],
+                    "total_wins": 0,
+                    "total_files": 0,
+                },
+            )
             entry["_means"].append(float(r["mean_composite"]))
             entry["total_wins"] += r["wins"]
             entry["total_files"] += r["files"]
-            entry["_detail"].append({
-                "language": lang, "files": r["files"],
-                "wins": r["wins"], "mean_composite": r["mean_composite"],
-            })
+            entry["_detail"].append(
+                {
+                    "language": lang,
+                    "files": r["files"],
+                    "wins": r["wins"],
+                    "mean_composite": r["mean_composite"],
+                }
+            )
 
     rows = []
     for entry in recipes.values():
@@ -343,12 +372,18 @@ def aggregate_global_leaderboard(runs, *, min_languages: int = LEADERBOARD_MIN_L
         else:
             confidence = "low"
         detail = sorted(entry["_detail"], key=lambda x: x["files"], reverse=True)
-        rows.append({
-            "label": entry["label"], "global_mean": global_mean,
-            "languages_covered": lang_count, "total_files": entry["total_files"],
-            "total_wins": entry["total_wins"], "eligible": eligible,
-            "confidence": confidence, "per_language": detail,
-        })
+        rows.append(
+            {
+                "label": entry["label"],
+                "global_mean": global_mean,
+                "languages_covered": lang_count,
+                "total_files": entry["total_files"],
+                "total_wins": entry["total_wins"],
+                "eligible": eligible,
+                "confidence": confidence,
+                "per_language": detail,
+            }
+        )
 
     # Eligible recipes first, then by global_mean desc, tie-broken by total_wins.
     rows.sort(key=lambda x: (x["eligible"], x["global_mean"], x["total_wins"]), reverse=True)

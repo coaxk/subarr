@@ -16,6 +16,7 @@ returns None and the tournament composite falls back to the structural judge
 (no penalty). The default backend is sentence-transformers/LaBSE; an onnx-lean
 packaging (drop the torch weight) is a tracked follow-up.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,6 +65,7 @@ def _default_embed(texts):
     Live-verified I/O, not unit-tested (the model is the boundary)."""
     global _embedder_cache
     from sentence_transformers import SentenceTransformer
+
     if _embedder_cache is None:
         model = os.environ.get(_MODEL_ENV, QE_MODEL)
         # Prefer a CACHED, offline load: sentence-transformers 5.x otherwise

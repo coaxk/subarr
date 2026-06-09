@@ -5,6 +5,7 @@ so the public stats dashboard can report failure-class counts without
 leaking paths / titles / keys. Schema lives in migrations/006; this store
 does NOT init_schema (migrations are the sole schema path).
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,8 +45,7 @@ class ErrorStore:
         try:
             with self._lock:
                 rows = self._conn.execute(
-                    "SELECT exc_class, COUNT(*) FROM error_events "
-                    "WHERE occurred_at >= ? GROUP BY exc_class",
+                    "SELECT exc_class, COUNT(*) FROM error_events WHERE occurred_at >= ? GROUP BY exc_class",
                     (since_epoch,),
                 ).fetchall()
             return {r[0]: int(r[1]) for r in rows}

@@ -17,25 +17,29 @@ Coverage:
 3. Foreign series where srt already exists → NOT added (already covered)
 4. Foreign series already in Bazarr wanted → NOT duplicated (dedup)
 """
+
 from __future__ import annotations
 
 import pytest
 import httpx
 
 
-
 # Minimal fixtures — sonarr returns one foreign + one english series.
 _SONARR_SERIES = [
     {
-        "id": 11, "title": "Flics",
+        "id": 11,
+        "title": "Flics",
         "originalLanguage": {"id": 2, "name": "French"},
-        "monitored": True, "path": "/data/Media/TV/Flics",
+        "monitored": True,
+        "path": "/data/Media/TV/Flics",
         "tags": [],
     },
     {
-        "id": 22, "title": "Severance",
+        "id": 22,
+        "title": "Severance",
         "originalLanguage": {"id": 1, "name": "English"},
-        "monitored": True, "path": "/data/Media/TV/Severance",
+        "monitored": True,
+        "path": "/data/Media/TV/Severance",
         "tags": [],
     },
 ]
@@ -44,17 +48,44 @@ _SONARR_SERIES = [
 # Severance S01E01: hasFile, file 201 — used to prove english series is skipped.
 _SONARR_EPS = {
     11: [
-        {"id": 1011, "seriesId": 11, "seasonNumber": 1, "episodeNumber": 1,
-         "hasFile": True, "episodeFileId": 101, "title": "Pilot"},
-        {"id": 1012, "seriesId": 11, "seasonNumber": 1, "episodeNumber": 2,
-         "hasFile": True, "episodeFileId": 102, "title": "Suite"},
+        {
+            "id": 1011,
+            "seriesId": 11,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFileId": 101,
+            "title": "Pilot",
+        },
+        {
+            "id": 1012,
+            "seriesId": 11,
+            "seasonNumber": 1,
+            "episodeNumber": 2,
+            "hasFile": True,
+            "episodeFileId": 102,
+            "title": "Suite",
+        },
         # Ep with no file — must NOT generate a synthetic row.
-        {"id": 1013, "seriesId": 11, "seasonNumber": 1, "episodeNumber": 3,
-         "hasFile": False, "title": "Ghost"},
+        {
+            "id": 1013,
+            "seriesId": 11,
+            "seasonNumber": 1,
+            "episodeNumber": 3,
+            "hasFile": False,
+            "title": "Ghost",
+        },
     ],
     22: [
-        {"id": 2201, "seriesId": 22, "seasonNumber": 1, "episodeNumber": 1,
-         "hasFile": True, "episodeFileId": 201, "title": "Macrodata"},
+        {
+            "id": 2201,
+            "seriesId": 22,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFileId": 201,
+            "title": "Macrodata",
+        },
     ],
 }
 _SONARR_FILES = {
@@ -148,31 +179,61 @@ async def test_bazarr_blind_synthetic_row_reaches_score_without_nameerror(monkey
     # Python evaluates the `ignore_forced` arg, BEFORE _score runs, so a stubbed
     # _score still exposes it.
     monkeypatch.setattr(ce, "_strip_arr_prefix", lambda p: p)
-    async def _no_index(dirs): return {}
+
+    async def _no_index(dirs):
+        return {}
+
     monkeypatch.setattr(ce, "_build_srt_index_parallel", _no_index)
     monkeypatch.setattr(ce, "_scan_for_srt_recursive", lambda c: [])
-    def _fake_attach(item, *a, **k): item.audio_label_suspect = True  # keep the row
+
+    def _fake_attach(item, *a, **k):
+        item.audio_label_suspect = True  # keep the row
+
     monkeypatch.setattr(ce, "_attach_probe_episode", _fake_attach)
     scored = []
-    def _fake_score(item, *a, **k): scored.append(k)
+
+    def _fake_score(item, *a, **k):
+        scored.append(k)
+
     monkeypatch.setattr(ce, "_score", _fake_score)
 
-    series = [{"id": 11, "title": "Flics", "originalLanguage": {"name": "French"},
-               "monitored": True, "path": "/data/Media/TV/Flics", "tags": []}]
-    eps_by_id = {1011: {"id": 1011, "seriesId": 11, "seasonNumber": 1,
-                        "episodeNumber": 1, "hasFile": True,
-                        "episodeFileId": 101, "title": "Pilot"}}
+    series = [
+        {
+            "id": 11,
+            "title": "Flics",
+            "originalLanguage": {"name": "French"},
+            "monitored": True,
+            "path": "/data/Media/TV/Flics",
+            "tags": [],
+        }
+    ]
+    eps_by_id = {
+        1011: {
+            "id": 1011,
+            "seriesId": 11,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFileId": 101,
+            "title": "Pilot",
+        }
+    }
     out = await ce._add_bazarr_blind_synthetic_rows(
-        object(), series, [],
+        object(),
+        series,
+        [],
         already_fetched_series_ids={11},
         sonarr_eps_by_id=eps_by_id,
         ep_file_paths={101: "/data/Media/TV/Flics/Season 1/Flics.S01E01.mkv"},
         series_srt_index={},
-        sonarr_tags={}, sonarr_missing_ids=set(), sonarr_recent_ids=set(),
+        sonarr_tags={},
+        sonarr_missing_ids=set(),
+        sonarr_recent_ids=set(),
         airing_soon_ids=set(),
-        activity={"now_playing_titles": set(), "transcoding_titles": set(),
-                  "audio_lang_hints": {}},
-        tt_signals={}, probe_by_series_prefix={}, user_verifications={},
+        activity={"now_playing_titles": set(), "transcoding_titles": set(), "audio_lang_hints": {}},
+        tt_signals={},
+        probe_by_series_prefix={},
+        user_verifications={},
         sources={},
     )
     assert len(out) == 1 and out[0].bazarr_blind is True
@@ -182,6 +243,7 @@ async def test_bazarr_blind_synthetic_row_reaches_score_without_nameerror(monkey
 def test_audio_metadata_mislabeled_signature():
     """Only flag bazarr-blind when audio metadata claims English / und."""
     from subarr.coverage_engine import _audio_metadata_looks_mislabeled
+
     # No probe data → insufficient evidence → don't flag (avoid false positives)
     assert _audio_metadata_looks_mislabeled(None) is False
     # Honestly tagged foreign audio → not blind (Bazarr handles correctly)
@@ -205,6 +267,7 @@ def test_is_en_sidecar_helper_matches_plex_naming():
     on disk is an English sidecar for a given video stem. Covers the naming
     variants subsyncarr + plex + manual rips actually emit."""
     from subarr.coverage_engine import _is_en_sidecar_for
+
     stem = "Flics.S01E01"
     # Standard Plex naming
     assert _is_en_sidecar_for("Season 1/Flics.S01E01.en.srt", stem) is True

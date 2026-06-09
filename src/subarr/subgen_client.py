@@ -9,6 +9,7 @@ v4.2 patch) and the structured POST /batch response (our v4.1 patch). On
 startup we probe what's available and the rest of the app gates feature
 surfaces on the result. See SubgenCapabilities below.
 """
+
 from __future__ import annotations
 
 import json
@@ -53,6 +54,7 @@ class SubgenCapabilities:
                         the subarr.subgen.* image labels OR the presence
                         of /queue + /batch contract surfaces).
     """
+
     reachable: bool
     version: str | None
     has_queue: bool
@@ -139,12 +141,20 @@ class SubgenCapabilities:
     @classmethod
     def unreachable(cls) -> "SubgenCapabilities":
         return cls(
-            reachable=False, version=None,
-            has_queue=False, has_batch=False, is_subarr_subgen=False,
-            audio_language_override=False, queue_cancel=False,
-            robust_language_detection=False, per_request_kwargs=False,
-            per_request_task=False, asr_arena=False, asr_vanilla_base=False,
-            asr_detected_language=False, ignore_forced_subtitles=False,
+            reachable=False,
+            version=None,
+            has_queue=False,
+            has_batch=False,
+            is_subarr_subgen=False,
+            audio_language_override=False,
+            queue_cancel=False,
+            robust_language_detection=False,
+            per_request_kwargs=False,
+            per_request_task=False,
+            asr_arena=False,
+            asr_vanilla_base=False,
+            asr_detected_language=False,
+            ignore_forced_subtitles=False,
             subarr_subgen_patch_rev=None,
         )
 
@@ -184,8 +194,9 @@ class SubgenClient:
         except ValueError:
             return {"cancelled": False, "_raw": r.text[:200], "status_code": r.status_code}
 
-    async def detect_language_robust(self, path: str, chunks: int = 3,
-                                     chunk_length_s: int = 30) -> dict[str, Any]:
+    async def detect_language_robust(
+        self, path: str, chunks: int = 3, chunk_length_s: int = 30
+    ) -> dict[str, Any]:
         """v4.5+: multi-chunk Whisper language detection. Returns the
         full per-chunk breakdown + aggregate vote so subarr's review UI
         can render evidence. Synchronous (~6-12s per call on a typical
@@ -197,8 +208,7 @@ class SubgenClient:
         try:
             r = await self._client.post(
                 "/detect_language_robust",
-                params={"path": path, "chunks": chunks,
-                        "chunk_length_s": chunk_length_s},
+                params={"path": path, "chunks": chunks, "chunk_length_s": chunk_length_s},
             )
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /detect_language_robust failed: {e}") from e
@@ -209,9 +219,7 @@ class SubgenClient:
         try:
             return r.json()
         except ValueError as e:
-            raise SubgenUnavailable(
-                f"subgen /detect_language_robust returned non-json: {e}"
-            ) from e
+            raise SubgenUnavailable(f"subgen /detect_language_robust returned non-json: {e}") from e
 
     async def status(self) -> dict[str, Any]:
         try:
@@ -256,7 +264,7 @@ class SubgenClient:
             v = body.get("version")
             if isinstance(v, str) and v.startswith("Subgen "):
                 # 'Subgen 2026.05.3, stable-ts ...' → grab the 2026.05.3
-                rest = v[len("Subgen "):].split(",", 1)[0].strip()
+                rest = v[len("Subgen ") :].split(",", 1)[0].strip()
                 if rest:
                     version = rest
         except Exception:
@@ -289,25 +297,15 @@ class SubgenClient:
                             patch_rev = rev
                         caps_block = body.get("capabilities") or {}
                         if isinstance(caps_block, dict):
-                            audio_language_override = bool(
-                                caps_block.get("audio_language_override")
-                            )
+                            audio_language_override = bool(caps_block.get("audio_language_override"))
                             queue_cancel = bool(caps_block.get("queue_cancel"))
-                            robust_language_detection = bool(
-                                caps_block.get("robust_language_detection")
-                            )
-                            per_request_kwargs = bool(
-                                caps_block.get("per_request_kwargs")
-                            )
-                            per_request_task = bool(
-                                caps_block.get("per_request_task")
-                            )
+                            robust_language_detection = bool(caps_block.get("robust_language_detection"))
+                            per_request_kwargs = bool(caps_block.get("per_request_kwargs"))
+                            per_request_task = bool(caps_block.get("per_request_task"))
                             asr_arena = bool(caps_block.get("asr_arena"))
                             asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
-                            ignore_forced_subtitles = bool(
-                                caps_block.get("ignore_forced_subtitles")
-                            )
+                            ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -338,18 +336,25 @@ class SubgenClient:
         log.info(
             "subgen capabilities: version=%s patch_rev=%s has_queue=%s has_batch=%s "
             "is_subarr_subgen=%s audio_lang_override=%s (compat_mode=%s)",
-            caps.version, caps.subarr_subgen_patch_rev,
-            caps.has_queue, caps.has_batch,
-            caps.is_subarr_subgen, caps.audio_language_override,
+            caps.version,
+            caps.subarr_subgen_patch_rev,
+            caps.has_queue,
+            caps.has_batch,
+            caps.is_subarr_subgen,
+            caps.audio_language_override,
             not caps.is_subarr_subgen,
         )
         return caps
 
-    async def batch(self, directory: str, reverse: bool = False,
-                    force_language: str | None = None,
-                    audio_language_override: str | None = None,
-                    kwargs: dict[str, Any] | None = None,
-                    task: str | None = None) -> tuple[int, dict[str, Any]]:
+    async def batch(
+        self,
+        directory: str,
+        reverse: bool = False,
+        force_language: str | None = None,
+        audio_language_override: str | None = None,
+        kwargs: dict[str, Any] | None = None,
+        task: str | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
         Returns (status_code, body). Caller distinguishes:
@@ -400,12 +405,19 @@ class SubgenClient:
             body = {"_raw": r.text[:500]}
         return r.status_code, body
 
-    async def asr(self, path: str | None = None, *, local_file: str | None = None,
-                  task: str = "transcribe",
-                  language: str | None = None, kwargs: dict[str, Any] | None = None,
-                  initial_prompt: str | None = None, base: str | None = None,
-                  return_language: bool = False,
-                  timeout_s: float = 7200.0):
+    async def asr(
+        self,
+        path: str | None = None,
+        *,
+        local_file: str | None = None,
+        task: str = "transcribe",
+        language: str | None = None,
+        kwargs: dict[str, Any] | None = None,
+        initial_prompt: str | None = None,
+        base: str | None = None,
+        return_language: bool = False,
+        timeout_s: float = 7200.0,
+    ):
         """v4.10+ arena channel: ASR that BLOCKS until done and returns the
         subtitle TEXT over HTTP. Two input modes:
 
@@ -444,6 +456,7 @@ class SubgenClient:
         files = None
         if local_file:
             import os
+
             with open(local_file, "rb") as fh:
                 content = fh.read()
             files = {"audio_file": (os.path.basename(local_file), content, "application/octet-stream")}

@@ -27,9 +27,14 @@ from subarr.update_checker import UpdateChecker, UpdateState, parse_atom_feed
 # ─── Atom feed helpers ──────────────────────────────────────────────
 
 
-def _entry(tag: str, *, name: str | None = None, body: str = "",
-           updated: str = "2026-05-28T10:00:00Z",
-           repo: str = "coaxk/subarr") -> str:
+def _entry(
+    tag: str,
+    *,
+    name: str | None = None,
+    body: str = "",
+    updated: str = "2026-05-28T10:00:00Z",
+    repo: str = "coaxk/subarr",
+) -> str:
     """One <entry> mirroring GitHub's real releases.atom shape: the <title>
     is the release NAME (not the tag), and the tag lives in the link href
     + the <id> suffix."""
@@ -49,7 +54,7 @@ def _feed(*entries: str, repo: str = "coaxk/subarr") -> str:
 <feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
   <id>tag:github.com,2008:https://github.com/{repo}/releases</id>
   <link type="text/html" rel="alternate" href="https://github.com/{repo}/releases"/>
-  <title>Release notes from {repo.split('/')[-1]}</title>
+  <title>Release notes from {repo.split("/")[-1]}</title>
   <updated>2026-06-06T19:21:09Z</updated>
 {body}
 </feed>"""
@@ -145,8 +150,9 @@ def _checker_with_mock(
     return c
 
 
-def _atom_response(req: httpx.Request, tag: str = "v1.0.0", *,
-                   body: str = "", repo: str = "coaxk/subarr") -> httpx.Response:
+def _atom_response(
+    req: httpx.Request, tag: str = "v1.0.0", *, body: str = "", repo: str = "coaxk/subarr"
+) -> httpx.Response:
     return httpx.Response(
         200,
         text=_feed(_entry(tag, body=body, repo=repo), repo=repo),
@@ -197,6 +203,7 @@ async def test_has_update_false_when_versions_match(db_path: Path):
 async def test_strips_v_prefix_for_comparison(db_path: Path):
     """Current version is '1.0.0', latest tag is 'v1.0.0' — should still
     treat as no update (the 'v' is just a tag convention)."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         return _atom_response(req, "v1.0.0")
 
@@ -212,6 +219,7 @@ async def test_strips_v_prefix_for_comparison(db_path: Path):
 async def test_404_records_error_without_crashing(db_path: Path):
     """Private/non-existent repos return 404. Should write a row with
     last_error set, no latest_version, has_update False."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="Not Found")
 
@@ -228,9 +236,9 @@ async def test_404_records_error_without_crashing(db_path: Path):
 @pytest.mark.asyncio
 async def test_empty_feed_records_no_public_release(db_path: Path):
     """An existing repo with no releases returns an entry-less feed."""
+
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=_feed(),
-                              headers={"content-type": "application/atom+xml"})
+        return httpx.Response(200, text=_feed(), headers={"content-type": "application/atom+xml"})
 
     c = _checker_with_mock(db_path, handler)
     await c._poll_all()
@@ -248,6 +256,7 @@ async def test_network_error_preserves_prior_good_state(db_path: Path):
     latest_version/etc stay populated so the UI keeps showing the last
     known good state."""
     call_count = 0
+
     def handler(req: httpx.Request) -> httpx.Response:
         nonlocal call_count
         call_count += 1
@@ -262,15 +271,16 @@ async def test_network_error_preserves_prior_good_state(db_path: Path):
 
     [s] = c.states()
     assert s.latest_version == "v1.0.0"  # preserved
-    assert s.last_error is not None       # error recorded
+    assert s.last_error is not None  # error recorded
     assert "unreachable" in s.last_error
 
 
 @pytest.mark.asyncio
 async def test_breaking_flag_detected_from_body(db_path: Path):
     def handler(req: httpx.Request) -> httpx.Response:
-        return _atom_response(req, "v2.0.0",
-                              body="&lt;h2&gt;BREAKING CHANGE&lt;/h2&gt; Config format changed.")
+        return _atom_response(
+            req, "v2.0.0", body="&lt;h2&gt;BREAKING CHANGE&lt;/h2&gt; Config format changed."
+        )
 
     c = _checker_with_mock(db_path, handler)
     await c._poll_all()
@@ -283,6 +293,7 @@ async def test_breaking_flag_detected_from_body(db_path: Path):
 @pytest.mark.asyncio
 async def test_refresh_now_forces_poll(db_path: Path):
     call_count = 0
+
     def handler(req: httpx.Request) -> httpx.Response:
         nonlocal call_count
         call_count += 1
@@ -301,6 +312,7 @@ async def test_refresh_now_forces_poll(db_path: Path):
 @pytest.mark.asyncio
 async def test_multiple_products_polled(db_path: Path):
     paths_hit: list[str] = []
+
     def handler(req: httpx.Request) -> httpx.Response:
         paths_hit.append(req.url.path)
         # repo from the path: /<owner>/<repo>/releases.atom
@@ -308,7 +320,8 @@ async def test_multiple_products_polled(db_path: Path):
         return _atom_response(req, "v1.0.0", repo=repo)
 
     c = _checker_with_mock(
-        db_path, handler,
+        db_path,
+        handler,
         products={"subarr": "coaxk/subarr", "subarr-subgen": "coaxk/subarr-subgen"},
         current_versions={"subarr": "v0.1.0", "subarr-subgen": "2026.05.3"},
     )
@@ -325,11 +338,15 @@ async def test_multiple_products_polled(db_path: Path):
 
 def test_update_state_to_dict_includes_has_update():
     s = UpdateState(
-        product="subarr", repo="coaxk/subarr",
-        current_version="v0.1.0", latest_version="v1.0.0",
+        product="subarr",
+        repo="coaxk/subarr",
+        current_version="v0.1.0",
+        latest_version="v1.0.0",
         latest_released_at=1779000000.0,
         release_notes_url="https://example",
-        is_breaking=False, checked_at=1779000001.0, last_error=None,
+        is_breaking=False,
+        checked_at=1779000001.0,
+        last_error=None,
     )
     d = s.to_dict()
     assert d["has_update"] is True

@@ -13,6 +13,7 @@ For v1.1 this is a manual endpoint. v1.2 wires it into the scan-submit
 flow automatically, running on each candidate file's Plex thumbnail before
 queueing subgen.
 """
+
 from __future__ import annotations
 
 import json
@@ -116,9 +117,7 @@ async def vision_status(request: Request) -> dict[str, Any]:
     installed = await ollama.installed_models()
     ollama.reset_vision_cache()
     resolved = await ollama.resolve_vision_model()
-    vision_caps = [m for m in installed if any(
-        m.lower().startswith(f) for f in _VISION_FAMILIES
-    )]
+    vision_caps = [m for m in installed if any(m.lower().startswith(f) for f in _VISION_FAMILIES)]
     return {
         "ollama_configured": True,
         "vision_model_config": ollama.vision_model_config,
@@ -166,8 +165,10 @@ async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, A
         if not _image_url_allowed(req.image_url, _allowed_image_hosts()):
             raise HTTPException(
                 400,
-                detail=("image_url host not allowed — must be the configured "
-                        "Plex or Tautulli host, or pass image_b64 instead"),
+                detail=(
+                    "image_url host not allowed — must be the configured "
+                    "Plex or Tautulli host, or pass image_b64 instead"
+                ),
             )
     try:
         # #232: pass model=None so resolve_vision_model() runs and we get

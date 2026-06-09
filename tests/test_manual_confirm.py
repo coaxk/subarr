@@ -1,4 +1,5 @@
 """Tests for manual_confirm scheduler mode + approve/reject endpoints."""
+
 from __future__ import annotations
 
 import httpx
@@ -12,11 +13,22 @@ def _bazarr_with_one_episode(req: httpx.Request) -> httpx.Response:
     if p == "/api/badges":
         return httpx.Response(200, json={"episodes": 1, "movies": 0, "providers": 1})
     if p == "/api/episodes/wanted":
-        return httpx.Response(200, json={"data": [{
-            "seriesTitle": "ManConf", "episode_number": "1x1", "episodeTitle": "Pilot",
-            "missing_subtitles": [{"name": "English", "code2": "en"}],
-            "sonarrSeriesId": 99, "sonarrEpisodeId": 7777, "tags": [],
-        }]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "seriesTitle": "ManConf",
+                        "episode_number": "1x1",
+                        "episodeTitle": "Pilot",
+                        "missing_subtitles": [{"name": "English", "code2": "en"}],
+                        "sonarrSeriesId": 99,
+                        "sonarrEpisodeId": 7777,
+                        "tags": [],
+                    }
+                ]
+            },
+        )
     if p == "/api/movies/wanted":
         return httpx.Response(200, json={"data": []})
     return httpx.Response(404)
@@ -27,19 +39,37 @@ def _sonarr_for_manconf(req: httpx.Request) -> httpx.Response:
     if p == "/api/v3/system/status":
         return httpx.Response(200, json={"version": "4.0"})
     if p == "/api/v3/series":
-        return httpx.Response(200, json=[{
-            "id": 99, "title": "ManConf", "monitored": True,
-            "path": "/data/Media/TV/ManConf",
-            "originalLanguage": {"id": 11, "name": "Korean"}, "tags": [],
-        }])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 99,
+                    "title": "ManConf",
+                    "monitored": True,
+                    "path": "/data/Media/TV/ManConf",
+                    "originalLanguage": {"id": 11, "name": "Korean"},
+                    "tags": [],
+                }
+            ],
+        )
     if p == "/api/v3/episode/7777":
-        return httpx.Response(200, json={
-            "id": 7777, "seriesId": 99, "hasFile": True, "episodeFileId": 8888,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": 7777,
+                "seriesId": 99,
+                "hasFile": True,
+                "episodeFileId": 8888,
+            },
+        )
     if p == "/api/v3/episodefile/8888":
-        return httpx.Response(200, json={
-            "id": 8888, "path": "/data/Media/TV/ManConf/Season 1/manconf.S01E01.mkv",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": 8888,
+                "path": "/data/Media/TV/ManConf/Season 1/manconf.S01E01.mkv",
+            },
+        )
     if p == "/api/v3/tag":
         return httpx.Response(200, json=[])
     return httpx.Response(404)
@@ -59,6 +89,7 @@ def manconf_setup(app_with_stub):
     the resolved file so _enqueue's exists() check passes."""
     from subarr.config import settings
     from subarr.media_probe import ProbeResult
+
     folder = settings.media_root / "TV" / "ManConf" / "Season 1"
     folder.mkdir(parents=True, exist_ok=True)
     f = folder / "manconf.S01E01.mkv"
@@ -70,15 +101,20 @@ def manconf_setup(app_with_stub):
     canonical = "TV/ManConf/Season 1/manconf.S01E01.mkv"
     st = f.stat()
     app_with_stub.app.state.probe_store.upsert(
-        canonical_path=canonical, mtime=st.st_mtime, size=st.st_size,
+        canonical_path=canonical,
+        mtime=st.st_mtime,
+        size=st.st_size,
         result=ProbeResult(canonical_path=canonical),
     )
-    app_with_stub.put("/api/schedule/rules", json={
-        "mode": "manual_confirm",
-        "min_score": 0,
-        "deny_languages": [],
-        "require_monitored": False,
-    })
+    app_with_stub.put(
+        "/api/schedule/rules",
+        json={
+            "mode": "manual_confirm",
+            "min_score": 0,
+            "deny_languages": [],
+            "require_monitored": False,
+        },
+    )
     return app_with_stub
 
 

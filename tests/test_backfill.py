@@ -9,11 +9,13 @@ This pins the PURE decision math (which gaps to enqueue NOW). The integration
 settle-window-passed) gaps, and ticking on the scheduler — is the documented
 next step, deliberately NOT built here.
 """
+
 from __future__ import annotations
 
 
 def _bf():
     from subarr import backfill
+
     return backfill
 
 
@@ -52,7 +54,9 @@ def test_batch_caps_a_large_headroom():
 
 def test_never_exceeds_available_gaps():
     bf = _bf()
-    out = bf.select_backfill_batch(["only0", "only1"], queue_depth=0, config=_cfg(target_queue_depth=10, batch=10))
+    out = bf.select_backfill_batch(
+        ["only0", "only1"], queue_depth=0, config=_cfg(target_queue_depth=10, batch=10)
+    )
     assert out == ["only0", "only1"]
 
 
@@ -70,22 +74,35 @@ def test_config_defaults_are_safe_off():
 # ── eligible_backfill_items: the queue-authority backlog selector (#66/#116) ──
 
 
-def _item(title, *, lang="Korean", score=500, vstate="verified", mon=True,
-          disk=False, emb=None, path=None):
+def _item(title, *, lang="Korean", score=500, vstate="verified", mon=True, disk=False, emb=None, path=None):
     from subarr.coverage_engine import CoverageItem
+
     return CoverageItem(
-        media_type="episode", title=title, original_language=lang, score=score,
-        verification_state=vstate, monitored=mon, has_sub_on_disk=disk,
-        embedded_en=emb, canonical_path=path or f"TV/{title}",
+        media_type="episode",
+        title=title,
+        original_language=lang,
+        score=score,
+        verification_state=vstate,
+        monitored=mon,
+        has_sub_on_disk=disk,
+        embedded_en=emb,
+        canonical_path=path or f"TV/{title}",
         file_canonical_path=path or f"TV/{title}/ep.mkv",
     )
 
 
 def _rules(**kw):
     from subarr.schedule_store import AutoQueueRules, MODE_DASHBOARD
-    base = dict(mode=MODE_DASHBOARD, min_score=200, max_per_run=5,
-                deny_languages=["English"], require_monitored=True,
-                skip_stale_disk=True, skip_embedded_en=True)
+
+    base = dict(
+        mode=MODE_DASHBOARD,
+        min_score=200,
+        max_per_run=5,
+        deny_languages=["English"],
+        require_monitored=True,
+        skip_stale_disk=True,
+        skip_embedded_en=True,
+    )
     base.update(kw)
     return AutoQueueRules(**base)
 
@@ -116,13 +133,13 @@ def test_eligible_works_even_in_dashboard_mode():
 def test_eligible_respects_quality_filters():
     bf = _bf()
     items = [
-        _item("good"),                       # eligible
-        _item("english", lang="English"),    # deny_languages
-        _item("lowscore", score=10),         # < min_score
-        _item("hassub", disk=True),          # stale disk
-        _item("embedded", emb="EN"),         # embedded EN
-        _item("unmonitored", mon=False),     # not monitored
-        _item("unprobed", vstate="unprobed"),# probe-gate
+        _item("good"),  # eligible
+        _item("english", lang="English"),  # deny_languages
+        _item("lowscore", score=10),  # < min_score
+        _item("hassub", disk=True),  # stale disk
+        _item("embedded", emb="EN"),  # embedded EN
+        _item("unmonitored", mon=False),  # not monitored
+        _item("unprobed", vstate="unprobed"),  # probe-gate
     ]
     out = bf.eligible_backfill_items(items, _rules())
     assert {i.title for i in out} == {"good"}

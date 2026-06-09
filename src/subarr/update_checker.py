@@ -104,22 +104,20 @@ def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
     updated = entry.find(f"{_ATOM_NS}updated")
     if updated is not None and updated.text:
         try:
-            released_at = datetime.fromisoformat(
-                updated.text.strip().replace("Z", "+00:00")
-            ).timestamp()
+            released_at = datetime.fromisoformat(updated.text.strip().replace("Z", "+00:00")).timestamp()
         except ValueError:
             pass
 
     content = entry.find(f"{_ATOM_NS}content")
     body = content.text if content is not None else None
 
-    return {"tag": tag, "released_at": released_at,
-            "notes_url": notes_url, "body": body}
+    return {"tag": tag, "released_at": released_at, "notes_url": notes_url, "body": body}
+
 
 # Default products subarr tracks. Each row maps to one update_checks row.
 DEFAULT_PRODUCTS = {
-    "subarr":         "coaxk/subarr",
-    "subarr-subgen":  "coaxk/subarr-subgen",
+    "subarr": "coaxk/subarr",
+    "subarr-subgen": "coaxk/subarr-subgen",
 }
 
 # Poll cadence. The 24h floor keeps us well below GitHub's anonymous
@@ -131,6 +129,7 @@ DEFAULT_POLL_INTERVAL_S = 86400  # 24 hours
 @dataclass
 class UpdateState:
     """One row from update_checks, hydrated for the API."""
+
     product: str
     repo: str
     current_version: str | None
@@ -225,11 +224,15 @@ class UpdateChecker:
             conn.close()
         return [
             UpdateState(
-                product=r[0], repo=r[1],
-                current_version=r[2], latest_version=r[3],
-                latest_released_at=r[4], release_notes_url=r[5],
+                product=r[0],
+                repo=r[1],
+                current_version=r[2],
+                latest_version=r[3],
+                latest_released_at=r[4],
+                release_notes_url=r[5],
                 is_breaking=bool(r[6]),
-                checked_at=r[7], last_error=r[8],
+                checked_at=r[7],
+                last_error=r[8],
             )
             for r in rows
         ]
@@ -278,8 +281,7 @@ class UpdateChecker:
                 # feed dodges the 60/hr unauthenticated REST limit (#158).
                 base_url="https://github.com",
                 timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0),
-                headers={"Accept": "application/atom+xml",
-                         "User-Agent": "subarr-update-checker"},
+                headers={"Accept": "application/atom+xml", "User-Agent": "subarr-update-checker"},
                 follow_redirects=True,  # renamed repos 301 to the new slug
             )
         for product, repo in self._products.items():
@@ -315,7 +317,8 @@ class UpdateChecker:
         is_breaking = "breaking" in release_body or "[breaking]" in release_body
 
         self._write_state(
-            product=product, repo=repo,
+            product=product,
+            repo=repo,
             current_version=self._current.get(product),
             latest_version=latest_tag,
             latest_released_at=released_at,
@@ -323,13 +326,15 @@ class UpdateChecker:
             is_breaking=is_breaking,
             last_error=None,
         )
-        log.info("update poll: %s → latest=%s (current=%s)",
-                 product, latest_tag, self._current.get(product))
+        log.info("update poll: %s → latest=%s (current=%s)", product, latest_tag, self._current.get(product))
 
     # ─── DB writes ─────────────────────────────────────────────────
 
     def _write_state(
-        self, *, product: str, repo: str,
+        self,
+        *,
+        product: str,
+        repo: str,
         current_version: str | None,
         latest_version: str | None,
         latest_released_at: float | None,
@@ -355,10 +360,15 @@ class UpdateChecker:
                 "  checked_at=excluded.checked_at, "
                 "  last_error=excluded.last_error",
                 (
-                    product, repo, current_version, latest_version,
-                    latest_released_at, release_notes_url,
+                    product,
+                    repo,
+                    current_version,
+                    latest_version,
+                    latest_released_at,
+                    release_notes_url,
                     1 if is_breaking else 0,
-                    time.time(), last_error,
+                    time.time(),
+                    last_error,
                 ),
             )
         finally:
@@ -374,18 +384,14 @@ class UpdateChecker:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE update_checks "
-                    "SET checked_at = ?, last_error = ? "
-                    "WHERE product = ?",
+                    "UPDATE update_checks SET checked_at = ?, last_error = ? WHERE product = ?",
                     (time.time(), error, product),
                 )
             else:
                 # First-poll failure — insert a stub row so /api/updates
                 # has something to render.
                 conn.execute(
-                    "INSERT INTO update_checks "
-                    "(product, repo, checked_at, last_error) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO update_checks (product, repo, checked_at, last_error) VALUES (?, ?, ?, ?)",
                     (product, repo, time.time(), error),
                 )
         finally:

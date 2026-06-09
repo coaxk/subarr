@@ -1,4 +1,5 @@
 """Shared HTTPX session for all integration clients."""
+
 from __future__ import annotations
 
 import logging
@@ -22,8 +23,9 @@ class IntegrationClient:
 
     name: str = "integration"
 
-    def __init__(self, base_url: str, headers: dict[str, str] | None = None,
-                 timeout: httpx.Timeout | None = None):
+    def __init__(
+        self, base_url: str, headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None
+    ):
         self._base_url = base_url.rstrip("/") if base_url else ""
         self._configured = bool(base_url)
         self._client = httpx.AsyncClient(

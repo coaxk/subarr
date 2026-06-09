@@ -98,10 +98,11 @@ SERVICE_CATALOGUE: dict[str, dict[str, Any]] = {
 @dataclass
 class DiscoveredService:
     """One candidate found by discovery. The wizard chooses among these."""
-    service: str                     # 'bazarr', 'sonarr', etc.
+
+    service: str  # 'bazarr', 'sonarr', etc.
     container_name: str
     image: str
-    container_id: str                # short ID (12 chars)
+    container_id: str  # short ID (12 chars)
     networks: list[str] = field(default_factory=list)
     # Container's port → host port mapping (e.g. {6767: 6767, 8989: 8990}).
     # Empty when only attached to internal networks.
@@ -242,6 +243,7 @@ class DockerDiscovery:
         # short ID. We use that to look ourselves up.
         try:
             import socket
+
             self_id = socket.gethostname()
         except Exception:
             return set()
@@ -275,7 +277,10 @@ class DockerDiscovery:
         return None
 
     def _hydrate(
-        self, service: str, container: dict, subarr_networks: set[str],
+        self,
+        service: str,
+        container: dict,
+        subarr_networks: set[str],
     ) -> DiscoveredService:
         names = container.get("Names", []) or []
         primary_name = names[0].lstrip("/") if names else "(unnamed)"
@@ -287,7 +292,7 @@ class DockerDiscovery:
         # Published ports — Docker returns these as a list of dicts with
         # PrivatePort + PublicPort.
         published: dict[int, int] = {}
-        for p in (container.get("Ports") or []):
+        for p in container.get("Ports") or []:
             priv = p.get("PrivatePort")
             pub = p.get("PublicPort")
             if priv and pub:
@@ -295,11 +300,7 @@ class DockerDiscovery:
 
         # Image version label (linuxserver / many others use OCI labels).
         labels = container.get("Labels") or {}
-        image_version = (
-            labels.get("org.opencontainers.image.version")
-            or labels.get("build_version")
-            or None
-        )
+        image_version = labels.get("org.opencontainers.image.version") or labels.get("build_version") or None
 
         # Config mount detection for Tier-3 hint. Match volume Source
         # paths whose Destination is /config (LinuxServer convention).
@@ -307,7 +308,7 @@ class DockerDiscovery:
         # need a follow-up /containers/{id}/json — skipping for now to
         # keep this single-call.
         config_host_path: str | None = None
-        for m in (container.get("Mounts") or []):
+        for m in container.get("Mounts") or []:
             if m.get("Destination") == "/config":
                 src = m.get("Source")
                 if src:
@@ -316,7 +317,11 @@ class DockerDiscovery:
 
         # URL inference.
         url, reason = self._infer_url(
-            service, primary_name, networks, published, subarr_networks,
+            service,
+            primary_name,
+            networks,
+            published,
+            subarr_networks,
         )
 
         return DiscoveredService(
@@ -334,8 +339,11 @@ class DockerDiscovery:
 
     @staticmethod
     def _infer_url(
-        service: str, container_name: str, networks: list[str],
-        published: dict[int, int], subarr_networks: set[str],
+        service: str,
+        container_name: str,
+        networks: list[str],
+        published: dict[int, int],
+        subarr_networks: set[str],
     ) -> tuple[str | None, str | None]:
         """Best-guess URL for subarr to reach this service.
 
@@ -372,6 +380,5 @@ class DockerDiscovery:
 
         # Nothing reachable from subarr's POV without manual config.
         return None, (
-            f"on network(s) {networks!r} which subarr isn't on; "
-            f"no port {internal_port} published to host"
+            f"on network(s) {networks!r} which subarr isn't on; no port {internal_port} published to host"
         )

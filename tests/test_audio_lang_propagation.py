@@ -8,12 +8,13 @@ correct foreign-language audio → episode appears in /wanted.
 This is the architectural payoff for the bazarr-blind defense: not just
 "see what Bazarr can't", but "make Bazarr able to see it".
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 
 def test_iso_code_to_sonarr_name_maps_common_languages():
     from subarr.routers.audio_lang import _iso_to_sonarr_name
+
     assert _iso_to_sonarr_name("en") == "English"
     assert _iso_to_sonarr_name("eng") == "English"
     assert _iso_to_sonarr_name("fr") == "French"

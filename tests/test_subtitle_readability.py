@@ -4,11 +4,13 @@ Pure SRT math against Netflix/BBC-style norms (CPS / CPL / line count /
 duration / overlap). No model, no GPU, no network. These tests pin the
 parser and the thresholds.
 """
+
 from __future__ import annotations
 
 
 def _mod():
     from subarr import subtitle_readability as sr
+
     return sr
 
 
@@ -67,10 +69,7 @@ def test_too_many_lines_flagged():
 
 def test_overlap_flagged():
     sr = _mod()
-    srt = (
-        "1\n00:00:00,000 --> 00:00:03,000\nfirst\n\n"
-        "2\n00:00:02,000 --> 00:00:04,000\nsecond\n"
-    )
+    srt = "1\n00:00:00,000 --> 00:00:03,000\nfirst\n\n2\n00:00:02,000 --> 00:00:04,000\nsecond\n"
     report = sr.analyze_srt(srt)
     assert any(i.kind == "overlap" for i in report.issues)
 

@@ -14,6 +14,7 @@ a single failure degrades gracefully (the engine returns whatever it
 managed to assemble; the response includes a `sources` field showing
 which integrations contributed).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,7 +54,7 @@ class CoverageItem:
     bazarr_episode_id: int | None = None
     missing_subtitles: list[str] = field(default_factory=list)
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
-    embedded_en: str | None = None   # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
+    embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
     audio_langs: list[str] = field(default_factory=list)
     suggest_bazarr_rescan: bool = False
     # Resolved file path (file-level, not series-dir; populated when
@@ -147,8 +148,8 @@ class CoverageItem:
     # Review flow offers a one-click mkvpropedit default-track swap. Only set for
     # .mkv files where a swap target exists; cleared for user-dismissed files.
     default_track_mismatch: bool = False
-    mismatch_default_track_lang: str | None = None   # current default track lang (ISO-639-1)
-    mismatch_native_track_lang: str | None = None    # the original language (ISO-639-1)
+    mismatch_default_track_lang: str | None = None  # current default track lang (ISO-639-1)
+    mismatch_native_track_lang: str | None = None  # the original language (ISO-639-1)
     mismatch_native_audio_ordinal: int | None = None  # 1-based audio ordinal for the swap
 
     def to_dict(self) -> dict[str, Any]:
@@ -236,6 +237,7 @@ class IntegrationBundle:
         # with env-driven config; .is_configured() reflects whether url+token
         # are present so callers degrade gracefully if Plex isn't set up.
         from .integrations.plex import PlexClient
+
         self.plex = PlexClient(
             base_url=settings.plex_url,
             token=settings.plex_token,
@@ -266,7 +268,7 @@ def _strip_arr_prefix(arr_path: str | None) -> str | None:
     prefix = settings.arr_path_prefix
     s = arr_path
     if prefix and s.startswith(prefix):
-        s = s[len(prefix):]
+        s = s[len(prefix) :]
     return s.strip("/")
 
 
@@ -305,11 +307,7 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
         full = settings.media_root / Path(canonical_dir)
         if not full.is_dir():
             return []
-        return sorted(
-            str(p.relative_to(full))
-            for p in full.rglob("*.srt")
-            if p.is_file()
-        )
+        return sorted(str(p.relative_to(full)) for p in full.rglob("*.srt") if p.is_file())
     except (OSError, ValueError):
         return []
 
@@ -325,7 +323,8 @@ _SRT_SCAN_CONCURRENCY = 8
 
 
 async def _build_srt_index_parallel(
-    canonical_dirs, cap: int = _SRT_SCAN_CONCURRENCY,
+    canonical_dirs,
+    cap: int = _SRT_SCAN_CONCURRENCY,
 ) -> dict[str, list[str]]:
     """Recursively scan each (unique, non-empty) series canonical dir for
     .srt files, with bounded concurrency. Returns {canonical_dir: [rel
@@ -382,8 +381,12 @@ def _sidecars_for_file(srt_paths: list[str], file_canonical: str) -> list[str]:
         return []
     name = file_canonical.rsplit("/", 1)[-1]
     stem = name.rsplit(".", 1)[0].lower()  # strip extension
-    return [p for p in srt_paths if p.rsplit("/", 1)[-1].lower().startswith(stem + ".")
-            or p.rsplit("/", 1)[-1].lower() == stem + ".srt"]
+    return [
+        p
+        for p in srt_paths
+        if p.rsplit("/", 1)[-1].lower().startswith(stem + ".")
+        or p.rsplit("/", 1)[-1].lower() == stem + ".srt"
+    ]
 
 
 def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
@@ -394,6 +397,7 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') are still
     parsed correctly because we grab the lang slot, not the last token."""
     import re
+
     # [2026-05-30] Split on BOTH dots AND hyphens. Release teams pack
     # the lang code into a hyphen-suffixed cluster ("…x264-iND-en.srt")
     # because they reuse a release-name template. The dot-only splitter
@@ -403,9 +407,26 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
     # Also skip release-team tokens that look like 2-3 char alpha but
     # AREN'T language codes. Heuristic list — extend as we hit new ones.
-    KNOWN_NON_LANG = {"web", "hdtv", "dvd", "uhd", "hdr", "sdr", "ddp",
-                       "aac", "dts", "ac3", "flac", "x264", "x265",
-                       "ind", "rep", "tla", "ntb", "syn"}
+    KNOWN_NON_LANG = {
+        "web",
+        "hdtv",
+        "dvd",
+        "uhd",
+        "hdr",
+        "sdr",
+        "ddp",
+        "aac",
+        "dts",
+        "ac3",
+        "flac",
+        "x264",
+        "x265",
+        "ind",
+        "rep",
+        "tla",
+        "ntb",
+        "syn",
+    }
 
     langs: set[str] = set()
     for p in sidecars:
@@ -447,7 +468,8 @@ def _episode_file_canonical(
 
 
 def _stale_for_episode(
-    *, sonarr_episode_id: int | None,
+    *,
+    sonarr_episode_id: int | None,
     ep_file_paths: dict[int, str],
     sonarr_eps_by_id: dict[int, dict],
     series_srt_paths: list[str],
@@ -465,7 +487,9 @@ def _stale_for_episode(
     Falls back to S<NN>E<NN> substring match if Sonarr didn't give us a
     file path (episode not yet downloaded, or pre-Sonarr-v3 cluster)."""
     if sonarr_episode_id is None or not series_srt_paths:
-        return _match_episode_srt_pattern(series_srt_paths, episode_number) if not missing_subs else (False, [])
+        return (
+            _match_episode_srt_pattern(series_srt_paths, episode_number) if not missing_subs else (False, [])
+        )
     file_canonical = _episode_file_canonical(sonarr_episode_id, ep_file_paths, sonarr_eps_by_id)
     if not file_canonical:
         # No file on disk yet → can't be stale; fall back to pattern only
@@ -480,7 +504,8 @@ def _stale_for_episode(
         # pattern is fuzzier but catches release mismatch. Original
         # subarr behaved this way; the v1.0 rewrite over-tightened.
         ep_pattern_hit, pattern_matches = _match_episode_srt_pattern(
-            series_srt_paths, episode_number,
+            series_srt_paths,
+            episode_number,
         )
         if not ep_pattern_hit:
             return False, []
@@ -490,6 +515,7 @@ def _stale_for_episode(
     # an 'en' wanted. The old raw `[:2]` truncation made 'eng' != 'en' and
     # 'ger'/'deu' un-matchable, raising phantom gaps for langs already on disk.
     from .langs import normalize_lang
+
     langs_present = {normalize_lang(l) for l in _langs_in_sidecars(sidecars)}
     wanted_codes = {normalize_lang(c) for c in (missing_subs or []) if c}
     # If no missing-subs language list (shouldn't happen for Bazarr wanted
@@ -521,8 +547,12 @@ async def _fetch_bazarr(bz: BazarrClient, sources: dict) -> tuple[list[dict], li
         movs_task = asyncio.create_task(bz.movies_wanted())
         eps = await eps_task
         movs = await movs_task
-        sources["bazarr"] = {"ok": True, "configured": True,
-                             "episodes_wanted": len(eps), "movies_wanted": len(movs)}
+        sources["bazarr"] = {
+            "ok": True,
+            "configured": True,
+            "episodes_wanted": len(eps),
+            "movies_wanted": len(movs),
+        }
         return eps, movs
     except IntegrationError as e:
         sources["bazarr"] = {"ok": False, "configured": True, "error": str(e)}
@@ -628,7 +658,7 @@ async def _fetch_tautulli_activity(t: TautulliClient, sources: dict) -> dict:
     out = {
         "now_playing_titles": set(),
         "transcoding_titles": set(),
-        "audio_lang_hints": {},   # title_lc → 3-letter ISO from user track choice
+        "audio_lang_hints": {},  # title_lc → 3-letter ISO from user track choice
     }
     if not t.is_configured():
         return out
@@ -643,8 +673,9 @@ async def _fetch_tautulli_activity(t: TautulliClient, sources: dict) -> dict:
             if (s.get("subtitle_decision") or "").lower() == "transcode":
                 out["transcoding_titles"].add(title)
             # Layer 2.5: audio track language the user actually picked.
-            audio_lang = (s.get("stream_audio_language_code")
-                          or s.get("audio_language_code") or "").strip().lower()
+            audio_lang = (
+                (s.get("stream_audio_language_code") or s.get("audio_language_code") or "").strip().lower()
+            )
             if audio_lang and audio_lang not in ("und", ""):
                 out["audio_lang_hints"][title] = audio_lang
         sources.setdefault("tautulli", {})["now_playing"] = len(out["now_playing_titles"])
@@ -710,24 +741,28 @@ def _episode_filename_pattern(episode_number: str | None) -> str | None:
         return None
 
 
-def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
-                          tautulli_hints: dict[str, str] | None = None,
-                          user_verifications: dict[str, str] | None = None,
-                          failed_idx: dict[str, list] | None = None,
-                          plex_hints: dict[str, str] | None = None,
-                          whisper_verifications: dict[str, str] | None = None) -> None:
+def _attach_probe_episode(
+    item: CoverageItem,
+    idx: dict[str, list],
+    tautulli_hints: dict[str, str] | None = None,
+    user_verifications: dict[str, str] | None = None,
+    failed_idx: dict[str, list] | None = None,
+    plex_hints: dict[str, str] | None = None,
+    whisper_verifications: dict[str, str] | None = None,
+) -> None:
     """Look up a probed file under the series prefix whose basename
     contains S01E03 (or equivalent). On match, copy embedded_en +
     audio_langs + file_canonical_path onto the item and mark it verified.
     On no probe match, mark probe_failed if a probe failure matches the
     same episode, else leave it unprobed (the probe-gate then buckets it)."""
     from .media_probe import audio_lang_summary_with_titles, english_track_summary
+
     if not item.canonical_path:
         return
     pattern = _episode_filename_pattern(item.episode_number)
     if not pattern:
         return
-    for file_canonical, probe in (idx.get(item.canonical_path) or []):
+    for file_canonical, probe in idx.get(item.canonical_path) or []:
         basename = file_canonical.rsplit("/", 1)[-1].lower()
         if pattern in basename:
             item.file_canonical_path = file_canonical
@@ -736,31 +771,38 @@ def _attach_probe_episode(item: CoverageItem, idx: dict[str, list],
             item.audio_langs = langs
             if notes:
                 item.audio_label_notes.extend(notes)
-            _classify_audio_label(item, tautulli_hints=tautulli_hints,
-                                  user_verifications=user_verifications,
-                                  plex_hints=plex_hints,
-                                  whisper_verifications=whisper_verifications)
+            _classify_audio_label(
+                item,
+                tautulli_hints=tautulli_hints,
+                user_verifications=user_verifications,
+                plex_hints=plex_hints,
+                whisper_verifications=whisper_verifications,
+            )
             _apply_track_mismatch(item, probe)
             item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
-    for failed_canonical in ((failed_idx or {}).get(item.canonical_path) or []):
+    for failed_canonical in (failed_idx or {}).get(item.canonical_path) or []:
         if pattern in failed_canonical.rsplit("/", 1)[-1].lower():
             item.verification_state = "probe_failed"
             return
     # else: leave default "unprobed"
 
 
-def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
-                        tautulli_hints: dict[str, str] | None = None,
-                        user_verifications: dict[str, str] | None = None,
-                        failed_idx: dict[str, list] | None = None,
-                        plex_hints: dict[str, str] | None = None,
-                        whisper_verifications: dict[str, str] | None = None) -> None:
+def _attach_probe_movie(
+    item: CoverageItem,
+    idx: dict[str, list],
+    tautulli_hints: dict[str, str] | None = None,
+    user_verifications: dict[str, str] | None = None,
+    failed_idx: dict[str, list] | None = None,
+    plex_hints: dict[str, str] | None = None,
+    whisper_verifications: dict[str, str] | None = None,
+) -> None:
     """Movies: a single video file lives directly under the movie dir.
     First probe under the movie's canonical wins → verified. No probe but a
     recorded failure → probe_failed. Otherwise unprobed."""
     from .media_probe import audio_lang_summary_with_titles, english_track_summary
+
     if not item.canonical_path:
         return
     candidates = idx.get(item.canonical_path) or []
@@ -775,19 +817,24 @@ def _attach_probe_movie(item: CoverageItem, idx: dict[str, list],
     item.audio_langs = langs
     if notes:
         item.audio_label_notes.extend(notes)
-    _classify_audio_label(item, tautulli_hints=tautulli_hints,
-                          user_verifications=user_verifications,
-                          plex_hints=plex_hints,
-                          whisper_verifications=whisper_verifications)
+    _classify_audio_label(
+        item,
+        tautulli_hints=tautulli_hints,
+        user_verifications=user_verifications,
+        plex_hints=plex_hints,
+        whisper_verifications=whisper_verifications,
+    )
     _apply_track_mismatch(item, probe)
     item.verification_state = "verified"
 
 
-def _classify_audio_label(item: CoverageItem,
-                          tautulli_hints: dict[str, str] | None = None,
-                          user_verifications: dict[str, str] | None = None,
-                          plex_hints: dict[str, str] | None = None,
-                          whisper_verifications: dict[str, str] | None = None) -> None:
+def _classify_audio_label(
+    item: CoverageItem,
+    tautulli_hints: dict[str, str] | None = None,
+    user_verifications: dict[str, str] | None = None,
+    plex_hints: dict[str, str] | None = None,
+    whisper_verifications: dict[str, str] | None = None,
+) -> None:
     """v1.1-O: cross-check audio_langs against Sonarr/Radarr originalLanguage.
 
     Three outcomes:
@@ -810,6 +857,7 @@ def _classify_audio_label(item: CoverageItem,
     file_path = item.file_canonical_path
     if user_verifications and file_path and file_path in user_verifications:
         from .langs import normalize_lang
+
         confirmed = user_verifications[file_path]
         prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
         item.audio_langs = [confirmed]
@@ -823,7 +871,7 @@ def _classify_audio_label(item: CoverageItem,
         item.audio_label_suspect = False
         item.audio_label_unknown = False
         item.audio_verified = True
-        item.audio_source = "user"   # refined to whisper/auto in the post-pass
+        item.audio_source = "user"  # refined to whisper/auto in the post-pass
         return
     # Layer 1 (#90): Whisper-verified spoken language — subarr LISTENED to the
     # audio (robust multi-chunk detect), so it beats tag-derived Plex/Tautulli
@@ -832,6 +880,7 @@ def _classify_audio_label(item: CoverageItem,
     # supplied (the on-demand trigger is slice 3) → no behaviour change yet.
     if whisper_verifications and file_path and file_path in whisper_verifications:
         from .langs import normalize_lang
+
         verified = (whisper_verifications[file_path] or "").lower()
         prior = [l for l in (item.audio_langs or []) if l and l.lower() not in ("", "und")]
         item.audio_langs = [verified]
@@ -854,9 +903,7 @@ def _classify_audio_label(item: CoverageItem,
         plex_lang = tautulli_hints[title_lc]
         # User picked this in Plex → that's the actual audio. Authoritative.
         item.audio_langs = [plex_lang]
-        item.audio_label_notes.append(
-            f"Plex audio-track pick = {plex_lang!r} (overrides ffprobe)"
-        )
+        item.audio_label_notes.append(f"Plex audio-track pick = {plex_lang!r} (overrides ffprobe)")
         item.audio_label_suspect = False
         item.audio_label_unknown = False
         item.audio_source = "plex"
@@ -879,14 +926,13 @@ def _classify_audio_label(item: CoverageItem,
     # [#118] Normalize audio tags to ISO-639-1 so the English-on-foreign-show
     # suspect check below catches eng/en-US, not just the bare 'en'/'eng' forms.
     from .langs import normalize_lang
+
     langs = [normalize_lang(l) or "und" for l in (item.audio_langs or [])]
     only_und = bool(langs) and all(l in ("", "und") for l in langs)
     no_data = not langs
     if only_und or no_data:
         item.audio_label_unknown = True
-        item.audio_label_notes.append(
-            "no audio language metadata — encoder didn't tag the stream"
-        )
+        item.audio_label_notes.append("no audio language metadata — encoder didn't tag the stream")
         return
     orig = (item.original_language or "").strip().lower()
     # Foreign originals: anything that isn't English.
@@ -902,9 +948,12 @@ def _classify_audio_label(item: CoverageItem,
     # No higher-trust source fired (user/Plex returned early; suspect/unknown
     # set their flags) and we have a usable tag → the language came from the
     # file's ffprobe metadata only. Lowest trust — the UI badge shows it muted.
-    if (item.audio_source is None and not item.audio_label_unknown
-            and not item.audio_label_suspect
-            and any(l not in ("", "und") for l in langs)):
+    if (
+        item.audio_source is None
+        and not item.audio_label_unknown
+        and not item.audio_label_suspect
+        and any(l not in ("", "und") for l in langs)
+    ):
         item.audio_source = "ffprobe"
 
 
@@ -913,6 +962,7 @@ def _apply_track_mismatch(item: CoverageItem, probe) -> None:
     files where a swap target exists. Dismissed files are cleared in a later
     central pass (mirrors the #140 mixed-dismiss handling)."""
     from .media_probe import detect_default_track_mismatch
+
     fp = item.file_canonical_path or ""
     if not fp.lower().endswith(".mkv"):
         return  # the mkvpropedit default-flag swap is Matroska-only
@@ -1000,15 +1050,12 @@ def _build_verification_lookup(audio_lang_store: Any):
     base_langs = audio_lang_store.get_all_as_lookup()
     base_sources = audio_lang_store.get_all_sources_as_lookup()
     intents = audio_lang_store.list_series_intents()
-    lang_intents: list[tuple[str, str]] = [
-        (i["series_prefix"], i["lang_code"]) for i in intents
-    ]
+    lang_intents: list[tuple[str, str]] = [(i["series_prefix"], i["lang_code"]) for i in intents]
     # Source string mirrors the per-path get() inheritance label so the UI
     # badge (via _refine_audio_sources -> "user") and any source-aware
     # consumer treats inherited rows as user-sourced.
     source_intents: list[tuple[str, str]] = [
-        (i["series_prefix"], f"series_intent:{i.get('source', 'user')}")
-        for i in intents
+        (i["series_prefix"], f"series_intent:{i.get('source', 'user')}") for i in intents
     ]
     user_verifications = _SeriesIntentLookup(base_langs, lang_intents)
     verification_sources = _SeriesIntentLookup(base_sources, source_intents)
@@ -1019,13 +1066,15 @@ def _refine_audio_sources(items: list, verification_sources: dict) -> None:
     """Post-pass: _classify set audio_source='user' for any store-verified hit;
     refine it to the ACTUAL verification source so the UI badge distinguishes
     user-verified from machine-detected (Whisper) audio. In place."""
+
     def _map(raw: str) -> str:
         r = raw.lower()
         if r.startswith("series_intent"):
-            return "user"                  # inherited from a user's series declaration
+            return "user"  # inherited from a user's series declaration
         if "whisper" in r or "auto" in r:
-            return "whisper"               # machine multi-chunk detect
+            return "whisper"  # machine multi-chunk detect
         return "user"
+
     for it in items:
         s = verification_sources.get(it.file_canonical_path)
         if s:
@@ -1047,9 +1096,7 @@ def _mixed_series_key(item: "CoverageItem") -> str | None:
     return item.canonical_path or None
 
 
-def _flag_mixed_language_series(
-    items: list, dismissed_series: set[str] | None = None
-) -> int:
+def _flag_mixed_language_series(items: list, dismissed_series: set[str] | None = None) -> int:
     """#140: flag series that contain ≥2 distinct NON-English high-trust spoken
     languages — the signature of two different shows merged into one Sonarr
     series (e.g. S01E04 Korean, S01E16 Russian). Mutates matching episodes'
@@ -1240,12 +1287,8 @@ async def build_coverage(
     ignore_forced = bool(getattr(subgen_caps, "ignore_forced_subtitles", False))
 
     bz_eps, bz_movs = await _fetch_bazarr(bundle.bazarr, sources)
-    sonarr_series_task = asyncio.create_task(
-        _fetch_arr("sonarr", bundle.sonarr, sources, "series")
-    )
-    radarr_movies_task = asyncio.create_task(
-        _fetch_arr("radarr", bundle.radarr, sources, "movies")
-    )
+    sonarr_series_task = asyncio.create_task(_fetch_arr("sonarr", bundle.sonarr, sources, "series"))
+    radarr_movies_task = asyncio.create_task(_fetch_arr("radarr", bundle.radarr, sources, "movies"))
     sonarr_tags_task = asyncio.create_task(_fetch_arr_tags("sonarr", bundle.sonarr, sources))
     radarr_tags_task = asyncio.create_task(_fetch_arr_tags("radarr", bundle.radarr, sources))
     # v1.1-B: wanted/missing sets — "no file imported yet" authoritative truth.
@@ -1258,25 +1301,25 @@ async def build_coverage(
     sonarr_calendar_task = asyncio.create_task(_fetch_calendar_upcoming(bundle.sonarr, sources))
     # v1.1-E: NOW PLAYING via Tautulli get_activity.
     tautulli_activity_task = (
-        asyncio.create_task(_fetch_tautulli_activity(bundle.tautulli, sources))
-        if use_tautulli else None
+        asyncio.create_task(_fetch_tautulli_activity(bundle.tautulli, sources)) if use_tautulli else None
     )
-    tautulli_task = (
-        asyncio.create_task(_fetch_tautulli(bundle.tautulli, sources))
-        if use_tautulli else None
-    )
+    tautulli_task = asyncio.create_task(_fetch_tautulli(bundle.tautulli, sources)) if use_tautulli else None
 
     sonarr_series = await sonarr_series_task
     radarr_movies = await radarr_movies_task
     sonarr_tags = await sonarr_tags_task
     radarr_tags = await radarr_tags_task
-    sonarr_missing_ids = await sonarr_missing_task   # set[int]
-    radarr_missing_ids = await radarr_missing_task   # set[int]
-    sonarr_recent_ids = await sonarr_recent_task     # dict[int, float] (id→import_ts) #117
-    radarr_recent_ids = await radarr_recent_task     # dict[int, float] (id→import_ts) #117
-    airing_soon_ids = await sonarr_calendar_task     # set[int]
+    sonarr_missing_ids = await sonarr_missing_task  # set[int]
+    radarr_missing_ids = await radarr_missing_task  # set[int]
+    sonarr_recent_ids = await sonarr_recent_task  # dict[int, float] (id→import_ts) #117
+    radarr_recent_ids = await radarr_recent_task  # dict[int, float] (id→import_ts) #117
+    airing_soon_ids = await sonarr_calendar_task  # set[int]
     history = await tautulli_task if tautulli_task else []
-    activity = await tautulli_activity_task if tautulli_activity_task else {"now_playing_titles": set(), "transcoding_titles": set()}
+    activity = (
+        await tautulli_activity_task
+        if tautulli_activity_task
+        else {"now_playing_titles": set(), "transcoding_titles": set()}
+    )
 
     # #12: per-show selected audio language from Plex (opt-in, funnel L2.6,
     # below Tautulli-live). Show-level signal → episodes only. Best-effort:
@@ -1287,8 +1330,7 @@ async def build_coverage(
         plex_audio_hints = await _fetch_plex_audio_hints(bundle.plex, ep_titles, sources)
 
     sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
-    radarr_by_title = {m.get("title", "").strip().lower(): m
-                       for m in radarr_movies if isinstance(m, dict)}
+    radarr_by_title = {m.get("title", "").strip().lower(): m for m in radarr_movies if isinstance(m, dict)}
     tt_signals = _tautulli_signals(history) if history else {}
 
     # Probe-cache index: { series_canonical_prefix → [(file_canonical, ProbeResult)] }
@@ -1335,9 +1377,7 @@ async def build_coverage(
     #     machine detection never declares a series intent.
     # Splitting avoids the user layer (which runs first) grabbing a whisper row
     # and conflating machine detection with user action.
-    user_verifications, verification_sources = _build_verification_lookup(
-        audio_lang_store
-    )
+    user_verifications, verification_sources = _build_verification_lookup(audio_lang_store)
 
     def _is_machine(p: str) -> bool:
         s = (verification_sources.get(p) or "").lower()
@@ -1346,9 +1386,7 @@ async def build_coverage(
     # Machine rows are per-file entries in the lookup's base dict; pull them into
     # a plain dict, then drop them from the user lookup (its series-intent
     # fallback stays intact since intents are never machine-sourced).
-    whisper_verifications: dict[str, str] = {
-        p: l for p, l in user_verifications.items() if _is_machine(p)
-    }
+    whisper_verifications: dict[str, str] = {p: l for p, l in user_verifications.items() if _is_machine(p)}
     for _p in whisper_verifications:
         user_verifications.pop(_p, None)
 
@@ -1364,8 +1402,7 @@ async def build_coverage(
     # rglobs were the dominant cost of the build (minutes). The loop then
     # just reads from this index.
     _ep_canonical_dirs = [
-        _strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path"))
-        for w in bz_eps
+        _strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps
     ]
     series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
 
@@ -1377,6 +1414,7 @@ async def build_coverage(
     sonarr_eps_by_id: dict[int, dict] = {}
     ep_file_paths: dict[int, str] = {}
     if wanted_series_ids and bundle.sonarr.is_configured():
+
         async def _fetch_series_files(sid: int):
             try:
                 eps, files = await asyncio.gather(
@@ -1388,6 +1426,7 @@ async def build_coverage(
             except IntegrationError as e:
                 log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
                 return sid, [], []
+
         results = await asyncio.gather(*[_fetch_series_files(sid) for sid in wanted_series_ids])
         for sid, eps, files in results:
             for ep in eps:
@@ -1396,8 +1435,7 @@ async def build_coverage(
             for f in files:
                 if isinstance(f, dict) and "id" in f and f.get("path"):
                     ep_file_paths[f["id"]] = f["path"]
-        sources["sonarr_files"] = {"ok": True, "series": len(wanted_series_ids),
-                                   "files": len(ep_file_paths)}
+        sources["sonarr_files"] = {"ok": True, "series": len(wanted_series_ids), "files": len(ep_file_paths)}
 
     # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
     for w in bz_eps:
@@ -1409,12 +1447,11 @@ async def build_coverage(
             # This inline fallback only fires for a dir that wasn't in the
             # pre-scan set (defensive); still offloaded so it never blocks
             # the event loop (#228).
-            series_srt_index[canonical] = await asyncio.to_thread(
-                _scan_for_srt_recursive, canonical
-            )
+            series_srt_index[canonical] = await asyncio.to_thread(_scan_for_srt_recursive, canonical)
         srt_paths = series_srt_index.get(canonical or "", [])
-        missing_codes = [ms.get("code2") or ms.get("name") or "?"
-                         for ms in (w.get("missing_subtitles") or [])]
+        missing_codes = [
+            ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+        ]
         has_srt, srts = _stale_for_episode(
             sonarr_episode_id=w.get("sonarrEpisodeId"),
             ep_file_paths=ep_file_paths,
@@ -1436,8 +1473,9 @@ async def build_coverage(
             sub_files_seen=srts,
             bazarr_sonarr_id=sonarr_id,
             bazarr_episode_id=w.get("sonarrEpisodeId"),
-            missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
-                               for ms in (w.get("missing_subtitles") or [])],
+            missing_subtitles=[
+                ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+            ],
         )
         # v1.1-B: Sonarr knows this episode has no file yet.
         if item.bazarr_episode_id and item.bazarr_episode_id in sonarr_missing_ids:
@@ -1449,16 +1487,22 @@ async def build_coverage(
         # when Sonarr has a file — fileless episodes stay pending_download.
         if not item.file_canonical_path:
             item.file_canonical_path = _episode_file_canonical(
-                item.bazarr_episode_id, ep_file_paths, sonarr_eps_by_id,
+                item.bazarr_episode_id,
+                ep_file_paths,
+                sonarr_eps_by_id,
             )
-        _attach_probe_episode(item, probe_by_series_prefix,
-                              tautulli_hints=activity.get("audio_lang_hints") or {},
-                              user_verifications=user_verifications,
-                              failed_idx=probe_failed_by_prefix,
-                              plex_hints=plex_audio_hints,
-                              whisper_verifications=whisper_verifications)
+        _attach_probe_episode(
+            item,
+            probe_by_series_prefix,
+            tautulli_hints=activity.get("audio_lang_hints") or {},
+            user_verifications=user_verifications,
+            failed_idx=probe_failed_by_prefix,
+            plex_hints=plex_audio_hints,
+            whisper_verifications=whisper_verifications,
+        )
         _score(
-            item, tt_signals,
+            item,
+            tt_signals,
             now_playing_titles=activity["now_playing_titles"],
             transcoding_titles=activity["transcoding_titles"],
             just_imported_eps=sonarr_recent_ids,
@@ -1490,19 +1534,24 @@ async def build_coverage(
             has_sub_on_disk=has_srt,
             sub_files_seen=srts,
             bazarr_radarr_id=m.get("id"),
-            missing_subtitles=[ms.get("code2") or ms.get("name") or "?"
-                               for ms in (w.get("missing_subtitles") or [])],
+            missing_subtitles=[
+                ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+            ],
         )
         if item.bazarr_radarr_id and item.bazarr_radarr_id in radarr_missing_ids:
             item.pending_download = True
-        _attach_probe_movie(item, probe_by_series_prefix,
-                            tautulli_hints=activity.get("audio_lang_hints") or {},
-                            user_verifications=user_verifications,
-                            failed_idx=probe_failed_by_prefix,
-                            plex_hints=plex_audio_hints,
-                            whisper_verifications=whisper_verifications)
+        _attach_probe_movie(
+            item,
+            probe_by_series_prefix,
+            tautulli_hints=activity.get("audio_lang_hints") or {},
+            user_verifications=user_verifications,
+            failed_idx=probe_failed_by_prefix,
+            plex_hints=plex_audio_hints,
+            whisper_verifications=whisper_verifications,
+        )
         _score(
-            item, tt_signals,
+            item,
+            tt_signals,
             now_playing_titles=activity["now_playing_titles"],
             transcoding_titles=activity["transcoding_titles"],
             just_imported_movies=radarr_recent_ids,
@@ -1525,7 +1574,9 @@ async def build_coverage(
     # with the same UI affordances as a regular wanted row.
     if bundle.sonarr.is_configured():
         items = await _add_bazarr_blind_synthetic_rows(
-            bundle, sonarr_series, items,
+            bundle,
+            sonarr_series,
+            items,
             already_fetched_series_ids=wanted_series_ids,
             sonarr_eps_by_id=sonarr_eps_by_id,
             ep_file_paths=ep_file_paths,
@@ -1614,7 +1665,9 @@ async def _add_bazarr_blind_synthetic_rows(
             foreign_series.append(s)
     if not foreign_series:
         sources["bazarr_blind_defense"] = {
-            "ok": True, "foreign_series": 0, "synthetic_rows": 0,
+            "ok": True,
+            "foreign_series": 0,
+            "synthetic_rows": 0,
             "note": "no foreign-language series in Sonarr — pass skipped",
         }
         return items
@@ -1622,10 +1675,10 @@ async def _add_bazarr_blind_synthetic_rows(
     # Fetch episodes + files for foreign series we haven't already loaded
     # (Bazarr-wanted iteration may have pre-fetched some).
     foreign_sids_to_fetch = [
-        s["id"] for s in foreign_series
-        if s.get("id") and s["id"] not in already_fetched_series_ids
+        s["id"] for s in foreign_series if s.get("id") and s["id"] not in already_fetched_series_ids
     ]
     if foreign_sids_to_fetch:
+
         async def _fetch(sid: int):
             try:
                 eps, files = await asyncio.gather(
@@ -1636,9 +1689,8 @@ async def _add_bazarr_blind_synthetic_rows(
             except IntegrationError as e:
                 log.debug("bazarr-blind sonarr fetch failed for %s: %s", sid, e)
                 return sid, [], []
-        for sid, eps, files in await asyncio.gather(
-            *[_fetch(sid) for sid in foreign_sids_to_fetch]
-        ):
+
+        for sid, eps, files in await asyncio.gather(*[_fetch(sid) for sid in foreign_sids_to_fetch]):
             for ep in eps:
                 if isinstance(ep, dict) and "id" in ep:
                     sonarr_eps_by_id[ep["id"]] = ep
@@ -1648,12 +1700,8 @@ async def _add_bazarr_blind_synthetic_rows(
 
     # Build dedup sets from existing items so we don't double-render rows
     # that already came from Bazarr wanted or other sources.
-    seen_ep_ids: set[int] = {
-        it.bazarr_episode_id for it in items if it.bazarr_episode_id
-    }
-    seen_files: set[str] = {
-        it.file_canonical_path for it in items if it.file_canonical_path
-    }
+    seen_ep_ids: set[int] = {it.bazarr_episode_id for it in items if it.bazarr_episode_id}
+    seen_files: set[str] = {it.file_canonical_path for it in items if it.file_canonical_path}
 
     # #93 perf: pre-group episodes by series id ONCE. The previous inner
     # loop scanned ALL of sonarr_eps_by_id for every foreign series — an
@@ -1669,7 +1717,8 @@ async def _add_bazarr_blind_synthetic_rows(
     # parallel (bounded), before the loop. This is the ~668-series fan-out
     # that previously ran strictly one-at-a-time.
     _foreign_dirs = [
-        c for c in (_strip_arr_prefix(s.get("path")) for s in foreign_series)
+        c
+        for c in (_strip_arr_prefix(s.get("path")) for s in foreign_series)
         if c and c not in series_srt_index
     ]
     series_srt_index.update(await _build_srt_index_parallel(_foreign_dirs))
@@ -1707,10 +1756,7 @@ async def _add_bazarr_blind_synthetic_rows(
             # in the lang code counts. This is intentionally conservative;
             # files with NO srt or only non-EN srt qualify as bazarr-blind.
             file_stem = file_canonical.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-            has_en_sidecar = any(
-                _is_en_sidecar_for(srt_path, file_stem)
-                for srt_path in srt_paths
-            )
+            has_en_sidecar = any(_is_en_sidecar_for(srt_path, file_stem) for srt_path in srt_paths)
             if has_en_sidecar:
                 continue
             # Build a tentative synthetic row + run the existing audio
@@ -1731,8 +1777,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 # file. (The to_dict layer renders S01E02 in the UI.)
                 episode_number=(
                     f"{ep.get('seasonNumber')}x{ep.get('episodeNumber')}"
-                    if ep.get("seasonNumber") is not None
-                    and ep.get("episodeNumber") is not None
+                    if ep.get("seasonNumber") is not None and ep.get("episodeNumber") is not None
                     else None
                 ),
                 original_language=(s.get("originalLanguage") or {}).get("name"),
@@ -1744,7 +1789,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 sub_files_seen=[],
                 bazarr_sonarr_id=sid,
                 bazarr_episode_id=ep_id,
-                missing_subtitles=["en"],   # treat as needing English
+                missing_subtitles=["en"],  # treat as needing English
                 # Suspect flags get set AFTER _classify_audio_label below
                 # has the chance to inspect audio_langs from the probe.
                 # Setting them upfront would bias every foreign-language
@@ -1759,7 +1804,8 @@ async def _add_bazarr_blind_synthetic_rows(
             # rows are regular foreign-language coverage scenarios Bazarr
             # can handle on its own; they don't need our special chip.
             _attach_probe_episode(
-                item, probe_by_series_prefix,
+                item,
+                probe_by_series_prefix,
                 tautulli_hints=activity.get("audio_lang_hints") or {},
                 user_verifications=user_verifications,
                 failed_idx=failed_idx,
@@ -1776,12 +1822,8 @@ async def _add_bazarr_blind_synthetic_rows(
             #       so Bazarr is STILL blind even though we now know
             #       the truth. Keep surfacing so the user knows the gap
             #       still exists at the Bazarr level.
-            user_lang = (
-                user_verifications.get(file_canonical) if user_verifications else None
-            )
-            user_confirmed_foreign = (
-                user_lang and user_lang.strip().lower() not in ("", "en", "eng")
-            )
+            user_lang = user_verifications.get(file_canonical) if user_verifications else None
+            user_confirmed_foreign = user_lang and user_lang.strip().lower() not in ("", "en", "eng")
             if not item.audio_label_suspect and not user_confirmed_foreign:
                 continue
             # Earned the suspect signal — mark it explicitly + add the
@@ -1793,7 +1835,8 @@ async def _add_bazarr_blind_synthetic_rows(
                 "Fix at source by editing the series Language Profile in Sonarr."
             )
             _score(
-                item, tt_signals,
+                item,
+                tt_signals,
                 now_playing_titles=activity["now_playing_titles"],
                 transcoding_titles=activity["transcoding_titles"],
                 just_imported_eps=sonarr_recent_ids,
@@ -1812,7 +1855,8 @@ async def _add_bazarr_blind_synthetic_rows(
     }
     log.info(
         "bazarr-blind defense: added %d synthetic rows across %d foreign-language series",
-        synthetic_added, len(foreign_series),
+        synthetic_added,
+        len(foreign_series),
     )
     return items
 
@@ -1826,6 +1870,7 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     # [#118] Normalize to ISO-639-1 so eng/en-US collapse to 'en' — otherwise a
     # region-tagged English track on a foreign show slips the mislabel check.
     from .langs import normalize_lang
+
     norm = [normalize_lang(l) or "und" for l in audio_langs]
     if not norm:
         # Empty audio_langs list = probe ran but found nothing → undetected,
@@ -1850,7 +1895,7 @@ def _is_en_sidecar_for(srt_path: str, file_stem: str) -> bool:
     base = name[:-4]
     if not base.startswith(file_stem):
         return False
-    tail = base[len(file_stem):]
+    tail = base[len(file_stem) :]
     if not tail.startswith("."):
         return False
     parts = [p for p in tail.split(".") if p]

@@ -5,6 +5,7 @@ Covers the three things that determine whether the Apple-TV loop closes:
 2. Section auto-discovery (longest-prefix match on Plex Location.path).
 3. Partial-scan request shape (correct URL + path query parameter).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -74,31 +75,37 @@ def patched_httpx(monkeypatch):
 
 def test_translate_path_when_prefix_differs():
     c = PlexClient(
-        base_url="http://p:32400", token="t", default_section="all",
-        path_prefix="/data/Media", media_root="/media/library",
+        base_url="http://p:32400",
+        token="t",
+        default_section="all",
+        path_prefix="/data/Media",
+        media_root="/media/library",
     )
-    assert c.translate_path("/media/library/TV/Foo/S01E01.srt") == \
-        "/data/Media/TV/Foo/S01E01.srt"
+    assert c.translate_path("/media/library/TV/Foo/S01E01.srt") == "/data/Media/TV/Foo/S01E01.srt"
 
 
 def test_translate_path_identity_when_prefixes_unset():
     c = PlexClient(
-        base_url="http://p:32400", token="t", default_section="all",
-        path_prefix="", media_root="/media/library",
+        base_url="http://p:32400",
+        token="t",
+        default_section="all",
+        path_prefix="",
+        media_root="/media/library",
     )
     # No prefix → no translation
-    assert c.translate_path("/media/library/TV/Foo/S01E01.srt") == \
-        "/media/library/TV/Foo/S01E01.srt"
+    assert c.translate_path("/media/library/TV/Foo/S01E01.srt") == "/media/library/TV/Foo/S01E01.srt"
 
 
 def test_translate_path_passthrough_when_no_root_match():
     c = PlexClient(
-        base_url="http://p:32400", token="t", default_section="all",
-        path_prefix="/data/Media", media_root="/media/library",
+        base_url="http://p:32400",
+        token="t",
+        default_section="all",
+        path_prefix="/data/Media",
+        media_root="/media/library",
     )
     # Path that doesn't start with media_root passes through untranslated.
-    assert c.translate_path("/somewhere/else/file.srt") == \
-        "/somewhere/else/file.srt"
+    assert c.translate_path("/somewhere/else/file.srt") == "/somewhere/else/file.srt"
 
 
 @pytest.mark.asyncio
@@ -112,8 +119,7 @@ async def test_partial_scan_discovers_section_and_fires(patched_httpx):
         captured.append(req)
         if req.url.path == "/library/sections":
             return httpx.Response(200, text=SECTIONS_XML)
-        if req.url.path.startswith("/library/sections/") and \
-           req.url.path.endswith("/refresh"):
+        if req.url.path.startswith("/library/sections/") and req.url.path.endswith("/refresh"):
             return httpx.Response(200, text="")
         return httpx.Response(404)
 
@@ -148,9 +154,11 @@ async def test_partial_scan_uses_numeric_section_without_discovery(patched_httpx
 
     patched_httpx["handler"] = handler
     c = PlexClient(
-        base_url="http://plex.test:32400", token="t",
+        base_url="http://plex.test:32400",
+        token="t",
         default_section="7",
-        path_prefix="/data/Media", media_root="/media/library",
+        path_prefix="/data/Media",
+        media_root="/media/library",
     )
     result = await c.partial_scan("/media/library/TV/X.srt")
     assert result["section"] == "7"
@@ -162,14 +170,17 @@ async def test_partial_scan_raises_when_no_section_matches(patched_httpx):
     """Path outside every Plex Location → IntegrationError, not silent no-op.
     Caller (completion_watcher) catches + logs; we don't want to drop the
     failure on the floor inside the client."""
+
     def handler(req):
         return httpx.Response(200, text=SECTIONS_XML)
 
     patched_httpx["handler"] = handler
     c = PlexClient(
-        base_url="http://plex.test:32400", token="t",
+        base_url="http://plex.test:32400",
+        token="t",
         default_section="all",
-        path_prefix="/data/Media", media_root="/media/library",
+        path_prefix="/data/Media",
+        media_root="/media/library",
     )
     with pytest.raises(IntegrationError, match="no section matched"):
         await c.partial_scan("/media/library/Music/x.srt")

@@ -11,6 +11,7 @@
 These assert the per-id history call works AND that an error path raises the
 intended IntegrationError, both of which the happy-path suite never exercised.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,9 +25,7 @@ from subarr.integrations.bazarr import BazarrClient
 
 def _client(handler) -> BazarrClient:
     c = BazarrClient()
-    c._client = httpx.AsyncClient(
-        base_url="http://bazarr:6767", transport=httpx.MockTransport(handler)
-    )
+    c._client = httpx.AsyncClient(base_url="http://bazarr:6767", transport=httpx.MockTransport(handler))
     c._configured = True
     return c
 
@@ -81,7 +80,11 @@ def test_error_path_raises_integration_error_not_nameerror():
     with pytest.raises(IntegrationError):
         asyncio.run(
             _client(handler).blacklist_episode(
-                series_id=1, episode_id=2, provider="x",
-                subs_id="s", language="en", subtitles_path="/p.srt",
+                series_id=1,
+                episode_id=2,
+                provider="x",
+                subs_id="s",
+                language="en",
+                subtitles_path="/p.srt",
             )
         )

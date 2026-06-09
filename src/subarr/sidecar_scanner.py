@@ -24,6 +24,7 @@ Similarity: we use SequenceMatcher.ratio() on the normalised stems
 0.85 catches typical mismatches (case differences, trailing language
 tags, extra dots) without dragging unrelated subs into the loose bucket.
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,18 +55,20 @@ class SidecarMismatch:
     """One mismatch finding. Suggested rename takes the .srt path's
     parent + the video's stem + the same language tag, so renames are
     reversible just by undoing the basename swap."""
-    srt_path: str            # full path of the .srt sidecar
-    srt_basename: str        # display basename
+
+    srt_path: str  # full path of the .srt sidecar
+    srt_basename: str  # display basename
     suggested_video: str | None  # full path of the matched video (None for orphans)
     suggested_rename_to: str | None  # full path the .srt should move to
-    similarity: float        # 0.0 - 1.0; 1.0 = exact stem match (case-insensitive)
-    reason: str              # "case-mismatch" | "trailing-tag" | "stem-typo" | "orphan"
+    similarity: float  # 0.0 - 1.0; 1.0 = exact stem match (case-insensitive)
+    reason: str  # "case-mismatch" | "trailing-tag" | "stem-typo" | "orphan"
 
 
 @dataclass
 class ScanResult:
     """Top-level scan output. Counters separated from mismatch list so
     the UI can show 'N/M srt files checked, K mismatches' cheaply."""
+
     root: str
     total_srt: int = 0
     exact_matches: int = 0
@@ -116,8 +119,7 @@ def _classify(video_stem: str, srt_stem: str) -> tuple[float, str]:
     return ratio, "stem-typo"
 
 
-def scan(root: Path, loose_threshold: float = 0.85,
-         max_depth: int | None = None) -> ScanResult:
+def scan(root: Path, loose_threshold: float = 0.85, max_depth: int | None = None) -> ScanResult:
     """Walk `root` and classify every .srt found.
 
     Args:
@@ -166,10 +168,7 @@ def scan(root: Path, loose_threshold: float = 0.85,
 def _siblings(srt_path: Path) -> Iterable[Path]:
     """Sibling video files in the same directory, sorted for determinism."""
     try:
-        return sorted(
-            p for p in srt_path.parent.iterdir()
-            if p.is_file() and p.suffix.lower() in VIDEO_EXTS
-        )
+        return sorted(p for p in srt_path.parent.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS)
     except OSError:
         return []
 
@@ -208,7 +207,7 @@ def _classify_one(srt_path: Path, loose_threshold: float) -> SidecarMismatch | N
         )
     # Loose match: suggest renaming the .srt to match the video's stem
     # while preserving the .en.srt language tag (if present) and extension.
-    tag_part = srt_stem[len(srt_video_stem):]  # e.g. ".en" or ""
+    tag_part = srt_stem[len(srt_video_stem) :]  # e.g. ".en" or ""
     suggested_basename = f"{best_video.stem}{tag_part}{srt_path.suffix}"
     suggested_path = srt_path.parent / suggested_basename
     return SidecarMismatch(
@@ -230,8 +229,7 @@ def apply_rename(srt_path: Path, suggested_rename_to: Path) -> None:
         raise FileExistsError(f"target already exists: {suggested_rename_to}")
     if srt_path.parent != suggested_rename_to.parent:
         raise ValueError(
-            "rename must stay in the same directory (got "
-            f"{srt_path.parent} → {suggested_rename_to.parent})"
+            f"rename must stay in the same directory (got {srt_path.parent} → {suggested_rename_to.parent})"
         )
     srt_path.rename(suggested_rename_to)
     log.info("sidecar renamed: %s → %s", srt_path, suggested_rename_to)

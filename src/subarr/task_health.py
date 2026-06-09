@@ -10,6 +10,7 @@ page surface it.
 Recording is BEST-EFFORT: record_success/record_failure must never raise, or a
 failure in the health layer would crash the very loop it monitors.
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,6 +36,7 @@ _SECRET_QS = re.compile(
 
 def _redact_secrets(text: str) -> str:
     return _SECRET_QS.sub(r"\1=<redacted>", text)
+
 
 # A task is unhealthy after this many failed cycles in a row...
 UNHEALTHY_CONSECUTIVE = 3
@@ -135,16 +137,17 @@ class TaskHealthStore:
         except Exception as e:
             log.debug("task_health record_success(%s) failed: %s", task_name, e)
 
-    def record_failure(self, task_name: str, exc: BaseException, *,
-                       expected_interval_s: float | None = None) -> None:
+    def record_failure(
+        self, task_name: str, exc: BaseException, *, expected_interval_s: float | None = None
+    ) -> None:
         """A cycle raised: capture type + traceback (the silent loops used to
         discard this), bump the failure streak."""
         try:
             now = time.time()
             exc_type = type(exc).__name__
-            detail = _redact_secrets("".join(
-                traceback.format_exception(type(exc), exc, exc.__traceback__)
-            ))[-_MAX_DETAIL:]
+            detail = _redact_secrets("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))[
+                -_MAX_DETAIL:
+            ]
             with self._lock:
                 self._conn.execute(
                     "INSERT INTO task_health (task_name, last_error_at, last_error_type, "
@@ -174,12 +177,16 @@ class TaskHealthStore:
             ).fetchall()
         return [
             TaskHealth(
-                task_name=r["task_name"], last_success_at=r["last_success_at"],
-                last_error_at=r["last_error_at"], last_error_type=r["last_error_type"],
+                task_name=r["task_name"],
+                last_success_at=r["last_success_at"],
+                last_error_at=r["last_error_at"],
+                last_error_type=r["last_error_type"],
                 last_error_detail=r["last_error_detail"],
                 consecutive_failures=r["consecutive_failures"],
-                total_runs=r["total_runs"], total_failures=r["total_failures"],
-                expected_interval_s=r["expected_interval_s"], updated_at=r["updated_at"],
+                total_runs=r["total_runs"],
+                total_failures=r["total_failures"],
+                expected_interval_s=r["expected_interval_s"],
+                updated_at=r["updated_at"],
             )
             for r in rows
         ]

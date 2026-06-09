@@ -5,6 +5,7 @@ Endpoints used:
 - GET /api/v3/series → master list (id, title, tvdbId, monitored, originalLanguage, path, tags)
 - GET /api/v3/tag → tag id→label map (we want labels in coverage output)
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -82,16 +83,20 @@ class SonarrClient(IntegrationClient):
         plain id set from this. On repeat imports of one episode we keep the
         most recent (records are date-descending, so first seen wins)."""
         import datetime
+
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
         out: dict[int, float] = {}
         page = 1
         while True:
             data = await self._get(
                 "/api/v3/history",
-                params={"page": page, "pageSize": 200,
-                        "eventType": 3,  # downloadFolderImported
-                        "sortKey": "date",
-                        "sortDirection": "descending"},
+                params={
+                    "page": page,
+                    "pageSize": 200,
+                    "eventType": 3,  # downloadFolderImported
+                    "sortKey": "date",
+                    "sortDirection": "descending",
+                },
             )
             records = data.get("records") or []
             crossed = False
@@ -123,6 +128,7 @@ class SonarrClient(IntegrationClient):
         Returns set of sonarrEpisodeId. Pre-warms the queue so subs are
         ready when the episode imports."""
         import datetime
+
         start = datetime.datetime.utcnow()
         end = start + datetime.timedelta(hours=hours)
         rows = await self._get(
@@ -147,9 +153,12 @@ class SonarrClient(IntegrationClient):
         while True:
             data = await self._get(
                 "/api/v3/wanted/missing",
-                params={"page": page, "pageSize": 1000,
-                        "sortKey": "episodes.airDateUtc",
-                        "sortDirection": "descending"},
+                params={
+                    "page": page,
+                    "pageSize": 1000,
+                    "sortKey": "episodes.airDateUtc",
+                    "sortDirection": "descending",
+                },
             )
             records = data.get("records") or []
             for r in records:
@@ -168,7 +177,8 @@ class SonarrClient(IntegrationClient):
         return await self._get("/api/v3/episode", params={"seriesId": series_id})
 
     async def all_episode_files_with_mediainfo(
-        self, series_ids: list[int] | None = None,
+        self,
+        series_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         """v1.1-A: Pull every episodefile row across the library, scoped
         by an optional series_ids filter. Each row contains the embedded
@@ -185,11 +195,11 @@ class SonarrClient(IntegrationClient):
         (cheaper than a wildcard query that returns empty for sparse libs).
         """
         import asyncio
+
         if series_ids is None:
             series = await self.series()
             series_ids = [
-                s["id"] for s in series
-                if (s.get("statistics") or {}).get("episodeFileCount", 0) > 0
+                s["id"] for s in series if (s.get("statistics") or {}).get("episodeFileCount", 0) > 0
             ]
         # 420 series × ~30 episodes serially = ~108s. Cap concurrency at 8
         # to be a polite client while still finishing in <15s.

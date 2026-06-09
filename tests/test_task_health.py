@@ -1,4 +1,5 @@
 """#157 Phase 1 — TaskHealthStore: per-loop health so silent crashes surface."""
+
 from __future__ import annotations
 
 import time
@@ -32,7 +33,7 @@ def test_record_success_then_failure(store):
     st = {t.task_name: t for t in store.states()}["coverage-cache"]
     assert st.consecutive_failures == 1
     assert st.last_error_type == "ValueError"
-    assert "boom" in (st.last_error_detail or "")          # traceback captured
+    assert "boom" in (st.last_error_detail or "")  # traceback captured
     assert "ValueError" in (st.last_error_detail or "")
     assert st.total_runs == 2 and st.total_failures == 1
 
@@ -53,23 +54,47 @@ def test_three_consecutive_failures_unhealthy_then_recovers(store):
 
 def test_staleness_marks_unhealthy_even_without_recent_failures():
     now = time.time()
-    fresh = TaskHealth(task_name="t", last_success_at=now - 5, last_error_at=None,
-                       last_error_type=None, last_error_detail=None,
-                       consecutive_failures=0, total_runs=10, total_failures=0,
-                       expected_interval_s=10, updated_at=now)
-    stale = TaskHealth(task_name="t", last_success_at=now - 100, last_error_at=None,
-                       last_error_type=None, last_error_detail=None,
-                       consecutive_failures=0, total_runs=10, total_failures=0,
-                       expected_interval_s=10, updated_at=now)  # 100 > 3*10
+    fresh = TaskHealth(
+        task_name="t",
+        last_success_at=now - 5,
+        last_error_at=None,
+        last_error_type=None,
+        last_error_detail=None,
+        consecutive_failures=0,
+        total_runs=10,
+        total_failures=0,
+        expected_interval_s=10,
+        updated_at=now,
+    )
+    stale = TaskHealth(
+        task_name="t",
+        last_success_at=now - 100,
+        last_error_at=None,
+        last_error_type=None,
+        last_error_detail=None,
+        consecutive_failures=0,
+        total_runs=10,
+        total_failures=0,
+        expected_interval_s=10,
+        updated_at=now,
+    )  # 100 > 3*10
     assert fresh.is_unhealthy is False
     assert stale.is_unhealthy is True
 
 
 def test_never_run_is_not_unhealthy():
-    h = TaskHealth(task_name="t", last_success_at=None, last_error_at=None,
-                   last_error_type=None, last_error_detail=None,
-                   consecutive_failures=0, total_runs=0, total_failures=0,
-                   expected_interval_s=300, updated_at=time.time())
+    h = TaskHealth(
+        task_name="t",
+        last_success_at=None,
+        last_error_at=None,
+        last_error_type=None,
+        last_error_detail=None,
+        consecutive_failures=0,
+        total_runs=0,
+        total_failures=0,
+        expected_interval_s=300,
+        updated_at=time.time(),
+    )
     assert h.is_unhealthy is False
 
 

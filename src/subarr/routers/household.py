@@ -8,6 +8,7 @@ language scoring (cross-correlate each user's history with Sonarr/Radarr
 originalLanguage to build {user: {lang: weight}}) ships in v1.1.1 once
 we have an efficient way to enrich rating_keys with metadata.
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,10 +69,12 @@ async def household_profile(
             stats = await t.get_user_watch_time_stats(uid, query_days=days)
         except IntegrationError:
             stats = []
-        members.append({
-            "user_id": uid,
-            "username": u.get("username"),
-            "friendly_name": u.get("friendly_name"),
-            "watch_stats": stats,
-        })
+        members.append(
+            {
+                "user_id": uid,
+                "username": u.get("username"),
+                "friendly_name": u.get("friendly_name"),
+                "watch_stats": stats,
+            }
+        )
     return {"available": True, "window_days": days, "members": members}

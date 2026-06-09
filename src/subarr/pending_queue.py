@@ -15,6 +15,7 @@ Single connection + Lock + WAL, mirroring the other stores. All methods are
 best-effort about concurrency via the Lock; they raise on programmer error
 (unknown id) where a caller would want to know.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 # ── statuses ────────────────────────────────────────────────────────
-STATUS_PENDING = "pending"      # in subarr's queue, not yet sent to subgen
+STATUS_PENDING = "pending"  # in subarr's queue, not yet sent to subgen
 STATUS_SUBMITTED = "submitted"  # handed to subgen; cancel-only from here
 STATUS_DONE = "done"
 STATUS_ERROR = "error"
@@ -35,9 +36,9 @@ ACTIVE_STATUSES = (STATUS_PENDING, STATUS_SUBMITTED)
 
 # ── per-source priority buckets (higher drains first) ───────────────
 PRIORITY_BY_SOURCE = {
-    "manual": 2,    # user clicked transcribe — most urgent
-    "gaps": 1,      # coverage gap queue
-    "auto": 1,      # scheduler auto-queue
+    "manual": 2,  # user clicked transcribe — most urgent
+    "gaps": 1,  # coverage gap queue
+    "auto": 1,  # scheduler auto-queue
     "backfill": 0,  # bulk library backfill (#116) — lowest
 }
 DEFAULT_PRIORITY = 0
@@ -97,27 +98,33 @@ _SELECT = f"SELECT {_COLS} FROM pending_queue"  # nosec B608
 _Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1"
 _Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
 _Q_INSERT = (  # nosec B608
-    f"INSERT INTO pending_queue ({_COLS}) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _Q_GET = f"{_SELECT} WHERE id = ?"
 _Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
 _Q_LIST_STATUS = f"{_SELECT} WHERE status = ? ORDER BY priority DESC, position ASC, created_at ASC"
 _Q_NEXT = f"{_Q_LIST_STATUS} LIMIT ?"
-_Q_BUCKET = (
-    f"{_SELECT} WHERE status = ? AND priority = ? AND id != ? "
-    "ORDER BY position ASC, created_at ASC"
+_Q_BUCKET = f"{_SELECT} WHERE status = ? AND priority = ? AND id != ? ORDER BY position ASC, created_at ASC"
+_Q_MINMAX = (
+    "SELECT MIN(position), MAX(position) FROM pending_queue WHERE status = ? AND priority = ? AND id != ?"
 )
-_Q_MINMAX = ("SELECT MIN(position), MAX(position) FROM pending_queue "
-             "WHERE status = ? AND priority = ? AND id != ?")
 
 
 def _row(r: tuple) -> PendingJob:
     return PendingJob(
-        id=r[0], canonical_path=r[1], position=r[2], priority=r[3], status=r[4],
-        audio_language_override=r[5], task=r[6], source=r[7],
-        created_at=r[8], submitted_at=r[9], error=r[10],
-        series_id=r[11], sonarr_episode_id=r[12],
+        id=r[0],
+        canonical_path=r[1],
+        position=r[2],
+        priority=r[3],
+        status=r[4],
+        audio_language_override=r[5],
+        task=r[6],
+        source=r[7],
+        created_at=r[8],
+        submitted_at=r[9],
+        error=r[10],
+        series_id=r[11],
+        sonarr_episode_id=r[12],
     )
 
 
@@ -125,7 +132,9 @@ class PendingQueueStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
-            str(db_path), check_same_thread=False, isolation_level=None,
+            str(db_path),
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
@@ -136,12 +145,17 @@ class PendingQueueStore:
 
     # ── enqueue (with dedup) ────────────────────────────────────────
 
-    def enqueue(self, canonical_path: str, *, source: str = "manual",
-                priority: int | None = None,
-                audio_language_override: str | None = None,
-                task: str | None = None,
-                series_id: int | None = None,
-                sonarr_episode_id: int | None = None) -> PendingJob:
+    def enqueue(
+        self,
+        canonical_path: str,
+        *,
+        source: str = "manual",
+        priority: int | None = None,
+        audio_language_override: str | None = None,
+        task: str | None = None,
+        series_id: int | None = None,
+        sonarr_episode_id: int | None = None,
+    ) -> PendingJob:
         """Add a job, or return the existing ACTIVE one for this path (dedup —
         we never double-queue a file that's already pending or in subgen).
         New jobs append to the end of their priority bucket."""
@@ -160,18 +174,37 @@ class PendingQueueStore:
             ).fetchone()
             pos = (row[0] + 1.0) if row and row[0] is not None else 0.0
             job = PendingJob(
-                id=uuid.uuid4().hex, canonical_path=canonical_path, position=pos,
-                priority=prio, status=STATUS_PENDING,
-                audio_language_override=audio_language_override, task=task,
-                source=source, created_at=time.time(), submitted_at=None, error=None,
-                series_id=series_id, sonarr_episode_id=sonarr_episode_id,
+                id=uuid.uuid4().hex,
+                canonical_path=canonical_path,
+                position=pos,
+                priority=prio,
+                status=STATUS_PENDING,
+                audio_language_override=audio_language_override,
+                task=task,
+                source=source,
+                created_at=time.time(),
+                submitted_at=None,
+                error=None,
+                series_id=series_id,
+                sonarr_episode_id=sonarr_episode_id,
             )
             self._conn.execute(
                 _Q_INSERT,
-                (job.id, job.canonical_path, job.position, job.priority, job.status,
-                 job.audio_language_override, job.task, job.source,
-                 job.created_at, job.submitted_at, job.error,
-                 job.series_id, job.sonarr_episode_id),
+                (
+                    job.id,
+                    job.canonical_path,
+                    job.position,
+                    job.priority,
+                    job.status,
+                    job.audio_language_override,
+                    job.task,
+                    job.source,
+                    job.created_at,
+                    job.submitted_at,
+                    job.error,
+                    job.series_id,
+                    job.sonarr_episode_id,
+                ),
             )
             return job
 
@@ -180,7 +213,8 @@ class PendingQueueStore:
     def get(self, job_id: str) -> PendingJob | None:
         with self._lock:
             r = self._conn.execute(
-                _Q_GET, (job_id,),
+                _Q_GET,
+                (job_id,),
             ).fetchone()
         return _row(r) if r else None
 
@@ -198,7 +232,8 @@ class PendingQueueStore:
         """The next N jobs the feeder should submit (highest priority first)."""
         with self._lock:
             rows = self._conn.execute(
-                _Q_NEXT, (STATUS_PENDING, max(1, limit)),
+                _Q_NEXT,
+                (STATUS_PENDING, max(1, limit)),
             ).fetchall()
         return [_row(r) for r in rows]
 
@@ -215,16 +250,14 @@ class PendingQueueStore:
 
     def count_by_status(self) -> dict[str, int]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT status, COUNT(*) FROM pending_queue GROUP BY status"
-            ).fetchall()
+            rows = self._conn.execute("SELECT status, COUNT(*) FROM pending_queue GROUP BY status").fetchall()
         return {r[0]: r[1] for r in rows}
 
     # ── status transitions ──────────────────────────────────────────
 
-    def set_status(self, job_id: str, status: str, *,
-                   error: str | None = None,
-                   submitted_at: float | None = None) -> bool:
+    def set_status(
+        self, job_id: str, status: str, *, error: str | None = None, submitted_at: float | None = None
+    ) -> bool:
         with self._lock:
             cur = self._conn.execute(
                 "UPDATE pending_queue SET status = ?, error = ?, "
@@ -239,7 +272,8 @@ class PendingQueueStore:
     def remove(self, job_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM pending_queue WHERE id = ?", (job_id,),
+                "DELETE FROM pending_queue WHERE id = ?",
+                (job_id,),
             )
             return cur.rowcount > 0
 
@@ -249,7 +283,8 @@ class PendingQueueStore:
                 cur = self._conn.execute("DELETE FROM pending_queue")
             else:
                 cur = self._conn.execute(
-                    "DELETE FROM pending_queue WHERE status = ?", (status,),
+                    "DELETE FROM pending_queue WHERE status = ?",
+                    (status,),
                 )
             return cur.rowcount
 
@@ -270,7 +305,7 @@ class PendingQueueStore:
                 _Q_MINMAX,
                 (STATUS_PENDING, job.priority, job_id),
             ).fetchone()
-            lo, hi = (row or (None, None))
+            lo, hi = row or (None, None)
             if lo is None:
                 new_pos = job.position  # only item in its bucket — no-op
             else:
@@ -281,8 +316,7 @@ class PendingQueueStore:
             )
             return self._require(job_id)
 
-    def move(self, job_id: str, *, before_id: str | None = None,
-             after_id: str | None = None) -> PendingJob:
+    def move(self, job_id: str, *, before_id: str | None = None, after_id: str | None = None) -> PendingJob:
         """Place `job_id` immediately before/after a target job. Adopts the
         target's priority bucket (so dragging across buckets re-prioritises),
         and takes the midpoint position between the target and its neighbour on
@@ -295,7 +329,8 @@ class PendingQueueStore:
             target = self._require(target_id)
             # ordered pending of the target's bucket, excluding the moving job
             ordered = [
-                _row(r) for r in self._conn.execute(
+                _row(r)
+                for r in self._conn.execute(
                     _Q_BUCKET,
                     (STATUS_PENDING, target.priority, job_id),
                 ).fetchall()
@@ -320,7 +355,8 @@ class PendingQueueStore:
 
     def _require(self, job_id: str) -> PendingJob:
         r = self._conn.execute(
-            _Q_GET, (job_id,),
+            _Q_GET,
+            (job_id,),
         ).fetchone()
         if r is None:
             raise KeyError(f"pending job {job_id!r} not found")

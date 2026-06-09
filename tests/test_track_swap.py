@@ -1,4 +1,5 @@
 """#159: mkvpropedit default-track swap."""
+
 from __future__ import annotations
 
 import pytest
@@ -14,9 +15,16 @@ from subarr.track_swap import (
 def test_build_args_sets_target_default_clears_others():
     args = build_mkvpropedit_args("/media/x.mkv", target_ordinal=2, audio_ordinals=[1, 2])
     assert args == [
-        "mkvpropedit", "/media/x.mkv",
-        "--edit", "track:a1", "--set", "flag-default=0",
-        "--edit", "track:a2", "--set", "flag-default=1",
+        "mkvpropedit",
+        "/media/x.mkv",
+        "--edit",
+        "track:a1",
+        "--set",
+        "flag-default=0",
+        "--edit",
+        "track:a2",
+        "--set",
+        "flag-default=1",
     ]
 
 

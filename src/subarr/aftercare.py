@@ -6,6 +6,7 @@ signals are inert — the trustworthy detectors are readability, looping (repeat
 and canned-hallucination. The composite is a failure-absence + readability
 rollup, NOT a quality grade; callers must present it as such.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,8 +25,8 @@ class AftercareEvaluation:
     composite: float
     cue_count: int
     flagged: bool
-    readability: dict[str, Any] | None   # ReadabilityReport.to_dict() or None
-    signals: dict[str, Any] | None       # score_entrant signals or None
+    readability: dict[str, Any] | None  # ReadabilityReport.to_dict() or None
+    signals: dict[str, Any] | None  # score_entrant signals or None
 
 
 def _is_flagged(card) -> bool:

@@ -10,6 +10,7 @@ Covers:
   - evaluate() lets through items past the window or with no import_ts
   - AutoQueueRules.settle_minutes round-trips through to_dict/from_dict
 """
+
 from __future__ import annotations
 
 from subarr.auto_queue import evaluate, settle_seconds_left
@@ -22,8 +23,12 @@ NOW = 1_780_000_000.0
 
 def _item(title: str, import_ts: float | None) -> CoverageItem:
     return CoverageItem(
-        media_type="episode", title=title, verification_state="verified",
-        score=500, monitored=True, canonical_path=f"TV/{title}",
+        media_type="episode",
+        title=title,
+        verification_state="verified",
+        score=500,
+        monitored=True,
+        canonical_path=f"TV/{title}",
         import_ts=import_ts,
     )
 
@@ -31,8 +36,12 @@ def _item(title: str, import_ts: float | None) -> CoverageItem:
 def _rules(settle_minutes: int) -> AutoQueueRules:
     # Isolate the settle gate from the other filters.
     return AutoQueueRules(
-        mode=MODE_AUTO_RULES, min_score=0, deny_languages=[],
-        require_monitored=False, skip_stale_disk=False, skip_embedded_en=False,
+        mode=MODE_AUTO_RULES,
+        min_score=0,
+        deny_languages=[],
+        require_monitored=False,
+        skip_stale_disk=False,
+        skip_embedded_en=False,
         settle_minutes=settle_minutes,
     )
 

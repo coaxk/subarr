@@ -10,6 +10,7 @@ fall back to triggering the global scan task. If both fail, the caller
 gets 502 with the available task list in the detail so the user can
 report what's actually there.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,7 +39,7 @@ _TASK_HINTS = (
 
 
 class SyncDiskRequest(BaseModel):
-    series_id: int | None = None     # optional — when known, surfaced in response
+    series_id: int | None = None  # optional — when known, surfaced in response
     canonical_path: str | None = None  # optional — surfaced for context
 
 

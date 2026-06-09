@@ -21,6 +21,7 @@ subgen is behind ONE injected seam, `CandidateRunner`. The production runner
 `AsrRunner` cuts the clips, then runs every recipe on each via subgen's v4.10
 `/asr` UPLOAD mode (short clip → tiny upload, no shared mount).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,10 +56,13 @@ def parse_robust_detect(resp) -> dict | None:
     lang = agg.get("language")
     n_ag = int(agg.get("n_agreeing") or 0)
     n_tot = int(agg.get("n_total") or 0)
-    heard = sorted({
-        c.get("language") for c in (resp.get("chunks") or [])
-        if c.get("language") and c.get("language") != "und"
-    })
+    heard = sorted(
+        {
+            c.get("language")
+            for c in (resp.get("chunks") or [])
+            if c.get("language") and c.get("language") != "und"
+        }
+    )
     if not n_tot:
         return None
     return {
@@ -74,6 +78,7 @@ def parse_robust_detect(resp) -> dict | None:
 class ConfigVariant:
     """One candidate Whisper config to trial. `kwargs` is the per-request
     SUBGEN_KWARGS override sent for this variant only."""
+
     label: str
     kwargs: dict[str, Any] = field(default_factory=dict)
 
@@ -81,16 +86,16 @@ class ConfigVariant:
 @dataclass
 class VariantOutcome:
     label: str
-    srt_text: str | None       # "" if it produced a sub on some clip; None if never
+    srt_text: str | None  # "" if it produced a sub on some clip; None if never
     error: str | None = None
 
 
 @dataclass
 class ClipResult:
-    kind: str                  # speech | boundary | silence | fallback
+    kind: str  # speech | boundary | silence | fallback
     winner: str | None
-    agreement: float | None    # clip_agreement (cross-config vocab overlap)
-    scorecards: list[dict]     # serialized Scorecard per recipe
+    agreement: float | None  # clip_agreement (cross-config vocab overlap)
+    scorecards: list[dict]  # serialized Scorecard per recipe
 
 
 @dataclass
@@ -98,27 +103,29 @@ class AggregateRow:
     label: str
     mean_composite: float
     mean_qe: float | None
-    clips_won: int             # clips this recipe topped
-    clips_scored: int          # clips it produced a usable sub on
-    disqualified_in: int       # clips it was disqualified on
+    clips_won: int  # clips this recipe topped
+    clips_scored: int  # clips it produced a usable sub on
+    disqualified_in: int  # clips it was disqualified on
 
 
 @dataclass
 class ArenaResult:
-    outcomes: list[VariantOutcome]    # per-recipe produced-or-not (live progress)
-    aggregate: list[AggregateRow]     # ranked best-first by mean composite
+    outcomes: list[VariantOutcome]  # per-recipe produced-or-not (live progress)
+    aggregate: list[AggregateRow]  # ranked best-first by mean composite
     per_clip: list[ClipResult]
-    winner: str | None                # top mean composite (or None)
-    confidence: str | None            # high | moderate | low
-    consistency: float | None         # fraction of clips the winner also topped
-    agreement_mean: float | None      # mean clip_agreement across clips
-    tie: bool = False                 # top recipes within noise → no real winner
+    winner: str | None  # top mean composite (or None)
+    confidence: str | None  # high | moderate | low
+    consistency: float | None  # fraction of clips the winner also topped
+    agreement_mean: float | None  # mean clip_agreement across clips
+    tie: bool = False  # top recipes within noise → no real winner
     source_language: str | None = None  # [#23] robustly-detected source lang (label + per-lang grouping)
-    source_language_confidence: float | None = None  # [#23] fraction of chunks agreeing (None when set conservatively)
+    source_language_confidence: float | None = (
+        None  # [#23] fraction of chunks agreeing (None when set conservatively)
+    )
     # Raw Whisper per-chunk distribution; the SERVICE turns this + the file's
     # known audio tag into the final source_language + mislabel/mixed flags.
     audio_detect: dict | None = None
-    explanation: str | None = None    # optional plain-language read (local ollama)
+    explanation: str | None = None  # optional plain-language read (local ollama)
 
 
 def _confidence(consistency: float | None, agreement_mean: float | None, n_clips: int) -> str:
@@ -158,12 +165,16 @@ def _aggregate(per_clip: list[ClipResult], variants: list[ConfigVariant]):
                 scored += 1
             if c.winner == v.label:
                 won += 1
-        rows.append(AggregateRow(
-            label=v.label,
-            mean_composite=round(sum(comps) / len(comps), 2) if comps else 0.0,
-            mean_qe=round(sum(qes) / len(qes), 4) if qes else None,
-            clips_won=won, clips_scored=scored, disqualified_in=dq,
-        ))
+        rows.append(
+            AggregateRow(
+                label=v.label,
+                mean_composite=round(sum(comps) / len(comps), 2) if comps else 0.0,
+                mean_qe=round(sum(qes) / len(qes), 4) if qes else None,
+                clips_won=won,
+                clips_scored=scored,
+                disqualified_in=dq,
+            )
+        )
     rows.sort(key=lambda r: r.mean_composite, reverse=True)
     winner = rows[0].label if rows and rows[0].mean_composite > 0 else None
 
@@ -174,19 +185,27 @@ def _aggregate(per_clip: list[ClipResult], variants: list[ConfigVariant]):
     tie = len(scored) >= 2 and (scored[0].mean_composite - scored[1].mean_composite) < 2.0
 
     clip_winners = [c.winner for c in per_clip if c.winner]
-    consistency = (sum(1 for w in clip_winners if w == winner) / len(clip_winners)
-                   if winner and clip_winners else None)
+    consistency = (
+        sum(1 for w in clip_winners if w == winner) / len(clip_winners) if winner and clip_winners else None
+    )
     agrs = [c.agreement for c in per_clip if c.agreement is not None]
     agreement_mean = round(sum(agrs) / len(agrs), 3) if agrs else None
     confidence = _confidence(consistency, agreement_mean, len(per_clip))
-    return (rows, winner, confidence,
-            round(consistency, 2) if consistency is not None else None, agreement_mean, tie)
+    return (
+        rows,
+        winner,
+        confidence,
+        round(consistency, 2) if consistency is not None else None,
+        agreement_mean,
+        tie,
+    )
 
 
 class CandidateRunner(Protocol):
     """Seam. `prepare()` auto-samples → returns one descriptor per clip
     ({kind, ranges}); `run(clip_idx, ...)` produces a subtitle for that clip;
     `cleanup()` releases temp clips."""
+
     async def preflight(self) -> None: ...
     async def prepare(self, media_path: str) -> list[dict]: ...
     async def run(self, clip_idx: int, *, task: str, kwargs: dict[str, Any]) -> str | None: ...
@@ -197,16 +216,25 @@ class AsrRunner:
     """Production runner: auto-samples N strata clips, runs each recipe on each
     clip via subgen's v4.10 `/asr` UPLOAD mode (no shared mount). Gate enforced
     in `preflight()`."""
-    def __init__(self, subgen, *, capabilities=None, source_language: str | None = None,
-                 to_fs_path=canonical_to_fs, to_subgen=canonical_to_subgen_batch, sampler=None,
-                 track: int = 0):
+
+    def __init__(
+        self,
+        subgen,
+        *,
+        capabilities=None,
+        source_language: str | None = None,
+        to_fs_path=canonical_to_fs,
+        to_subgen=canonical_to_subgen_batch,
+        sampler=None,
+        track: int = 0,
+    ):
         self._subgen = subgen
         self._caps = capabilities
         self._source_language = source_language
         self._to_fs_path = to_fs_path
         self._to_subgen = to_subgen
         self._sampler = sampler
-        self._track = track   # audio-stream ordinal to sweep (multi-track files)
+        self._track = track  # audio-stream ordinal to sweep (multi-track files)
         self._clips: list[dict] = []  # [{path, kind, ranges}]
 
     async def preflight(self) -> None:
@@ -224,6 +252,7 @@ class AsrRunner:
             from .arena_sampler import build_samples as sampler
         fs_path = str(self._to_fs_path(media_path))
         import asyncio
+
         try:
             self._clips = await asyncio.to_thread(sampler, fs_path, track=self._track)
         except TypeError:
@@ -240,8 +269,11 @@ class AsrRunner:
         # which preserves the classic merge-on-global behaviour.
         base = "vanilla" if getattr(self._caps, "asr_vanilla_base", False) else None
         srt = await self._subgen.asr(
-            local_file=clip["path"], task=task,
-            language=self._source_language, kwargs=kwargs or None, base=base,
+            local_file=clip["path"],
+            task=task,
+            language=self._source_language,
+            kwargs=kwargs or None,
+            base=base,
         )
         return srt or None
 
@@ -271,6 +303,7 @@ class AsrRunner:
 
     async def cleanup(self) -> None:
         import os
+
         for c in self._clips:
             try:
                 os.remove(c["path"])
@@ -289,8 +322,8 @@ async def run_arena(
     *,
     runner: CandidateRunner,
     judge=judge_candidates,
-    on_clip=None,    # on_clip(idx, kind, total) — a clip's passes are starting
-    on_step=None,    # on_step() — one transcription (source or recipe) finished
+    on_clip=None,  # on_clip(idx, kind, total) — a clip's passes are starting
+    on_step=None,  # on_step() — one transcription (source or recipe) finished
 ) -> ArenaResult:
     """Run one multi-clip sweep and return the aggregated result."""
     if not variants:
@@ -326,16 +359,25 @@ async def run_arena(
             # load then ~0.1s) — run it off the event loop so the model load
             # can't block the app's SSE/HTTP work.
             res = await asyncio.to_thread(
-                judge, candidates, speech_ranges=clip.get("ranges"), source_text=source_text)
-            per_clip.append(ClipResult(
-                kind=clip.get("kind", "?"), winner=res.winner_label,
-                agreement=res.clip_agreement,
-                scorecards=[asdict(sc) for sc in res.scorecards],
-            ))
+                judge, candidates, speech_ranges=clip.get("ranges"), source_text=source_text
+            )
+            per_clip.append(
+                ClipResult(
+                    kind=clip.get("kind", "?"),
+                    winner=res.winner_label,
+                    agreement=res.clip_agreement,
+                    scorecards=[asdict(sc) for sc in res.scorecards],
+                )
+            )
 
-        outcomes = [VariantOutcome(v.label, "" if produced[v.label] else None,
-                                   None if produced[v.label] else "no subtitle produced on any clip")
-                    for v in variants]
+        outcomes = [
+            VariantOutcome(
+                v.label,
+                "" if produced[v.label] else None,
+                None if produced[v.label] else "no subtitle produced on any clip",
+            )
+            for v in variants
+        ]
         rows, winner, confidence, consistency, agreement_mean, tie = _aggregate(per_clip, variants)
         # [#23] robust source-language detection (per-chunk distribution).
         # Conservative standalone verdict: only assert a language when the chunks
@@ -353,10 +395,16 @@ async def run_arena(
             n_tot = detect.get("n_total") or 0
             src_conf = round(detect.get("n_agreeing", 0) / n_tot, 2) if n_tot else None
         return ArenaResult(
-            outcomes=outcomes, aggregate=rows, per_clip=per_clip,
-            winner=winner, confidence=confidence,
-            consistency=consistency, agreement_mean=agreement_mean, tie=tie,
-            source_language=src_lang, source_language_confidence=src_conf,
+            outcomes=outcomes,
+            aggregate=rows,
+            per_clip=per_clip,
+            winner=winner,
+            confidence=confidence,
+            consistency=consistency,
+            agreement_mean=agreement_mean,
+            tie=tie,
+            source_language=src_lang,
+            source_language_confidence=src_conf,
             audio_detect=detect,
         )
     finally:

@@ -33,6 +33,7 @@ Telemetry: ProbeStore.count_by_source() reports the split so the UI can
 celebrate "12,847 from Sonarr · 142 from ffprobe · 23,189 ffprobe-walks
 skipped this scan."
 """
+
 from __future__ import annotations
 
 import logging
@@ -99,10 +100,20 @@ class ArrMediainfoSync:
     async def run(self) -> dict[str, Any]:
         started = time.time()
         summary = {
-            "sonarr": {"queried": 0, "upserted": 0, "skipped_no_path": 0,
-                       "skipped_no_mediainfo": 0, "skipped_ffprobe_won": 0},
-            "radarr": {"queried": 0, "upserted": 0, "skipped_no_path": 0,
-                       "skipped_no_mediainfo": 0, "skipped_ffprobe_won": 0},
+            "sonarr": {
+                "queried": 0,
+                "upserted": 0,
+                "skipped_no_path": 0,
+                "skipped_no_mediainfo": 0,
+                "skipped_ffprobe_won": 0,
+            },
+            "radarr": {
+                "queried": 0,
+                "upserted": 0,
+                "skipped_no_path": 0,
+                "skipped_no_mediainfo": 0,
+                "skipped_ffprobe_won": 0,
+            },
             "duration_s": 0.0,
         }
 
@@ -116,8 +127,10 @@ class ArrMediainfoSync:
         log.info(
             "arr_mediainfo sync done in %.2fs: sonarr=%d/%d radarr=%d/%d",
             summary["duration_s"],
-            summary["sonarr"]["upserted"], summary["sonarr"]["queried"],
-            summary["radarr"]["upserted"], summary["radarr"]["queried"],
+            summary["sonarr"]["upserted"],
+            summary["sonarr"]["queried"],
+            summary["radarr"]["upserted"],
+            summary["radarr"]["queried"],
         )
         return summary
 
@@ -168,8 +181,11 @@ class ArrMediainfoSync:
         # upsert with source='arr_mediainfo' — refuses to clobber ffprobe.
         before = self.probe_store.get(canonical)
         self.probe_store.upsert(
-            canonical_path=canonical, mtime=mtime, size=size,
-            result=result, source="arr_mediainfo",
+            canonical_path=canonical,
+            mtime=mtime,
+            size=size,
+            result=result,
+            source="arr_mediainfo",
         )
         if before is not None:
             # might have been a no-op if previous source was ffprobe
@@ -194,14 +210,24 @@ def _arr_row_to_probe_result(row: dict[str, Any], canonical: str) -> ProbeResult
 
     audio = [
         AudioStream(
-            index=i, language=lang, codec=None, title=None, default=(i == 0),
+            index=i,
+            language=lang,
+            codec=None,
+            title=None,
+            default=(i == 0),
         )
         for i, lang in enumerate(audio_langs)
     ]
     subs = [
         SubtitleStream(
-            index=i, language=lang, codec=None, title=None,
-            default=False, forced=False, sdh=False, commentary=False,
+            index=i,
+            language=lang,
+            codec=None,
+            title=None,
+            default=False,
+            forced=False,
+            sdh=False,
+            commentary=False,
         )
         for i, lang in enumerate(sub_langs)
     ]
