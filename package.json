@@ -10,6 +10,6 @@
     "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'"
   },
   "devDependencies": {
-    "esbuild": "0.25.0"
+    "esbuild": "0.28.0"
   }
 }
