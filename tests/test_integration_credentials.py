@@ -26,10 +26,20 @@ def test_credential_fields_are_in_field_env_vars(subarr_env):
     """Every editable credential field must be in FIELD_ENV_VARS so
     env_is_set() can protect an operator's env declaration."""
     from subarr import config
+
     for field in (
-        "bazarr_url", "bazarr_api_key", "sonarr_url", "sonarr_api_key",
-        "radarr_url", "radarr_api_key", "tautulli_url", "tautulli_api_key",
-        "plex_url", "plex_token", "ollama_url", "ollama_model",
+        "bazarr_url",
+        "bazarr_api_key",
+        "sonarr_url",
+        "sonarr_api_key",
+        "radarr_url",
+        "radarr_api_key",
+        "tautulli_url",
+        "tautulli_api_key",
+        "plex_url",
+        "plex_token",
+        "ollama_url",
+        "ollama_model",
     ):
         assert field in config.FIELD_ENV_VARS, field
 
@@ -39,10 +49,19 @@ def test_credential_fields_are_persistable(subarr_env):
     credential field, else a saved value silently never re-applies on
     restart."""
     from subarr import config
+
     for field in (
-        "bazarr_url", "bazarr_api_key", "sonarr_url", "sonarr_api_key",
-        "radarr_url", "radarr_api_key", "tautulli_url", "tautulli_api_key",
-        "plex_url", "plex_token", "ollama_url",
+        "bazarr_url",
+        "bazarr_api_key",
+        "sonarr_url",
+        "sonarr_api_key",
+        "radarr_url",
+        "radarr_api_key",
+        "tautulli_url",
+        "tautulli_api_key",
+        "plex_url",
+        "plex_token",
+        "ollama_url",
     ):
         assert field in config._FIELD_COERCE, field
 
@@ -51,6 +70,7 @@ def test_persisted_credential_reapplies_below_env(subarr_env, monkeypatch):
     """A saved override re-applies on the next config.load() — but only
     when the field is not env-set (env > file > default)."""
     from subarr import config, config_store
+
     monkeypatch.delenv("BAZARR_URL", raising=False)
     config_store.save_override("bazarr_url", "http://persisted:6767")
     s = config.load()
@@ -91,6 +111,7 @@ def test_get_config_reports_editable_when_not_env_set(app_with_stub, monkeypatch
     monkeypatch.delenv("PLEX_URL", raising=False)
     # force a fresh settings load reflecting the delenv
     from subarr import config
+
     monkeypatch.setattr(config, "settings", config.load())
     r = app_with_stub.get("/api/integrations/plex/config")
     assert r.status_code == 200
@@ -195,9 +216,7 @@ def test_save_plex_token(app_with_stub, monkeypatch):
 
 
 def test_test_connection_unknown_service_404(app_with_stub):
-    r = app_with_stub.post(
-        "/api/integrations/nope/test", json={"url": "http://x", "api_key": "k"}
-    )
+    r = app_with_stub.post("/api/integrations/nope/test", json={"url": "http://x", "api_key": "k"})
     assert r.status_code == 404
 
 
@@ -213,8 +232,7 @@ def test_test_connection_delegates_to_onboarding_probe(app_with_stub, monkeypatc
     async def fake_sonarr(body):
         seen["url"] = body.url
         seen["api_key"] = body.api_key
-        return {"ok": True, "version": "4.0.1",
-                "detail": "Sonarr 4.0.1", "error": None}
+        return {"ok": True, "version": "4.0.1", "detail": "Sonarr 4.0.1", "error": None}
 
     monkeypatch.setattr(ob, "_test_sonarr", fake_sonarr)
 

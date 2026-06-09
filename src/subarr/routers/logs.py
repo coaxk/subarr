@@ -1,10 +1,11 @@
 """GET /api/logs/events — SSE stream of subgen container logs."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..docker_client import DockerUnavailable

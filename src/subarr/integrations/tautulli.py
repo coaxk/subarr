@@ -8,6 +8,7 @@ We use:
 - cmd=get_history → episode + movie playback history with rating_keys to
   cross-reference with Plex / Sonarr / Radarr / Bazarr.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -52,6 +53,7 @@ class TautulliClient(IntegrationClient):
         params: dict[str, Any] = {"length": length}
         if days is not None:
             import datetime
+
             cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
             params["start_date"] = cutoff.strftime("%Y-%m-%d")
         d = await self._cmd("get_history", **params)
@@ -70,11 +72,12 @@ class TautulliClient(IntegrationClient):
         return []
 
     async def get_user_watch_time_stats(
-        self, user_id: int, query_days: int = 30,
+        self,
+        user_id: int,
+        query_days: int = 30,
     ) -> list[dict[str, Any]]:
         """Per-user watch stats — total plays/duration over a window."""
-        d = await self._cmd("get_user_watch_time_stats",
-                            user_id=user_id, query_days=query_days)
+        d = await self._cmd("get_user_watch_time_stats", user_id=user_id, query_days=query_days)
         if isinstance(d, list):
             return d
         return d.get("data", []) if isinstance(d, dict) else []

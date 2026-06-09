@@ -4,6 +4,7 @@ One concurrent fan-out call. Per-upstream errors don't fail the whole
 endpoint — each integration reports its own status. The frontend's
 Settings tab renders this as a status grid.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,14 +36,14 @@ log = logging.getLogger(__name__)
 # guard). subgen + ollama also carry non-credential knobs (model) but those
 # flow through the same path.
 _CREDENTIAL_FIELDS: dict[str, dict[str, tuple[str, type]]] = {
-    "bazarr":   {"url": ("bazarr_url", str),   "api_key": ("bazarr_api_key", str)},
-    "sonarr":   {"url": ("sonarr_url", str),   "api_key": ("sonarr_api_key", str)},
-    "radarr":   {"url": ("radarr_url", str),   "api_key": ("radarr_api_key", str)},
+    "bazarr": {"url": ("bazarr_url", str), "api_key": ("bazarr_api_key", str)},
+    "sonarr": {"url": ("sonarr_url", str), "api_key": ("sonarr_api_key", str)},
+    "radarr": {"url": ("radarr_url", str), "api_key": ("radarr_api_key", str)},
     "tautulli": {"url": ("tautulli_url", str), "api_key": ("tautulli_api_key", str)},
     # Plex authenticates with a token rather than an X-Api-Key header.
-    "plex":     {"url": ("plex_url", str),     "token": ("plex_token", str)},
-    "subgen":   {"url": ("subgen_url", str)},
-    "ollama":   {"url": ("ollama_url", str),   "model": ("ollama_model", str)},
+    "plex": {"url": ("plex_url", str), "token": ("plex_token", str)},
+    "subgen": {"url": ("subgen_url", str)},
+    "ollama": {"url": ("ollama_url", str), "model": ("ollama_model", str)},
 }
 
 
@@ -90,20 +91,19 @@ def get_credentials(name: str, request: Request) -> dict[str, Any]:
 class CredentialsBody(BaseModel):
     url: str | None = None
     api_key: str | None = None
-    token: str | None = None     # Plex
-    model: str | None = None     # Ollama
+    token: str | None = None  # Plex
+    model: str | None = None  # Ollama
 
 
 class TestBody(BaseModel):
     url: str
     api_key: str | None = None
-    token: str | None = None     # Plex
+    token: str | None = None  # Plex
 
 
 @router.put("/integrations/{name}/credentials")
 @router.post("/integrations/{name}/credentials")
-async def save_credentials(name: str, body: CredentialsBody,
-                           request: Request) -> dict[str, Any]:
+async def save_credentials(name: str, body: CredentialsBody, request: Request) -> dict[str, Any]:
     """Persist + live-apply integration credentials without a restart.
 
     For each supplied field:
@@ -142,8 +142,7 @@ async def save_credentials(name: str, body: CredentialsBody,
         if env_is_set(settings_attr):
             # Operator's env is authoritative — never clobber it.
             managed_by_env.append(settings_attr)
-            log.info("creds: %s.%s managed by env, ignored UI write",
-                     svc, settings_attr)
+            log.info("creds: %s.%s managed by env, ignored UI write", svc, settings_attr)
             continue
         value = coerce(raw)
         # Persist below env (survives restart).
@@ -173,8 +172,7 @@ async def save_credentials(name: str, body: CredentialsBody,
 
 
 @router.post("/integrations/{name}/test")
-async def test_credentials(name: str, body: TestBody,
-                           request: Request) -> dict[str, Any]:
+async def test_credentials(name: str, body: TestBody, request: Request) -> dict[str, Any]:
     """Test-connection-before-save: verify a (url, api_key/token) reaches
     the named service WITHOUT committing it. Reuses the onboarding
     per-service probe handlers so the same reachability logic backs both
@@ -202,6 +200,7 @@ class OllamaProbeResult:
     pattern so telemetry can report ollama on a REAL signal (was
     /api/tags reachable?) rather than the defaulted OLLAMA_URL, which is
     non-empty on every install (#119)."""
+
     reachable: bool
 
 
@@ -227,7 +226,7 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                 "badges": {
                     "models": len(models),
                     "model_names": ", ".join(m.get("name", "?") for m in models[:3])
-                                   + (" ..." if len(models) > 3 else ""),
+                    + (" ..." if len(models) > 3 else ""),
                     "vision_model_config": client.vision_model_config,
                     "vision_model_resolved": vision_resolved or "",
                     "vision_capable": bool(vision_resolved),
@@ -240,7 +239,9 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
             # badges_task dangling when status timed out → "Task exception was
             # never retrieved" tracebacks on every Bazarr blip).
             status, badges = await asyncio.gather(
-                client.status(), client.badges(), return_exceptions=True,
+                client.status(),
+                client.badges(),
+                return_exceptions=True,
             )
             if isinstance(status, BaseException):
                 raise status  # IntegrationError → outer handler marks offline

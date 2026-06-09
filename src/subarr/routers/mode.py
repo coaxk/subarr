@@ -10,6 +10,7 @@ NB: SUBGEN_KWARGS values are JSON-encoded strings embedded in YAML. We parse
 them best-effort; malformed entries are returned as raw strings with a parse
 error rather than failing the whole response.
 """
+
 from __future__ import annotations
 
 import json
@@ -98,9 +99,7 @@ def get_mode() -> ModeResponse:
         elif isinstance(value, dict):
             per_lang.append(LangKwargs(code=code, raw=json.dumps(value), parsed=value))
         else:
-            per_lang.append(
-                LangKwargs(code=code, raw=str(value), parse_error="unexpected value type")
-            )
+            per_lang.append(LangKwargs(code=code, raw=str(value), parse_error="unexpected value type"))
 
     per_lang.sort(key=lambda lk: lk.code)
 

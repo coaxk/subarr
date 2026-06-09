@@ -1,4 +1,5 @@
 """#203: sidecar basename mismatch detector + auto-rename tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,6 +21,7 @@ def _make_srt(dir: Path, name: str) -> Path:
 
 def test_exact_match_no_mismatch(tmp_path):
     from subarr.sidecar_scanner import scan
+
     _make_video(tmp_path, "Show.S01E01.mkv")
     _make_srt(tmp_path, "Show.S01E01.en.srt")
     result = scan(tmp_path)
@@ -33,6 +35,7 @@ def test_case_mismatch_detected(tmp_path):
     """show.S01E01.mkv + SHOW.S01E01.en.srt — same basename, wrong case
     on Linux. Bazarr fails to pair them; we should flag + suggest rename."""
     from subarr.sidecar_scanner import scan
+
     _make_video(tmp_path, "show.S01E01.mkv")
     _make_srt(tmp_path, "SHOW.S01E01.en.srt")
     result = scan(tmp_path)
@@ -47,6 +50,7 @@ def test_case_mismatch_detected(tmp_path):
 def test_stem_typo_detected(tmp_path):
     """Realistic typo: srt has extra dot before language tag."""
     from subarr.sidecar_scanner import scan
+
     _make_video(tmp_path, "Cheers.S01E01.mkv")
     _make_srt(tmp_path, "Cheers.S01E01..en.srt")  # double-dot
     result = scan(tmp_path)
@@ -59,6 +63,7 @@ def test_stem_typo_detected(tmp_path):
 def test_orphan_srt_no_video(tmp_path):
     """Solo .srt with no matching video sibling."""
     from subarr.sidecar_scanner import scan
+
     _make_srt(tmp_path, "Random.Sub.srt")
     result = scan(tmp_path)
     assert result.exact_matches == 0
@@ -78,6 +83,7 @@ def test_recursion_into_subdirs(tmp_path):
     _make_video(s2, "Show.S02E01.mkv")
     _make_srt(s2, "SHOW.S02E01.en.srt")  # case mismatch in season 2
     from subarr.sidecar_scanner import scan
+
     result = scan(tmp_path)
     assert result.total_srt == 2
     assert result.exact_matches == 1
@@ -89,6 +95,7 @@ def test_max_depth_caps_recursion(tmp_path):
     deep.mkdir(parents=True)
     _make_srt(deep, "deep.srt")
     from subarr.sidecar_scanner import scan
+
     # depth=2 covers root + a + b but stops there.
     result = scan(tmp_path, max_depth=2)
     assert result.total_srt == 0  # deep.srt is 4 levels in
@@ -96,6 +103,7 @@ def test_max_depth_caps_recursion(tmp_path):
 
 def test_apply_rename_moves_file(tmp_path):
     from subarr.sidecar_scanner import apply_rename
+
     src = _make_srt(tmp_path, "WRONG.en.srt")
     dst = tmp_path / "right.en.srt"
     apply_rename(src, dst)
@@ -105,6 +113,7 @@ def test_apply_rename_moves_file(tmp_path):
 
 def test_apply_rename_refuses_overwrite(tmp_path):
     from subarr.sidecar_scanner import apply_rename
+
     src = _make_srt(tmp_path, "a.srt")
     dst = _make_srt(tmp_path, "b.srt")
     with pytest.raises(FileExistsError):
@@ -116,6 +125,7 @@ def test_apply_rename_refuses_overwrite(tmp_path):
 
 def test_apply_rename_refuses_cross_directory(tmp_path):
     from subarr.sidecar_scanner import apply_rename
+
     src_dir = tmp_path / "a"
     src_dir.mkdir()
     src = _make_srt(src_dir, "x.srt")

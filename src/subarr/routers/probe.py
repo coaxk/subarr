@@ -1,4 +1,5 @@
 """ffprobe HTTP API: GET /api/probe, POST /api/probe/walk, walk SSE."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,7 @@ log = logging.getLogger(__name__)
 
 class WalkRequest(BaseModel):
     path: str
-    recursive: bool = True   # currently always recursive; kept for future
+    recursive: bool = True  # currently always recursive; kept for future
 
 
 @router.get("/probe")
@@ -98,8 +99,10 @@ async def library(
     on disk. Used to confirm 'this file has X embedded' and feed back to
     Coverage's hide_embedded_en filter."""
     from ..media_probe import (
-        audio_lang_summary, english_track_summary,
-        has_forced_or_commentary_english, has_usable_embedded_english,
+        audio_lang_summary,
+        english_track_summary,
+        has_forced_or_commentary_english,
+        has_usable_embedded_english,
     )
 
     store = request.app.state.probe_store
@@ -130,20 +133,27 @@ async def library(
                 row_kind = "commentary"
             if row_kind != kind_filter:
                 continue
-        out.append({
-            "canonical_path": r.canonical_path,
-            "duration_s": r.duration_s,
-            "audio_langs": audio_lang_summary(r),
-            "english_track": en_summary,
-            "usable_english": usable,
-            "subtitle_streams": [
-                {
-                    "language": s.language, "title": s.title, "codec": s.codec,
-                    "forced": s.forced, "sdh": s.sdh, "commentary": s.commentary,
-                } for s in r.subtitles
-            ],
-            "probed_at": r.probed_at,
-        })
+        out.append(
+            {
+                "canonical_path": r.canonical_path,
+                "duration_s": r.duration_s,
+                "audio_langs": audio_lang_summary(r),
+                "english_track": en_summary,
+                "usable_english": usable,
+                "subtitle_streams": [
+                    {
+                        "language": s.language,
+                        "title": s.title,
+                        "codec": s.codec,
+                        "forced": s.forced,
+                        "sdh": s.sdh,
+                        "commentary": s.commentary,
+                    }
+                    for s in r.subtitles
+                ],
+                "probed_at": r.probed_at,
+            }
+        )
         if len(out) >= limit:
             break
 

@@ -22,6 +22,7 @@ path no longer in the queue and falsely mark it completed (best-effort
 behaviour; the worst case is a redundant Bazarr scan-disk-series, which
 is harmless).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,23 +53,28 @@ WATCHER_INTERVAL_S = 30
 # (update_series / sync_episodes); the watcher silently never triggered
 # Bazarr because the actual scan-disk task name is `series_full_scan_subtitles`.
 _BAZARR_SCAN_TASK_HINTS = (
-    "series_full_scan_subtitles",   # Bazarr 1.5.x — episodes
-    "movies_full_scan_subtitles",   # Bazarr 1.5.x — movies (we mostly do episodes)
-    "scan_disk_series",             # forward-compat
+    "series_full_scan_subtitles",  # Bazarr 1.5.x — episodes
+    "movies_full_scan_subtitles",  # Bazarr 1.5.x — movies (we mostly do episodes)
+    "scan_disk_series",  # forward-compat
     "scan_disk_episodes",
-    "scan disk",                    # human-readable fallback
+    "scan disk",  # human-readable fallback
     "index all existing episodes",  # human-readable name match
 )
 
 
 class CompletionWatcher:
-    def __init__(self, subgen: SubgenClient | None = None,
-                 bazarr: BazarrClient | None = None,
-                 provenance: ProvenanceStore = None,
-                 interval_s: int = WATCHER_INTERVAL_S,
-                 caps_provider=None, plex: PlexClient | None = None,
-                 bundle_provider=None, subgen_provider=None,
-                 aftercare_store=None):
+    def __init__(
+        self,
+        subgen: SubgenClient | None = None,
+        bazarr: BazarrClient | None = None,
+        provenance: ProvenanceStore = None,
+        interval_s: int = WATCHER_INTERVAL_S,
+        caps_provider=None,
+        plex: PlexClient | None = None,
+        bundle_provider=None,
+        subgen_provider=None,
+        aftercare_store=None,
+    ):
         # Clients are resolved live so onboarding can swap them on
         # app.state without restarting the watcher. When a bundle_provider
         # is given, bazarr + plex come from the live bundle; otherwise the
@@ -180,6 +186,7 @@ class CompletionWatcher:
                 in_flight.add(t["path"])
 
         from .paths import canonical_to_subgen_batch
+
         for entry in pending:
             subgen_path = canonical_to_subgen_batch(entry.canonical_path)
             if subgen_path in in_flight:
@@ -222,10 +229,7 @@ class CompletionWatcher:
         — it just means the polling pass already handled this path, or the
         path was never tracked by subarr (e.g. a subgen Plex/Tautulli
         auto-transcribe rather than a subarr-submitted job)."""
-        matches = [
-            e for e in self._provenance.query_by_path(canonical_path)
-            if e.completed_at is None
-        ]
+        matches = [e for e in self._provenance.query_by_path(canonical_path) if e.completed_at is None]
         for entry in matches:
             await self.complete_entry(entry)
         return len(matches)
@@ -296,8 +300,7 @@ class CompletionWatcher:
                     file_path=srt_path,
                 )
                 self._provenance.mark_bazarr_triggered(entry.id)
-                log.info("bazarr upload OK for episode %d (ledger #%d)",
-                         entry.sonarr_episode_id, entry.id)
+                log.info("bazarr upload OK for episode %d (ledger #%d)", entry.sonarr_episode_id, entry.id)
                 return True
             # Movie path (radarr_movie_id) — we'd need radarr id on the
             # entry. Provenance ledger has radarr_movie_id; not all paths
@@ -322,23 +325,27 @@ class CompletionWatcher:
         if self._plex is None:
             return
         from .config import settings as _settings
+
         if not _settings.plex_partial_scan_enabled:
             return
         if not self._plex.is_configured():
             return
         from pathlib import Path
+
         subarr_full = str(_settings.media_root / Path(video_canonical))
         try:
             result = await self._plex.partial_scan(subarr_full)
             log.info(
                 "plex partial-scan fired: section=%s path=%s (ledger entry: %s)",
-                result.get("section"), result.get("plex_path"), video_canonical,
+                result.get("section"),
+                result.get("plex_path"),
+                video_canonical,
             )
         except IntegrationError as e:
             log.warning(
-                "plex partial-scan failed for %s: %s (will be picked up "
-                "by Plex's next periodic scan)",
-                video_canonical, e,
+                "plex partial-scan failed for %s: %s (will be picked up by Plex's next periodic scan)",
+                video_canonical,
+                e,
             )
 
     def _run_aftercare(self, entry) -> None:
@@ -359,8 +366,7 @@ class CompletionWatcher:
                 source=getattr(entry, "source", None) or "subgenscan",
             )
         except Exception as e:  # noqa: BLE001 - aftercare must never break completion
-            log.warning("aftercare judging failed for %s: %s",
-                        getattr(entry, "canonical_path", "?"), e)
+            log.warning("aftercare judging failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
 
     def _find_srt_sidecar(self, video_canonical: str) -> str | None:
         """Locate the .srt subgen wrote next to the video. Subgen's default
@@ -368,6 +374,7 @@ class CompletionWatcher:
         basename if the language tag differs."""
         from pathlib import Path
         from .config import settings
+
         full = settings.media_root / Path(video_canonical)
         try:
             if not full.exists():
@@ -400,8 +407,9 @@ class CompletionWatcher:
         try:
             await self._bazarr.trigger_task(self._bazarr_task_id)
             self._provenance.mark_bazarr_triggered(ledger_id)
-            log.info("bazarr scan-disk triggered for series_id=%d via task %s",
-                     series_id, self._bazarr_task_id)
+            log.info(
+                "bazarr scan-disk triggered for series_id=%d via task %s", series_id, self._bazarr_task_id
+            )
         except IntegrationError as e:
             log.warning("bazarr scan-disk trigger failed: %s", e)
 
@@ -427,11 +435,13 @@ class CompletionWatcher:
                     self._bazarr_task_lookup_attempted = True
                     log.info(
                         "bazarr scan-disk task discovered: %s (matched hint %r against %s)",
-                        self._bazarr_task_id, hint,
+                        self._bazarr_task_id,
+                        hint,
                         "job_id" if h in job_id else "name",
                     )
                     return
         log.warning(
             "no bazarr task matched scan-disk hints %s; available job_ids: %s",
-            list(_BAZARR_SCAN_TASK_HINTS), [t.get("job_id") for t in tasks][:20],
+            list(_BAZARR_SCAN_TASK_HINTS),
+            [t.get("job_id") for t in tasks][:20],
         )

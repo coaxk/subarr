@@ -2,6 +2,7 @@
 
 Mirror of Sonarr's structure. Same v3 contract, same auth header.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -34,16 +35,20 @@ class RadarrClient(IntegrationClient):
         timestamp powers the #117 settle-window; `recent_imports` derives the
         plain id set. Repeat imports of one movie keep the most recent."""
         import datetime
+
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
         out: dict[int, float] = {}
         page = 1
         while True:
             data = await self._get(
                 "/api/v3/history",
-                params={"page": page, "pageSize": 200,
-                        "eventType": 3,
-                        "sortKey": "date",
-                        "sortDirection": "descending"},
+                params={
+                    "page": page,
+                    "pageSize": 200,
+                    "eventType": 3,
+                    "sortKey": "date",
+                    "sortDirection": "descending",
+                },
             )
             records = data.get("records") or []
             crossed = False
@@ -77,9 +82,12 @@ class RadarrClient(IntegrationClient):
         while True:
             data = await self._get(
                 "/api/v3/wanted/missing",
-                params={"page": page, "pageSize": 1000,
-                        "sortKey": "movies.sortTitle",
-                        "sortDirection": "ascending"},
+                params={
+                    "page": page,
+                    "pageSize": 1000,
+                    "sortKey": "movies.sortTitle",
+                    "sortDirection": "ascending",
+                },
             )
             records = data.get("records") or []
             for r in records:
@@ -105,6 +113,7 @@ class RadarrClient(IntegrationClient):
         making the fan-out 8× faster than serial. Each row's mediaInfo
         block has the same shape as Sonarr's."""
         import asyncio
+
         movies = await self.movies()
         ids = [m["id"] for m in movies if (m.get("hasFile") or m.get("movieFile"))]
         sem = asyncio.Semaphore(8)

@@ -23,6 +23,7 @@ We deliberately keep this defensive: when in doubt, the helper functions
 classify a sub as 'not usable' rather than 'usable' so we don't suppress
 a Bazarr-wanted gap based on a false-positive embedded match.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -104,10 +105,11 @@ class TrackMismatch:
     track that IS the original language exists. `native_audio_ordinal` is the
     1-based position among AUDIO tracks (what mkvpropedit's `track:aN` wants),
     NOT the global ffprobe stream index."""
-    default_lang: str            # normalized ISO-639-1 of the current default track
-    native_lang: str             # normalized ISO-639-1 of the original-language track
-    native_audio_ordinal: int    # 1-based audio-track ordinal for mkvpropedit track:aN
-    native_stream_index: int     # global ffprobe stream index (reference only)
+
+    default_lang: str  # normalized ISO-639-1 of the current default track
+    native_lang: str  # normalized ISO-639-1 of the original-language track
+    native_audio_ordinal: int  # 1-based audio-track ordinal for mkvpropedit track:aN
+    native_stream_index: int  # global ffprobe stream index (reference only)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,6 +133,7 @@ def detect_default_track_mismatch(
     Returns a TrackMismatch (carrying the 1-based audio ordinal of the native
     track for mkvpropedit) or None. Pure — no I/O."""
     from .langs import normalize_lang
+
     orig = normalize_lang(original_language)
     if not orig or orig in ("en", "und"):
         return None
@@ -195,7 +198,7 @@ def parse_ffprobe_json(canonical_path: str, payload: dict) -> ProbeResult:
         result.duration_s = float(fmt.get("duration")) if fmt.get("duration") else None
     except (TypeError, ValueError):
         result.duration_s = None
-    for stream in (payload.get("streams") or []):
+    for stream in payload.get("streams") or []:
         kind = stream.get("codec_type")
         if kind == "audio":
             result.audio.append(_classify_audio(stream))
@@ -213,13 +216,16 @@ async def probe(path: Path, timeout_s: float = 30.0) -> ProbeResult:
         raise ProbeError(f"not a file: {path}")
 
     args = [
-        "ffprobe", "-v", "error",
+        "ffprobe",
+        "-v",
+        "error",
         "-show_entries",
         "format=duration:"
         "stream=index,codec_type,codec_name:"
         "stream_tags=language,title:"
         "stream_disposition=default,forced,comment,hearing_impaired",
-        "-of", "json",
+        "-of",
+        "json",
         str(path),
     ]
     try:
@@ -239,9 +245,7 @@ async def probe(path: Path, timeout_s: float = 30.0) -> ProbeResult:
         raise ProbeError(f"ffprobe timeout after {timeout_s}s: {path}")
 
     if proc.returncode != 0:
-        raise ProbeError(
-            f"ffprobe exit {proc.returncode}: {stderr.decode(errors='replace')[:300]}"
-        )
+        raise ProbeError(f"ffprobe exit {proc.returncode}: {stderr.decode(errors='replace')[:300]}")
 
     try:
         payload = json.loads(stdout.decode("utf-8", errors="replace") or "{}")
@@ -266,8 +270,7 @@ def has_usable_embedded_english(result: ProbeResult) -> bool:
     director's commentary tracks remain non-usable — those genuinely
     aren't full subtitles for the show."""
     for s in result.subtitles:
-        if (s.language or "").lower() in ENGLISH_TAGS \
-                and not s.forced and not s.commentary:
+        if (s.language or "").lower() in ENGLISH_TAGS and not s.forced and not s.commentary:
             return True
     return False
 
@@ -299,12 +302,10 @@ def english_track_summary(result: ProbeResult) -> str | None:
         # Prefer the clean label if there's a non-SDH English track;
         # otherwise note SDH so the UI is honest about what's there.
         for s in result.subtitles:
-            if (s.language or "").lower() in ENGLISH_TAGS \
-                    and not s.forced and not s.commentary and not s.sdh:
+            if (s.language or "").lower() in ENGLISH_TAGS and not s.forced and not s.commentary and not s.sdh:
                 return "EN"
         for s in result.subtitles:
-            if (s.language or "").lower() in ENGLISH_TAGS \
-                    and not s.forced and not s.commentary and s.sdh:
+            if (s.language or "").lower() in ENGLISH_TAGS and not s.forced and not s.commentary and s.sdh:
                 return "EN(SDH)"
         return "EN"
     for s in result.subtitles:
@@ -354,8 +355,7 @@ _TITLE_LANG_HINTS = {
 }
 
 _TITLE_RES = {
-    code: [re.compile(p, re.IGNORECASE) for p in patterns]
-    for code, patterns in _TITLE_LANG_HINTS.items()
+    code: [re.compile(p, re.IGNORECASE) for p in patterns] for code, patterns in _TITLE_LANG_HINTS.items()
 }
 
 

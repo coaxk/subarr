@@ -7,14 +7,22 @@ which skips unchanged files by mtime and would otherwise leave the stale finding
 forever. The GET endpoint enforces this by filtering findings against the
 audio_lang verification store (user ground truth).
 """
+
 from __future__ import annotations
 
 
 def _seed_finding(client, *, path, status="mislabel", detected="nl"):
     store = client.app.state.audio_audit_store
-    store.upsert(canonical_path=path, tag_lang="da", detected_lang=detected,
-                 status=status, languages_heard=[detected], n_agreeing=3,
-                 n_total=3, mtime=10.0)
+    store.upsert(
+        canonical_path=path,
+        tag_lang="da",
+        detected_lang=detected,
+        status=status,
+        languages_heard=[detected],
+        n_agreeing=3,
+        n_total=3,
+        mtime=10.0,
+    )
 
 
 def test_get_audit_lists_actionable_findings(app_with_stub):
@@ -22,32 +30,35 @@ def test_get_audit_lists_actionable_findings(app_with_stub):
     _seed_finding(app_with_stub, path="TV/X/ok.mkv", status="agrees", detected="en")
     body = app_with_stub.get("/api/audio-audit").json()
     paths = [f["canonical_path"] for f in body["findings"]]
-    assert "TV/X/a.mkv" in paths          # mislabel = actionable
-    assert "TV/X/ok.mkv" not in paths      # agrees = not surfaced
+    assert "TV/X/a.mkv" in paths  # mislabel = actionable
+    assert "TV/X/ok.mkv" not in paths  # agrees = not surfaced
     assert body["counts"].get("mislabel") == 1
 
 
 def test_get_audit_excludes_user_verified(app_with_stub):
     _seed_finding(app_with_stub, path="TV/X/a.mkv")
     # before verification: present
-    assert any(f["canonical_path"] == "TV/X/a.mkv"
-               for f in app_with_stub.get("/api/audio-audit").json()["findings"])
+    assert any(
+        f["canonical_path"] == "TV/X/a.mkv" for f in app_with_stub.get("/api/audio-audit").json()["findings"]
+    )
     # user adjudicates it → ground truth recorded
     app_with_stub.app.state.audio_lang.upsert(
-        canonical_path="TV/X/a.mkv", lang_code="nld", source="user", confidence=1.0)
+        canonical_path="TV/X/a.mkv", lang_code="nld", source="user", confidence=1.0
+    )
     # after: filtered out (and would survive a re-scan's mtime-skip)
-    assert not any(f["canonical_path"] == "TV/X/a.mkv"
-                   for f in app_with_stub.get("/api/audio-audit").json()["findings"])
+    assert not any(
+        f["canonical_path"] == "TV/X/a.mkv" for f in app_with_stub.get("/api/audio-audit").json()["findings"]
+    )
 
 
 def test_get_audit_verified_match_is_slash_insensitive(app_with_stub):
     # walker stores bare canonical; set-language persists lstrip('/') — match
     # must normalize both so a leading-slash mismatch doesn't leak a stale row.
     _seed_finding(app_with_stub, path="/TV/X/b.mkv")
-    app_with_stub.app.state.audio_lang.upsert(
-        canonical_path="TV/X/b.mkv", lang_code="nld", source="user")
-    assert not any("b.mkv" in f["canonical_path"]
-                   for f in app_with_stub.get("/api/audio-audit").json()["findings"])
+    app_with_stub.app.state.audio_lang.upsert(canonical_path="TV/X/b.mkv", lang_code="nld", source="user")
+    assert not any(
+        "b.mkv" in f["canonical_path"] for f in app_with_stub.get("/api/audio-audit").json()["findings"]
+    )
 
 
 def test_get_audit_whisper_robust_does_not_hide(app_with_stub):
@@ -56,10 +67,11 @@ def test_get_audit_whisper_robust_does_not_hide(app_with_stub):
     # would self-erase every finding it writes.
     _seed_finding(app_with_stub, path="TV/X/a.mkv")
     app_with_stub.app.state.audio_lang.upsert(
-        canonical_path="TV/X/a.mkv", lang_code="nld",
-        source="whisper-robust", confidence=0.7)
-    assert any(f["canonical_path"] == "TV/X/a.mkv"
-               for f in app_with_stub.get("/api/audio-audit").json()["findings"])
+        canonical_path="TV/X/a.mkv", lang_code="nld", source="whisper-robust", confidence=0.7
+    )
+    assert any(
+        f["canonical_path"] == "TV/X/a.mkv" for f in app_with_stub.get("/api/audio-audit").json()["findings"]
+    )
 
 
 def test_get_audit_includes_scan_summary(app_with_stub):

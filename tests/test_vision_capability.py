@@ -8,6 +8,7 @@ After #232, vision_describe() refuses the call cleanly, the Settings
 panel shows "vision pre-filter inactive", and the wizard can offer a
 one-click pull of the recommended vision model.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
@@ -17,12 +18,12 @@ import pytest
 from subarr.integrations.ollama import (
     _VISION_FAMILIES,
     OllamaClient,
-    OllamaError,
     _is_vision_capable,
 )
 
 
 # Family-prefix detection: must catch tagged variants without false positives.
+
 
 @pytest.mark.parametrize(
     "name,expected",
@@ -48,10 +49,10 @@ def test_family_match(name, expected):
 
 # resolve_vision_model() honours explicit config when the model is installed.
 
+
 @pytest.mark.asyncio
 async def test_resolve_explicit_installed():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="qwen2.5vl:7b")
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl:7b")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b", "qwen2.5vl:7b"])
     resolved = await c.resolve_vision_model()
     assert resolved == "qwen2.5vl:7b"
@@ -61,10 +62,10 @@ async def test_resolve_explicit_installed():
 # vision-capable. This is the "user changed OLLAMA_MODEL to text-only
 # but never pulled the vision model" path.
 
+
 @pytest.mark.asyncio
 async def test_resolve_falls_back_to_installed_vision():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="qwen2.5vl:7b")
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl:7b")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b", "llava:13b"])
     resolved = await c.resolve_vision_model()
     assert resolved == "llava:13b"
@@ -72,10 +73,10 @@ async def test_resolve_falls_back_to_installed_vision():
 
 # The "auto" sentinel skips the explicit check and picks first-installed.
 
+
 @pytest.mark.asyncio
 async def test_resolve_auto_picks_first_vision():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="auto")
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="auto")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b", "moondream:latest"])
     resolved = await c.resolve_vision_model()
     assert resolved == "moondream:latest"
@@ -84,13 +85,11 @@ async def test_resolve_auto_picks_first_vision():
 # Family preference order: when multiple vision models are installed,
 # we pick the best-fit-first (qwen2.5vl > llava > moondream).
 
+
 @pytest.mark.asyncio
 async def test_resolve_prefers_qwen_over_llava():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="auto")
-    c.installed_models = AsyncMock(
-        return_value=["moondream:latest", "llava:13b", "qwen2.5vl:7b"]
-    )
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="auto")
+    c.installed_models = AsyncMock(return_value=["moondream:latest", "llava:13b", "qwen2.5vl:7b"])
     resolved = await c.resolve_vision_model()
     assert resolved == "qwen2.5vl:7b"
 
@@ -98,10 +97,10 @@ async def test_resolve_prefers_qwen_over_llava():
 # The CRITICAL regression: no vision model installed -> None, not
 # silently fall through to the text model.
 
+
 @pytest.mark.asyncio
 async def test_resolve_none_when_no_vision_capable():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="qwen2.5vl:7b")
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl:7b")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b", "phi3.5:3.8b"])
     resolved = await c.resolve_vision_model()
     assert resolved is None
@@ -110,6 +109,7 @@ async def test_resolve_none_when_no_vision_capable():
 # vision_describe must REFUSE when no vision model is installed,
 # raising the actionable error. Previously this would silently invoke
 # the text model and return hallucinations.
+
 
 @pytest.mark.asyncio
 async def test_vision_describe_refuses_without_vision_model():
@@ -120,8 +120,8 @@ async def test_vision_describe_refuses_without_vision_model():
     # post-reload class the OllamaClient actually raises.
     from subarr.integrations.ollama import OllamaClient as _Client
     from subarr.integrations.ollama import OllamaError as _Err
-    c = _Client(base_url="http://ollama:11434", model="qwen2.5:7b",
-                vision_model="qwen2.5vl:7b")
+
+    c = _Client(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl:7b")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b"])  # text only
     raised: _Err | None = None
     try:
@@ -135,10 +135,10 @@ async def test_vision_describe_refuses_without_vision_model():
 # The resolved-model cache invalidates after pull_model completes — so
 # the user pulling a vision model is reflected without restart.
 
+
 @pytest.mark.asyncio
 async def test_reset_vision_cache_after_pull():
-    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b",
-                     vision_model="qwen2.5vl:7b")
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl:7b")
     c.installed_models = AsyncMock(return_value=["qwen2.5:7b"])
     assert await c.resolve_vision_model() is None
     # Simulate post-pull state: vision model now appears.
@@ -151,6 +151,7 @@ async def test_reset_vision_cache_after_pull():
 
 # Allowlist sanity: families list is non-empty and qwen2.5vl is first
 # (the recommended default). If someone reorders this we want to know.
+
 
 def test_families_default_preference():
     assert len(_VISION_FAMILIES) >= 5

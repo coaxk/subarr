@@ -10,6 +10,7 @@ channel (no upload, no shared scratch). Gated on capabilities.asr_arena so
 older/vanilla subgen gets a clear "needs subarr-subgen >=v4.10" instead of a
 confusing failure.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,10 +30,11 @@ def _audio_track_langs(app, canonical_path: str) -> list:
     """Ordered audio-track languages (ISO-639-1) from probe_store ffprobe
     streams. The list index is the audio-stream ordinal used for -map 0:a:N."""
     from ..langs import normalize_lang
+
     out = []
     store = getattr(app.state, "probe_store", None)
     pr = store.get(canonical_path) if store is not None else None
-    for a in (getattr(pr, "audio", None) or []):
+    for a in getattr(pr, "audio", None) or []:
         out.append(normalize_lang(getattr(a, "language", None) or "") or None)
     return out
 
@@ -73,10 +75,9 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
             detail={
                 "error": "unsupported",
                 "reason": "the tuning lab needs subarr-subgen >=v4.10 — its /asr "
-                          "endpoint must advertise the arena channel (path-input + "
-                          "per-request kwargs).",
-                "remedy": "Upgrade your subgen image to "
-                          "ghcr.io/coaxk/subarr-subgen:latest (>=2026.05.3-r4).",
+                "endpoint must advertise the arena channel (path-input + "
+                "per-request kwargs).",
+                "remedy": "Upgrade your subgen image to ghcr.io/coaxk/subarr-subgen:latest (>=2026.05.3-r4).",
             },
         )
 
@@ -90,12 +91,10 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
     if not req.source_language and len({t for t in track_langs if t}) >= 2:
         runs = []
         for idx, lang in enumerate(track_langs):
-            r = svc.create(p, variants, source_language=lang, track_index=idx,
-                           is_track_fanout=True)
+            r = svc.create(p, variants, source_language=lang, track_index=idx, is_track_fanout=True)
             svc.start(r)
             runs.append(r)
-        return {**runs[0].to_dict(), "fanned_out": len(runs),
-                "fanned_tracks": [t for t in track_langs]}
+        return {**runs[0].to_dict(), "fanned_out": len(runs), "fanned_tracks": [t for t in track_langs]}
     run = svc.create(p, variants, source_language=req.source_language)
     svc.start(run)
     return run.to_dict()
@@ -132,8 +131,9 @@ async def arena_audio_issues(request: Request) -> dict:
     bilingual (multiple languages heard), newest run per file, so a user can
     review/correct them in one place. (Phase 2 = a throttled walker for
     not-yet-swept files.) Defined before /{run_id} so it isn't captured as one."""
-    runs = sorted(request.app.state.arena.list(),
-                  key=lambda r: getattr(r, "created_at", 0) or 0, reverse=True)
+    runs = sorted(
+        request.app.state.arena.list(), key=lambda r: getattr(r, "created_at", 0) or 0, reverse=True
+    )
     # User adjudication is ground truth: once a file has an audio-lang
     # verification, drop it from the issues list (it's been resolved).
     verified: set[str] = set()
@@ -152,9 +152,9 @@ async def arena_audio_issues(request: Request) -> dict:
         mixed = bool(res.get("audio_lang_mixed"))
         if not (mislabel or mixed):
             continue
-        if (r.media_path or "").lstrip("/") in verified:   # already resolved
+        if (r.media_path or "").lstrip("/") in verified:  # already resolved
             continue
-        if r.media_path in by_path:   # keep the newest run per file
+        if r.media_path in by_path:  # keep the newest run per file
             continue
         by_path[r.media_path] = {
             "run_id": r.id,
@@ -194,6 +194,7 @@ async def set_arena_run_language(run_id: str, req: SetLanguageRequest, request: 
     global audio-lang verification for the file, so coverage and FUTURE sweeps
     of the same file inherit it (user ground truth)."""
     from ..langs import normalize_lang
+
     run = request.app.state.arena.get(run_id)
     if run is None:
         raise HTTPException(404, detail="arena run not found")
@@ -211,9 +212,13 @@ async def set_arena_run_language(run_id: str, req: SetLanguageRequest, request: 
     store = getattr(request.app.state, "audio_lang", None)
     if store is not None:
         try:
-            store.upsert(canonical_path=(run.media_path or "").strip().lstrip("/"),
-                         lang_code=code, source="user", confidence=1.0,
-                         evidence={"via": "tuning-lab set-language", "run_id": run_id})
+            store.upsert(
+                canonical_path=(run.media_path or "").strip().lstrip("/"),
+                lang_code=code,
+                source="user",
+                confidence=1.0,
+                evidence={"via": "tuning-lab set-language", "run_id": run_id},
+            )
         except Exception:
             pass
     return run.to_dict()

@@ -1,9 +1,8 @@
 """#66/#116 slice 3: pending-queue API — list, control (pause/target_depth),
 reorder (promote/demote/move), remove, and the submitted-row guard.
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 def _enqueue(client, path, source="gaps"):
@@ -94,19 +93,45 @@ def test_unknown_id_404(app_with_stub):
 
 def test_backfill_loads_eligible_gaps_as_backfill(app_with_stub, monkeypatch):
     from types import SimpleNamespace
+
     c = app_with_stub
-    snap = SimpleNamespace(generated_at=0.0, items=[
-        {"media_type": "episode", "title": "Korean Show", "original_language": "Korean",
-         "score": 500, "verification_state": "verified", "monitored": True,
-         "has_sub_on_disk": False, "embedded_en": None,
-         "canonical_path": "TV/K", "file_canonical_path": "TV/K/ep.mkv"},
-        {"media_type": "episode", "title": "English Show", "original_language": "English",
-         "score": 500, "verification_state": "verified", "monitored": True,
-         "canonical_path": "TV/E", "file_canonical_path": "TV/E/ep.mkv"},
-        {"media_type": "episode", "title": "Unprobed", "original_language": "Korean",
-         "score": 500, "verification_state": "unprobed", "monitored": True,
-         "canonical_path": "TV/U", "file_canonical_path": "TV/U/ep.mkv"},
-    ])
+    snap = SimpleNamespace(
+        generated_at=0.0,
+        items=[
+            {
+                "media_type": "episode",
+                "title": "Korean Show",
+                "original_language": "Korean",
+                "score": 500,
+                "verification_state": "verified",
+                "monitored": True,
+                "has_sub_on_disk": False,
+                "embedded_en": None,
+                "canonical_path": "TV/K",
+                "file_canonical_path": "TV/K/ep.mkv",
+            },
+            {
+                "media_type": "episode",
+                "title": "English Show",
+                "original_language": "English",
+                "score": 500,
+                "verification_state": "verified",
+                "monitored": True,
+                "canonical_path": "TV/E",
+                "file_canonical_path": "TV/E/ep.mkv",
+            },
+            {
+                "media_type": "episode",
+                "title": "Unprobed",
+                "original_language": "Korean",
+                "score": 500,
+                "verification_state": "unprobed",
+                "monitored": True,
+                "canonical_path": "TV/U",
+                "file_canonical_path": "TV/U/ep.mkv",
+            },
+        ],
+    )
     monkeypatch.setattr(c.app.state.coverage_cache, "get_cached", lambda: snap)
 
     r = c.post("/api/queue/backfill")
@@ -122,14 +147,26 @@ def test_backfill_loads_eligible_gaps_as_backfill(app_with_stub, monkeypatch):
 
 def test_backfill_dedups_already_pending(app_with_stub, monkeypatch):
     from types import SimpleNamespace
+
     c = app_with_stub
     c.app.state.pending_queue.enqueue("TV/K/ep.mkv", source="gaps")  # already queued
-    snap = SimpleNamespace(generated_at=0.0, items=[
-        {"media_type": "episode", "title": "Korean Show", "original_language": "Korean",
-         "score": 500, "verification_state": "verified", "monitored": True,
-         "has_sub_on_disk": False, "embedded_en": None,
-         "canonical_path": "TV/K", "file_canonical_path": "TV/K/ep.mkv"},
-    ])
+    snap = SimpleNamespace(
+        generated_at=0.0,
+        items=[
+            {
+                "media_type": "episode",
+                "title": "Korean Show",
+                "original_language": "Korean",
+                "score": 500,
+                "verification_state": "verified",
+                "monitored": True,
+                "has_sub_on_disk": False,
+                "embedded_en": None,
+                "canonical_path": "TV/K",
+                "file_canonical_path": "TV/K/ep.mkv",
+            },
+        ],
+    )
     monkeypatch.setattr(c.app.state.coverage_cache, "get_cached", lambda: snap)
 
     r = c.post("/api/queue/backfill")

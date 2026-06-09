@@ -3,6 +3,7 @@
 Env var prefix is SUBARR_*. SUBGEN_* is reserved for things specifically about
 the subgen container (URL, container name, compose path).
 """
+
 from __future__ import annotations
 
 import logging
@@ -189,9 +190,7 @@ def load() -> Settings:
     # auth, optional docker discovery).
     _s = Settings(
         media_root=Path(_env_or("SUBARR_MEDIA_ROOT", "/media/library")),
-        subgen_compose_path=Path(
-            _env_or("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")
-        ),
+        subgen_compose_path=Path(_env_or("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")),
         subgen_url=_env_or("SUBGEN_URL", "http://subgen:9000"),
         subgen_container=_env_or("SUBGEN_CONTAINER", "subgen"),
         subgen_media_prefix=_env_or("SUBGEN_MEDIA_PREFIX", "/media"),
@@ -201,20 +200,15 @@ def load() -> Settings:
         plex_token=os.environ.get("PLEX_TOKEN", ""),
         plex_section=_env_or("PLEX_SECTION", "all"),
         plex_path_prefix=os.environ.get("PLEX_PATH_PREFIX", ""),
-        plex_partial_scan_enabled=_env_or(
-            "PLEX_PARTIAL_SCAN_ENABLED", "1"
-        ).strip().lower() not in ("0", "false", "no", "off"),
-        subgen_webhook_enabled=_env_or(
-            "SUBARR_SUBGEN_WEBHOOK_ENABLED", "1"
-        ).strip().lower() not in ("0", "false", "no", "off"),
-        sonarr_propagate_audio_lang=os.environ.get(
-            "SONARR_PROPAGATE_AUDIO_LANG", "0"
-        ).strip().lower() in ("1", "true", "yes", "on"),
-        plex_audio_hints=os.environ.get(
-            "PLEX_AUDIO_HINTS", "0"
-        ).strip().lower() in ("1", "true", "yes", "on"),
-        vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower()
+        plex_partial_scan_enabled=_env_or("PLEX_PARTIAL_SCAN_ENABLED", "1").strip().lower()
         not in ("0", "false", "no", "off"),
+        subgen_webhook_enabled=_env_or("SUBARR_SUBGEN_WEBHOOK_ENABLED", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
+        sonarr_propagate_audio_lang=os.environ.get("SONARR_PROPAGATE_AUDIO_LANG", "0").strip().lower()
+        in ("1", "true", "yes", "on"),
+        plex_audio_hints=os.environ.get("PLEX_AUDIO_HINTS", "0").strip().lower()
+        in ("1", "true", "yes", "on"),
+        vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off"),
         # #104: default 120s. Min-clamped at 0 (a 0/negative value disables
         # debounce — every kick rebuilds, the pre-#104 behaviour).
         coverage_refresh_min_interval_s=max(
@@ -353,12 +347,13 @@ def _apply_persisted_overrides(s: Settings) -> None:
     Frozen dataclass → object.__setattr__. Fail-soft per field so one bad
     value can't break config load."""
     from . import config_store
+
     for field, raw in config_store.load_overrides().items():
         coerce = _FIELD_COERCE.get(field)
         if coerce is None:
-            continue                 # not a UI-settable field; ignore
+            continue  # not a UI-settable field; ignore
         if env_is_set(field):
-            continue                 # operator's env is authoritative
+            continue  # operator's env is authoritative
         try:
             object.__setattr__(s, field, coerce(raw))
         except Exception:

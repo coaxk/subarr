@@ -12,6 +12,7 @@ existing subtitle: {.srt, .vtt, .sub, .ass, .ssa, .idx, .sbv, .pgs, .ttml,
 exists was mislabeled 'unknown'. These tests pin the broadened sidecar match
 while keeping the directory / no-sidecar / wrong-stem cases as 'unknown'.
 """
+
 from __future__ import annotations
 
 import types
@@ -58,8 +59,7 @@ def test_plain_srt_sidecar_classified_sub_exists(media_tree):
     assert _infer_skip_reason(CANON) == "sub_exists"
 
 
-@pytest.mark.parametrize("ext", [".ass", ".ssa", ".vtt", ".sub", ".idx",
-                                 ".sbv", ".pgs", ".ttml", ".lrc"])
+@pytest.mark.parametrize("ext", [".ass", ".ssa", ".vtt", ".sub", ".idx", ".sbv", ".pgs", ".ttml", ".lrc"])
 def test_non_srt_subtitle_sidecar_classified_sub_exists(media_tree, ext):
     """NEW (#89): subgen skips on any subtitle extension it recognizes, not
     just .srt. A matching `.ass`/`.vtt`/etc. sidecar must classify as

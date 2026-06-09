@@ -12,6 +12,7 @@ the same way Sonarr's do (the wanted row has the movie itself, which
 IS the single video file). For movies the canonical path is already
 file-level, so no resolution needed.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,8 +24,6 @@ from ..config import settings
 from ..integrations import IntegrationError
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..audio_lang_store import resolve_audio_language_override
-from ..provenance import SOURCE_SUBGENSCAN
-from ..scan_store import PATH_STATUS_PENDING
 
 router = APIRouter(prefix="/api", tags=["coverage"])
 log = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ def _strip_arr_prefix(arr_path: str) -> str:
     prefix = settings.arr_path_prefix
     s = arr_path or ""
     if prefix and s.startswith(prefix):
-        s = s[len(prefix):]
+        s = s[len(prefix) :]
     return s.strip("/")
 
 

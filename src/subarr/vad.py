@@ -18,6 +18,7 @@ silero is an OPT-IN dependency (onboarding checkbox; pulled on demand or via
 the `subarr[vad]` extra). When it is unavailable, callers fall back to the
 existing silencedetect behaviour — never a hard failure.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -143,7 +144,7 @@ def pull_model(force: bool = False, *, _fetch=None) -> dict:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_bytes(data)
-    tmp.replace(target)   # atomic on POSIX
+    tmp.replace(target)  # atomic on POSIX
     return {"status": "downloaded", "path": str(target), "sha256": digest}
 
 
@@ -213,12 +214,22 @@ def _decode_pcm_f32(path: str, track: int) -> "object":
 
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     cmd = [
-        ffmpeg, "-hide_banner", "-nostdin",
-        "-t", f"{_SCAN_WINDOW_S:.0f}",
-        "-i", path,
-        "-map", f"0:a:{track}",
-        "-ac", "1", "-ar", str(_SR),
-        "-f", "f32le", "-",
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-t",
+        f"{_SCAN_WINDOW_S:.0f}",
+        "-i",
+        path,
+        "-map",
+        f"0:a:{track}",
+        "-ac",
+        "1",
+        "-ar",
+        str(_SR),
+        "-f",
+        "f32le",
+        "-",
     ]
     out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
     return np.frombuffer(out, dtype="<f4")
@@ -241,7 +252,7 @@ def _run_silero(path: str, track: int = 0) -> list[Range]:
     probs: list[float] = []
     n = len(audio)
     for off in range(0, n - _WINDOW + 1, _WINDOW):
-        chunk = audio[off:off + _WINDOW].reshape(1, _WINDOW).astype(np.float32)
+        chunk = audio[off : off + _WINDOW].reshape(1, _WINDOW).astype(np.float32)
         out, state = sess.run(["output", "stateN"], {"input": chunk, "state": state, "sr": sr})
         probs.append(float(out[0][0]))
     return _probs_to_ranges(probs, _WINDOW_S)

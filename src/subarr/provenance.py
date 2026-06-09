@@ -19,6 +19,7 @@ purposes:
 Same SQLite file as the scan store. WAL mode + a single Lock around
 the connection — no per-thread state.
 """
+
 from __future__ import annotations
 
 import logging
@@ -105,8 +106,14 @@ class ProvenanceStore:
                 " scan_id, source, subgen_version, queued_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    canonical_path, series_id, sonarr_episode_id, radarr_movie_id,
-                    scan_id, source, subgen_version, time.time(),
+                    canonical_path,
+                    series_id,
+                    sonarr_episode_id,
+                    radarr_movie_id,
+                    scan_id,
+                    source,
+                    subgen_version,
+                    time.time(),
                 ),
             )
             return cur.lastrowid
@@ -182,6 +189,7 @@ class ProvenanceStore:
         `max_age_s` bounds how far back we'll look — avoids triggering a
         forever-old retry storm after a long subarr downtime."""
         import time
+
         cutoff = time.time() - max_age_s
         with self._lock:
             rows = self._conn.execute(

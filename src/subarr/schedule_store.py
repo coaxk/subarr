@@ -14,6 +14,7 @@ allow/deny + max items per run.
 Both tables are tiny (≤N rows) so a single Lock around the connection
 is fine.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,14 +28,14 @@ from typing import Any
 
 # Schedule kinds:
 KIND_INTERVAL = "interval"  # fires every interval_minutes
-KIND_DAILY = "daily"        # fires once per day at HH:MM (24h)
-KIND_WEEKLY = "weekly"      # fires once per week on day_of_week at HH:MM
+KIND_DAILY = "daily"  # fires once per day at HH:MM (24h)
+KIND_WEEKLY = "weekly"  # fires once per week on day_of_week at HH:MM
 
 
 # Auto-queue rule modes (matches spec s.1.2):
-MODE_DASHBOARD = "dashboard"           # Coverage list only, no queue action
+MODE_DASHBOARD = "dashboard"  # Coverage list only, no queue action
 MODE_MANUAL_CONFIRM = "manual_confirm"  # show "queue all matching" button
-MODE_AUTO_RULES = "auto_rules"          # automatically queue matching rows
+MODE_AUTO_RULES = "auto_rules"  # automatically queue matching rows
 
 
 @dataclass
@@ -42,9 +43,9 @@ class ScheduleConfig:
     name: str
     enabled: bool
     kind: str
-    interval_minutes: int        # for KIND_INTERVAL
-    daily_hhmm: str              # for KIND_DAILY / KIND_WEEKLY ("03:00")
-    day_of_week: int             # for KIND_WEEKLY (0=Mon, 6=Sun)
+    interval_minutes: int  # for KIND_INTERVAL
+    daily_hhmm: str  # for KIND_DAILY / KIND_WEEKLY ("03:00")
+    day_of_week: int  # for KIND_WEEKLY (0=Mon, 6=Sun)
     last_run_at: float | None
     next_run_at: float | None
     last_result: str | None
@@ -78,7 +79,7 @@ class AutoQueueRules:
     allow_tags: list[str] = field(default_factory=list)
     deny_tags: list[str] = field(default_factory=list)
     require_monitored: bool = True
-    skip_stale_disk: bool = True   # don't auto-queue rows where .srt already on disk
+    skip_stale_disk: bool = True  # don't auto-queue rows where .srt already on disk
     skip_embedded_en: bool = True  # don't auto-queue rows where probe confirmed EN/EN(SDH)
     max_per_run: int = 50
     # #117 settle-window: hold a freshly-imported gap out of auto-queue for
@@ -151,9 +152,15 @@ class ScheduleStore:
         if row is None:
             return None
         return ScheduleConfig(
-            name=row[0], enabled=bool(row[1]), kind=row[2],
-            interval_minutes=row[3], daily_hhmm=row[4], day_of_week=row[5],
-            last_run_at=row[6], next_run_at=row[7], last_result=row[8],
+            name=row[0],
+            enabled=bool(row[1]),
+            kind=row[2],
+            interval_minutes=row[3],
+            daily_hhmm=row[4],
+            day_of_week=row[5],
+            last_run_at=row[6],
+            next_run_at=row[7],
+            last_result=row[8],
             probe_roots=row[9] or "",
         )
 
@@ -166,19 +173,31 @@ class ScheduleStore:
             ).fetchall()
         return [
             ScheduleConfig(
-                name=r[0], enabled=bool(r[1]), kind=r[2],
-                interval_minutes=r[3], daily_hhmm=r[4], day_of_week=r[5],
-                last_run_at=r[6], next_run_at=r[7], last_result=r[8],
+                name=r[0],
+                enabled=bool(r[1]),
+                kind=r[2],
+                interval_minutes=r[3],
+                daily_hhmm=r[4],
+                day_of_week=r[5],
+                last_run_at=r[6],
+                next_run_at=r[7],
+                last_result=r[8],
                 probe_roots=r[9] or "",
-            ) for r in rows
+            )
+            for r in rows
         ]
 
-    def update_schedule(self, name: str, *, enabled: bool | None = None,
-                         kind: str | None = None,
-                         interval_minutes: int | None = None,
-                         daily_hhmm: str | None = None,
-                         day_of_week: int | None = None,
-                         probe_roots: str | None = None) -> ScheduleConfig:
+    def update_schedule(
+        self,
+        name: str,
+        *,
+        enabled: bool | None = None,
+        kind: str | None = None,
+        interval_minutes: int | None = None,
+        daily_hhmm: str | None = None,
+        day_of_week: int | None = None,
+        probe_roots: str | None = None,
+    ) -> ScheduleConfig:
         with self._lock:
             current = self._conn.execute(
                 "SELECT enabled, kind, interval_minutes, daily_hhmm, day_of_week, probe_roots "
@@ -202,12 +221,12 @@ class ScheduleStore:
             )
         return self.get_schedule(name)  # type: ignore[return-value]
 
-    def record_run(self, name: str, *, last_run_at: float, next_run_at: float | None,
-                   last_result: str) -> None:
+    def record_run(
+        self, name: str, *, last_run_at: float, next_run_at: float | None, last_result: str
+    ) -> None:
         with self._lock:
             self._conn.execute(
-                "UPDATE schedule_config SET last_run_at=?, next_run_at=?, last_result=? "
-                "WHERE name=?",
+                "UPDATE schedule_config SET last_run_at=?, next_run_at=?, last_result=? WHERE name=?",
                 (last_run_at, next_run_at, last_result, name),
             )
 
@@ -215,9 +234,7 @@ class ScheduleStore:
 
     def get_rules(self) -> AutoQueueRules:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT payload_json FROM auto_queue_rules WHERE id = 1"
-            ).fetchone()
+            row = self._conn.execute("SELECT payload_json FROM auto_queue_rules WHERE id = 1").fetchone()
         if not row:
             return AutoQueueRules()
         try:

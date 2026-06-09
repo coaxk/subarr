@@ -7,17 +7,19 @@ Covers the findings from the adversarial audit:
     (Tautulli ?apikey=, Plex ?X-Plex-Token=) before storage (#157 served them)
   - /api/health (the one pre-auth endpoint) must not leak config
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 
 from subarr.migrate import run_migrations
 
 
 # ─── onboarding secret masking ──────────────────────────────────────
 
+
 def _store(tmp_path):
     from subarr.onboarding import OnboardingStore
+
     db = tmp_path / "subarr.db"
     run_migrations(db)
     return OnboardingStore(db)
@@ -25,11 +27,13 @@ def _store(tmp_path):
 
 def test_onboarding_to_dict_masks_secrets(tmp_path):
     s = _store(tmp_path)
-    s.update(progress_patch={
-        "sonarr_api_key": "REALKEY12345",
-        "plex_token": "PLEXTOKEN6789",
-        "sonarr_url": "http://sonarr:8989",
-    })
+    s.update(
+        progress_patch={
+            "sonarr_api_key": "REALKEY12345",
+            "plex_token": "PLEXTOKEN6789",
+            "sonarr_url": "http://sonarr:8989",
+        }
+    )
     state = s.get()
     masked = state.to_dict()["progress"]
     # secrets masked
@@ -64,8 +68,10 @@ def test_onboarding_state_route_masks(app_with_stub):
 
 # ─── task_health traceback redaction ────────────────────────────────
 
+
 def test_task_health_redacts_credential_query_params(tmp_path):
     from subarr.task_health import TaskHealthStore
+
     db = tmp_path / "subarr.db"
     run_migrations(db)
     th = TaskHealthStore(db)
@@ -84,6 +90,7 @@ def test_task_health_redacts_credential_query_params(tmp_path):
 
 
 # ─── /api/health no config leak ─────────────────────────────────────
+
 
 def test_health_endpoint_no_config_leak(app_with_stub):
     d = app_with_stub.get("/api/health").json()

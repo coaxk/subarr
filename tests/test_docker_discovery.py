@@ -36,22 +36,25 @@ def _discovery_with_mock(handler) -> DockerDiscovery:
 # ─── Static matching tests ─────────────────────────────────────────
 
 
-@pytest.mark.parametrize("image, name, expected", [
-    ("linuxserver/bazarr:1.5.6", "bazarr", "bazarr"),
-    ("linuxserver/sonarr:latest", "sonarr", "sonarr"),
-    ("ghcr.io/hotio/radarr", "radarr", "radarr"),
-    ("tautulli/tautulli", "tautulli", "tautulli"),
-    ("ghcr.io/coaxk/subarr-subgen:2026.05.3-r1", "subgen", "subgen"),
-    ("mccloud/subgen:latest", "subgen", "subgen"),
-    ("ollama/ollama", "ollama", "ollama"),
-    ("plexinc/pms-docker", "plex", "plex"),
-    ("jellyfin/jellyfin", "jellyfin", "jellyfin"),
-    # No match — random image
-    ("nginx:alpine", "nginx", None),
-    # No match — image is opaque but container is named the service.
-    # This catches private rebuilds with stripped tags.
-    ("ghcr.io/private/build:abc", "bazarr", "bazarr"),
-])
+@pytest.mark.parametrize(
+    "image, name, expected",
+    [
+        ("linuxserver/bazarr:1.5.6", "bazarr", "bazarr"),
+        ("linuxserver/sonarr:latest", "sonarr", "sonarr"),
+        ("ghcr.io/hotio/radarr", "radarr", "radarr"),
+        ("tautulli/tautulli", "tautulli", "tautulli"),
+        ("ghcr.io/coaxk/subarr-subgen:2026.05.3-r1", "subgen", "subgen"),
+        ("mccloud/subgen:latest", "subgen", "subgen"),
+        ("ollama/ollama", "ollama", "ollama"),
+        ("plexinc/pms-docker", "plex", "plex"),
+        ("jellyfin/jellyfin", "jellyfin", "jellyfin"),
+        # No match — random image
+        ("nginx:alpine", "nginx", None),
+        # No match — image is opaque but container is named the service.
+        # This catches private rebuilds with stripped tags.
+        ("ghcr.io/private/build:abc", "bazarr", "bazarr"),
+    ],
+)
 def test_service_matching(image: str, name: str, expected: str | None):
     container = {"Image": image, "Names": [f"/{name}"]}
     assert DockerDiscovery._match_service(container) == expected
@@ -62,7 +65,7 @@ def test_url_inference_shared_network_wins():
         service="bazarr",
         container_name="bazarr",
         networks=["media-stack", "host"],
-        published={6767: 6767},   # also published, but shared net wins
+        published={6767: 6767},  # also published, but shared net wins
         subarr_networks={"media-stack"},
     )
     assert url == "http://bazarr:6767"
@@ -73,8 +76,8 @@ def test_url_inference_falls_back_to_host_port():
     url, reason = DockerDiscovery._infer_url(
         service="bazarr",
         container_name="bazarr",
-        networks=["isolated-net"],     # no shared network with subarr
-        published={6767: 6768},        # mapped to host port 6768
+        networks=["isolated-net"],  # no shared network with subarr
+        published={6767: 6768},  # mapped to host port 6768
         subarr_networks={"safe-bridge"},
     )
     assert url == "http://host.docker.internal:6768"
@@ -123,42 +126,49 @@ async def test_discover_finds_multiple_services():
     """Realistic homelab: bazarr + sonarr + radarr + subgen all on the
     media-stack network. Subarr is also on media-stack. All four should
     discover with shared-network URLs."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/containers/json":
-            return httpx.Response(200, json=[
-                {
-                    "Id": "abc123" + "0" * 58,
-                    "Image": "linuxserver/bazarr:1.5.6",
-                    "Names": ["/bazarr"],
-                    "Ports": [{"PrivatePort": 6767, "PublicPort": 6767, "Type": "tcp"}],
-                    "NetworkSettings": {"Networks": {"media-stack": {}}},
-                    "Mounts": [{"Source": "/mnt/configs/bazarr", "Destination": "/config"}],
-                    "Labels": {"org.opencontainers.image.version": "1.5.6"},
-                },
-                {
-                    "Id": "def456" + "0" * 58,
-                    "Image": "linuxserver/sonarr:latest",
-                    "Names": ["/sonarr"],
-                    "Ports": [{"PrivatePort": 8989, "PublicPort": 8989, "Type": "tcp"}],
-                    "NetworkSettings": {"Networks": {"media-stack": {}}},
-                    "Mounts": [{"Source": "/mnt/configs/sonarr", "Destination": "/config"}],
-                    "Labels": {},
-                },
-                {
-                    "Id": "789abc" + "0" * 58,
-                    "Image": "nginx:alpine",  # not a service
-                    "Names": ["/nginx"],
-                    "Ports": [],
-                    "NetworkSettings": {"Networks": {"media-stack": {}}},
-                    "Mounts": [],
-                    "Labels": {},
-                },
-            ])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "Id": "abc123" + "0" * 58,
+                        "Image": "linuxserver/bazarr:1.5.6",
+                        "Names": ["/bazarr"],
+                        "Ports": [{"PrivatePort": 6767, "PublicPort": 6767, "Type": "tcp"}],
+                        "NetworkSettings": {"Networks": {"media-stack": {}}},
+                        "Mounts": [{"Source": "/mnt/configs/bazarr", "Destination": "/config"}],
+                        "Labels": {"org.opencontainers.image.version": "1.5.6"},
+                    },
+                    {
+                        "Id": "def456" + "0" * 58,
+                        "Image": "linuxserver/sonarr:latest",
+                        "Names": ["/sonarr"],
+                        "Ports": [{"PrivatePort": 8989, "PublicPort": 8989, "Type": "tcp"}],
+                        "NetworkSettings": {"Networks": {"media-stack": {}}},
+                        "Mounts": [{"Source": "/mnt/configs/sonarr", "Destination": "/config"}],
+                        "Labels": {},
+                    },
+                    {
+                        "Id": "789abc" + "0" * 58,
+                        "Image": "nginx:alpine",  # not a service
+                        "Names": ["/nginx"],
+                        "Ports": [],
+                        "NetworkSettings": {"Networks": {"media-stack": {}}},
+                        "Mounts": [],
+                        "Labels": {},
+                    },
+                ],
+            )
         # Subarr's own container lookup — return its network
         if req.url.path.startswith("/containers/") and req.url.path.endswith("/json"):
-            return httpx.Response(200, json={
-                "NetworkSettings": {"Networks": {"media-stack": {}}},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "NetworkSettings": {"Networks": {"media-stack": {}}},
+                },
+            )
         return httpx.Response(404)
 
     d = _discovery_with_mock(handler)
@@ -197,20 +207,29 @@ async def test_discover_returns_empty_on_docker_unreachable():
 async def test_discover_for_service_filters():
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/containers/json":
-            return httpx.Response(200, json=[
-                {
-                    "Id": "1" * 64, "Image": "linuxserver/bazarr",
-                    "Names": ["/bazarr"], "Ports": [], "Mounts": [],
-                    "NetworkSettings": {"Networks": {"x": {}}},
-                    "Labels": {},
-                },
-                {
-                    "Id": "2" * 64, "Image": "linuxserver/sonarr",
-                    "Names": ["/sonarr"], "Ports": [], "Mounts": [],
-                    "NetworkSettings": {"Networks": {"x": {}}},
-                    "Labels": {},
-                },
-            ])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "Id": "1" * 64,
+                        "Image": "linuxserver/bazarr",
+                        "Names": ["/bazarr"],
+                        "Ports": [],
+                        "Mounts": [],
+                        "NetworkSettings": {"Networks": {"x": {}}},
+                        "Labels": {},
+                    },
+                    {
+                        "Id": "2" * 64,
+                        "Image": "linuxserver/sonarr",
+                        "Names": ["/sonarr"],
+                        "Ports": [],
+                        "Mounts": [],
+                        "NetworkSettings": {"Networks": {"x": {}}},
+                        "Labels": {},
+                    },
+                ],
+            )
         if "/json" in req.url.path:
             return httpx.Response(200, json={"NetworkSettings": {"Networks": {}}})
         return httpx.Response(404)
@@ -231,18 +250,32 @@ async def test_discover_for_service_filters():
 async def test_multiple_instances_of_same_service():
     """Some users run multiple Sonarrs (4K + standard). Discovery
     should surface both — wizard decides which is which."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/containers/json":
-            return httpx.Response(200, json=[
-                {"Id": "1" * 64, "Image": "linuxserver/sonarr:latest",
-                 "Names": ["/sonarr"], "Ports": [],
-                 "NetworkSettings": {"Networks": {"a": {}}},
-                 "Mounts": [], "Labels": {}},
-                {"Id": "2" * 64, "Image": "linuxserver/sonarr:latest",
-                 "Names": ["/sonarr-4k"], "Ports": [],
-                 "NetworkSettings": {"Networks": {"a": {}}},
-                 "Mounts": [], "Labels": {}},
-            ])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "Id": "1" * 64,
+                        "Image": "linuxserver/sonarr:latest",
+                        "Names": ["/sonarr"],
+                        "Ports": [],
+                        "NetworkSettings": {"Networks": {"a": {}}},
+                        "Mounts": [],
+                        "Labels": {},
+                    },
+                    {
+                        "Id": "2" * 64,
+                        "Image": "linuxserver/sonarr:latest",
+                        "Names": ["/sonarr-4k"],
+                        "Ports": [],
+                        "NetworkSettings": {"Networks": {"a": {}}},
+                        "Mounts": [],
+                        "Labels": {},
+                    },
+                ],
+            )
         if "/json" in req.url.path:
             return httpx.Response(200, json={"NetworkSettings": {"Networks": {}}})
         return httpx.Response(404)
@@ -258,8 +291,10 @@ async def test_multiple_instances_of_same_service():
 
 def test_discovered_service_to_dict_includes_all_fields():
     s = DiscoveredService(
-        service="bazarr", container_name="bazarr",
-        image="linuxserver/bazarr:1.5.6", container_id="abc123def456",
+        service="bazarr",
+        container_name="bazarr",
+        image="linuxserver/bazarr:1.5.6",
+        container_id="abc123def456",
         networks=["media-stack"],
         published_ports={6767: 6767},
         inferred_url="http://bazarr:6767",
@@ -279,6 +314,5 @@ def test_discovered_service_to_dict_includes_all_fields():
 def test_service_catalogue_has_known_homelab_services():
     """Smoke check: the catalogue covers the common *arr stack we
     expect to discover in real setups."""
-    expected = {"bazarr", "sonarr", "radarr", "tautulli", "subgen",
-                "ollama", "plex", "jellyfin"}
+    expected = {"bazarr", "sonarr", "radarr", "tautulli", "subgen", "ollama", "plex", "jellyfin"}
     assert expected.issubset(SERVICE_CATALOGUE.keys())

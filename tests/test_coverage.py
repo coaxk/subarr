@@ -4,6 +4,7 @@ All upstreams stubbed via @pytest.mark.integrations_stub(...). Filesystem
 reconcile uses the same media_root fixture as other tests — we plant a
 .srt next to a video to verify the 'stale Bazarr view' detection.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -20,30 +21,40 @@ def _bazarr_handler(req: httpx.Request) -> httpx.Response:
     if path == "/api/badges":
         return httpx.Response(200, json={"episodes": 2, "movies": 0, "providers": 2, "status": 0})
     if path == "/api/episodes/wanted":
-        return httpx.Response(200, json={"total": 2, "data": [
-            {
-                "seriesTitle": "Foreign Drama",
-                "episode_number": "1x3",
-                "episodeTitle": "Pilot",
-                "missing_subtitles": [{"name": "English", "code2": "en", "code3": "eng", "forced": False, "hi": False}],
-                "sonarrSeriesId": 42,
-                "sonarrEpisodeId": 9001,
-                "sceneName": "Foreign.S01E03",
-                "tags": [],
-                "seriesType": "standard",
+        return httpx.Response(
+            200,
+            json={
+                "total": 2,
+                "data": [
+                    {
+                        "seriesTitle": "Foreign Drama",
+                        "episode_number": "1x3",
+                        "episodeTitle": "Pilot",
+                        "missing_subtitles": [
+                            {"name": "English", "code2": "en", "code3": "eng", "forced": False, "hi": False}
+                        ],
+                        "sonarrSeriesId": 42,
+                        "sonarrEpisodeId": 9001,
+                        "sceneName": "Foreign.S01E03",
+                        "tags": [],
+                        "seriesType": "standard",
+                    },
+                    {
+                        "seriesTitle": "Already Subbed",
+                        "episode_number": "1x1",
+                        "episodeTitle": "Pilot",
+                        "missing_subtitles": [
+                            {"name": "English", "code2": "en", "code3": "eng", "forced": False, "hi": False}
+                        ],
+                        "sonarrSeriesId": 43,
+                        "sonarrEpisodeId": 9002,
+                        "sceneName": "Already.S01E01",
+                        "tags": [],
+                        "seriesType": "standard",
+                    },
+                ],
             },
-            {
-                "seriesTitle": "Already Subbed",
-                "episode_number": "1x1",
-                "episodeTitle": "Pilot",
-                "missing_subtitles": [{"name": "English", "code2": "en", "code3": "eng", "forced": False, "hi": False}],
-                "sonarrSeriesId": 43,
-                "sonarrEpisodeId": 9002,
-                "sceneName": "Already.S01E01",
-                "tags": [],
-                "seriesType": "standard",
-            },
-        ]})
+        )
     if path == "/api/movies/wanted":
         return httpx.Response(200, json={"total": 0, "data": []})
     return httpx.Response(404)
@@ -54,20 +65,29 @@ def _sonarr_handler(req: httpx.Request) -> httpx.Response:
     if path == "/api/v3/system/status":
         return httpx.Response(200, json={"version": "4.0.17.2967", "appName": "Sonarr"})
     if path == "/api/v3/series":
-        return httpx.Response(200, json=[
-            {
-                "id": 42, "title": "Foreign Drama", "tvdbId": 12345,
-                "monitored": True, "path": "/data/Media/TV/Foreign Drama",
-                "originalLanguage": {"id": 11, "name": "Korean"},
-                "tags": [1],
-            },
-            {
-                "id": 43, "title": "Already Subbed", "tvdbId": 67890,
-                "monitored": True, "path": "/data/Media/TV/Already Subbed",
-                "originalLanguage": {"id": 1, "name": "English"},
-                "tags": [],
-            },
-        ])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 42,
+                    "title": "Foreign Drama",
+                    "tvdbId": 12345,
+                    "monitored": True,
+                    "path": "/data/Media/TV/Foreign Drama",
+                    "originalLanguage": {"id": 11, "name": "Korean"},
+                    "tags": [1],
+                },
+                {
+                    "id": 43,
+                    "title": "Already Subbed",
+                    "tvdbId": 67890,
+                    "monitored": True,
+                    "path": "/data/Media/TV/Already Subbed",
+                    "originalLanguage": {"id": 1, "name": "English"},
+                    "tags": [],
+                },
+            ],
+        )
     if path == "/api/v3/tag":
         return httpx.Response(200, json=[{"id": 1, "label": "premium"}])
     return httpx.Response(404)
@@ -92,20 +112,42 @@ def _tautulli_handler(req: httpx.Request) -> httpx.Response:
         # start_date must be YYYY-MM-DD (Tautulli silently 0-rows on epoch).
         sd = req.url.params.get("start_date") or ""
         if sd and not (len(sd) == 10 and sd[4] == "-" and sd[7] == "-"):
-            return httpx.Response(200, json={"response": {"result": "success",
-                "data": {"data": [], "recordsFiltered": 0, "recordsTotal": 0}}})
-        # Foreign Drama watched yesterday -> +1000
-        return httpx.Response(200, json={"response": {"result": "success", "data": {
-            "data": [
-                {
-                    "date": __import__("time").time() - 86400,
-                    "rating_key": 1, "parent_rating_key": 2, "grandparent_rating_key": 3,
-                    "grandparent_title": "Foreign Drama", "media_type": "episode",
-                    "stopped": 1, "duration": 100, "user": "u", "watched_status": 1,
+            return httpx.Response(
+                200,
+                json={
+                    "response": {
+                        "result": "success",
+                        "data": {"data": [], "recordsFiltered": 0, "recordsTotal": 0},
+                    }
                 },
-            ],
-            "recordsFiltered": 1, "recordsTotal": 1,
-        }}})
+            )
+        # Foreign Drama watched yesterday -> +1000
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "result": "success",
+                    "data": {
+                        "data": [
+                            {
+                                "date": __import__("time").time() - 86400,
+                                "rating_key": 1,
+                                "parent_rating_key": 2,
+                                "grandparent_rating_key": 3,
+                                "grandparent_title": "Foreign Drama",
+                                "media_type": "episode",
+                                "stopped": 1,
+                                "duration": 100,
+                                "user": "u",
+                                "watched_status": 1,
+                            },
+                        ],
+                        "recordsFiltered": 1,
+                        "recordsTotal": 1,
+                    },
+                }
+            },
+        )
     return httpx.Response(200, json={"response": {"result": "error", "message": "stub: unknown cmd"}})
 
 
@@ -130,6 +172,7 @@ def _stub_plex_online(app, version="1.40.0.0"):
 
     async def fake_status():
         return {"version": version, "machine_id": "test-machine"}
+
     p.status = fake_status
 
 
@@ -173,8 +216,12 @@ def _bazarr_500(req):
     return httpx.Response(500, text="kaboom")
 
 
-@pytest.mark.integrations_stub(bazarr_handler=_bazarr_500, sonarr_handler=_sonarr_handler,
-                                radarr_handler=_radarr_handler, tautulli_handler=_tautulli_handler)
+@pytest.mark.integrations_stub(
+    bazarr_handler=_bazarr_500,
+    sonarr_handler=_sonarr_handler,
+    radarr_handler=_radarr_handler,
+    tautulli_handler=_tautulli_handler,
+)
 def test_integrations_health_isolates_one_failure(app_with_stub):
     r = app_with_stub.get("/api/integrations/health")
     by_name = {it["name"]: it for it in r.json()["integrations"]}
@@ -255,8 +302,9 @@ def test_coverage_cache(app_with_stub, coverage_media_root):
     assert r1["generated_at"] == r2["generated_at"]
 
 
-@pytest.mark.integrations_stub(sonarr_handler=_sonarr_handler, radarr_handler=_radarr_handler,
-                                tautulli_handler=_tautulli_handler)  # bazarr unconfigured
+@pytest.mark.integrations_stub(
+    sonarr_handler=_sonarr_handler, radarr_handler=_radarr_handler, tautulli_handler=_tautulli_handler
+)  # bazarr unconfigured
 def test_coverage_handles_missing_bazarr(app_with_stub):
     r = app_with_stub.get("/api/coverage?fresh=true&hide_stale_disk=false")
     assert r.status_code == 200

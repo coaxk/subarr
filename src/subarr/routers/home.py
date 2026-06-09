@@ -33,8 +33,7 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/home/dashboard")
-async def home_dashboard(request: Request,
-                          fresh: bool = False) -> dict[str, Any]:
+async def home_dashboard(request: Request, fresh: bool = False) -> dict[str, Any]:
     """v1.1 ARCH: serves the cached dashboard snapshot instantly.
     Background task rebuilds every 30s. ?fresh=true forces a synchronous
     rebuild for callers that need it now."""
@@ -103,34 +102,43 @@ async def _stages_block(state) -> list[dict[str, Any]]:
         log.debug("stages: discovered probe error: %s", e)
         discovered_count = 0
         top, top_meta = "", ""
-    stages.append({
-        "id": "discovered", "label": "discovered",
-        "count": discovered_count, "delta": 0, "spark": [],
-        "top": top, "topMeta": top_meta, "live": False,
-    })
+    stages.append(
+        {
+            "id": "discovered",
+            "label": "discovered",
+            "count": discovered_count,
+            "delta": 0,
+            "spark": [],
+            "top": top,
+            "topMeta": top_meta,
+            "live": False,
+        }
+    )
 
     # 2. probing: active probe walks.
     try:
         walks = state.probe_walker.list_all()
         active_walks = [w for w in walks if w.status == "running"]
-        probing_count = sum(
-            max(0, (w.total_files or 0) - (w.processed or 0)) for w in active_walks
-        )
+        probing_count = sum(max(0, (w.total_files or 0) - (w.processed or 0)) for w in active_walks)
         live = bool(active_walks)
         current = active_walks[0] if active_walks else None
         top = "/" + current.root if current else ""
-        top_meta = (
-            f"walk {current.id[:8]}… · {current.processed}/{current.total_files}"
-            if current else ""
-        )
+        top_meta = f"walk {current.id[:8]}… · {current.processed}/{current.total_files}" if current else ""
     except Exception as e:
         log.debug("stages: probing error: %s", e)
         probing_count, live, top, top_meta = 0, False, "", ""
-    stages.append({
-        "id": "probing", "label": "probing",
-        "count": probing_count, "delta": 0, "spark": [],
-        "top": top, "topMeta": top_meta, "live": live,
-    })
+    stages.append(
+        {
+            "id": "probing",
+            "label": "probing",
+            "count": probing_count,
+            "delta": 0,
+            "spark": [],
+            "top": top,
+            "topMeta": top_meta,
+            "live": live,
+        }
+    )
 
     # 3. bazarr-wanted: count from the latest integrations-health cache.
     # Cheaper than re-hitting Bazarr — we just use what the integrations
@@ -144,20 +152,35 @@ async def _stages_block(state) -> list[dict[str, Any]]:
             wanted_count = len(eps) + len(movs)
     except Exception as e:
         log.debug("stages: bazarr-wanted error: %s", e)
-    stages.append({
-        "id": "wanted", "label": "bazarr-wanted",
-        "count": wanted_count, "delta": 0, "spark": [],
-        "top": "", "topMeta": "", "live": False,
-    })
+    stages.append(
+        {
+            "id": "wanted",
+            "label": "bazarr-wanted",
+            "count": wanted_count,
+            "delta": 0,
+            "spark": [],
+            "top": "",
+            "topMeta": "",
+            "live": False,
+        }
+    )
 
     # 4. scanning: subgen processing count (from /queue if available).
-    scanning_count, active_count, queued_count, live, top, top_meta, progress_pct = 0, 0, 0, False, "", "", None
+    scanning_count, active_count, queued_count, live, top, top_meta, progress_pct = (
+        0,
+        0,
+        0,
+        False,
+        "",
+        "",
+        None,
+    )
     try:
         caps = getattr(state, "subgen_caps", None)
         if caps and caps.has_queue:
             q = await state.subgen.queue()
             processing = q.get("processing") or []
-            active_count = len(processing)            # #97: in-flight (may be >1)
+            active_count = len(processing)  # #97: in-flight (may be >1)
             queued_count = len(q.get("queued") or [])  # #97: remaining in queue
             scanning_count = active_count + queued_count
             live = bool(processing)
@@ -172,26 +195,34 @@ async def _stages_block(state) -> list[dict[str, Any]]:
                 if docker_ops is not None:
                     try:
                         from .queue import match_progress
+
                         pm = await docker_ops.recent_progress(tail=80)
                         prog = match_progress(top, pm)
                         if prog and prog.get("pct") is not None:
                             progress_pct = int(prog["pct"])
                             eta = prog.get("eta")
-                            top_meta = (f"subgen · {progress_pct}%"
-                                        + (f" · ETA {eta}" if eta and eta != "?" else ""))
+                            top_meta = f"subgen · {progress_pct}%" + (
+                                f" · ETA {eta}" if eta and eta != "?" else ""
+                            )
                     except Exception as e:
                         log.debug("stages: scanning progress error: %s", e)
     except Exception as e:
         log.debug("stages: scanning error: %s", e)
-    stages.append({
-        "id": "scanning", "label": "transcribing",
-        "count": scanning_count,        # total — kept for the chrome-counts poller
-        "active": active_count,          # #97: currently transcribing/translating
-        "queued": queued_count,          # #97: remaining in queue
-        "progress": progress_pct,        # #97: live % of the current job (None when idle)
-        "delta": 0, "spark": [],
-        "top": top, "topMeta": top_meta, "live": live,
-    })
+    stages.append(
+        {
+            "id": "scanning",
+            "label": "transcribing",
+            "count": scanning_count,  # total — kept for the chrome-counts poller
+            "active": active_count,  # #97: currently transcribing/translating
+            "queued": queued_count,  # #97: remaining in queue
+            "progress": progress_pct,  # #97: live % of the current job (None when idle)
+            "delta": 0,
+            "spark": [],
+            "top": top,
+            "topMeta": top_meta,
+            "live": live,
+        }
+    )
 
     # 5. written-back: provenance entries that completed + got Bazarr
     # scan-disk fired. Show the most recent one as "top".
@@ -210,13 +241,20 @@ async def _stages_block(state) -> list[dict[str, Any]]:
             tail_kind = None
     except Exception as e:
         log.debug("stages: written-back error: %s", e)
-    stages.append({
-        "id": "written", "label": "written-back",
-        "count": written_count, "delta": 0, "spark": [],
-        "top": top, "topMeta": top_meta,
-        "live": False,
-        "tail": tail, "tailKind": tail_kind,
-    })
+    stages.append(
+        {
+            "id": "written",
+            "label": "written-back",
+            "count": written_count,
+            "delta": 0,
+            "spark": [],
+            "top": top,
+            "topMeta": top_meta,
+            "live": False,
+            "tail": tail,
+            "tailKind": tail_kind,
+        }
+    )
 
     return stages
 
@@ -258,17 +296,20 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
     # Add subgen tile from cached caps.
     caps = getattr(state, "subgen_caps", None)
     if caps is not None:
-        out.append({
-            "name": "subgen",
-            "status": "ok" if caps.reachable else "error",
-            "version": caps.version or "?",
-            "ping": 0,
-            "extra": (
-                "subarr-subgen" if caps.is_subarr_subgen
-                else ("vanilla — compat mode" if caps.reachable else "unreachable")
-            ),
-            "configured": True,
-        })
+        out.append(
+            {
+                "name": "subgen",
+                "status": "ok" if caps.reachable else "error",
+                "version": caps.version or "?",
+                "ping": 0,
+                "extra": (
+                    "subarr-subgen"
+                    if caps.is_subarr_subgen
+                    else ("vanilla — compat mode" if caps.reachable else "unreachable")
+                ),
+                "configured": True,
+            }
+        )
 
     # Add Ollama tile — it's a standalone client on app.state, not part
     # of the integrations bundle. Probe via /api/tags (cheap — lists
@@ -279,50 +320,54 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
             try:
                 tags = await ollama.tags()
                 model_count = len(tags.get("models") or [])
-                out.append({
-                    "name": "ollama",
-                    "status": "ok",
-                    "version": "",  # ollama /api/tags doesn't surface server version
-                    "ping": 0,
-                    "extra": f"{model_count} models · {ollama.model}",
-                    "configured": True,
-                })
+                out.append(
+                    {
+                        "name": "ollama",
+                        "status": "ok",
+                        "version": "",  # ollama /api/tags doesn't surface server version
+                        "ping": 0,
+                        "extra": f"{model_count} models · {ollama.model}",
+                        "configured": True,
+                    }
+                )
             except Exception as e:
                 log.debug("ollama probe error: %s", e)
-                out.append({
+                out.append(
+                    {
+                        "name": "ollama",
+                        "status": "error",
+                        "version": "",
+                        "ping": 0,
+                        "extra": "unreachable",
+                        "configured": True,
+                    }
+                )
+        else:
+            out.append(
+                {
                     "name": "ollama",
-                    "status": "error",
+                    "status": "muted",
                     "version": "",
                     "ping": 0,
-                    "extra": "unreachable",
-                    "configured": True,
-                })
-        else:
-            out.append({
-                "name": "ollama",
-                "status": "muted",
-                "version": "",
-                "ping": 0,
-                "extra": "not configured",
-                "configured": False,
-            })
+                    "extra": "not configured",
+                    "configured": False,
+                }
+            )
     return out
 
 
 def _to_tile(probe: dict[str, Any]) -> dict[str, Any]:
     """Map /api/integrations/health row shape → Home tile shape."""
     online = probe.get("online", False)
-    extra_count = (
-        probe.get("episodes_wanted") if probe.get("name") == "bazarr"
-        else None
-    )
+    extra_count = probe.get("episodes_wanted") if probe.get("name") == "bazarr" else None
     return {
         "name": probe.get("name"),
         "status": "ok" if online else ("error" if probe.get("configured") else "muted"),
         "version": probe.get("version") or "?",
         "ping": 0,  # we don't currently time per-probe RTT; cosmetic for now
         "extra": (
-            f"{extra_count} wanted" if extra_count is not None
+            f"{extra_count} wanted"
+            if extra_count is not None
             else probe.get("error") or ("configured" if probe.get("configured") else "not configured")
         ),
         "configured": probe.get("configured", False),
@@ -338,6 +383,7 @@ async def _gpu_block(state) -> dict[str, Any] | None:
     skips the HTTP round-trip."""
     try:
         from .gpu import gpu_status
+
         snap = await gpu_status()
         if not snap.get("online"):
             return None
@@ -369,18 +415,20 @@ def _next_run_block(state) -> dict[str, Any]:
         # Pick the most recently-configured schedule. v1.0 expects one
         # named 'default'; pre-existing user configs use whatever name
         # they set during onboarding.
-        cfg = next((s for s in schedules if s.enabled), None) or (
-            schedules[0] if schedules else None
-        )
+        cfg = next((s for s in schedules if s.enabled), None) or (schedules[0] if schedules else None)
     except Exception as e:
         log.debug("next-run block error: %s", e)
         cfg = None
     if cfg is None:
         return {
             "enabled": False,
-            "rule": None, "mode": None, "targets": [],
-            "next_run_at": None, "countdown_s": None,
-            "last_run_at": None, "last_result": None,
+            "rule": None,
+            "mode": None,
+            "targets": [],
+            "next_run_at": None,
+            "countdown_s": None,
+            "last_run_at": None,
+            "last_result": None,
         }
     try:
         rules = state.schedule.get_rules() or None
@@ -422,19 +470,22 @@ def _activity_block(state, limit: int = 10) -> list[dict[str, Any]]:
             kind = "queued"
         # We don't track 'failed' in provenance currently — that'd need
         # a status column on subs_generated. v1.1 task.
-        out.append({
-            "t": _fmt_clock(e.queued_at),
-            "rel": _fmt_rel(e.queued_at),
-            "kind": kind,
-            "path": "/" + e.canonical_path,
-            "meta": e.source or "",
-            "ledger_id": e.id,
-        })
+        out.append(
+            {
+                "t": _fmt_clock(e.queued_at),
+                "rel": _fmt_rel(e.queued_at),
+                "kind": kind,
+                "path": "/" + e.canonical_path,
+                "meta": e.source or "",
+                "ledger_id": e.id,
+            }
+        )
     return out
 
 
 def _fmt_clock(ts: float) -> str:
     from datetime import datetime
+
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 

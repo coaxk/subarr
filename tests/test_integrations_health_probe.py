@@ -3,6 +3,7 @@ results must always be retrieved so a Bazarr blip never leaves a dangling task
 ('Task exception was never retrieved' tracebacks). Regression for the
 fire-and-forget fix.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -12,8 +13,7 @@ from subarr.routers.integrations import _probe
 
 
 class _FakeBazarr:
-    def __init__(self, *, status_exc=None, badges_exc=None,
-                 status_val=None, badges_val=None):
+    def __init__(self, *, status_exc=None, badges_exc=None, status_val=None, badges_val=None):
         self._status_exc = status_exc
         self._badges_exc = badges_exc
         self._status_val = status_val or {"version": "1.5.6"}

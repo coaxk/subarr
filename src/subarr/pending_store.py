@@ -16,6 +16,7 @@ Two tables:
 Auto-expire: walks older than `EXPIRE_AFTER_S` (7 days) get garbage-
 collected on next walk creation. Prevents stale lists piling up.
 """
+
 from __future__ import annotations
 
 import json
@@ -112,8 +113,11 @@ class PendingStore:
                     (walk_id, json.dumps(it)),
                 )
         return PendingWalk(
-            id=walk_id, created_at=now, status=STATUS_PENDING,
-            considered=considered, decisions_total=len(items),
+            id=walk_id,
+            created_at=now,
+            status=STATUS_PENDING,
+            considered=considered,
+            decisions_total=len(items),
             approved_count=0,
             decisions=self._list_decisions(walk_id),
         )
@@ -122,8 +126,7 @@ class PendingStore:
         cutoff = time.time() - EXPIRE_AFTER_S
         with self._lock:
             self._conn.execute(
-                "UPDATE pending_walks SET status = ? "
-                "WHERE status = ? AND created_at < ?",
+                "UPDATE pending_walks SET status = ? WHERE status = ? AND created_at < ?",
                 (STATUS_EXPIRED, STATUS_PENDING, cutoff),
             )
 
@@ -139,8 +142,12 @@ class PendingStore:
         if not row:
             return None
         return PendingWalk(
-            id=row[0], created_at=row[1], status=row[2],
-            considered=row[3], decisions_total=row[4], approved_count=row[5],
+            id=row[0],
+            created_at=row[1],
+            status=row[2],
+            considered=row[3],
+            decisions_total=row[4],
+            approved_count=row[5],
             decisions=self._list_decisions(walk_id),
         )
 
@@ -160,9 +167,14 @@ class PendingStore:
                 ).fetchall()
         return [
             PendingWalk(
-                id=r[0], created_at=r[1], status=r[2],
-                considered=r[3], decisions_total=r[4], approved_count=r[5],
-            ) for r in rows
+                id=r[0],
+                created_at=r[1],
+                status=r[2],
+                considered=r[3],
+                decisions_total=r[4],
+                approved_count=r[5],
+            )
+            for r in rows
         ]
 
     def pending_count(self) -> int:
@@ -186,11 +198,15 @@ class PendingStore:
                 item = json.loads(r[2])
             except (ValueError, TypeError):
                 item = {}
-            out.append(PendingDecision(
-                id=r[0], walk_id=r[1], item=item,
-                approved=None if r[3] is None else bool(r[3]),
-                scan_id=r[4],
-            ))
+            out.append(
+                PendingDecision(
+                    id=r[0],
+                    walk_id=r[1],
+                    item=item,
+                    approved=None if r[3] is None else bool(r[3]),
+                    scan_id=r[4],
+                )
+            )
         return out
 
     # ── decide ────────────────────────────────────────────────────────

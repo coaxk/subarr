@@ -6,11 +6,10 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 
 def _migrated_db(tmp_path):
     from subarr.migrate import run_migrations
+
     db = tmp_path / "t.db"
     run_migrations(db)
     return db
@@ -18,6 +17,7 @@ def _migrated_db(tmp_path):
 
 def test_scan_store_count_since(tmp_path):
     from subarr.scan_store import ScanStore
+
     s = ScanStore(_migrated_db(tmp_path))
     now = time.time()
     # 3 recent scans
@@ -30,6 +30,7 @@ def test_scan_store_count_since(tmp_path):
 
 def test_error_store_record_and_counts(tmp_path):
     from subarr.error_store import ErrorStore
+
     es = ErrorStore(_migrated_db(tmp_path))
     now = time.time()
     es.record("SubgenUnavailable", when=now - 10)
@@ -42,8 +43,8 @@ def test_error_store_record_and_counts(tmp_path):
 
 def test_error_store_stores_only_class_name(tmp_path):
     """Anonymity: keys must be bare class identifiers (no messages/paths)."""
-    import re
     from subarr.error_store import ErrorStore
+
     es = ErrorStore(_migrated_db(tmp_path))
     es.record("ValueError")
     es.record("x" * 200)  # over-long is truncated, never a message
@@ -55,6 +56,7 @@ def test_error_store_stores_only_class_name(tmp_path):
 def test_error_store_record_never_raises(tmp_path):
     """record() on a closed/broken store must not propagate."""
     from subarr.error_store import ErrorStore
+
     es = ErrorStore(_migrated_db(tmp_path))
     es.close()
     es.record("SomethingError")  # should swallow, not raise

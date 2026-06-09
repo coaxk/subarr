@@ -46,10 +46,11 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ServiceConfigSpec:
     """How to find + parse one *arr service's API key."""
+
     service: str
     config_filename: str
-    parser: str                  # 'yaml-apikey' | 'xml-element' | 'ini-key'
-    env_var_name: str            # e.g. 'BAZARR_API_KEY' — used by source 1 + 2
+    parser: str  # 'yaml-apikey' | 'xml-element' | 'ini-key'
+    env_var_name: str  # e.g. 'BAZARR_API_KEY' — used by source 1 + 2
 
 
 SERVICE_CONFIGS: dict[str, ServiceConfigSpec] = {
@@ -86,9 +87,10 @@ SERVICE_CONFIGS: dict[str, ServiceConfigSpec] = {
 @dataclass
 class ExtractedKey:
     """One discovered API key + provenance info for the UI."""
+
     service: str
     api_key: str
-    source: str                  # human-readable: 'subarr env' / 'docker env' / 'config file' / '.env file'
+    source: str  # human-readable: 'subarr env' / 'docker env' / 'config file' / '.env file'
     source_detail: str | None = None  # e.g. file path or env var name
 
     @property
@@ -116,10 +118,11 @@ class ExtractResult:
     `key` is the chosen value (or None). `candidates` is all the
     sources that found a key — usually one, sometimes more if multiple
     sources disagree (UI shows the conflict)."""
+
     service: str
     key: ExtractedKey | None
     candidates: list[ExtractedKey]
-    conflict: bool             # true iff multiple candidates with different values
+    conflict: bool  # true iff multiple candidates with different values
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -149,7 +152,8 @@ def _from_subarr_env(spec: ServiceConfigSpec, env: dict[str, str]) -> ExtractedK
 
 
 def _from_container_env(
-    spec: ServiceConfigSpec, container_env: list[str] | None,
+    spec: ServiceConfigSpec,
+    container_env: list[str] | None,
 ) -> ExtractedKey | None:
     """Source 2: target container's resolved env vars.
 
@@ -162,7 +166,7 @@ def _from_container_env(
     prefix = spec.env_var_name + "="
     for entry in container_env:
         if entry.startswith(prefix):
-            val = entry[len(prefix):]
+            val = entry[len(prefix) :]
             if val:
                 return ExtractedKey(
                     service=spec.service,
@@ -174,7 +178,8 @@ def _from_container_env(
 
 
 def _from_config_file(
-    spec: ServiceConfigSpec, config_dir: Path | None,
+    spec: ServiceConfigSpec,
+    config_dir: Path | None,
 ) -> ExtractedKey | None:
     """Source 3: mounted *arr config file (the canonical source)."""
     if config_dir is None or not config_dir.is_dir():
@@ -195,7 +200,8 @@ def _from_config_file(
 
 
 def _from_env_file(
-    spec: ServiceConfigSpec, config_dir: Path | None,
+    spec: ServiceConfigSpec,
+    config_dir: Path | None,
 ) -> ExtractedKey | None:
     """Source 4: .env file in same dir as the mounted config."""
     if config_dir is None or not config_dir.is_dir():
@@ -240,8 +246,10 @@ def _parse_bazarr_yaml(path: Path, service: str) -> ExtractedKey | None:
         m = re.match(r"^\s*apikey\s*:\s*(['\"]?)([0-9a-fA-F]{16,})\1\s*$", line)
         if m:
             return ExtractedKey(
-                service=service, api_key=m.group(2),
-                source="config file", source_detail=str(path),
+                service=service,
+                api_key=m.group(2),
+                source="config file",
+                source_detail=str(path),
             )
     return None
 
@@ -255,8 +263,10 @@ def _parse_sonarr_radarr_xml(path: Path, service: str) -> ExtractedKey | None:
             key = elem.text.strip()
             if key:
                 return ExtractedKey(
-                    service=service, api_key=key,
-                    source="config file", source_detail=str(path),
+                    service=service,
+                    api_key=key,
+                    source="config file",
+                    source_detail=str(path),
                 )
     return None
 
@@ -270,8 +280,10 @@ def _parse_tautulli_ini(path: Path, service: str) -> ExtractedKey | None:
             val = cp.get(section, "api_key").strip()
             if val:
                 return ExtractedKey(
-                    service=service, api_key=val,
-                    source="config file", source_detail=str(path),
+                    service=service,
+                    api_key=val,
+                    source="config file",
+                    source_detail=str(path),
                 )
     return None
 
@@ -317,7 +329,10 @@ def extract_for_service(
     conflict = len(distinct_values) > 1
     chosen = _choose_authoritative(candidates)
     return ExtractResult(
-        service=service, key=chosen, candidates=candidates, conflict=conflict,
+        service=service,
+        key=chosen,
+        candidates=candidates,
+        conflict=conflict,
     )
 
 

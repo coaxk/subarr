@@ -27,11 +27,13 @@ We discover the right section id at runtime by listing /library/sections
 and matching the path against each section's <Location> entries. Cached
 per-process; if Plex sections change subarr restart picks them up.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import PurePosixPath
 from typing import Optional
+
 # defusedxml hardens against billion-laughs / external-entity attacks.
 # Plex is a trusted local service but a compromised Plex container
 # should not be a foothold into subarr — defusedxml is a 1-line swap.
@@ -50,8 +52,14 @@ class PlexClient:
 
     name = "plex"
 
-    def __init__(self, base_url: str, token: str, default_section: str = "all",
-                 path_prefix: str = "", media_root: str = ""):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        default_section: str = "all",
+        path_prefix: str = "",
+        media_root: str = "",
+    ):
         self._base_url = (base_url or "").rstrip("/")
         self._token = token or ""
         self._default_section = default_section or "all"
@@ -81,7 +89,7 @@ class PlexClient:
         if not self._path_prefix or not self._media_root:
             return subarr_path
         if subarr_path.startswith(self._media_root):
-            return self._path_prefix + subarr_path[len(self._media_root):]
+            return self._path_prefix + subarr_path[len(self._media_root) :]
         # Unknown root — return as-is and let Plex's section matcher decide.
         return subarr_path
 
@@ -96,9 +104,7 @@ class PlexClient:
         except httpx.HTTPError as e:
             raise IntegrationError(f"plex sections: {e}") from e
         if r.status_code >= 400:
-            raise IntegrationError(
-                f"plex sections HTTP {r.status_code}: {r.text[:200]}"
-            )
+            raise IntegrationError(f"plex sections HTTP {r.status_code}: {r.text[:200]}")
         try:
             root = ET.fromstring(r.text)
         except ET.ParseError as e:
@@ -109,8 +115,7 @@ class PlexClient:
             if not sid:
                 continue
             title = directory.get("title") or ""
-            paths = [loc.get("path") for loc in directory.iter("Location")
-                     if loc.get("path")]
+            paths = [loc.get("path") for loc in directory.iter("Location") if loc.get("path")]
             out.append({"id": sid, "title": title, "paths": paths})
         return out
 
@@ -161,11 +166,8 @@ class PlexClient:
         except httpx.HTTPError as e:
             raise IntegrationError(f"plex full_scan: {e}") from e
         if r.status_code >= 400:
-            raise IntegrationError(
-                f"plex full_scan HTTP {r.status_code}: {r.text[:200]}"
-            )
-        return {"triggered": True, "section": sid, "scope": "full",
-                "plex_status": r.status_code}
+            raise IntegrationError(f"plex full_scan HTTP {r.status_code}: {r.text[:200]}")
+        return {"triggered": True, "section": sid, "scope": "full", "plex_status": r.status_code}
 
     async def partial_scan(self, subarr_file_path: str) -> dict:
         """Fire a path-scoped refresh covering the directory containing
@@ -202,12 +204,15 @@ class PlexClient:
         except httpx.HTTPError as e:
             raise IntegrationError(f"plex partial_scan: {e}") from e
         if r.status_code >= 400:
-            raise IntegrationError(
-                f"plex partial_scan HTTP {r.status_code}: {r.text[:200]}"
-            )
+            raise IntegrationError(f"plex partial_scan HTTP {r.status_code}: {r.text[:200]}")
         log.info("plex partial_scan: section=%s path=%s", sid, scan_dir)
-        return {"triggered": True, "section": sid, "scope": "partial",
-                "plex_path": scan_dir, "plex_status": r.status_code}
+        return {
+            "triggered": True,
+            "section": sid,
+            "scope": "partial",
+            "plex_path": scan_dir,
+            "plex_status": r.status_code,
+        }
 
     async def status(self) -> dict:
         """Liveness + version probe for /api/integrations/health. Hits Plex
@@ -244,8 +249,7 @@ class PlexClient:
         idx: dict[str, str] = {}
         root = await self._get_xml("/library/sections")
         show_section_ids = [
-            d.get("key") for d in root.iter("Directory")
-            if d.get("type") == "show" and d.get("key")
+            d.get("key") for d in root.iter("Directory") if d.get("type") == "show" and d.get("key")
         ]
         for sid in show_section_ids:
             try:
@@ -304,9 +308,7 @@ class PlexClient:
                     except IntegrationError as e:
                         log.debug("plex audio hint failed for %r: %s", tl, e)
                 self._audio_hint_cache[tl] = lang
-        return {tl: self._audio_hint_cache[tl]
-                for tl in wanted
-                if self._audio_hint_cache.get(tl)}
+        return {tl: self._audio_hint_cache[tl] for tl in wanted if self._audio_hint_cache.get(tl)}
 
     async def aclose(self) -> None:
         # Stateless — each call opens its own client. Nothing to close.

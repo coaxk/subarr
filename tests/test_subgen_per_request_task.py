@@ -10,6 +10,7 @@ through the same path-based channel). subarr must:
      entirely (and rejecting unknown values) so older subgen keeps its
      env-locked behaviour.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -21,7 +22,8 @@ from subarr.subgen_client import SubgenClient
 def _make_client(mock_transport: httpx.MockTransport) -> SubgenClient:
     c = SubgenClient(base_url="http://fake-subgen:9000")
     c._client = httpx.AsyncClient(
-        base_url="http://fake-subgen:9000", transport=mock_transport,
+        base_url="http://fake-subgen:9000",
+        transport=mock_transport,
     )
     return c
 
@@ -32,10 +34,14 @@ async def test_capability_detected_from_queue_block():
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "Subgen 2026.05.3 (docker)"})
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "capabilities": {"per_request_task": True},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "capabilities": {"per_request_task": True},
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))
@@ -52,10 +58,14 @@ async def test_capability_absent_defaults_false():
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "Subgen 2026.05.3 (docker)"})
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "capabilities": {"per_request_kwargs": True},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "capabilities": {"per_request_kwargs": True},
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))
@@ -71,10 +81,14 @@ async def test_asr_arena_capability_detected_from_queue_block():
         if request.url.path == "/status":
             return httpx.Response(200, json={"version": "Subgen 2026.05.3 (docker)"})
         if request.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [],
-                "capabilities": {"asr_arena": True},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "capabilities": {"asr_arena": True},
+                },
+            )
         return httpx.Response(404)
 
     c = _make_client(httpx.MockTransport(handler))

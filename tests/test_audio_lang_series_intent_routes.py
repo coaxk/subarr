@@ -8,6 +8,7 @@ use BARE paths (`/series-intent`). They previously repeated the prefix
 intended path. These tests lock the route in place via both the live router
 table and a real request through the app.
 """
+
 from __future__ import annotations
 
 SINGLE = "/api/audio-lang/series-intent"
@@ -20,8 +21,7 @@ def _intent_methods(app):
     by_method: dict[str, set[str]] = {}
     for r in app.routes:
         name = getattr(r, "name", "")
-        if name in {"upsert_series_intent", "list_series_intents",
-                    "delete_series_intent"}:
+        if name in {"upsert_series_intent", "list_series_intents", "delete_series_intent"}:
             for m in getattr(r, "methods", set()):
                 by_method.setdefault(m, set()).add(r.path)
     return by_method
@@ -60,6 +60,7 @@ def test_put_then_get_roundtrips_at_single_path(app_with_stub):
 class _RefreshSpy:
     """Stand-in for coverage_cache that records request_refresh calls and
     serves an empty snapshot."""
+
     def __init__(self):
         self.refresh_calls = 0
 
@@ -79,8 +80,7 @@ def test_put_series_intent_kicks_coverage_refresh(app_with_stub):
 
 
 def test_delete_series_intent_kicks_coverage_refresh(app_with_stub):
-    app_with_stub.app.state.audio_lang.set_series_intent(
-        series_prefix="TV/Cheers/", lang_code="eng")
+    app_with_stub.app.state.audio_lang.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
     spy = _RefreshSpy()
     app_with_stub.app.state.coverage_cache = spy
     r = app_with_stub.delete(SINGLE, params={"series_prefix": "TV/Cheers/"})
@@ -114,11 +114,13 @@ def test_get_series_intent_enriches_count_and_media_type(app_with_stub):
     store = app_with_stub.app.state.audio_lang
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
     store.set_series_intent(series_prefix="Movies/Parasite (2019)/", lang_code="kor")
-    app_with_stub.app.state.coverage_cache = _SnapCache([
-        {"file_canonical_path": "TV/Cheers/Season 1/e1.mkv", "media_type": "episode"},
-        {"file_canonical_path": "TV/Cheers/Season 1/e2.mkv", "media_type": "episode"},
-        {"file_canonical_path": "Movies/Parasite (2019)/Parasite.mkv", "media_type": "movie"},
-    ])
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [
+            {"file_canonical_path": "TV/Cheers/Season 1/e1.mkv", "media_type": "episode"},
+            {"file_canonical_path": "TV/Cheers/Season 1/e2.mkv", "media_type": "episode"},
+            {"file_canonical_path": "Movies/Parasite (2019)/Parasite.mkv", "media_type": "movie"},
+        ]
+    )
     body = app_with_stub.get(SINGLE).json()
     by_prefix = {it["series_prefix"]: it for it in body["items"]}
     assert by_prefix["TV/Cheers/"]["covered_count"] == 2
@@ -128,8 +130,7 @@ def test_get_series_intent_enriches_count_and_media_type(app_with_stub):
 
 
 def test_get_series_intent_without_snapshot_returns_rules(app_with_stub):
-    app_with_stub.app.state.audio_lang.set_series_intent(
-        series_prefix="TV/Cheers/", lang_code="eng")
+    app_with_stub.app.state.audio_lang.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
     app_with_stub.app.state.coverage_cache = _RefreshSpy()  # get_cached() -> None
     body = app_with_stub.get(SINGLE).json()
     assert body["items"][0]["series_prefix"] == "TV/Cheers/"

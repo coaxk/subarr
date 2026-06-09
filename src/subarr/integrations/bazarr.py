@@ -9,11 +9,13 @@ Endpoints used:
 Writes (POST /api/system/tasks, POST /api/episodes/subtitles) deferred to
 v1.1 batch 2 when the queue-back-to-Bazarr flow lands.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from ..config import settings
+from . import IntegrationError
 from .base import IntegrationClient
 
 
@@ -42,8 +44,9 @@ class BazarrClient(IntegrationClient):
         d = await self._get("/api/movies/wanted")
         return d.get("data", []) if isinstance(d, dict) else []
 
-    async def episodes_history(self, sonarr_episode_id: int | None = None,
-                                length: int = 50) -> list[dict[str, Any]]:
+    async def episodes_history(
+        self, sonarr_episode_id: int | None = None, length: int = 50
+    ) -> list[dict[str, Any]]:
         """Per-episode subtitle download history (provider, score, timestamp).
         If sonarr_episode_id supplied, Bazarr returns rows for that episode."""
         params: dict[str, Any] = {"length": length}
@@ -52,8 +55,9 @@ class BazarrClient(IntegrationClient):
         d = await self._get("/api/episodes/history", params=params)
         return d.get("data", []) if isinstance(d, dict) else []
 
-    async def movies_history(self, radarr_movie_id: int | None = None,
-                              length: int = 50) -> list[dict[str, Any]]:
+    async def movies_history(
+        self, radarr_movie_id: int | None = None, length: int = 50
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"length": length}
         if radarr_movie_id is not None:
             params["radarrId"] = radarr_movie_id
@@ -61,8 +65,14 @@ class BazarrClient(IntegrationClient):
         return d.get("data", []) if isinstance(d, dict) else []
 
     async def blacklist_episode(
-        self, *, series_id: int, episode_id: int, provider: str,
-        subs_id: str, language: str, subtitles_path: str,
+        self,
+        *,
+        series_id: int,
+        episode_id: int,
+        provider: str,
+        subs_id: str,
+        language: str,
+        subtitles_path: str,
     ) -> dict[str, Any] | None:
         """v1.1-N: POST /api/episodes/blacklist — mark a downloaded sub
         as bad so Bazarr stops refetching the same broken release. Called
@@ -88,8 +98,13 @@ class BazarrClient(IntegrationClient):
             return None
 
     async def blacklist_movie(
-        self, *, radarr_id: int, provider: str, subs_id: str,
-        language: str, subtitles_path: str,
+        self,
+        *,
+        radarr_id: int,
+        provider: str,
+        subs_id: str,
+        language: str,
+        subtitles_path: str,
     ) -> dict[str, Any] | None:
         """Movie counterpart."""
         data = {
@@ -118,19 +133,10 @@ class BazarrClient(IntegrationClient):
         d = await self._get("/api/providers")
         return d.get("data", []) if isinstance(d, dict) else []
 
-    async def episodes_history(self, *, length: int = 1000) -> list[dict[str, Any]]:
-        """v1.1-J: Pull subtitle download history. Each row carries
-        provider, score, action, language, blacklisted, dont_matches
-        — the raw material for the success leaderboard."""
-        d = await self._get("/api/episodes/history", params={"length": length})
-        return d.get("data", []) if isinstance(d, dict) else []
-
-    async def movies_history(self, *, length: int = 1000) -> list[dict[str, Any]]:
-        d = await self._get("/api/movies/history", params={"length": length})
-        return d.get("data", []) if isinstance(d, dict) else []
-
     async def candidate_episode_subtitles(
-        self, episode_id: int, language: str = "en",
+        self,
+        episode_id: int,
+        language: str = "en",
     ) -> list[dict[str, Any]]:
         """v1.1-F: GET /api/providers/episodes?episodeid=&language= — asks
         Bazarr's enabled providers for candidate releases right now.
@@ -150,7 +156,9 @@ class BazarrClient(IntegrationClient):
         return d or []
 
     async def candidate_movie_subtitles(
-        self, radarr_id: int, language: str = "en",
+        self,
+        radarr_id: int,
+        language: str = "en",
     ) -> list[dict[str, Any]]:
         """Movie counterpart of candidate_episode_subtitles."""
         d = await self._get(
@@ -162,8 +170,15 @@ class BazarrClient(IntegrationClient):
         return d or []
 
     async def download_episode_candidate(
-        self, *, episode_id: int, language: str, provider: str,
-        subtitles_id: str, score: int, forced: bool = False, hi: bool = False,
+        self,
+        *,
+        episode_id: int,
+        language: str,
+        provider: str,
+        subtitles_id: str,
+        score: int,
+        forced: bool = False,
+        hi: bool = False,
     ) -> dict[str, Any] | None:
         """v1.1-F: POST /api/providers/episodes — tells Bazarr to fetch
         a specific candidate from the candidate list above. Closes the
@@ -190,8 +205,15 @@ class BazarrClient(IntegrationClient):
             return None
 
     async def download_movie_candidate(
-        self, *, movie_id: int, language: str, provider: str,
-        subtitles_id: str, score: int, forced: bool = False, hi: bool = False,
+        self,
+        *,
+        movie_id: int,
+        language: str,
+        provider: str,
+        subtitles_id: str,
+        score: int,
+        forced: bool = False,
+        hi: bool = False,
     ) -> dict[str, Any] | None:
         """Movie mirror of download_episode_candidate: POST
         /api/providers/movies (form field `radarrid`, matching
@@ -218,8 +240,14 @@ class BazarrClient(IntegrationClient):
             return None
 
     async def upload_episode_subtitle(
-        self, *, series_id: int, episode_id: int, language: str,
-        file_path: str, hi: bool = False, forced: bool = False,
+        self,
+        *,
+        series_id: int,
+        episode_id: int,
+        language: str,
+        file_path: str,
+        hi: bool = False,
+        forced: bool = False,
     ) -> dict[str, Any] | None:
         """v1.1-G: POST /api/episodes/subtitles — multipart upload of a
         single .srt file. Closes the write-back loop with Bazarr directly
@@ -246,22 +274,27 @@ class BazarrClient(IntegrationClient):
             }
             try:
                 r = await self._client.post(
-                    "/api/episodes/subtitles", data=data, files=files,
+                    "/api/episodes/subtitles",
+                    data=data,
+                    files=files,
                 )
             except Exception as e:
                 raise IntegrationError(f"bazarr upload: {e}") from e
         if r.status_code >= 400:
-            raise IntegrationError(
-                f"bazarr upload HTTP {r.status_code}: {r.text[:300]}"
-            )
+            raise IntegrationError(f"bazarr upload HTTP {r.status_code}: {r.text[:300]}")
         try:
             return r.json()
         except ValueError:
             return None
 
     async def upload_movie_subtitle(
-        self, *, radarr_id: int, language: str, file_path: str,
-        hi: bool = False, forced: bool = False,
+        self,
+        *,
+        radarr_id: int,
+        language: str,
+        file_path: str,
+        hi: bool = False,
+        forced: bool = False,
     ) -> dict[str, Any] | None:
         """Movie counterpart of upload_episode_subtitle."""
         if not self._configured:
@@ -276,14 +309,14 @@ class BazarrClient(IntegrationClient):
             }
             try:
                 r = await self._client.post(
-                    "/api/movies/subtitles", data=data, files=files,
+                    "/api/movies/subtitles",
+                    data=data,
+                    files=files,
                 )
             except Exception as e:
                 raise IntegrationError(f"bazarr upload: {e}") from e
         if r.status_code >= 400:
-            raise IntegrationError(
-                f"bazarr upload HTTP {r.status_code}: {r.text[:300]}"
-            )
+            raise IntegrationError(f"bazarr upload HTTP {r.status_code}: {r.text[:300]}")
         try:
             return r.json()
         except ValueError:

@@ -1,4 +1,5 @@
 """Shared fixtures: env isolation + module reload + module-level subgen stub."""
+
 from __future__ import annotations
 
 import importlib
@@ -13,7 +14,7 @@ def _make_compose(p: Path) -> None:
         "services:\n"
         "  subgen:\n"
         "    environment:\n"
-        "      SUBGEN_KWARGS: '{\"patience\": 1.5, \"length_penalty\": 0.85}'\n"
+        '      SUBGEN_KWARGS: \'{"patience": 1.5, "length_penalty": 0.85}\'\n'
         "      SUBGEN_KWARGS_LANG_JA: '{\"patience\": 1.0}'\n"
     )
 
@@ -55,12 +56,23 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
 
     from subarr import app as app_mod
     from subarr import (
-        auto_queue, completion_watcher, config, coverage_engine, docker_client,
-        enrichment as enrichment_mod, media_probe, paths,
+        auto_queue,
+        completion_watcher,
+        config,
+        coverage_engine,
+        docker_client,
+        enrichment as enrichment_mod,
+        media_probe,
+        paths,
         pending_store as pending_store_mod,
-        probe_store as probe_store_mod, probe_walker as probe_walker_mod,
-        provenance as prov_mod, scan_runner, scan_store,
-        schedule_store as sched_store_mod, scheduler as scheduler_mod, subgen_client,
+        probe_store as probe_store_mod,
+        probe_walker as probe_walker_mod,
+        provenance as prov_mod,
+        scan_runner,
+        scan_store,
+        schedule_store as sched_store_mod,
+        scheduler as scheduler_mod,
+        subgen_client,
     )
     from subarr.integrations import bazarr as iz_bazarr
     from subarr.integrations import base as iz_base
@@ -69,24 +81,63 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     from subarr.integrations import sonarr as iz_sonarr
     from subarr.integrations import tautulli as iz_tautulli
     from subarr.routers import (
-        admin, bazarr_sync, browse, coverage, coverage_actions,
+        admin,
+        bazarr_sync,
+        browse,
+        coverage,
+        coverage_actions,
         enrichment as r_enrichment,
-        gpu, integrations as r_integrations,
-        logs, mode, probe as r_probe,
-        provenance as r_provenance, queue, scan,
+        gpu,
+        integrations as r_integrations,
+        logs,
+        mode,
+        probe as r_probe,
+        provenance as r_provenance,
+        queue,
+        scan,
         schedule as r_schedule,
     )
 
     for m in [
-        config, paths, scan_store, subgen_client, scan_runner, docker_client,
-        prov_mod, completion_watcher, sched_store_mod, auto_queue,
-        pending_store_mod, scheduler_mod,
-        media_probe, probe_store_mod, probe_walker_mod,
-        iz_base, iz_bazarr, iz_sonarr, iz_radarr, iz_tautulli, iz_ollama,
-        enrichment_mod, coverage_engine,
-        browse, mode, queue, scan, gpu, logs, admin, r_integrations,
-        coverage, coverage_actions, r_provenance, r_schedule, r_enrichment,
-        r_probe, bazarr_sync, app_mod,
+        config,
+        paths,
+        scan_store,
+        subgen_client,
+        scan_runner,
+        docker_client,
+        prov_mod,
+        completion_watcher,
+        sched_store_mod,
+        auto_queue,
+        pending_store_mod,
+        scheduler_mod,
+        media_probe,
+        probe_store_mod,
+        probe_walker_mod,
+        iz_base,
+        iz_bazarr,
+        iz_sonarr,
+        iz_radarr,
+        iz_tautulli,
+        iz_ollama,
+        enrichment_mod,
+        coverage_engine,
+        browse,
+        mode,
+        queue,
+        scan,
+        gpu,
+        logs,
+        admin,
+        r_integrations,
+        coverage,
+        coverage_actions,
+        r_provenance,
+        r_schedule,
+        r_enrichment,
+        r_probe,
+        bazarr_sync,
+        app_mod,
     ]:
         importlib.reload(m)
 
@@ -112,20 +163,38 @@ def app_with_stub(subarr_env, request):
         if req.url.path == "/status":
             # Required for the capability probe — without it, subgen looks
             # unreachable and the scan-runner compat-mode gate blocks scans.
-            return httpx.Response(200, json={
-                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
+                },
+            )
         if req.url.path == "/queue":
-            return httpx.Response(200, json={
-                "queued": [], "processing": [], "queued_count": 0,
-                "processing_count": 0, "idle": True, "version": "test",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "queued_count": 0,
+                    "processing_count": 0,
+                    "idle": True,
+                    "version": "test",
+                },
+            )
         if req.url.path == "/batch":
-            return httpx.Response(200, json={
-                "walked": 1, "queued": 1, "skipped": 0, "already_in_queue": 0,
-                "no_audio": 0, "pending_language_detect": 0,
-                "path": req.url.params.get("directory"), "reverse": False,
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "walked": 1,
+                    "queued": 1,
+                    "skipped": 0,
+                    "already_in_queue": 0,
+                    "no_audio": 0,
+                    "pending_language_detect": 0,
+                    "path": req.url.params.get("directory"),
+                    "reverse": False,
+                },
+            )
         return httpx.Response(404, json={"detail": "stub: unhandled"})
 
     real_handler = handler or default_handler
@@ -139,6 +208,7 @@ def app_with_stub(subarr_env, request):
 
     # TestClient triggers lifespan; intercept the subgen client + docker ops.
     import subarr.app as app_mod
+
     app_mod.SubgenClient = _StubClient  # type: ignore[attr-defined]
 
     docker_marker = request.node.get_closest_marker("docker_stub")
@@ -184,7 +254,8 @@ def _make_ollama_stub(handler=None):
             self._vision_model_resolved = "qwen2.5vl:7b"  # pretend installed
             self._configured = True
             self._client = httpx.AsyncClient(
-                base_url="http://ollama.test:11434", transport=transport,
+                base_url="http://ollama.test:11434",
+                transport=transport,
             )
 
     return _StubOllama
@@ -229,20 +300,29 @@ def _make_integration_bundle(
 
     class _StubBundle(IntegrationBundle):
         def __init__(self):
-            self.bazarr = _wrap(BazarrClient, bazarr_handler,
-                                "http://bazarr.test:6767",
-                                {"X-API-KEY": "bz-test-key"} if bazarr_handler else None)
-            self.sonarr = _wrap(SonarrClient, sonarr_handler,
-                                "http://sonarr.test:8989",
-                                {"X-Api-Key": "sn-test-key"} if sonarr_handler else None)
-            self.radarr = _wrap(RadarrClient, radarr_handler,
-                                "http://radarr.test:7878",
-                                {"X-Api-Key": "rd-test-key"} if radarr_handler else None)
-            self.tautulli = _wrap(TautulliClient, tautulli_handler,
-                                  "http://tautulli.test:8181")
+            self.bazarr = _wrap(
+                BazarrClient,
+                bazarr_handler,
+                "http://bazarr.test:6767",
+                {"X-API-KEY": "bz-test-key"} if bazarr_handler else None,
+            )
+            self.sonarr = _wrap(
+                SonarrClient,
+                sonarr_handler,
+                "http://sonarr.test:8989",
+                {"X-Api-Key": "sn-test-key"} if sonarr_handler else None,
+            )
+            self.radarr = _wrap(
+                RadarrClient,
+                radarr_handler,
+                "http://radarr.test:7878",
+                {"X-Api-Key": "rd-test-key"} if radarr_handler else None,
+            )
+            self.tautulli = _wrap(TautulliClient, tautulli_handler, "http://tautulli.test:8181")
             # v1.1.1: tests don't exercise Plex; stub with an unconfigured
             # client so .is_configured() returns False and code paths skip.
             from subarr.integrations.plex import PlexClient
+
             self.plex = PlexClient(base_url="", token="", default_section="all")
 
     return _StubBundle
@@ -286,7 +366,7 @@ def _make_docker_stub(
         async def stream_subgen_logs(self, tail: int = 200):
             if container_unavailable:
                 raise DockerUnavailable("stub: docker unavailable")
-            for line in (log_lines or ["INFO:root:line one", "INFO:root:line two"]):
+            for line in log_lines or ["INFO:root:line one", "INFO:root:line two"]:
                 yield line
 
         async def recent_progress(self, tail: int = 80) -> dict[str, dict]:

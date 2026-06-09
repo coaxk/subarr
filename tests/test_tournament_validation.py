@@ -9,11 +9,13 @@ This validates that the JUDGES detect what they're supposed to — the
 prerequisite for trusting a real (Tier B) tournament verdict. No subgen, no
 ground truth: synthetic speech_ranges stand in for the VAD pass.
 """
+
 from __future__ import annotations
 
 
 def _t():
     from subarr import tournament as t
+
     return t
 
 
@@ -35,10 +37,12 @@ def test_clean_beats_hallucination_over_silence():
         "2\n00:00:02,000 --> 00:00:04,000\nThank you for watching.\n\n"
         "3\n00:00:04,000 --> 00:00:06,000\nSubtitles by amara.org\n"
     )
-    res = t.run_tournament([
-        t.Entrant(label="halluc", srt_text=halluc, speech_ranges=[(0.0, 0.5)]),
-        t.Entrant(label="clean", srt_text=CLEAN, speech_ranges=SPEECH_FULL),
-    ])
+    res = t.run_tournament(
+        [
+            t.Entrant(label="halluc", srt_text=halluc, speech_ranges=[(0.0, 0.5)]),
+            t.Entrant(label="clean", srt_text=CLEAN, speech_ranges=SPEECH_FULL),
+        ]
+    )
     assert res.winner_label == "clean"
     halluc_card = next(s for s in res.scorecards if s.entrant_label == "halluc")
     clean_card = next(s for s in res.scorecards if s.entrant_label == "clean")
@@ -49,11 +53,13 @@ def test_clean_beats_looping_decoder():
     t = _t()
     loop = ""
     for i in range(1, 7):
-        loop += f"{i}\n00:00:0{i-1},000 --> 00:00:0{i},000\nyou\n\n"
-    res = t.run_tournament([
-        t.Entrant(label="loop", srt_text=loop, speech_ranges=SPEECH_FULL),
-        t.Entrant(label="clean", srt_text=CLEAN, speech_ranges=SPEECH_FULL),
-    ])
+        loop += f"{i}\n00:00:0{i - 1},000 --> 00:00:0{i},000\nyou\n\n"
+    res = t.run_tournament(
+        [
+            t.Entrant(label="loop", srt_text=loop, speech_ranges=SPEECH_FULL),
+            t.Entrant(label="clean", srt_text=CLEAN, speech_ranges=SPEECH_FULL),
+        ]
+    )
     assert res.winner_label == "clean"
 
 
@@ -90,9 +96,11 @@ def test_accurate_fast_dialogue_is_not_floored_by_readability():
     hallucination, looping, or canned text must score as a GOOD result even
     when its cues flash fast. It must not be floored."""
     t = _t()
-    sc = t.run_tournament([
-        t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
-    ]).scorecards[0]
+    sc = t.run_tournament(
+        [
+            t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
+        ]
+    ).scorecards[0]
     assert not sc.disqualified
     # QE signals are clean — this is genuinely good output.
     assert sc.signals["repeated_line_ratio"] == 0.0
@@ -115,11 +123,13 @@ def test_readability_is_secondary_to_qe():
         "2\n00:00:02,000 --> 00:00:04,000\nPlease subscribe to the channel.\n\n"
         "3\n00:00:04,000 --> 00:00:06,000\nSubtitles by amara.org\n"
     )
-    res = t.run_tournament([
-        # readable hallucination listed FIRST so a naive tie resolves to it.
-        t.Entrant(label="readable_halluc", srt_text=readable_halluc, speech_ranges=[(0.0, 0.5)]),
-        t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
-    ])
+    res = t.run_tournament(
+        [
+            # readable hallucination listed FIRST so a naive tie resolves to it.
+            t.Entrant(label="readable_halluc", srt_text=readable_halluc, speech_ranges=[(0.0, 0.5)]),
+            t.Entrant(label="fast_clean", srt_text=FAST_CLEAN, speech_ranges=FAST_RANGES),
+        ]
+    )
     assert res.winner_label == "fast_clean"
 
 
@@ -131,12 +141,24 @@ def test_incomplete_sub_penalised_for_uncovered_speech():
     Scored at the entrant level so consensus isn't involved."""
     t = _t()
     ranges = [(0.0, 6.0)]
-    complete = t.score_entrant(t.Entrant(label="complete", speech_ranges=ranges, srt_text=(
-        "1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n\n"
-        "2\n00:00:02,000 --> 00:00:04,000\nI am meeting a friend downtown.\n\n"
-        "3\n00:00:04,000 --> 00:00:06,000\nWe will be back before midnight.\n")))
-    truncated = t.score_entrant(t.Entrant(label="truncated", speech_ranges=ranges, srt_text=(
-        "1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n")))
+    complete = t.score_entrant(
+        t.Entrant(
+            label="complete",
+            speech_ranges=ranges,
+            srt_text=(
+                "1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n\n"
+                "2\n00:00:02,000 --> 00:00:04,000\nI am meeting a friend downtown.\n\n"
+                "3\n00:00:04,000 --> 00:00:06,000\nWe will be back before midnight.\n"
+            ),
+        )
+    )
+    truncated = t.score_entrant(
+        t.Entrant(
+            label="truncated",
+            speech_ranges=ranges,
+            srt_text=("1\n00:00:00,000 --> 00:00:02,000\nWhere are you going tonight?\n"),
+        )
+    )
     assert truncated.signals["uncovered_speech_ratio"] > 0.5
     assert complete.signals["uncovered_speech_ratio"] < 0.1
     assert complete.composite > truncated.composite

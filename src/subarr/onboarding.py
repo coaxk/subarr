@@ -47,7 +47,7 @@ STEP_TAUTULLI = 5
 STEP_SUBGEN = 6
 STEP_OLLAMA = 7
 STEP_GPU = 8
-STEP_SPEECH = 9        # #111 — speech-aware audio (silero VAD) opt-in
+STEP_SPEECH = 9  # #111 — speech-aware audio (silero VAD) opt-in
 STEP_FIRST_WALK = 10
 STEP_DONE = 11
 
@@ -82,10 +82,7 @@ def _is_masked(value: Any) -> bool:
 
 
 def _mask_progress(progress: dict[str, Any]) -> dict[str, Any]:
-    return {
-        k: (_mask_secret(v) if _is_secret_key(k) else v)
-        for k, v in progress.items()
-    }
+    return {k: (_mask_secret(v) if _is_secret_key(k) else v) for k, v in progress.items()}
 
 
 @dataclass
@@ -143,15 +140,22 @@ class OnboardingStore:
         except json.JSONDecodeError:
             progress = {}
         return OnboardingState(
-            step=row[0], completed_at=row[1], progress=progress,
-            created_at=row[3], updated_at=row[4],
+            step=row[0],
+            completed_at=row[1],
+            progress=progress,
+            created_at=row[3],
+            updated_at=row[4],
         )
 
     # ─── Write ─────────────────────────────────────────────────────
 
-    def update(self, *, step: int | None = None,
-               progress_patch: dict[str, Any] | None = None,
-               unset_keys: list[str] | None = None) -> OnboardingState:
+    def update(
+        self,
+        *,
+        step: int | None = None,
+        progress_patch: dict[str, Any] | None = None,
+        unset_keys: list[str] | None = None,
+    ) -> OnboardingState:
         """Merge progress_patch into progress, optionally advance step.
 
         - `step`: when set, becomes the new current step. Bounds-checked
@@ -179,9 +183,7 @@ class OnboardingStore:
         new_step = state.step if step is None else max(0, min(MAX_STEP, int(step)))
 
         self._conn.execute(
-            "UPDATE onboarding_state "
-            "SET step = ?, progress_json = ?, updated_at = ? "
-            "WHERE id = 1",
+            "UPDATE onboarding_state SET step = ?, progress_json = ?, updated_at = ? WHERE id = 1",
             (new_step, json.dumps(state.progress, separators=(",", ":")), time.time()),
         )
         return self.get()
@@ -211,9 +213,7 @@ class OnboardingStore:
     # ─── Internal ───────────────────────────────────────────────────
 
     def _ensure_row(self) -> None:
-        existing = self._conn.execute(
-            "SELECT 1 FROM onboarding_state WHERE id = 1"
-        ).fetchone()
+        existing = self._conn.execute("SELECT 1 FROM onboarding_state WHERE id = 1").fetchone()
         if not existing:
             ts = time.time()
             self._conn.execute(

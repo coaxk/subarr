@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import base64
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -67,7 +66,7 @@ def test_401_when_no_auth_header():
     c = TestClient(_app(user="admin", password="hunter2"))
     r = c.get("/api/queue")
     assert r.status_code == 401
-    assert r.headers["www-authenticate"].startswith('Basic realm=')
+    assert r.headers["www-authenticate"].startswith("Basic realm=")
 
 
 def test_401_when_wrong_password():
@@ -140,6 +139,7 @@ def test_uses_constant_time_compare():
     reading the source. If someone rewrites with ==, this test fails
     + we re-review."""
     import subarr.auth
+
     src = open(subarr.auth.__file__, encoding="utf-8").read()
     assert "secrets.compare_digest" in src, (
         "auth.py must use secrets.compare_digest, not == — protects "

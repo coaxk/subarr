@@ -9,20 +9,24 @@ silero speech ranges from #111.
 Tests pin behaviour (a clean cue scores ~0, a hallucinated/looping one scores
 high), not exact magnitudes.
 """
+
 from __future__ import annotations
 
 
 def _sig():
     from subarr import transcript_signals as s
+
     return s
 
 
 def _cues(srt):
     from subarr.subtitle_readability import parse_srt
+
     return parse_srt(srt)
 
 
 # --- silence_text_ratio: fraction of cue time with no underlying speech ---
+
 
 def test_silence_text_ratio_zero_when_cues_sit_in_speech():
     s = _sig()
@@ -42,6 +46,7 @@ def test_silence_text_ratio_one_when_text_over_silence():
 # The base-camp complement of silence_text_ratio: a sub that drops dialogue
 # leaves speech unsubtitled. A terse/truncated output that captures fewer cues
 # scores high here (incomplete), even if everything it DID write is clean.
+
 
 def test_uncovered_speech_ratio_zero_when_speech_fully_subtitled():
     s = _sig()
@@ -83,11 +88,12 @@ def test_silence_text_ratio_no_speech_data_returns_zero():
 
 # --- repeated_line_ratio: looping / stuck-decoder detection ----------------
 
+
 def test_repeated_line_ratio_flags_loops():
     s = _sig()
     srt = ""
     for i in range(1, 6):
-        srt += f"{i}\n00:00:0{i-1},000 --> 00:00:0{i},000\nyou\n\n"
+        srt += f"{i}\n00:00:0{i - 1},000 --> 00:00:0{i},000\nyou\n\n"
     # 5 identical lines → highly repetitive
     assert s.repeated_line_ratio(_cues(srt)) >= 0.7
 
@@ -103,6 +109,7 @@ def test_repeated_line_ratio_low_for_varied_dialogue():
 
 
 # --- canned_phrase_hits: known non-speech hallucination phrases ------------
+
 
 def test_canned_phrase_hits_detects_known_phrases():
     s = _sig()

@@ -10,6 +10,7 @@ init_schema(). Mirrors probe_store.py: own connection, WAL, lock, no
 isolation_level (autocommit), so background-walk writes don't contend with
 HTTP-request writes.
 """
+
 from __future__ import annotations
 
 import json
@@ -57,7 +58,9 @@ class AudioAuditStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
-            str(db_path), check_same_thread=False, isolation_level=None,
+            str(db_path),
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.row_factory = sqlite3.Row
@@ -68,11 +71,19 @@ class AudioAuditStore:
             self._conn.close()
 
     # ── writes ──────────────────────────────────────────────────────────────
-    def upsert(self, *, canonical_path: str, tag_lang: str | None,
-               detected_lang: str | None, status: str,
-               languages_heard: list[str] | None, n_agreeing: int | None,
-               n_total: int | None, mtime: float | None,
-               track_languages: list[str] | None = None) -> None:
+    def upsert(
+        self,
+        *,
+        canonical_path: str,
+        tag_lang: str | None,
+        detected_lang: str | None,
+        status: str,
+        languages_heard: list[str] | None,
+        n_agreeing: int | None,
+        n_total: int | None,
+        mtime: float | None,
+        track_languages: list[str] | None = None,
+    ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audio_lang_audit "
@@ -86,9 +97,15 @@ class AudioAuditStore:
                 "  mtime=excluded.mtime, checked_at=excluded.checked_at, "
                 "  track_languages=excluded.track_languages",
                 (
-                    canonical_path, tag_lang, detected_lang, status,
+                    canonical_path,
+                    tag_lang,
+                    detected_lang,
+                    status,
                     json.dumps(list(languages_heard or [])),
-                    n_agreeing, n_total, mtime, time.time(),
+                    n_agreeing,
+                    n_total,
+                    mtime,
+                    time.time(),
                     json.dumps(list(track_languages or [])),
                 ),
             )
@@ -155,9 +172,7 @@ class AudioAuditStore:
 
     def all(self) -> list[AuditFinding]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM audio_lang_audit ORDER BY checked_at DESC"
-            ).fetchall()
+            rows = self._conn.execute("SELECT * FROM audio_lang_audit ORDER BY checked_at DESC").fetchall()
         return [self._row(r) for r in rows]
 
     def count_by_status(self) -> dict[str, int]:

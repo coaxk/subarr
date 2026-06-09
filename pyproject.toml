@@ -71,3 +71,16 @@ norecursedirs = ["tests/e2e"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+
+[tool.ruff.lint]
+# Default selection (pycodestyle E/W + pyflakes F). We enforce pyflakes (F) —
+# real correctness issues like unused/undefined names and redefinitions — and
+# most of pycodestyle, but relax a few E7 style rules that conflict with this
+# codebase's deliberate, working patterns. Layout is owned by `ruff format`.
+ignore = [
+    "E402",  # module-import-not-at-top: intentional late imports avoid circular deps (e.g. routers/queue.py)
+    "E741",  # ambiguous var names (l/I/O): present in terse numeric code; rename churn/risk outweighs value
+    "E731",  # lambda assignment: used deliberately in a handful of spots
+    "E701",  # multiple statements on one line (colon): terse one-line guards
+    "E702",  # multiple statements on one line (semicolon): same
+]

@@ -19,6 +19,7 @@ completion_watcher reconciles completion by canonical_path as it does today.
 Supervised via #157: the loop reports per-tick success/failure to task_health
 ("queue-feeder"). subgen being unreachable is a soft skip, not a feeder failure.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -62,14 +63,18 @@ def _effective_depth(q: dict) -> int:
 
 class PendingQueueFeeder:
     def __init__(
-        self, *, store: PendingQueueStore, subgen_provider, submit_job,
+        self,
+        *,
+        store: PendingQueueStore,
+        subgen_provider,
+        submit_job,
         target_depth_provider=lambda: DEFAULT_TARGET_DEPTH,
         paused_provider=lambda: False,
         interval_s: float = FEEDER_INTERVAL_S,
     ):
         self._store = store
         self._subgen_provider = subgen_provider
-        self._submit_job = submit_job              # async (job) -> None; raises on failure
+        self._submit_job = submit_job  # async (job) -> None; raises on failure
         self._target_depth = target_depth_provider
         self._paused = paused_provider
         self._interval_s = interval_s
@@ -145,8 +150,7 @@ class PendingQueueFeeder:
         # Release in-flight reservations that have surfaced in subgen's queue
         # (handed off to _effective_depth) or aged past the grace window.
         self._inflight = {
-            p: t for p, t in self._inflight.items()
-            if p not in subgen_paths and (now - t) < INFLIGHT_GRACE_S
+            p: t for p, t in self._inflight.items() if p not in subgen_paths and (now - t) < INFLIGHT_GRACE_S
         }
         # Effective depth = subgen's reported depth PLUS our not-yet-surfaced
         # submissions, so a tick landing in the /batch→/queue lag window doesn't
@@ -173,12 +177,11 @@ class PendingQueueFeeder:
             try:
                 await self._submit_job(job)
             except Exception as e:  # noqa: BLE001 — one bad job mustn't stall the queue
-                log.warning("queue feeder: submit failed for %s: %s",
-                            job.canonical_path, e)
+                log.warning("queue feeder: submit failed for %s: %s", job.canonical_path, e)
                 self._store.set_status(job.id, STATUS_ERROR, error=str(e)[:500])
                 continue  # don't consume a depth slot; move to the next job
             self._store.mark_submitted(job.id)
-            self._inflight[sg_path] = now   # reserve the slot until subgen surfaces it
+            self._inflight[sg_path] = now  # reserve the slot until subgen surfaces it
             effective += 1
             submitted += 1
         return submitted

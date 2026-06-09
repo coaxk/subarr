@@ -16,6 +16,7 @@ the expensive bit; on a 1500-series library, the TV/ rollup takes 20-40s.
 With this cache, repeat browses of the same path return in <50ms. TTL
 keeps the cache fresh enough to catch new files; probe walks invalidate.
 """
+
 from __future__ import annotations
 
 import re
@@ -85,8 +86,24 @@ def clear_cache_for_prefix(prefix: str | None = None) -> int:
 # parsing srt filenames. Matches coverage_engine._langs_in_sidecars.
 _KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
 _KNOWN_NON_LANG = {
-    "web", "hdtv", "dvd", "uhd", "hdr", "sdr", "ddp", "aac", "dts", "ac3",
-    "flac", "x264", "x265", "ind", "rep", "tla", "ntb", "syn",
+    "web",
+    "hdtv",
+    "dvd",
+    "uhd",
+    "hdr",
+    "sdr",
+    "ddp",
+    "aac",
+    "dts",
+    "ac3",
+    "flac",
+    "x264",
+    "x265",
+    "ind",
+    "rep",
+    "tla",
+    "ntb",
+    "syn",
 }
 
 
@@ -120,18 +137,18 @@ class BrowseEntry(BaseModel):
     video_count: int = 0
     srt_count: int = 0
     videos_with_en: int = 0  # videos with any source of English coverage (disk srt OR embedded)
-    videos_probed: int = 0   # videos that have a probe cache entry
+    videos_probed: int = 0  # videos that have a probe cache entry
     coverage_status: str | None = None  # 'full' | 'partial' | 'none' | 'unknown'
 
     # File-only fields (defaults for dirs):
     has_sibling_srt: bool = False
     embedded_en: str | None = None
-    audio_langs: list[str] = []      # ['fre', 'eng']
-    sub_langs: list[str] = []        # langs from sibling .srt files
-    srt_filenames: list[str] = []    # actual sidecar filenames (not full path)
+    audio_langs: list[str] = []  # ['fre', 'eng']
+    sub_langs: list[str] = []  # langs from sibling .srt files
+    srt_filenames: list[str] = []  # actual sidecar filenames (not full path)
     duration_s: float | None = None
     size_mb: float | None = None
-    file_status: str | None = None   # 'covered' | 'embedded-only' | 'srt-only' | 'missing' | 'unknown'
+    file_status: str | None = None  # 'covered' | 'embedded-only' | 'srt-only' | 'missing' | 'unknown'
     # v1.1.1 #222: user-verified ground-truth audio language from the review
     # queue (audio_lang_store). When set, this OVERRIDES audio_langs for UI
     # purposes — the probe data is what the file CLAIMS, the verification is
@@ -246,6 +263,7 @@ def _walk_for_rollup(folder: Path, probe_store, max_videos: int = 500) -> dict[s
     cap is hit we bail with bail=True and downstream forces 'unknown'.
     """
     import os
+
     total_videos = videos_with_en = videos_probed = srt_count = 0
     bail = False
     try:
@@ -282,12 +300,8 @@ def _walk_for_rollup(folder: Path, probe_store, max_videos: int = 500) -> dict[s
                 v_stem = vname.lower().rsplit(".", 1)[0]
                 v_ep = _episode_pattern(vname)
                 has_en_srt = False
-                for (_sname, s_stem, s_ep, s_lang) in srt_meta:
-                    matched = (
-                        s_stem == v_stem
-                        or s_stem.startswith(v_stem + ".")
-                        or (v_ep and s_ep == v_ep)
-                    )
+                for _sname, s_stem, s_ep, s_lang in srt_meta:
+                    matched = s_stem == v_stem or s_stem.startswith(v_stem + ".") or (v_ep and s_ep == v_ep)
                     if matched and s_lang in _EN_LIKE:
                         has_en_srt = True
                         break
@@ -298,7 +312,9 @@ def _walk_for_rollup(folder: Path, probe_store, max_videos: int = 500) -> dict[s
                     try:
                         st = vpath.stat()
                         cached = probe_store.get(
-                            fs_to_canonical(vpath), mtime=st.st_mtime, size=st.st_size,
+                            fs_to_canonical(vpath),
+                            mtime=st.st_mtime,
+                            size=st.st_size,
                         )
                         if cached is not None:
                             videos_probed += 1
@@ -330,7 +346,7 @@ def browse(
     rollup: bool = Query(
         True,
         description="Recurse into subdirs to compute coverage rollups for the "
-                    "traffic-light dot. Set false for fastest browse-only mode.",
+        "traffic-light dot. Set false for fastest browse-only mode.",
     ),
     fresh: bool = Query(False, description="v1.1 ARCH: bypass cache + rebuild now"),
 ) -> BrowseResponse:
@@ -418,7 +434,9 @@ def browse(
                 e.coverage_status = "unknown"
             else:
                 e.coverage_status = _classify_folder_status(
-                    r["videos_with_en"], r["total_videos"], r["videos_probed"],
+                    r["videos_with_en"],
+                    r["total_videos"],
+                    r["videos_probed"],
                 )
         entries.append(e)
 
@@ -453,22 +471,24 @@ def browse(
                 audio_langs = audio_lang_summary(cached)
                 duration_s = cached.duration_s
 
-        entries.append(BrowseEntry(
-            name=f.name,
-            path=canonical,
-            is_dir=False,
-            has_sibling_srt=bool(sibs),
-            embedded_en=embedded,
-            audio_langs=audio_langs,
-            sub_langs=sub_langs,
-            srt_filenames=srt_filenames,
-            duration_s=duration_s,
-            size_mb=size_mb,
-            file_status=_classify_file_status(has_en_srt, embedded, probed),
-            # #222: ground-truth lang from the review queue, if the user has
-            # confirmed one. The display layer treats this as authoritative.
-            audio_lang_verified=verified_lookup.get(canonical),
-        ))
+        entries.append(
+            BrowseEntry(
+                name=f.name,
+                path=canonical,
+                is_dir=False,
+                has_sibling_srt=bool(sibs),
+                embedded_en=embedded,
+                audio_langs=audio_langs,
+                sub_langs=sub_langs,
+                srt_filenames=srt_filenames,
+                duration_s=duration_s,
+                size_mb=size_mb,
+                file_status=_classify_file_status(has_en_srt, embedded, probed),
+                # #222: ground-truth lang from the review queue, if the user has
+                # confirmed one. The display layer treats this as authoritative.
+                audio_lang_verified=verified_lookup.get(canonical),
+            )
+        )
 
     canonical = path.strip().strip("/")
     parent = None
@@ -481,7 +501,9 @@ def browse(
 
 
 @router.post("/browse/refresh")
-def refresh_browse(prefix: str = Query("", description="Path prefix to invalidate; empty = all")) -> dict[str, Any]:
+def refresh_browse(
+    prefix: str = Query("", description="Path prefix to invalidate; empty = all"),
+) -> dict[str, Any]:
     """v1.1 ARCH: manual flush. Frontend can call this after a known
     invalidating event (probe walk finish, scan submit, manual edit on
     disk). Returns number of cache entries dropped."""

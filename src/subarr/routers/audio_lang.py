@@ -7,6 +7,7 @@ DELETE /api/audio-lang/verifications/{path} — remove a verification
 POST /api/audio-lang/verifications/bulk-for-series — apply to multiple files
 GET  /api/audio-lang/pending-review       — coverage rows needing user input
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,7 +18,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..audio_sampler import (
-    extract_sample, find_dialog_positions,
+    extract_sample,
+    find_dialog_positions,
 )
 from ..config import settings
 from ..paths import PathOutsideRootError, canonical_to_fs
@@ -64,7 +66,8 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
     propagation: dict[str, Any] = {"attempted": False}
     if settings.sonarr_propagate_audio_lang and req.source == "user":
         propagation = await _propagate_to_sonarr(
-            request, canonical_path=req.canonical_path,
+            request,
+            canonical_path=req.canonical_path,
             lang_code=req.lang_code,
         )
 
@@ -77,13 +80,19 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
         bundle = request.app.state.integrations
         probe_store = request.app.state.probe_store
         cov_cache.request_refresh(bundle, probe_store, store)
-    return {"verified": True, "canonical_path": req.canonical_path,
-            "lang_code": req.lang_code.lower(),
-            "sonarr_propagation": propagation}
+    return {
+        "verified": True,
+        "canonical_path": req.canonical_path,
+        "lang_code": req.lang_code.lower(),
+        "sonarr_propagation": propagation,
+    }
 
 
 async def _propagate_to_sonarr(
-    request: Request, *, canonical_path: str, lang_code: str,
+    request: Request,
+    *,
+    canonical_path: str,
+    lang_code: str,
 ) -> dict[str, Any]:
     """Push the user's audio-language verification back to Sonarr's
     per-episodeFile language record. Closes the bazarr-blind loop.
@@ -96,53 +105,50 @@ async def _propagate_to_sonarr(
       3. PUT the episodeFile with updated `languages` field.
     Returns {attempted: True, ok: bool, detail: ...}."""
     from ..integrations import IntegrationError
+
     bundle = request.app.state.integrations
     sonarr = bundle.sonarr
     if not sonarr.is_configured():
-        return {"attempted": True, "ok": False,
-                "detail": "Sonarr not configured"}
+        return {"attempted": True, "ok": False, "detail": "Sonarr not configured"}
 
-    # Find the episodeFile id for this canonical_path. We do this by
-    # walking the in-process episode-file path map the coverage cache
-    # populates. Fall back to a direct Sonarr lookup if cache empty.
-    arr_path = settings.arr_path_prefix.rstrip("/") + "/" + canonical_path.strip("/")
+    # Find the episodeFile id for this canonical_path by walking the
+    # in-process episode-file path map the coverage cache populates.
     ep_file_id: int | None = None
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     if cov_cache is not None:
         snap = cov_cache.get_cached()
         if snap is not None:
             for item in snap.items:
-                if item.get("file_canonical_path") == canonical_path \
-                   and (item.get("bazarr") or {}).get("episode_id"):
+                if item.get("file_canonical_path") == canonical_path and (item.get("bazarr") or {}).get(
+                    "episode_id"
+                ):
                     # Sonarr episode id → episodeFile id requires a lookup.
                     try:
-                        ep = await sonarr.episode(
-                            item["bazarr"]["episode_id"]
-                        )
+                        ep = await sonarr.episode(item["bazarr"]["episode_id"])
                         ep_file_id = ep.get("episodeFileId")
                         break
                     except IntegrationError as e:
                         log.debug("propagation episode lookup failed: %s", e)
     if not ep_file_id:
-        return {"attempted": True, "ok": False,
-                "detail": "couldn't resolve episodeFile id for path "
-                          f"{canonical_path!r}"}
+        return {
+            "attempted": True,
+            "ok": False,
+            "detail": f"couldn't resolve episodeFile id for path {canonical_path!r}",
+        }
 
     # Resolve the language name. Sonarr's /language returns
     # [{id: 1, name: "English"}, {id: 2, name: "French"}, ...].
     try:
         langs = await sonarr.languages()
     except IntegrationError as e:
-        return {"attempted": True, "ok": False,
-                "detail": f"sonarr /language fetch failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"sonarr /language fetch failed: {e}"}
     name = _iso_to_sonarr_name(lang_code)
     target = next(
         (l for l in langs if (l.get("name") or "").lower() == name.lower()),
         None,
     )
     if target is None:
-        return {"attempted": True, "ok": False,
-                "detail": f"Sonarr has no language named {name!r}"}
+        return {"attempted": True, "ok": False, "detail": f"Sonarr has no language named {name!r}"}
 
     try:
         await sonarr.update_episode_file_languages(
@@ -150,12 +156,13 @@ async def _propagate_to_sonarr(
             languages=[{"id": target["id"], "name": target["name"]}],
         )
     except IntegrationError as e:
-        return {"attempted": True, "ok": False,
-                "detail": f"sonarr PUT failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"sonarr PUT failed: {e}"}
     log.info(
-        "sonarr propagation OK: episodeFile=%s language=%s (id=%s) "
-        "via user verification on %s",
-        ep_file_id, target["name"], target["id"], canonical_path,
+        "sonarr propagation OK: episodeFile=%s language=%s (id=%s) via user verification on %s",
+        ep_file_id,
+        target["name"],
+        target["id"],
+        canonical_path,
     )
 
     # Kick Bazarr's "Sync with Sonarr" task so it picks up the new audio
@@ -166,10 +173,13 @@ async def _propagate_to_sonarr(
     # because Sonarr is the source of truth — Bazarr will eventually sync
     # on its own schedule regardless.
     bazarr_sync = await _trigger_bazarr_sync(bundle)
-    return {"attempted": True, "ok": True,
-            "episode_file_id": ep_file_id,
-            "language": target["name"],
-            "bazarr_sync": bazarr_sync}
+    return {
+        "attempted": True,
+        "ok": True,
+        "episode_file_id": ep_file_id,
+        "language": target["name"],
+        "bazarr_sync": bazarr_sync,
+    }
 
 
 # Cache the discovered Bazarr task id so we don't list/match every verify.
@@ -181,6 +191,7 @@ async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
     fresh series + episode info from Sonarr. Bounded (~few seconds even
     on large libraries) and idempotent. Returns {ok, detail}."""
     from ..integrations import IntegrationError
+
     global _bazarr_sync_task_id
     bazarr = bundle.bazarr
     if not bazarr.is_configured():
@@ -200,14 +211,12 @@ async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
                 _bazarr_sync_task_id = t.get("job_id") or t.get("id") or t.get("name")
                 break
         if _bazarr_sync_task_id is None:
-            return {"attempted": False,
-                    "detail": "no update_series task discovered in Bazarr"}
+            return {"attempted": False, "detail": "no update_series task discovered in Bazarr"}
 
     try:
         await bazarr.trigger_task(_bazarr_sync_task_id)
     except IntegrationError as e:
-        return {"attempted": True, "ok": False,
-                "detail": f"bazarr trigger failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"bazarr trigger failed: {e}"}
     log.info("bazarr sync triggered: task=%s", _bazarr_sync_task_id)
     return {"attempted": True, "ok": True, "task": _bazarr_sync_task_id}
 
@@ -216,45 +225,94 @@ def _iso_to_sonarr_name(code: str) -> str:
     """Map ISO 639-1/2 codes the UI uses to Sonarr's language names.
     Sonarr stores names like "English", "French", "German"."""
     m = {
-        "en": "English", "eng": "English",
-        "fr": "French", "fre": "French", "fra": "French",
-        "de": "German", "ger": "German", "deu": "German",
-        "es": "Spanish", "spa": "Spanish",
-        "it": "Italian", "ita": "Italian",
-        "pt": "Portuguese", "por": "Portuguese",
-        "ru": "Russian", "rus": "Russian",
-        "ja": "Japanese", "jpn": "Japanese",
-        "ko": "Korean", "kor": "Korean",
-        "zh": "Chinese", "chi": "Chinese", "zho": "Chinese",
-        "nl": "Dutch", "dut": "Dutch", "nld": "Dutch",
-        "pl": "Polish", "pol": "Polish",
-        "sv": "Swedish", "swe": "Swedish",
-        "no": "Norwegian", "nor": "Norwegian",
-        "da": "Danish", "dan": "Danish",
-        "fi": "Finnish", "fin": "Finnish",
-        "tr": "Turkish", "tur": "Turkish",
-        "ar": "Arabic", "ara": "Arabic",
-        "he": "Hebrew", "heb": "Hebrew",
-        "hi": "Hindi", "hin": "Hindi",
+        "en": "English",
+        "eng": "English",
+        "fr": "French",
+        "fre": "French",
+        "fra": "French",
+        "de": "German",
+        "ger": "German",
+        "deu": "German",
+        "es": "Spanish",
+        "spa": "Spanish",
+        "it": "Italian",
+        "ita": "Italian",
+        "pt": "Portuguese",
+        "por": "Portuguese",
+        "ru": "Russian",
+        "rus": "Russian",
+        "ja": "Japanese",
+        "jpn": "Japanese",
+        "ko": "Korean",
+        "kor": "Korean",
+        "zh": "Chinese",
+        "chi": "Chinese",
+        "zho": "Chinese",
+        "nl": "Dutch",
+        "dut": "Dutch",
+        "nld": "Dutch",
+        "pl": "Polish",
+        "pol": "Polish",
+        "sv": "Swedish",
+        "swe": "Swedish",
+        "no": "Norwegian",
+        "nor": "Norwegian",
+        "da": "Danish",
+        "dan": "Danish",
+        "fi": "Finnish",
+        "fin": "Finnish",
+        "tr": "Turkish",
+        "tur": "Turkish",
+        "ar": "Arabic",
+        "ara": "Arabic",
+        "he": "Hebrew",
+        "heb": "Hebrew",
+        "hi": "Hindi",
+        "hin": "Hindi",
         # 2026-05-31 — Balkan + Baltic + remaining EU slavic langs.
-        "bg": "Bulgarian", "bul": "Bulgarian",
-        "ca": "Catalan", "cat": "Catalan",
-        "hr": "Croatian", "hrv": "Croatian", "scr": "Croatian",
-        "cs": "Czech", "cze": "Czech", "ces": "Czech",
-        "et": "Estonian", "est": "Estonian",
-        "el": "Greek", "gre": "Greek", "ell": "Greek",
-        "hu": "Hungarian", "hun": "Hungarian",
-        "id": "Indonesian", "ind": "Indonesian",
-        "lv": "Latvian", "lav": "Latvian",
-        "lt": "Lithuanian", "lit": "Lithuanian",
-        "ms": "Malay", "may": "Malay", "msa": "Malay",
-        "ro": "Romanian", "rum": "Romanian", "ron": "Romanian",
-        "sr": "Serbian", "srp": "Serbian", "scc": "Serbian",
-        "sk": "Slovak", "slo": "Slovak", "slk": "Slovak",
-        "sl": "Slovenian", "slv": "Slovenian",
-        "th": "Thai", "tha": "Thai",
-        "uk": "Ukrainian", "ukr": "Ukrainian",
-        "vi": "Vietnamese", "vie": "Vietnamese",
+        "bg": "Bulgarian",
+        "bul": "Bulgarian",
+        "ca": "Catalan",
+        "cat": "Catalan",
+        "hr": "Croatian",
+        "hrv": "Croatian",
+        "scr": "Croatian",
+        "cs": "Czech",
+        "cze": "Czech",
+        "ces": "Czech",
+        "et": "Estonian",
+        "est": "Estonian",
+        "el": "Greek",
+        "gre": "Greek",
+        "ell": "Greek",
+        "hu": "Hungarian",
+        "hun": "Hungarian",
+        "id": "Indonesian",
+        "ind": "Indonesian",
+        "lv": "Latvian",
+        "lav": "Latvian",
+        "lt": "Lithuanian",
+        "lit": "Lithuanian",
+        "ms": "Malay",
+        "may": "Malay",
+        "msa": "Malay",
+        "ro": "Romanian",
+        "rum": "Romanian",
+        "ron": "Romanian",
+        "sr": "Serbian",
+        "srp": "Serbian",
+        "scc": "Serbian",
+        "sk": "Slovak",
+        "slo": "Slovak",
+        "slk": "Slovak",
+        "sl": "Slovenian",
+        "slv": "Slovenian",
+        "th": "Thai",
+        "tha": "Thai",
+        "uk": "Ukrainian",
+        "ukr": "Ukrainian",
+        "vi": "Vietnamese",
+        "vie": "Vietnamese",
     }
     return m.get(code.strip().lower(), code)
 
@@ -269,7 +327,7 @@ async def delete_verification(canonical_path: str, request: Request) -> dict[str
 
 
 class BulkSeriesRequest(BaseModel):
-    series_canonical_prefix: str   # e.g. "TV/Flics"
+    series_canonical_prefix: str  # e.g. "TV/Flics"
     lang_code: str
     file_paths: list[str]
 
@@ -289,7 +347,7 @@ async def bulk_for_series(req: BulkSeriesRequest, request: Request) -> dict[str,
 
 
 class SeriesIntentRequest(BaseModel):
-    series_prefix: str   # e.g. "TV/Cheers/" — trailing slash auto-added
+    series_prefix: str  # e.g. "TV/Cheers/" — trailing slash auto-added
     lang_code: str
     note: str | None = None
 
@@ -361,7 +419,7 @@ async def delete_series_intent(series_prefix: str, request: Request) -> dict[str
 
 
 class MixedDismissRequest(BaseModel):
-    series_path: str           # the series directory, e.g. "TV/Trigger"
+    series_path: str  # the series directory, e.g. "TV/Trigger"
     note: str | None = None
 
 
@@ -394,9 +452,7 @@ class TrackMismatchDismissRequest(BaseModel):
 
 
 @router.post("/track-mismatch-dismiss")
-async def dismiss_track_mismatch(
-    req: TrackMismatchDismissRequest, request: Request
-) -> dict[str, Any]:
+async def dismiss_track_mismatch(req: TrackMismatchDismissRequest, request: Request) -> dict[str, Any]:
     """Dismiss the #159 default-track prompt for a file whose default audio the
     user wants to keep as-is. Suppressed on future walks until re-enabled."""
     store = request.app.state.audio_lang
@@ -405,9 +461,7 @@ async def dismiss_track_mismatch(
 
 
 @router.delete("/track-mismatch-dismiss")
-async def undismiss_track_mismatch(
-    file_canonical_path: str, request: Request
-) -> dict[str, Any]:
+async def undismiss_track_mismatch(file_canonical_path: str, request: Request) -> dict[str, Any]:
     """Re-enable the #159 prompt for a previously-dismissed file."""
     store = request.app.state.audio_lang
     removed = store.undismiss_track_mismatch(file_canonical_path)
@@ -421,14 +475,11 @@ class TrackSwapRequest(BaseModel):
 
 
 @router.post("/track-mismatch-swap")
-async def track_mismatch_swap(
-    req: TrackSwapRequest, request: Request
-) -> dict[str, Any]:
+async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[str, Any]:
     """#159: make the original-language audio track the sole default, in place,
     via mkvpropedit (instant, lossless, reversible). The server RE-VALIDATES the
     mismatch against a live probe + the coverage row's originalLanguage — the
     client only names the file, never the track index."""
-    from pathlib import Path
     from ..media_probe import detect_default_track_mismatch, probe
     from ..track_swap import TrackSwapError, swap_default_audio_track
 
@@ -444,8 +495,7 @@ async def track_mismatch_swap(
         snap = cov_cache.get_cached()
         if snap is not None:
             for it in snap.items:
-                if (it.get("file_canonical_path") == file_path
-                        and it.get("default_track_mismatch")):
+                if it.get("file_canonical_path") == file_path and it.get("default_track_mismatch"):
                     row = it
                     break
     if row is None:
@@ -475,7 +525,10 @@ async def track_mismatch_swap(
         fresh = await probe(Path(fs))
         fresh.canonical_path = file_path
         request.app.state.probe_store.upsert(
-            canonical_path=file_path, mtime=st.st_mtime, size=st.st_size, result=fresh,
+            canonical_path=file_path,
+            mtime=st.st_mtime,
+            size=st.st_size,
+            result=fresh,
         )
     except Exception:  # noqa: BLE001 — best-effort cache freshness
         pass
@@ -579,10 +632,13 @@ async def pending_review(request: Request) -> dict[str, Any]:
     if not items_source:
         # No cache yet (very fresh boot) — fall back to a quick build.
         from ..coverage_engine import build_coverage
+
         bundle = request.app.state.integrations
         probe_store = request.app.state.probe_store
         report = await build_coverage(
-            bundle, use_tautulli=True, probe_store=probe_store,
+            bundle,
+            use_tautulli=True,
+            probe_store=probe_store,
             audio_lang_store=audio_lang_store,
             subgen_caps=getattr(request.app.state, "subgen_caps", None),
         )
@@ -606,8 +662,7 @@ async def pending_review(request: Request) -> dict[str, Any]:
         # Skip if already verified — check BOTH keys (bulk-verify stores under
         # file_canonical_path || canonical_path; Bazarr-synthetic / series-level
         # rows have a None file_canonical_path and are verified under canonical).
-        elif (file_path and file_path in verifications) or \
-             (canonical and canonical in verifications):
+        elif (file_path and file_path in verifications) or (canonical and canonical in verifications):
             continue  # already verified, and not a track mismatch
         elif it.get("audio_label_suspect"):
             flag = "suspect"
@@ -615,21 +670,24 @@ async def pending_review(request: Request) -> dict[str, Any]:
             flag = "unknown"
         if not flag:
             continue
-        pending.append({
-            "canonical_path": it.get("canonical_path"),
-            "file_canonical_path": file_path,
-            "title": it.get("title"),
-            "episode_number": it.get("episode_number"),
-            "original_language": it.get("original_language"),
-            "audio_langs": it.get("audio_langs"),
-            "flag": flag,
-            "notes": it.get("audio_label_notes"),
-            **extra,
-        })
+        pending.append(
+            {
+                "canonical_path": it.get("canonical_path"),
+                "file_canonical_path": file_path,
+                "title": it.get("title"),
+                "episode_number": it.get("episode_number"),
+                "original_language": it.get("original_language"),
+                "audio_langs": it.get("audio_langs"),
+                "flag": flag,
+                "notes": it.get("audio_label_notes"),
+                **extra,
+            }
+        )
     return {"count": len(pending), "items": pending[:200]}
 
 
 # ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───
+
 
 class WhisperDetectRequest(BaseModel):
     canonical_path: str

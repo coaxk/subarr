@@ -8,11 +8,13 @@ Split mirrors vad.py: the PURE scoring (cosine, adequacy with an injected
 embedder) is unit-tested here; the LaBSE model I/O sits behind an availability
 gate and is live-verified, not unit-tested.
 """
+
 from __future__ import annotations
 
 
 def _qe():
     from subarr import qe
+
     return qe
 
 
@@ -37,6 +39,7 @@ def test_cosine_returns_builtin_float_for_numpy_inputs():
     # float32 leaking through crashed arena_store.save → run stuck "running").
     import json
     import pytest
+
     np = pytest.importorskip("numpy")  # QE-backend dep; skipped on base CI
     qe = _qe()
     a = np.array([1.0, 0.0, 0.0], dtype=np.float32)

@@ -36,7 +36,6 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +43,10 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Migration:
     """One numbered .sql file on disk."""
-    version: int            # parsed from filename prefix (e.g. 001 → 1)
-    name: str               # filename without .sql (e.g. "001_baseline")
-    path: Path              # full path to the .sql file
+
+    version: int  # parsed from filename prefix (e.g. 001 → 1)
+    name: str  # filename without .sql (e.g. "001_baseline")
+    path: Path  # full path to the .sql file
 
 
 class MigrationRunner:
@@ -85,8 +85,11 @@ class MigrationRunner:
             if not applied_now:
                 log.info("migrations: already up to date (%d applied)", len(already))
             else:
-                log.info("migrations: applied %d new (now at %d total)",
-                         len(applied_now), len(already) + len(applied_now))
+                log.info(
+                    "migrations: applied %d new (now at %d total)",
+                    len(applied_now),
+                    len(already) + len(applied_now),
+                )
             return applied_now
         finally:
             conn.close()
@@ -121,9 +124,7 @@ class MigrationRunner:
 
     @staticmethod
     def _applied_versions(conn: sqlite3.Connection) -> list[int]:
-        rows = conn.execute(
-            "SELECT version FROM schema_versions ORDER BY version"
-        ).fetchall()
+        rows = conn.execute("SELECT version FROM schema_versions ORDER BY version").fetchall()
         return sorted([r[0] for r in rows])
 
     def _discover(self) -> list[Migration]:
@@ -136,9 +137,7 @@ class MigrationRunner:
             try:
                 version = int(prefix)
             except ValueError:
-                log.warning(
-                    "ignoring migration with non-numeric prefix: %s", p.name
-                )
+                log.warning("ignoring migration with non-numeric prefix: %s", p.name)
                 continue
             out.append(Migration(version=version, name=stem, path=p))
         return out
@@ -146,6 +145,7 @@ class MigrationRunner:
     @staticmethod
     def _apply_one(conn: sqlite3.Connection, m: Migration) -> None:
         import time
+
         sql = m.path.read_text(encoding="utf-8")
         # We can't use sqlite3.executescript() — it issues an implicit
         # COMMIT before running, which breaks our atomic-per-migration
@@ -197,13 +197,13 @@ class MigrationRunner:
                     if "duplicate column name" in str(e).lower():
                         log.info(
                             "migration %s: column already present, skipping: %s",
-                            m.name, stmt.split("\n", 1)[0][:80],
+                            m.name,
+                            stmt.split("\n", 1)[0][:80],
                         )
                         continue
                     raise
             conn.execute(
-                "INSERT INTO schema_versions (version, name, applied_at) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO schema_versions (version, name, applied_at) VALUES (?, ?, ?)",
                 (m.version, m.name, time.time()),
             )
             conn.execute("COMMIT")

@@ -14,6 +14,7 @@ Two endpoints:
 Both endpoints honour the canonical media-root sandbox: paths must
 resolve under SUBARR_MEDIA_ROOT or the request 400s.
 """
+
 from __future__ import annotations
 
 import logging
@@ -104,7 +105,7 @@ def sidecar_rename(req: RenameRequest) -> dict[str, Any]:
         raise HTTPException(
             400,
             detail="rename must stay in the same directory; cross-dir moves "
-                   "should go through the file manager.",
+            "should go through the file manager.",
         )
 
     try:

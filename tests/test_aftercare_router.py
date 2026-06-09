@@ -1,4 +1,5 @@
 """#156 aftercare router."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,13 +14,16 @@ def client(tmp_path, monkeypatch):
     from subarr.aftercare_store import AfterCareStore
     from subarr.aftercare import AftercareEvaluation
     from subarr.routers import aftercare as r
+
     db = tmp_path / "a.db"
     run_migrations(db)
     store = AfterCareStore(db)
-    store.record(canonical_path="TV/A/e1.mkv", completed_at=1.0,
-                 evaluation=AftercareEvaluation(40.0, 10, True, {"issues": []},
-                                                {"canned_phrase_hits": 2}),
-                 source="subgenscan")
+    store.record(
+        canonical_path="TV/A/e1.mkv",
+        completed_at=1.0,
+        evaluation=AftercareEvaluation(40.0, 10, True, {"issues": []}, {"canned_phrase_hits": 2}),
+        source="subgenscan",
+    )
     app = FastAPI()
     app.state.aftercare = store
     app.include_router(r.router)
@@ -56,13 +60,16 @@ def test_results_enriches_language_from_coverage(tmp_path, monkeypatch):
     from subarr.aftercare_store import AfterCareStore
     from subarr.aftercare import AftercareEvaluation
     from subarr.routers import aftercare as r
+
     db = tmp_path / "a.db"
     run_migrations(db)
     store = AfterCareStore(db)
-    store.record(canonical_path="TV/A/e1.mkv", completed_at=1.0,
-                 evaluation=AftercareEvaluation(40.0, 10, True, {"issues": []},
-                                                {"canned_phrase_hits": 1}),
-                 source="gaps")
+    store.record(
+        canonical_path="TV/A/e1.mkv",
+        completed_at=1.0,
+        evaluation=AftercareEvaluation(40.0, 10, True, {"issues": []}, {"canned_phrase_hits": 1}),
+        source="gaps",
+    )
 
     class _Snap:
         items = [{"file_canonical_path": "TV/A/e1.mkv", "original_language": "Russian"}]
@@ -77,4 +84,4 @@ def test_results_enriches_language_from_coverage(tmp_path, monkeypatch):
     app.include_router(r.router)
     client = TestClient(app)
     item = client.get("/api/aftercare/results?view=flagged").json()["items"][0]
-    assert item["language"] == "ru"   # normalized from "Russian"
+    assert item["language"] == "ru"  # normalized from "Russian"

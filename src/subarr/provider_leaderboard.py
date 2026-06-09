@@ -22,6 +22,7 @@ Whisper. +200 score when any provider for that language has >=70% success
 and is not throttled; -1000 when ALL providers for that language are
 throttled or have <30% success (route directly to subgen).
 """
+
 from __future__ import annotations
 
 import time
@@ -60,9 +61,13 @@ class ProviderStats:
             "blacklisted": self.blacklisted,
             "avg_score": round(self.avg_score, 1),
             "success_rate": round(self.success_rate * 100, 1),  # %
-            "languages": dict(sorted(
-                self.languages.items(), key=lambda kv: kv[1], reverse=True,
-            )),
+            "languages": dict(
+                sorted(
+                    self.languages.items(),
+                    key=lambda kv: kv[1],
+                    reverse=True,
+                )
+            ),
             "last_seen": self.last_seen,
             "throttled": self.throttled,
             "status_label": self.status_label,
@@ -148,6 +153,7 @@ def aggregate(
             if isinstance(ts, str):
                 try:
                     import datetime
+
                     dt = datetime.datetime.strptime(ts, "%m/%d/%y %H:%M:%S")
                     s.last_seen = max(s.last_seen, dt.timestamp())
                 except (ValueError, TypeError):

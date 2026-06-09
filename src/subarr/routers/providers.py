@@ -4,6 +4,7 @@ GET /api/providers/leaderboard            — full table
 GET /api/providers/leaderboard/telemetry  — anonymous snapshot for subarr.com/stats
 POST /api/providers/{name}/reset          — kick a throttled provider
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,8 +24,7 @@ _cache: dict[str, Any] = {"at": 0, "data": None}
 
 
 @router.get("/leaderboard")
-async def get_leaderboard(request: Request,
-                          fresh: bool = Query(False)) -> dict[str, Any]:
+async def get_leaderboard(request: Request, fresh: bool = Query(False)) -> dict[str, Any]:
     now = time.time()
     if not fresh and _cache["data"] and (now - _cache["at"]) < _CACHE_TTL:
         out = dict(_cache["data"])

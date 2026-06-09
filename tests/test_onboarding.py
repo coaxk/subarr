@@ -22,7 +22,10 @@ import pytest
 
 from subarr.migrate import run_migrations
 from subarr.onboarding import (
-    MAX_STEP, STEP_BAZARR, STEP_DONE, STEP_WELCOME,
+    MAX_STEP,
+    STEP_BAZARR,
+    STEP_DONE,
+    STEP_WELCOME,
     OnboardingStore,
 )
 
@@ -155,6 +158,7 @@ def test_probe_paths_success(tmp_path: Path):
 
     class _MockRequest:
         pass
+
     r = probe_paths(ProbePathsRequest(media_root=str(tmp_path)), _MockRequest())
     assert r["ok"] is True
     assert r["total_top_level"] == 3
@@ -166,6 +170,7 @@ def test_probe_paths_nonexistent(tmp_path: Path):
 
     class _MockRequest:
         pass
+
     r = probe_paths(
         ProbePathsRequest(media_root=str(tmp_path / "nonexistent")),
         _MockRequest(),
@@ -181,6 +186,7 @@ def test_probe_paths_not_a_directory(tmp_path: Path):
 
     class _MockRequest:
         pass
+
     r = probe_paths(ProbePathsRequest(media_root=str(f)), _MockRequest())
     assert r["ok"] is False
     assert "not a directory" in r["error"]

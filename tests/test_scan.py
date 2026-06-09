@@ -1,4 +1,5 @@
 """Tests for POST /api/scan + GET /api/scan/{id} + SSE events."""
+
 from __future__ import annotations
 
 import json
@@ -61,20 +62,38 @@ def _empty_handler(req: httpx.Request) -> httpx.Response:
     # /status + /queue must respond so the capability probe sees a
     # subarr-subgen build. The test point is /batch behaviour.
     if req.url.path == "/status":
-        return httpx.Response(200, json={
-            "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "version": "Subgen 2026.05.3, stable-ts 0.7.0, faster-whisper 1.0.3 (test)",
+            },
+        )
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [], "processing": [], "queued_count": 0,
-            "processing_count": 0, "idle": True, "version": "test",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [],
+                "processing": [],
+                "queued_count": 0,
+                "processing_count": 0,
+                "idle": True,
+                "version": "test",
+            },
+        )
     if req.url.path == "/batch":
-        return httpx.Response(404, json={
-            "walked": 0, "queued": 0, "skipped": 0, "already_in_queue": 0,
-            "no_audio": 0, "pending_language_detect": 0,
-            "path": req.url.params.get("directory"), "reverse": False,
-        })
+        return httpx.Response(
+            404,
+            json={
+                "walked": 0,
+                "queued": 0,
+                "skipped": 0,
+                "already_in_queue": 0,
+                "no_audio": 0,
+                "pending_language_detect": 0,
+                "path": req.url.params.get("directory"),
+                "reverse": False,
+            },
+        )
     return httpx.Response(404)
 
 

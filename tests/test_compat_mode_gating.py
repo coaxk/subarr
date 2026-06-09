@@ -12,10 +12,8 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,11 +27,13 @@ import pytest
 # the current module's class on every test.
 def _import_ScanRunner():
     from subarr.scan_runner import ScanRunner, CompatModeError
+
     return ScanRunner, CompatModeError
 
 
 def _import_CompletionWatcher():
     from subarr.completion_watcher import CompletionWatcher
+
     return CompletionWatcher
 
 
@@ -97,9 +97,9 @@ async def test_watcher_skips_pending_pass_when_no_queue_endpoint(caplog):
     """When caps say has_queue=False, _pass_pending bails after logging
     the one-time warning, without calling subgen.queue()."""
     subgen = MagicMock()
-    subgen.queue = AsyncMock(side_effect=AssertionError(
-        "watcher must NOT call subgen.queue() when has_queue=False"
-    ))
+    subgen.queue = AsyncMock(
+        side_effect=AssertionError("watcher must NOT call subgen.queue() when has_queue=False")
+    )
     provenance = MagicMock()
     provenance.pending.return_value = [MagicMock(canonical_path="TV/x.mkv", id=1)]
 
@@ -129,21 +129,19 @@ async def test_watcher_warns_only_once_across_ticks(caplog):
 
     CompletionWatcher = _import_CompletionWatcher()
     watcher = CompletionWatcher(
-        subgen=subgen, bazarr=MagicMock(), provenance=provenance,
+        subgen=subgen,
+        bazarr=MagicMock(),
+        provenance=provenance,
         caps_provider=lambda: FakeCaps(has_queue=False, is_subarr_subgen=False),
     )
     with caplog.at_level(logging.WARNING):
         await watcher._pass_pending()
-        first_count = sum(
-            1 for r in caplog.records if "compat mode" in r.message.lower()
-        )
+        first_count = sum(1 for r in caplog.records if "compat mode" in r.message.lower())
         # Repeat 3 more times — should NOT log again
         await watcher._pass_pending()
         await watcher._pass_pending()
         await watcher._pass_pending()
-        total_count = sum(
-            1 for r in caplog.records if "compat mode" in r.message.lower()
-        )
+        total_count = sum(1 for r in caplog.records if "compat mode" in r.message.lower())
     assert first_count == 1
     assert total_count == 1, f"expected 1 warning total, got {total_count}"
 
@@ -154,16 +152,16 @@ async def test_watcher_uses_queue_when_has_queue_true():
     subgen = MagicMock()
     subgen.queue = AsyncMock(return_value={"queued": [], "processing": []})
     provenance = MagicMock()
-    provenance.pending.return_value = [
-        MagicMock(canonical_path="TV/x.mkv", id=1, series_id=None)
-    ]
+    provenance.pending.return_value = [MagicMock(canonical_path="TV/x.mkv", id=1, series_id=None)]
     # We need mark_completed to be a regular MagicMock since the watcher
     # calls it synchronously
     provenance.mark_completed = MagicMock()
 
     CompletionWatcher = _import_CompletionWatcher()
     watcher = CompletionWatcher(
-        subgen=subgen, bazarr=MagicMock(), provenance=provenance,
+        subgen=subgen,
+        bazarr=MagicMock(),
+        provenance=provenance,
         caps_provider=lambda: FakeCaps(has_queue=True),
     )
     await watcher._pass_pending()
@@ -178,14 +176,14 @@ async def test_watcher_works_when_no_caps_provider():
     subgen = MagicMock()
     subgen.queue = AsyncMock(return_value={"queued": [], "processing": []})
     provenance = MagicMock()
-    provenance.pending.return_value = [
-        MagicMock(canonical_path="TV/x.mkv", id=1, series_id=None)
-    ]
+    provenance.pending.return_value = [MagicMock(canonical_path="TV/x.mkv", id=1, series_id=None)]
     provenance.mark_completed = MagicMock()
 
     CompletionWatcher = _import_CompletionWatcher()
     watcher = CompletionWatcher(
-        subgen=subgen, bazarr=MagicMock(), provenance=provenance,
+        subgen=subgen,
+        bazarr=MagicMock(),
+        provenance=provenance,
         # No caps_provider — default None
     )
     await watcher._pass_pending()

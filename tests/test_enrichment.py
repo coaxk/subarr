@@ -1,4 +1,5 @@
 """LLM enrichment + GPU-idle gating tests."""
+
 from __future__ import annotations
 
 import httpx
@@ -10,6 +11,7 @@ import pytest
 
 def test_parse_iso_extracts_first_code(subarr_env):
     from subarr.enrichment import parse_iso
+
     assert parse_iso("ko") == "ko"
     assert parse_iso("Korean") is None  # not an ISO code
     assert parse_iso("ko (Korean)") == "ko"
@@ -55,11 +57,17 @@ def _ollama_returns_ko(req: httpx.Request) -> httpx.Response:
 
 def _subgen_idle(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [], "processing": [],
-            "queued_count": 0, "processing_count": 0,
-            "idle": True, "version": "2026.05.3",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [],
+                "processing": [],
+                "queued_count": 0,
+                "processing_count": 0,
+                "idle": True,
+                "version": "2026.05.3",
+            },
+        )
     return httpx.Response(404)
 
 
@@ -93,9 +101,12 @@ def _ollama_returns_json(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/api/generate":
         # Simulate a real Ollama JSON-mode response: the model returns a
         # serialised JSON object as a string in the `response` field.
-        return httpx.Response(200, json={
-            "response": '{"iso_code": "ko", "confidence": 0.93, "reasoning": "Squid Game is a Korean Netflix series."}',
-        })
+        return httpx.Response(
+            200,
+            json={
+                "response": '{"iso_code": "ko", "confidence": 0.93, "reasoning": "Squid Game is a Korean Netflix series."}',
+            },
+        )
     return httpx.Response(404)
 
 
@@ -119,9 +130,12 @@ def _ollama_returns_und_json(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/api/tags":
         return httpx.Response(200, json={"models": [{"name": "test-model"}]})
     if req.url.path == "/api/generate":
-        return httpx.Response(200, json={
-            "response": '{"iso_code": "und", "confidence": 0.2, "reasoning": "Title is ambiguous."}',
-        })
+        return httpx.Response(
+            200,
+            json={
+                "response": '{"iso_code": "und", "confidence": 0.2, "reasoning": "Title is ambiguous."}',
+            },
+        )
     return httpx.Response(404)
 
 
@@ -144,12 +158,17 @@ def test_enrich_lang_und_normalised_to_null(app_with_stub):
 
 def _subgen_busy(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [],
-            "processing": [{"path": "/media/TV/X/ep.mkv", "type": "transcribe"}],
-            "queued_count": 0, "processing_count": 1,
-            "idle": False, "version": "2026.05.3",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [],
+                "processing": [{"path": "/media/TV/X/ep.mkv", "type": "transcribe"}],
+                "queued_count": 0,
+                "processing_count": 1,
+                "idle": False,
+                "version": "2026.05.3",
+            },
+        )
     return httpx.Response(404)
 
 
@@ -182,10 +201,12 @@ def test_enrich_lang_gate_off_runs_even_when_busy(app_with_stub):
 def test_enrich_lang_bulk(app_with_stub):
     r = app_with_stub.post(
         "/api/enrichment/lang/bulk",
-        json={"items": [
-            {"canonical_path": "TV/A", "title": "A"},
-            {"canonical_path": "TV/B", "title": "B"},
-        ]},
+        json={
+            "items": [
+                {"canonical_path": "TV/A", "title": "A"},
+                {"canonical_path": "TV/B", "title": "B"},
+            ]
+        },
     )
     assert r.status_code == 200
     body = r.json()

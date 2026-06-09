@@ -1,4 +1,5 @@
 """POST /api/scan, GET /api/scan/{id}, GET /api/scan/{id}/events (SSE)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -48,6 +49,7 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
         runner._check_can_scan()
     except Exception as e:
         from .. import scan_runner as _sr
+
         if isinstance(e, _sr.CompatModeError):
             raise HTTPException(
                 503,
@@ -55,8 +57,8 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
                     "error": "compat_mode",
                     "reason": str(e),
                     "remedy": "Switch SUBGEN_URL to ghcr.io/coaxk/subarr-subgen, "
-                              "or see Settings → Integrations → subgen for the "
-                              "current compat-mode status.",
+                    "or see Settings → Integrations → subgen for the "
+                    "current compat-mode status.",
                 },
             )
         raise

@@ -4,6 +4,7 @@ The whole point: the sample must include a SILENCE/music stratum, not just
 dense speech — clean dialogue doesn't discriminate configs; hallucination over
 silence does. These tests pin that behaviour (pure function, no ffmpeg/VAD).
 """
+
 from __future__ import annotations
 
 from subarr.arena_sampler import WINDOW_S, select_windows
@@ -11,7 +12,7 @@ from subarr.arena_sampler import WINDOW_S, select_windows
 
 def test_includes_a_silence_window_for_a_long_gap():
     # speech early, a long silent gap in the middle, speech late.
-    ranges = [(10.0, 70.0), (400.0, 460.0)]   # ~330s silence gap between them
+    ranges = [(10.0, 70.0), (400.0, 460.0)]  # ~330s silence gap between them
     wins = select_windows(ranges, duration=500.0)
     kinds = {w["kind"] for w in wins}
     assert "silence" in kinds, f"expected a silence stratum, got {kinds}"
@@ -22,7 +23,7 @@ def test_includes_a_silence_window_for_a_long_gap():
 
 
 def test_boundary_window_captures_a_speech_to_silence_transition():
-    ranges = [(100.0, 200.0)]   # one big speech region, silence after
+    ranges = [(100.0, 200.0)]  # one big speech region, silence after
     wins = select_windows(ranges, duration=400.0)
     kinds = [w["kind"] for w in wins]
     assert "boundary" in kinds

@@ -2,10 +2,12 @@
 
 Auth is OFF in the default `subarr_env`, so no Authorization header needed.
 """
+
 from __future__ import annotations
 
 
 # --- Security headers ---------------------------------------------
+
 
 def test_csp_header_present_on_html_screen(app_with_stub):
     r = app_with_stub.get("/static/v1/home.html")
@@ -30,6 +32,7 @@ def test_hardening_headers_present(app_with_stub):
 
 
 # --- Static Cache-Control -----------------------------------------
+
 
 def test_vendor_asset_long_cache(app_with_stub):
     r = app_with_stub.get("/static/v1/vendor/react.production.min.js")
@@ -75,6 +78,7 @@ def test_html_stays_no_cache(app_with_stub):
 
 
 # --- Favicon route ------------------------------------------------
+
 
 def test_favicon_ico_route(app_with_stub):
     r = app_with_stub.get("/favicon.ico")

@@ -1,6 +1,7 @@
 """#156 Track A: persistence for per-job aftercare results. One row per
 completed job; latest-per-path surfaced. Mirrors error_store/task_health
 (single connection, WAL, lock)."""
+
 from __future__ import annotations
 
 import json
@@ -18,13 +19,9 @@ from .aftercare import AftercareEvaluation
 # execute() call site — so bandit doesn't read them as dynamic SQL (B608).
 # They contain only fixed literals + bound ? params; no user input is ever
 # interpolated (view selects between two constants; limit/offset are bound).
-_LATEST = (
-    "a.id = (SELECT MAX(b.id) FROM aftercare_results b "
-    "WHERE b.canonical_path = a.canonical_path)"
-)
+_LATEST = "a.id = (SELECT MAX(b.id) FROM aftercare_results b WHERE b.canonical_path = a.canonical_path)"
 _PENDING_COUNT_SQL = (
-    "SELECT COUNT(*) FROM aftercare_results a "
-    f"WHERE a.flagged = 1 AND a.reviewed_at IS NULL AND {_LATEST}"
+    f"SELECT COUNT(*) FROM aftercare_results a WHERE a.flagged = 1 AND a.reviewed_at IS NULL AND {_LATEST}"
 )
 _LIST_ALL_SQL = (
     f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
@@ -41,14 +38,17 @@ class AfterCareStore:
     def __init__(self, db_path: Path):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
-            str(db_path), check_same_thread=False, isolation_level=None,
+            str(db_path),
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
 
-    def record(self, *, canonical_path: str, completed_at: float,
-               evaluation: AftercareEvaluation, source: str | None) -> None:
+    def record(
+        self, *, canonical_path: str, completed_at: float, evaluation: AftercareEvaluation, source: str | None
+    ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO aftercare_results "
@@ -56,11 +56,15 @@ class AfterCareStore:
                 " readability_json, signals_json, source, reviewed_at, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
                 (
-                    canonical_path, completed_at, evaluation.composite,
-                    evaluation.cue_count, 1 if evaluation.flagged else 0,
+                    canonical_path,
+                    completed_at,
+                    evaluation.composite,
+                    evaluation.cue_count,
+                    1 if evaluation.flagged else 0,
                     json.dumps(evaluation.readability) if evaluation.readability else None,
                     json.dumps(evaluation.signals) if evaluation.signals else None,
-                    source, time.time(),
+                    source,
+                    time.time(),
                 ),
             )
 
@@ -78,7 +82,8 @@ class AfterCareStore:
     def get(self, result_id: int) -> dict[str, Any] | None:
         with self._lock:
             r = self._conn.execute(
-                "SELECT * FROM aftercare_results WHERE id = ?", (result_id,),
+                "SELECT * FROM aftercare_results WHERE id = ?",
+                (result_id,),
             ).fetchone()
         return self._row_to_dict(r) if r else None
 

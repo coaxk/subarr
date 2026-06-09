@@ -1,0 +1,12 @@
+# Mirrors the CI lint gate (.github/workflows/ci.yml) so issues are caught
+# before push, not in CI. One-time setup:  pre-commit install
+# Pinned to the same ruff version CI and the committed format use.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|tests)/
+      - id: ruff-format
+        files: ^(src|tests)/

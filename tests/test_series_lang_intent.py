@@ -1,4 +1,5 @@
 """#226: series-level audio-language intent memory tests."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,14 +9,14 @@ import pytest
 def store(tmp_path):
     from subarr.migrate import run_migrations
     from subarr.audio_lang_store import AudioLangStore
+
     db = tmp_path / "audio_lang.db"
     run_migrations(db)  # schema is migration-owned now (no init_schema)
     yield AudioLangStore(db)
 
 
 def test_get_returns_per_file_verification_when_present(store):
-    store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E01.mkv",
-                 lang_code="eng")
+    store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E01.mkv", lang_code="eng")
     v = store.get("TV/Cheers/Season 1/Cheers.S01E01.mkv")
     assert v is not None
     assert v.lang_code == "eng"
@@ -38,8 +39,9 @@ def test_per_file_beats_series_intent(store):
     """If both exist, the per-file verification wins. Lets users correct
     individual episodes inside a declared-language series."""
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
-    store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv",
-                 lang_code="fre")  # one French-dubbed episode
+    store.upsert(
+        canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv", lang_code="fre"
+    )  # one French-dubbed episode
     v = store.get("TV/Cheers/Season 1/Cheers.S01E05.mkv")
     assert v.lang_code == "fre"
     assert v.source == "user"  # NOT series_intent
@@ -49,8 +51,7 @@ def test_longest_series_prefix_wins(store):
     """When two prefixes match (e.g. TV/Cheers/ and TV/Cheers/Season 2/
     were both declared), the longer prefix takes precedence."""
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
-    store.set_series_intent(series_prefix="TV/Cheers/Season 2/",
-                            lang_code="fre")
+    store.set_series_intent(series_prefix="TV/Cheers/Season 2/", lang_code="fre")
     v = store.get("TV/Cheers/Season 2/Cheers.S02E01.mkv")
     assert v.lang_code == "fre"
 

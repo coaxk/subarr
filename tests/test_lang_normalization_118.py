@@ -5,6 +5,7 @@ subgen sidecars, and probe tags. Coverage comparisons must normalize all
 variants or they raise phantom gaps (a present .ger.srt not matched against a
 'de' wanted) or miss Bazarr-blind rows (en-US audio on a foreign show).
 """
+
 from __future__ import annotations
 
 from subarr.langs import normalize_lang
@@ -23,6 +24,7 @@ def _stale(sidecar_name: str, wanted: list[str]) -> bool:
 
 
 # ── GAP A: stale-sidecar match must normalize 639-2/B + /T → 639-1 ──────────
+
 
 def test_bibliographic_and_terminological_sidecar_satisfy_two_letter_wanted():
     # A German sidecar (.ger 639-2/B or .deu 639-2/T) satisfies a 'de' wanted.
@@ -45,16 +47,18 @@ def test_unrelated_language_is_not_stale():  # control
 
 # ── langs.normalize_lang: strip region/script suffixes ─────────────────────
 
+
 def test_normalize_strips_region_and_script_tags():
     assert normalize_lang("en-US") == "en"
     assert normalize_lang("pt-BR") == "pt"
     assert normalize_lang("zh-Hans") == "zh"
-    assert normalize_lang("en") == "en"          # unchanged
-    assert normalize_lang("ger") == "de"         # still maps 639-2/B
-    assert normalize_lang("und") == "und"        # preserved
+    assert normalize_lang("en") == "en"  # unchanged
+    assert normalize_lang("ger") == "de"  # still maps 639-2/B
+    assert normalize_lang("und") == "und"  # preserved
 
 
 # ── GAP B: Bazarr-blind mislabel signature catches region-tagged English ───
+
 
 def test_region_tagged_english_audio_flagged_mislabeled():
     assert _audio_metadata_looks_mislabeled(["en-US"]) is True

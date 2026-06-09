@@ -16,6 +16,7 @@ dep + thread pool.
 Tick frequency: every 60s. The loop sleeps that long, then asks each
 enabled schedule "are you due to fire now?" via `_due()`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,8 +35,12 @@ from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .schedule_store import (
-    KIND_DAILY, KIND_INTERVAL, KIND_WEEKLY, MODE_MANUAL_CONFIRM,
-    ScheduleConfig, ScheduleStore,
+    KIND_DAILY,
+    KIND_INTERVAL,
+    KIND_WEEKLY,
+    MODE_MANUAL_CONFIRM,
+    ScheduleConfig,
+    ScheduleStore,
 )
 
 log = logging.getLogger(__name__)
@@ -45,10 +50,11 @@ TICK_S = 60
 
 def _strip_arr_prefix(arr_path: str) -> str:
     from .config import settings
+
     prefix = settings.arr_path_prefix
     s = arr_path or ""
     if prefix and s.startswith(prefix):
-        s = s[len(prefix):]
+        s = s[len(prefix) :]
     return s.strip("/")
 
 
@@ -221,11 +227,16 @@ class Scheduler:
                 # because that's a frontend channel.
                 while state.status == "running":
                     await asyncio.sleep(0.5)
-                results.append({
-                    "root": root, "status": state.status,
-                    "total": state.total_files, "probed": state.probed,
-                    "cached_hits": state.cached_hits, "errors": len(state.errors),
-                })
+                results.append(
+                    {
+                        "root": root,
+                        "status": state.status,
+                        "total": state.total_files,
+                        "probed": state.probed,
+                        "cached_hits": state.cached_hits,
+                        "errors": len(state.errors),
+                    }
+                )
             except Exception as e:
                 log.warning("probe walk %r failed: %s", root, e)
                 results.append({"root": root, "status": "error", "error": str(e)})
@@ -272,9 +283,12 @@ class Scheduler:
         try:
             tasks = await bazarr.list_tasks()
             hints = (
-                "series_full_scan_subtitles", "movies_full_scan_subtitles",
-                "scan_disk_series", "scan_disk_episodes",
-                "scan disk", "index all existing episodes",
+                "series_full_scan_subtitles",
+                "movies_full_scan_subtitles",
+                "scan_disk_series",
+                "scan_disk_episodes",
+                "scan disk",
+                "index all existing episodes",
             )
             for hint in hints:
                 for t in tasks:
@@ -295,7 +309,8 @@ class Scheduler:
             self._last_bazarr_poke_ts = now
             log.info(
                 "coverage_walk: poked Bazarr scan-disk (%s) — %d stale-disk items detected",
-                task_id, len(stale),
+                task_id,
+                len(stale),
             )
             return {"fired": True, "task_id": task_id, "stale_count": len(stale)}
         except Exception as e:
@@ -336,7 +351,9 @@ class Scheduler:
         try:
             probe_store = getattr(self._probe_walker, "_store", None) if self._probe_walker else None
             report = await build_coverage(
-                self._bundle, use_tautulli=True, probe_store=probe_store,
+                self._bundle,
+                use_tautulli=True,
+                probe_store=probe_store,
                 subgen_caps=self._caps_provider(),
             )
         except Exception as e:
@@ -375,7 +392,9 @@ class Scheduler:
             )
             log.info(
                 "coverage_walk[manual_confirm]: %d items considered, %d pending approval (walk_id=%s)",
-                len(report.items), len(queue_decisions), pending.id,
+                len(report.items),
+                len(queue_decisions),
+                pending.id,
             )
             return {
                 "ok": True,
@@ -404,7 +423,9 @@ class Scheduler:
 
         log.info(
             "coverage_walk: %d items considered, %d queued, %d errors",
-            len(report.items), queued, len(errors),
+            len(report.items),
+            queued,
+            len(errors),
         )
         return {
             "ok": True,
@@ -509,15 +530,20 @@ class Scheduler:
         # #66/#116 slice 6: route through the pending queue (feeder drains it).
         if self._pending_queue is not None:
             job = self._pending_queue.enqueue(
-                canonical, source="gaps", series_id=series_id,
+                canonical,
+                source="gaps",
+                series_id=series_id,
                 sonarr_episode_id=sonarr_ep_id,
             )
             return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
         self._runner.start(scan)
         self._provenance.record(
-            canonical_path=canonical, scan_id=scan.id, source=SOURCE_SUBGENSCAN,
-            series_id=series_id, sonarr_episode_id=sonarr_ep_id,
+            canonical_path=canonical,
+            scan_id=scan.id,
+            source=SOURCE_SUBGENSCAN,
+            series_id=series_id,
+            sonarr_episode_id=sonarr_ep_id,
         )
         return scan.id, None
 
@@ -560,7 +586,9 @@ class Scheduler:
         # submission if no pending_queue is wired (older callers / tests).
         if self._pending_queue is not None:
             job = self._pending_queue.enqueue(
-                canonical, source="auto", series_id=series_id,
+                canonical,
+                source="auto",
+                series_id=series_id,
                 sonarr_episode_id=item.bazarr_episode_id,
             )
             return job.id, None

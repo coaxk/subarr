@@ -1,4 +1,5 @@
 """Tests for /api/gpu, /api/restart, /api/container, /api/plex/scan, /api/logs/events."""
+
 from __future__ import annotations
 
 import json
@@ -9,9 +10,11 @@ import pytest
 
 # ───── GPU ──────────────────────────────────────────────────────────────────
 
+
 def test_gpu_returns_offline_when_smi_missing(app_with_stub, monkeypatch):
     # Force nvidia-smi resolution to fail.
     from subarr.routers import gpu as gpu_mod
+
     monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: None)
 
     r = app_with_stub.get("/api/gpu")
@@ -48,6 +51,7 @@ def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
 
 # ───── Container info + restart ─────────────────────────────────────────────
 
+
 def test_container_info(app_with_stub):
     r = app_with_stub.get("/api/container")
     assert r.status_code == 200
@@ -72,14 +76,22 @@ def test_restart_returns_503_when_docker_down(app_with_stub):
 
 # ───── Plex scan ────────────────────────────────────────────────────────────
 
+
 def _plex_handler(req: httpx.Request) -> httpx.Response:
     if req.url.path == "/library/sections/all/refresh":
         return httpx.Response(200, content=b"")
     if req.url.path == "/queue":
-        return httpx.Response(200, json={
-            "queued": [], "processing": [], "queued_count": 0,
-            "processing_count": 0, "idle": True, "version": "test",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "queued": [],
+                "processing": [],
+                "queued_count": 0,
+                "processing_count": 0,
+                "idle": True,
+                "version": "test",
+            },
+        )
     if req.url.path == "/batch":
         return httpx.Response(200, json={"walked": 0, "queued": 0, "skipped": 0})
     return httpx.Response(404)
@@ -94,8 +106,7 @@ def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
 
     # Inject a configured Plex client into app state (conftest stub leaves
     # it unconfigured by default so other tests get 503 properly).
-    plex = PlexClient(base_url="http://plex.test:32400", token="test-token",
-                      default_section="all")
+    plex = PlexClient(base_url="http://plex.test:32400", token="test-token", default_section="all")
     app_with_stub.app.state.integrations.plex = plex
 
     calls = []
@@ -104,8 +115,13 @@ def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
     class _FakeAsyncClient:
         def __init__(self, *a, **kw):
             self._kw = kw
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
         async def get(self, url, params=None):
             calls.append((url, dict(params or {})))
             return httpx.Response(200, content=b"")
@@ -136,6 +152,7 @@ def test_plex_scan_503_when_token_missing(app_with_stub):
 
 
 # ───── Logs SSE ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.docker_stub(log_lines=["INFO:root:hello", "ERROR:root:bad thing happened"])
 def test_logs_sse_streams_lines(app_with_stub):

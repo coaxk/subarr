@@ -1,0 +1,41 @@
+# Lint + test gate. Fills two gaps: ruff was configured but never enforced in
+# CI, and pytest only ran in release.yml (on push/tags), not on PRs.
+#   - lint:  ruff check + ruff format --check on every push + PR
+#   - test:  full pytest suite on PRs (pushes to main are covered by release.yml
+#            before publish, so we don't double-run the suite there)
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      # Pin to the exact ruff that produced the committed format, so CI and
+      # local never disagree on a patch-level formatting change.
+      - run: pip install ruff==0.15.15
+      - run: ruff check src/ tests/
+      - run: ruff format --check src/ tests/
+
+  test:
+    # PRs only — pushes to main run pytest in release.yml before publish.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e .[dev]
+      - run: PYTHONPATH=src pytest -q --tb=line

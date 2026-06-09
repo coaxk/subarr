@@ -9,6 +9,7 @@ into "this clip is easy enough that settings don't matter — try a harder one".
 Best-effort: returns None if ollama isn't configured or errors, so the
 structured guidance always stands on its own.
 """
+
 from __future__ import annotations
 
 import logging

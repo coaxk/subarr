@@ -8,6 +8,7 @@ Gating: caller (router) checks subgen `/queue` idle before enrichment
 to avoid GPU contention with active transcribes. The LLM also runs on
 the same GPU.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,10 +39,7 @@ _SYSTEM_PROMPT = (
     "Examples of ISO codes: en, fr, es, de, it, ja, ko, zh, ru, pl, pt, hi."
 )
 
-_USER_TEMPLATE = (
-    "Title: {title}\n"
-    "Folder path: {path}"
-)
+_USER_TEMPLATE = "Title: {title}\nFolder path: {path}"
 
 # Schema passed to Ollama's `format` parameter. Ollama (and llama.cpp under
 # the hood) honour this as a grammar constraint — the model's output is
@@ -125,14 +123,29 @@ class EnrichmentStore:
         if row is None:
             return None
         return {
-            "canonical_path": row[0], "title": row[1], "raw_response": row[2],
-            "iso_code": row[3], "model": row[4], "inferred_at": row[5], "error": row[6],
-            "confidence": row[7], "reasoning": row[8],
+            "canonical_path": row[0],
+            "title": row[1],
+            "raw_response": row[2],
+            "iso_code": row[3],
+            "model": row[4],
+            "inferred_at": row[5],
+            "error": row[6],
+            "confidence": row[7],
+            "reasoning": row[8],
         }
 
-    def upsert(self, *, canonical_path: str, title: str, raw_response: str,
-                iso_code: str | None, model: str, error: str | None = None,
-                confidence: float | None = None, reasoning: str | None = None) -> None:
+    def upsert(
+        self,
+        *,
+        canonical_path: str,
+        title: str,
+        raw_response: str,
+        iso_code: str | None,
+        model: str,
+        error: str | None = None,
+        confidence: float | None = None,
+        reasoning: str | None = None,
+    ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO lang_enrichment "
@@ -144,8 +157,17 @@ class EnrichmentStore:
                 "  iso_code=excluded.iso_code, model=excluded.model, "
                 "  inferred_at=excluded.inferred_at, error=excluded.error, "
                 "  confidence=excluded.confidence, reasoning=excluded.reasoning",
-                (canonical_path, title, raw_response, iso_code, model, time.time(),
-                 error, confidence, reasoning),
+                (
+                    canonical_path,
+                    title,
+                    raw_response,
+                    iso_code,
+                    model,
+                    time.time(),
+                    error,
+                    confidence,
+                    reasoning,
+                ),
             )
 
 
@@ -218,27 +240,42 @@ async def enrich_one(
         # one-sentence reason). Grammar-constrained JSON means the model
         # can't over-shoot the schema regardless.
         raw = await ollama.generate(
-            prompt, system=_SYSTEM_PROMPT, temperature=0.0, num_predict=120,
+            prompt,
+            system=_SYSTEM_PROMPT,
+            temperature=0.0,
+            num_predict=120,
             keep_alive=keep_alive,
             format_schema=_LANG_SCHEMA,
         )
     except OllamaError as e:
         store.upsert(
-            canonical_path=canonical_path, title=title,
-            raw_response="", iso_code=None,
-            model=ollama.model, error=str(e),
+            canonical_path=canonical_path,
+            title=title,
+            raw_response="",
+            iso_code=None,
+            model=ollama.model,
+            error=str(e),
         )
         raise
 
     iso, confidence, reasoning = _parse_structured(raw)
     store.upsert(
-        canonical_path=canonical_path, title=title,
-        raw_response=raw, iso_code=iso,
-        model=ollama.model, error=None,
-        confidence=confidence, reasoning=reasoning,
+        canonical_path=canonical_path,
+        title=title,
+        raw_response=raw,
+        iso_code=iso,
+        model=ollama.model,
+        error=None,
+        confidence=confidence,
+        reasoning=reasoning,
     )
     return EnrichmentResult(
-        canonical_path=canonical_path, title=title, iso_code=iso,
-        raw_response=raw, model=ollama.model, cached=False,
-        confidence=confidence, reasoning=reasoning,
+        canonical_path=canonical_path,
+        title=title,
+        iso_code=iso,
+        raw_response=raw,
+        model=ollama.model,
+        cached=False,
+        confidence=confidence,
+        reasoning=reasoning,
     )

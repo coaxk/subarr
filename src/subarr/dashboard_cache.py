@@ -12,6 +12,7 @@ calls (usually Bazarr wanted on large libs) gates the response. With this
 cache, the user pays that latency once per 30s background tick instead
 of once per page load.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -76,9 +77,9 @@ class DashboardCache:
 DEFAULT_INTERVAL_S = 30
 
 
-async def background_refresh_loop(cache: DashboardCache, build_fn,
-                                   interval_s: int = DEFAULT_INTERVAL_S,
-                                   health=None) -> None:
+async def background_refresh_loop(
+    cache: DashboardCache, build_fn, interval_s: int = DEFAULT_INTERVAL_S, health=None
+) -> None:
     # Warm on boot if empty.
     if cache.get_cached() is None:
         try:

@@ -8,6 +8,7 @@ No side effects — the caller (scheduler or HTTP handler) loops over the
 "queue" decisions and posts each to /api/coverage/queue (or invokes the
 underlying flow directly).
 """
+
 from __future__ import annotations
 
 import logging
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .coverage_engine import CoverageItem
-from .schedule_store import AutoQueueRules, MODE_AUTO_RULES, MODE_DASHBOARD, MODE_MANUAL_CONFIRM
+from .schedule_store import AutoQueueRules, MODE_DASHBOARD
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +98,9 @@ def evaluate(
         # pattern. Done in O(items × in_flight) which is fine at scale —
         # in_flight is bounded by the number of recently-queued files.
         if _is_in_flight(item, in_flight):
-            decisions.append(Decision(item, "skip", "already in flight (scan submitted, awaiting subgen completion)"))
+            decisions.append(
+                Decision(item, "skip", "already in flight (scan submitted, awaiting subgen completion)")
+            )
             continue
         # Probe-gate: never auto-queue a row subarr hasn't verified by
         # probing the file. An un-probed/probe-failed row can't be trusted
@@ -112,10 +115,13 @@ def evaluate(
         left = settle_seconds_left(item, rules.settle_minutes, now)
         if left > 0:
             mins = (left + 59) // 60  # ceil to whole minutes
-            decisions.append(Decision(
-                item, "skip",
-                f"settling ({mins}m left) — letting Bazarr/providers land a real sub first",
-            ))
+            decisions.append(
+                Decision(
+                    item,
+                    "skip",
+                    f"settling ({mins}m left) — letting Bazarr/providers land a real sub first",
+                )
+            )
             continue
         skip_reason = _filter_reason(item, rules)
         if skip_reason:
@@ -125,8 +131,8 @@ def evaluate(
 
     # Sort eligible by score desc (CoverageItems already sorted, but defensive).
     eligible.sort(key=lambda i: i.score, reverse=True)
-    queued = eligible[:rules.max_per_run]
-    cut = eligible[rules.max_per_run:]
+    queued = eligible[: rules.max_per_run]
+    cut = eligible[rules.max_per_run :]
     for item in queued:
         decisions.append(Decision(item, "queue", f"matches rules (mode={rules.mode})"))
     for item in cut:

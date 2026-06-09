@@ -4,6 +4,7 @@ In the test env onnxruntime is not installed, so this also pins the
 runtime-absent behaviour: status reports it, and pull-model 503s cleanly
 (the app keeps working — it falls back to silencedetect).
 """
+
 from __future__ import annotations
 
 
@@ -25,6 +26,7 @@ def test_vad_pull_model_503_without_runtime(app_with_stub):
 
 def test_vad_config_toggle_persists_and_reflects(app_with_stub, tmp_path, monkeypatch):
     from subarr import config, config_store as cs
+
     monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
     monkeypatch.delenv("SUBARR_VAD_ENABLED", raising=False)
     prior = config.settings.vad_enabled
@@ -34,6 +36,6 @@ def test_vad_config_toggle_persists_and_reflects(app_with_stub, tmp_path, monkey
         body = r.json()
         assert body["enabled"] is False
         assert body["env_controlled"] is False
-        assert cs.load_overrides().get("vad_enabled") is False   # persisted
+        assert cs.load_overrides().get("vad_enabled") is False  # persisted
     finally:
         object.__setattr__(config.settings, "vad_enabled", prior)

@@ -1,4 +1,5 @@
 """#156 aftercare evaluation + flag bar (pure)."""
+
 from __future__ import annotations
 
 from subarr.aftercare import AftercareEvaluation, evaluate_subtitle
@@ -8,8 +9,7 @@ _CLEAN = (
     "2\n00:00:04,000 --> 00:00:06,500\nHow are you today?\n\n"
 )
 _LOOPING = "".join(
-    f"{i}\n00:00:{i:02d},000 --> 00:00:{i:02d},800\nThanks for watching!\n\n"
-    for i in range(1, 11)
+    f"{i}\n00:00:{i:02d},000 --> 00:00:{i:02d},800\nThanks for watching!\n\n" for i in range(1, 11)
 )
 
 
@@ -22,7 +22,7 @@ def test_clean_subtitle_not_flagged():
 
 
 def test_canned_hallucination_flagged():
-    ev = evaluate_subtitle(_LOOPING)   # repeats + canned "Thanks for watching!"
+    ev = evaluate_subtitle(_LOOPING)  # repeats + canned "Thanks for watching!"
     assert ev.flagged is True
     assert (ev.signals or {}).get("canned_phrase_hits", 0) > 0
 

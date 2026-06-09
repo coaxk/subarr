@@ -11,6 +11,7 @@ Rubric pinned here is behaviour, not implementation: a window lands inside
 the largest speech region, clamps within the file, and prefers the cluster
 with the most speech.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +21,7 @@ import pytest
 
 def _vad():
     from subarr import vad
+
     return vad
 
 
@@ -34,8 +36,8 @@ def test_picks_window_inside_longest_speech_region():
     speech = [(2.0, 4.0), (50.0, 90.0)]
     w = vad.select_speech_window(speech, 100.0, target_len=12.0)
     assert w is not None
-    assert 50.0 <= w <= 78.0          # inside [50,90]
-    assert w + 12.0 <= 90.0 + 0.01    # window fits inside the region
+    assert 50.0 <= w <= 78.0  # inside [50,90]
+    assert w + 12.0 <= 90.0 + 0.01  # window fits inside the region
 
 
 def test_window_clamped_within_duration():
@@ -50,13 +52,14 @@ def test_window_clamped_within_duration():
 
 def test_prefers_cluster_with_most_speech():
     vad = _vad()
-    speech = [(10.0, 13.0), (40.0, 70.0)]   # 3s vs 30s
+    speech = [(10.0, 13.0), (40.0, 70.0)]  # 3s vs 30s
     w = vad.select_speech_window(speech, 100.0, target_len=12.0)
     assert w is not None
-    assert 40.0 <= w <= 58.0   # centred in the big cluster
+    assert 40.0 <= w <= 58.0  # centred in the big cluster
 
 
 # --- normalize_speech_ranges: clean silero's raw output -----------------
+
 
 def test_normalize_merges_ranges_within_gap():
     vad = _vad()
@@ -86,6 +89,7 @@ def test_normalize_sorts_unordered_input():
 
 # --- availability gate: never hard-fails when silero is absent ----------
 
+
 def test_vad_available_returns_bool_without_raising():
     vad = _vad()
     assert isinstance(vad.vad_available(), bool)
@@ -100,6 +104,7 @@ def test_detect_speech_ranges_returns_none_when_unavailable(monkeypatch):
 # --- _probs_to_ranges: per-window silero probs → speech ranges ----------
 # (the pure half of the onnx inference; the ffmpeg decode + session.run is
 #  live-verified I/O glue that calls into this.)
+
 
 def test_probs_to_ranges_merges_contiguous_speech_windows():
     vad = _vad()
@@ -123,6 +128,7 @@ def test_probs_to_ranges_all_speech_is_single_range():
 
 
 # --- pull_model: pinned download + checksum verify + atomic write -------
+
 
 def test_pull_model_downloads_and_verifies(tmp_path, monkeypatch):
     vad = _vad()
@@ -158,4 +164,4 @@ def test_pull_model_rejects_checksum_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(vad, "MODEL_SHA256", "deadbeef")
     with pytest.raises(ValueError):
         vad.pull_model(_fetch=lambda url: b"corrupted-or-tampered")
-    assert not target.is_file()   # nothing persisted on a bad checksum
+    assert not target.is_file()  # nothing persisted on a bad checksum

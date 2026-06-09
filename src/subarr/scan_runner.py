@@ -7,6 +7,7 @@ per-scan asyncio.Queue that the SSE endpoint subscribes to.
 Sequential because subgen is single-GPU; parallel /batch calls just queue up
 inside subgen anyway. Sequential here = honest UI.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,8 +40,14 @@ class CompatModeError(RuntimeError):
 
 
 class ScanRunner:
-    def __init__(self, subgen: SubgenClient | None = None, store: ScanStore = None,
-                 caps_provider=None, subgen_provider=None, error_recorder=None):
+    def __init__(
+        self,
+        subgen: SubgenClient | None = None,
+        store: ScanStore = None,
+        caps_provider=None,
+        subgen_provider=None,
+        error_recorder=None,
+    ):
         # subgen is resolved through a provider so onboarding live-reload
         # can swap the client on app.state without restarting the runner.
         # Backward compatible: a directly-passed `subgen` is wrapped in a
@@ -82,8 +89,7 @@ class ScanRunner:
             return  # caps not probed yet — let it proceed
         if not caps.reachable:
             raise CompatModeError(
-                "subgen is not reachable. Check the subgen container is "
-                "running + SUBGEN_URL points at it."
+                "subgen is not reachable. Check the subgen container is running + SUBGEN_URL points at it."
             )
         if not caps.has_batch:
             raise CompatModeError(
@@ -109,9 +115,12 @@ class ScanRunner:
             self._overrides[scan.id] = audio_language_override
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
-        task.add_done_callback(lambda t, sid=scan.id: (
-            self._tasks.pop(sid, None), self._overrides.pop(sid, None),
-        ))
+        task.add_done_callback(
+            lambda t, sid=scan.id: (
+                self._tasks.pop(sid, None),
+                self._overrides.pop(sid, None),
+            )
+        )
 
     async def subscribe(self, scan_id: str) -> AsyncIterator[dict]:
         """Yields events for a scan until the scan reaches a terminal state.
@@ -172,7 +181,8 @@ class ScanRunner:
                 directory = canonical_to_subgen_batch(path)
                 override = self._overrides.get(scan_id)
                 status_code, body = await self._subgen.batch(
-                    directory, reverse=scan.reverse,
+                    directory,
+                    reverse=scan.reverse,
                     audio_language_override=override,
                 )
                 result.subgen_status_code = status_code
@@ -215,8 +225,12 @@ class ScanRunner:
                     if pending_detect:
                         reasons.append(f"{pending_detect} pending lang detect")
                     result.error = "; ".join(reasons) if reasons else "skipped"
-                elif status_code == 200 and walked > 0 and queued == 0 \
-                        and (body.get("already_in_queue", 0) > 0):
+                elif (
+                    status_code == 200
+                    and walked > 0
+                    and queued == 0
+                    and (body.get("already_in_queue", 0) > 0)
+                ):
                     # Already in subgen's queue — treat as OK; it'll process.
                     result.status = PATH_STATUS_OK
                 elif status_code == 404 or walked == 0:

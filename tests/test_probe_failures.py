@@ -12,6 +12,7 @@ def _store(tmp_path):
     # self-creates tables (init_schema removed).
     from subarr.migrate import run_migrations
     from subarr.probe_store import ProbeStore
+
     db = tmp_path / "p.db"
     run_migrations(db)
     return ProbeStore(db)
@@ -36,9 +37,11 @@ def test_record_failure_upserts_and_counts_attempts(tmp_path):
 
 def test_successful_probe_clears_failure(tmp_path):
     from subarr.media_probe import ProbeResult
+
     s = _store(tmp_path)
     s.record_failure("TV/X/a.mkv", "transient")
     assert "TV/X/a.mkv" in s.failed_paths()
-    s.upsert(canonical_path="TV/X/a.mkv", mtime=1.0, size=100,
-             result=ProbeResult(canonical_path="TV/X/a.mkv"))
+    s.upsert(
+        canonical_path="TV/X/a.mkv", mtime=1.0, size=100, result=ProbeResult(canonical_path="TV/X/a.mkv")
+    )
     assert "TV/X/a.mkv" not in s.failed_paths()  # recovered → no longer failed

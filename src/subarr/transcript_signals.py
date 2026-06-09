@@ -15,6 +15,7 @@ Cross-config CONSENSUS (segments most entrants agree on) is the other big
 signal, but it's inherently cross-entrant so it lives in the tournament
 runner, not here.
 """
+
 from __future__ import annotations
 
 from collections import Counter

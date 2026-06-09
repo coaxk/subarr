@@ -21,6 +21,7 @@ The RUBRIC (weights/penalties below) is the v1 PROPOSAL — tune with Judd. The
 readability dominates, speed breaks ties, QE slots in as an advisory
 contributor later.
 """
+
 from __future__ import annotations
 
 import re
@@ -38,9 +39,9 @@ from .transcript_signals import (
 from . import qe as _qe
 
 # --- v1 proposed rubric (TUNABLE) ---------------------------------------
-CRITICAL_PENALTY = 2.0   # weight of a 'critical' readability issue
-WARN_PENALTY = 1.0       # weight of a 'warn' readability issue
-QUALITY_WEIGHT = 0.85    # quality (100 − QE − readability penalties) vs speed
+CRITICAL_PENALTY = 2.0  # weight of a 'critical' readability issue
+WARN_PENALTY = 1.0  # weight of a 'warn' readability issue
+QUALITY_WEIGHT = 0.85  # quality (100 − QE − readability penalties) vs speed
 SPEED_WEIGHT = 0.15
 
 # Readability is the SECONDARY judge (#65 research: QE signals are the real
@@ -49,22 +50,22 @@ SPEED_WEIGHT = 0.15
 # Tier-B 2026-06-04 showed the old "readability IS the base" rubric scored
 # accurate, speech-aligned transcripts of rapid dialogue at ~0 (high CPS trips
 # the linter), masking the QE signals that decide a tournament.
-READABILITY_K = 25.0     # readability penalty = load_per_cue × K …
-READABILITY_CAP = 20.0   # … capped here so readability stays secondary
+READABILITY_K = 25.0  # readability penalty = load_per_cue × K …
+READABILITY_CAP = 20.0  # … capped here so readability stays secondary
 
 # QE (reference-free) penalties — the real discriminators (#65 research). A
 # quality score starts from readability (0-100) and these subtract from it, so
 # a hallucinating/looping entrant tanks regardless of how "readable" its
 # fabricated text is. Tuned so a fully-hallucinated or fully-looping output
 # drops to ~0.
-SILENCE_TEXT_PENALTY = 100.0   # × fraction of text over silence (hallucination)
-REPEAT_PENALTY = 100.0         # × fraction of duplicate lines (looping)
-CANNED_PENALTY = 40.0          # × canned-phrase cues (capped)
+SILENCE_TEXT_PENALTY = 100.0  # × fraction of text over silence (hallucination)
+REPEAT_PENALTY = 100.0  # × fraction of duplicate lines (looping)
+CANNED_PENALTY = 40.0  # × canned-phrase cues (capped)
 CANNED_CAP = 3
 # Base-camp completeness: speech with no subtitle (dropped dialogue). Weighted
 # below the catastrophic-failure tier (silence/repeat = 100) but high enough to
 # stop an incomplete sub from winning — an incomplete sub is a journey defect.
-COVERAGE_PENALTY = 50.0        # × fraction of speech left unsubtitled
+COVERAGE_PENALTY = 50.0  # × fraction of speech left unsubtitled
 
 # CONSENSUS judge (#65) — the cross-config pseudo-reference. The per-entrant
 # judges above score each output in isolation, so they miss a fluent, well-formed
@@ -76,7 +77,7 @@ COVERAGE_PENALTY = 50.0        # × fraction of speech left unsubtitled
 # collapse). The penalty subtracts from the composite by (1 − f1). No ground
 # truth required; robust to translation wording/timing variance (content-word
 # sets, not cue alignment).
-CONSENSUS_PENALTY = 40.0   # × (1 − consensus F1)
+CONSENSUS_PENALTY = 40.0  # × (1 − consensus F1)
 
 # QE/ADEQUACY (#123, the summit) — reference-free LaBSE cosine(source, hyp).
 # Validated rho=0.727 vs true accuracy (vs the structural quality's ~0.41), so
@@ -86,13 +87,13 @@ CONSENSUS_PENALTY = 40.0   # × (1 − consensus F1)
 # Gated: only blends when Entrant.source_text is set AND the embedder is
 # available; otherwise composite is unchanged (structural-only). TUNABLE —
 # calibrate the blend against the chrF rig.
-QE_BLEND = 0.70   # weight of QE adequacy in quality_total when QE is present
+QE_BLEND = 0.70  # weight of QE adequacy in quality_total when QE is present
 
 
 @dataclass
 class Entrant:
-    label: str                  # config name, e.g. "large-v3 / beam5 / vad"
-    srt_text: str               # candidate output for the shared source
+    label: str  # config name, e.g. "large-v3 / beam5 / vad"
+    srt_text: str  # candidate output for the shared source
     gen_time_s: float | None = None
     config: dict[str, Any] = field(default_factory=dict)
     # silero speech ranges (s) for the SOURCE audio (#111). Shared across
@@ -108,20 +109,20 @@ class Entrant:
 class Scorecard:
     entrant_label: str
     disqualified: bool
-    composite: float            # 0-100 (0 if disqualified)
-    readability_score: float    # 0-100
+    composite: float  # 0-100 (0 if disqualified)
+    readability_score: float  # 0-100
     cue_count: int
     gen_time_s: float | None
-    readability: dict[str, Any] | None   # the #92 report.to_dict()
+    readability: dict[str, Any] | None  # the #92 report.to_dict()
     signals: dict[str, Any] | None = None  # QE signals (silence/repeat/canned)
     consensus: dict[str, Any] | None = None  # vs-majority precision/recall/f1
-    qe_adequacy: float | None = None       # #123: LaBSE cosine(source, hyp); None if unavailable
+    qe_adequacy: float | None = None  # #123: LaBSE cosine(source, hyp); None if unavailable
     notes: str = ""
 
 
 @dataclass
 class TournamentResult:
-    scorecards: list[Scorecard]           # ranked best-first
+    scorecards: list[Scorecard]  # ranked best-first
     winner_label: str | None
     # mean pairwise content-word agreement across entrants (0-1). Low → the
     # configs disagree about what was said → flag the clip for human review.
@@ -174,18 +175,32 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
             # outcome. A clean pass, NOT a disqualification (it must beat any
             # entrant that hallucinated text here).
             return Scorecard(
-                entrant_label=entrant.label, disqualified=False, composite=100.0,
-                readability_score=100.0, cue_count=0, gen_time_s=entrant.gen_time_s,
+                entrant_label=entrant.label,
+                disqualified=False,
+                composite=100.0,
+                readability_score=100.0,
+                cue_count=0,
+                gen_time_s=entrant.gen_time_s,
                 readability=None,
-                signals={"silence_text_ratio": 0.0, "repeated_line_ratio": 0.0,
-                         "canned_phrase_hits": 0, "uncovered_speech_ratio": 0.0,
-                         "qe_adequacy": None, "non_speech_clip": True},
+                signals={
+                    "silence_text_ratio": 0.0,
+                    "repeated_line_ratio": 0.0,
+                    "canned_phrase_hits": 0,
+                    "uncovered_speech_ratio": 0.0,
+                    "qe_adequacy": None,
+                    "non_speech_clip": True,
+                },
                 notes="correctly produced no output on a non-speech clip",
             )
         return Scorecard(
-            entrant_label=entrant.label, disqualified=True, composite=0.0,
-            readability_score=0.0, cue_count=0, gen_time_s=entrant.gen_time_s,
-            readability=None, signals=None,
+            entrant_label=entrant.label,
+            disqualified=True,
+            composite=0.0,
+            readability_score=0.0,
+            cue_count=0,
+            gen_time_s=entrant.gen_time_s,
+            readability=None,
+            signals=None,
             notes="no parseable subtitle cues (disqualified)",
         )
     report = analyze_srt(entrant.srt_text)
@@ -230,10 +245,7 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     if entrant.source_text:
         hyp = " ".join(c.text for c in cues)
         qadq = _qe.qe_adequacy(entrant.source_text, hyp)
-    quality_total = (
-        quality if qadq is None
-        else (qadq * 100.0) * QE_BLEND + quality * (1.0 - QE_BLEND)
-    )
+    quality_total = quality if qadq is None else (qadq * 100.0) * QE_BLEND + quality * (1.0 - QE_BLEND)
     signals = {
         "silence_text_ratio": round(sil, 4),
         "repeated_line_ratio": round(rep, 4),
@@ -248,10 +260,15 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
     else:
         composite = quality_total
     return Scorecard(
-        entrant_label=entrant.label, disqualified=False,
-        composite=round(composite, 2), readability_score=round(r_score, 2),
-        cue_count=report.cue_count, gen_time_s=entrant.gen_time_s,
-        readability=report.to_dict(), signals=signals, qe_adequacy=qadq,
+        entrant_label=entrant.label,
+        disqualified=False,
+        composite=round(composite, 2),
+        readability_score=round(r_score, 2),
+        cue_count=report.cue_count,
+        gen_time_s=entrant.gen_time_s,
+        readability=report.to_dict(),
+        signals=signals,
+        qe_adequacy=qadq,
     )
 
 
@@ -278,7 +295,7 @@ def consensus_scores(
         return {}, None
     vocabs = {label: _content_tokens(srt) for label, srt in label_to_srt.items()}
     n = len(vocabs)
-    threshold = n // 2 + 1            # strict majority; for n=2 → both must agree
+    threshold = n // 2 + 1  # strict majority; for n=2 → both must agree
     doc_freq: dict[str, int] = {}
     for v in vocabs.values():
         for tok in v:
@@ -318,8 +335,7 @@ def run_tournament(entrants: list[Entrant]) -> TournamentResult:
     # (non-disqualified) entrants form the consensus; the divergence penalty
     # then subtracts from each composite by (1 − F1).
     by_label = {e.label: e for e in entrants}
-    scorable = {c.entrant_label: by_label[c.entrant_label].srt_text
-                for c in cards if not c.disqualified}
+    scorable = {c.entrant_label: by_label[c.entrant_label].srt_text for c in cards if not c.disqualified}
     reports, clip_agreement = consensus_scores(scorable)
     for c in cards:
         rep = reports.get(c.entrant_label)
@@ -330,12 +346,16 @@ def run_tournament(entrants: list[Entrant]) -> TournamentResult:
         c.composite = round(max(0.0, c.composite - penalty), 2)
 
     # Disqualified always last; otherwise composite desc, faster breaks ties.
-    cards.sort(key=lambda c: (
-        c.disqualified,
-        -c.composite,
-        c.gen_time_s if c.gen_time_s is not None else float("inf"),
-    ))
+    cards.sort(
+        key=lambda c: (
+            c.disqualified,
+            -c.composite,
+            c.gen_time_s if c.gen_time_s is not None else float("inf"),
+        )
+    )
     winner = next((c.entrant_label for c in cards if not c.disqualified), None)
     return TournamentResult(
-        scorecards=cards, winner_label=winner, clip_agreement=clip_agreement,
+        scorecards=cards,
+        winner_label=winner,
+        clip_agreement=clip_agreement,
     )

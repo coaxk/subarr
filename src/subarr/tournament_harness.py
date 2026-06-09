@@ -13,6 +13,7 @@ CLI:
 Each *.srt in the dir is one entrant (labelled by filename stem). Prints a
 ranked scorecard with the QE signals that decided it.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,8 +36,10 @@ def judge_candidates(
     gen_times = gen_times or {}
     entrants = [
         Entrant(
-            label=label, srt_text=srt,
-            speech_ranges=speech_ranges, gen_time_s=gen_times.get(label),
+            label=label,
+            srt_text=srt,
+            speech_ranges=speech_ranges,
+            gen_time_s=gen_times.get(label),
             source_text=source_text,
         )
         for label, srt in candidates.items()
@@ -47,10 +50,7 @@ def judge_candidates(
 def load_candidates(srt_dir) -> dict[str, str]:
     """Load every *.srt in a directory, labelled by filename stem."""
     d = Path(srt_dir)
-    return {
-        p.stem: p.read_text(encoding="utf-8", errors="replace")
-        for p in sorted(d.glob("*.srt"))
-    }
+    return {p.stem: p.read_text(encoding="utf-8", errors="replace") for p in sorted(d.glob("*.srt"))}
 
 
 def format_result(result: TournamentResult) -> str:

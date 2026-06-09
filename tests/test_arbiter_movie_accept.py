@@ -25,15 +25,18 @@ def test_download_movie_candidate_posts_radarrid():
         return httpx.Response(200, json={"downloaded": True})
 
     c = BazarrClient()
-    c._client = httpx.AsyncClient(
-        base_url="http://bazarr:6767", transport=httpx.MockTransport(handler)
-    )
+    c._client = httpx.AsyncClient(base_url="http://bazarr:6767", transport=httpx.MockTransport(handler))
     c._configured = True
 
     res = asyncio.run(
         c.download_movie_candidate(
-            movie_id=42, language="en", provider="opensubtitles",
-            subtitles_id="abc123", score=91, forced=False, hi=False,
+            movie_id=42,
+            language="en",
+            provider="opensubtitles",
+            subtitles_id="abc123",
+            score=91,
+            forced=False,
+            hi=False,
         )
     )
     assert captured["path"] == "/api/providers/movies"
@@ -60,17 +63,27 @@ def test_accept_movie_routes_to_bazarr(app_with_stub):
             pass
 
     c.app.state.integrations.bazarr = FakeBazarr()
-    r = c.post("/api/arbiter/accept", json={
-        "movie_id": 42, "provider": "opensubtitles",
-        "subtitles_id": "abc123", "score": 91,
-    })
+    r = c.post(
+        "/api/arbiter/accept",
+        json={
+            "movie_id": 42,
+            "provider": "opensubtitles",
+            "subtitles_id": "abc123",
+            "score": 91,
+        },
+    )
     assert r.status_code == 200, r.text
     assert r.json()["accepted"] is True
     assert calls["movie_id"] == 42
 
 
 def test_accept_requires_an_id(app_with_stub):
-    r = app_with_stub.post("/api/arbiter/accept", json={
-        "provider": "opensubtitles", "subtitles_id": "x", "score": 1,
-    })
+    r = app_with_stub.post(
+        "/api/arbiter/accept",
+        json={
+            "provider": "opensubtitles",
+            "subtitles_id": "x",
+            "score": 1,
+        },
+    )
     assert r.status_code == 400

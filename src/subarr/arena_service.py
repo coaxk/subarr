@@ -13,6 +13,7 @@ SSE subscribers + asyncio tasks stay in-memory (transient).
 The run state stays light on purpose: live `outcomes` carry label/ok/error
 (not the full SRT), and `result` is the serialized `TournamentResult`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,9 +69,15 @@ def resolve_source_language(detect, tag, submit, multitrack=False):
 
 
 class ArenaService:
-    def __init__(self, store: ArenaStore, build_runner: Callable[[ArenaRun], CandidateRunner],
-                 explainer=None, max_concurrent: int = 1, lang_fallback=None,
-                 track_info=None):
+    def __init__(
+        self,
+        store: ArenaStore,
+        build_runner: Callable[[ArenaRun], CandidateRunner],
+        explainer=None,
+        max_concurrent: int = 1,
+        lang_fallback=None,
+        track_info=None,
+    ):
         self._store = store
         self._build_runner = build_runner
         self._explainer = explainer  # async (result_dict, media_path) -> str|None
@@ -89,9 +96,14 @@ class ArenaService:
         self._sema = asyncio.Semaphore(max_concurrent)
 
     # ── store (persisted) ────────────────────────────────────────────────────
-    def create(self, media_path: str, variants: list[ConfigVariant],
-               source_language: str | None = None, track_index: int = 0,
-               is_track_fanout: bool = False) -> ArenaRun:
+    def create(
+        self,
+        media_path: str,
+        variants: list[ConfigVariant],
+        source_language: str | None = None,
+        track_index: int = 0,
+        is_track_fanout: bool = False,
+    ) -> ArenaRun:
         run = ArenaRun(
             id=uuid.uuid4().hex[:12],
             media_path=media_path,
@@ -163,8 +175,13 @@ class ArenaService:
             async with self._sema:
                 run.status = "running"
                 self._store.save(run)
-                self._emit(run_id, {"event": "start",
-                                    "data": {"id": run.id, "variants": [v["label"] for v in run.variants]}})
+                self._emit(
+                    run_id,
+                    {
+                        "event": "start",
+                        "data": {"id": run.id, "variants": [v["label"] for v in run.variants]},
+                    },
+                )
                 await self._execute(run)
         except asyncio.CancelledError:
             run.status = "error"
@@ -198,8 +215,7 @@ class ArenaService:
             self._store.save(run)
             self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
 
-        result = await run_arena(run.media_path, variants, runner=runner,
-                                 on_clip=on_clip, on_step=on_step)
+        result = await run_arena(run.media_path, variants, runner=runner, on_clip=on_clip, on_step=on_step)
         for c in per_clip["clips"]:
             c["status"] = "done"
         serialized = asdict(result)
@@ -238,7 +254,8 @@ class ArenaService:
         # tag mismatch is just a different track).
         multitrack = len(track_langs) >= 2
         final, src, mixed, mislabel = resolve_source_language(
-            det, tag, run.source_language, multitrack=multitrack)
+            det, tag, run.source_language, multitrack=multitrack
+        )
         # A fan-out leg's language came from the track's ffprobe tag, not a user
         # pick — relabel "user" → "track" so the herd distinguishes the two.
         if src == "user" and run.is_track_fanout:

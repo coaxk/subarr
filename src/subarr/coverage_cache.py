@@ -16,6 +16,7 @@ single-row keyed by id=1 — no history retention needed (we don't render
 "snapshot 5 minutes ago" deltas yet; if we do later, this gets a
 timestamp index).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -119,7 +120,9 @@ class CoverageCache:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
-            str(db_path), check_same_thread=False, isolation_level=None,
+            str(db_path),
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
@@ -135,12 +138,13 @@ class CoverageCache:
         # kicks into at most one in-flight build + one queued follow-up,
         # and spaces builds at least `_min_interval_s` apart.
         from . import config
+
         try:
             self._min_interval_s: float = config.load().coverage_refresh_min_interval_s
         except Exception:
             self._min_interval_s = 120.0
         self._last_refresh_done: float = 0.0  # monotonic clock
-        self._pending_again: bool = False     # coalesced follow-up flag
+        self._pending_again: bool = False  # coalesced follow-up flag
         self._pending_args: tuple | None = None  # args for the follow-up
         self._refresh_task: asyncio.Task | None = None
         self._debounce_handle: asyncio.TimerHandle | None = None
@@ -159,8 +163,9 @@ class CoverageCache:
         in-flight build."""
         return self._pending_again or self._debounce_handle is not None
 
-    def request_refresh(self, bundle, probe_store, audio_lang_store,
-                        *, use_tautulli: bool = True, probe_walker=None) -> None:
+    def request_refresh(
+        self, bundle, probe_store, audio_lang_store, *, use_tautulli: bool = True, probe_walker=None
+    ) -> None:
         """Single coalescing entry point for event-driven refresh kicks.
 
         Behaviour:
@@ -197,9 +202,7 @@ class CoverageCache:
         if wait <= 0:
             self._start_refresh_task(args)
         else:
-            self._debounce_handle = loop.call_later(
-                wait, self._fire_debounced
-            )
+            self._debounce_handle = loop.call_later(wait, self._fire_debounced)
 
     def _time_until_allowed(self, loop) -> float:
         if self._min_interval_s <= 0 or self._last_refresh_done == 0.0:
@@ -221,8 +224,11 @@ class CoverageCache:
         async def _run():
             try:
                 await self.refresh(
-                    bundle, probe_store, audio_lang_store,
-                    use_tautulli=use_tautulli, probe_walker=probe_walker,
+                    bundle,
+                    probe_store,
+                    audio_lang_store,
+                    use_tautulli=use_tautulli,
+                    probe_walker=probe_walker,
                 )
             except Exception as e:  # pragma: no cover - logged, non-fatal
                 log.warning("coverage refresh (coalesced) failed: %s", e)
@@ -268,11 +274,19 @@ class CoverageCache:
     def is_refreshing(self) -> bool:
         return self._refreshing
 
-    def store(self, *, items: list[dict[str, Any]], totals: dict[str, Any],
-              sources: dict[str, Any], build_duration_s: float) -> CachedSnapshot:
+    def store(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        totals: dict[str, Any],
+        sources: dict[str, Any],
+        build_duration_s: float,
+    ) -> CachedSnapshot:
         snap = CachedSnapshot(
             generated_at=time.time(),
-            items=items, totals=totals, sources=sources,
+            items=items,
+            totals=totals,
+            sources=sources,
             build_duration_s=build_duration_s,
             item_count=len(items),
         )
@@ -300,9 +314,15 @@ class CoverageCache:
         self._cached = snap
         return snap
 
-    async def refresh(self, bundle, probe_store, audio_lang_store,
-                       use_tautulli: bool = True, probe_walker=None,
-                       caps_provider=None) -> CachedSnapshot:
+    async def refresh(
+        self,
+        bundle,
+        probe_store,
+        audio_lang_store,
+        use_tautulli: bool = True,
+        probe_walker=None,
+        caps_provider=None,
+    ) -> CachedSnapshot:
         """Run build_coverage and store the result. Uses an asyncio.Lock
         so a parallel refresh waits for the in-flight one instead of
         duplicating the expensive build. Notifications dispatched after
@@ -321,12 +341,14 @@ class CoverageCache:
             started = time.time()
             try:
                 from .coverage_engine import build_coverage
+
                 # #79: resolve subgen caps live (provider) so a watchdog-
                 # detected subgen upgrade / IGNORE_FORCED_SUBTITLES toggle is
                 # reflected on the next refresh without restarting this loop.
                 subgen_caps = caps_provider() if caps_provider else None
                 report = await build_coverage(
-                    bundle, use_tautulli=use_tautulli,
+                    bundle,
+                    use_tautulli=use_tautulli,
                     probe_store=probe_store,
                     audio_lang_store=audio_lang_store,
                     subgen_caps=subgen_caps,
@@ -339,8 +361,7 @@ class CoverageCache:
                     sources=body["sources"],
                     build_duration_s=duration,
                 )
-                log.info("coverage cache refreshed in %.1fs (%d items)",
-                         duration, snap.item_count)
+                log.info("coverage cache refreshed in %.1fs (%d items)", duration, snap.item_count)
                 if probe_walker is not None:
                     await self._kick_eager_probe(probe_walker, body["items"])
                 return snap
@@ -400,17 +421,25 @@ async def background_refresh_loop(
     if cache.get_cached() is None:
         log.info("coverage cache: no snapshot found; warming on boot")
         try:
-            await cache.refresh(get_bundle(), probe_store, audio_lang_store,
-                                probe_walker=probe_walker,
-                                caps_provider=caps_provider)
+            await cache.refresh(
+                get_bundle(),
+                probe_store,
+                audio_lang_store,
+                probe_walker=probe_walker,
+                caps_provider=caps_provider,
+            )
         except Exception as e:
             log.warning("coverage cache: initial warm failed: %s", e)
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await cache.refresh(get_bundle(), probe_store, audio_lang_store,
-                                probe_walker=probe_walker,
-                                caps_provider=caps_provider)
+            await cache.refresh(
+                get_bundle(),
+                probe_store,
+                audio_lang_store,
+                probe_walker=probe_walker,
+                caps_provider=caps_provider,
+            )
             if health:
                 health.record_success("coverage-cache", expected_interval_s=interval_s)
         except asyncio.CancelledError:

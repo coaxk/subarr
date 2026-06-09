@@ -1,4 +1,5 @@
 """Phase-1 smoke tests. Run with: pytest -q"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,9 +21,9 @@ def _isolated_env(monkeypatch, tmp_path: Path):
         "services:\n"
         "  subgen:\n"
         "    environment:\n"
-        "      SUBGEN_KWARGS: '{\"patience\": 1.5, \"length_penalty\": 0.85, \"beam_size\": 5}'\n"
-        "      SUBGEN_KWARGS_LANG_JA: '{\"patience\": 1.0, \"length_penalty\": 1.3}'\n"
-        "      SUBGEN_KWARGS_LANG_DE: '{\"patience\": 1.8, \"length_penalty\": 0.8}'\n"
+        '      SUBGEN_KWARGS: \'{"patience": 1.5, "length_penalty": 0.85, "beam_size": 5}\'\n'
+        '      SUBGEN_KWARGS_LANG_JA: \'{"patience": 1.0, "length_penalty": 1.3}\'\n'
+        '      SUBGEN_KWARGS_LANG_DE: \'{"patience": 1.8, "length_penalty": 0.8}\'\n'
         "      UNRELATED_VAR: hello\n"
     )
 

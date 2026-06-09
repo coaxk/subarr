@@ -19,6 +19,7 @@ a restart — we just keep the old caps until reachability returns. Most
 restarts produce a brief unreachable window followed by a new identity,
 which trips the detection on the next successful probe.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -145,8 +146,9 @@ class SubgenWatchdog:
             # not a transition from one-running-version to another).
             self._set_caps(new)
             self._consecutive_unreachable = 0
-            log.info("subgen watchdog: subgen reached %s; caps adopted",
-                     new.subarr_subgen_patch_rev or new.version)
+            log.info(
+                "subgen watchdog: subgen reached %s; caps adopted", new.subarr_subgen_patch_rev or new.version
+            )
             return
 
         old_identity = self._identity(old)
@@ -171,20 +173,20 @@ class SubgenWatchdog:
         self.last_restart_from = old_identity
         self.last_restart_to = new_identity
         self._set_caps(new)
-        reason = ("identity change" if identity_changed
-                  else "unreachable→reachable bounce")
+        reason = "identity change" if identity_changed else "unreachable→reachable bounce"
         log.warning(
             "subgen RESTART detected (%s): %s → %s. In-flight items "
             "submitted before this point may have evaporated from "
             "subgen's queue.",
-            reason, old_identity, new_identity,
+            reason,
+            old_identity,
+            new_identity,
         )
         if self._on_restart is not None:
             try:
                 await self._on_restart(old, new, self.last_restart_at)
             except Exception as e:
-                log.error("subgen watchdog: on_restart hook failed: %s", e,
-                          exc_info=True)
+                log.error("subgen watchdog: on_restart hook failed: %s", e, exc_info=True)
 
     @staticmethod
     def _identity(caps) -> dict[str, Any]:

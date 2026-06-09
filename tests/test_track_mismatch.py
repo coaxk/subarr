@@ -1,7 +1,7 @@
 """#159: default-audio-track / original-language mismatch detection + swap."""
+
 from __future__ import annotations
 
-import pytest
 
 from subarr.media_probe import AudioStream, detect_default_track_mismatch
 
@@ -12,6 +12,7 @@ def _a(index, lang, default=False, title=None, codec="aac"):
 
 # ── detection: the canonical issue case ───────────────────────────────────
 
+
 def test_detects_german_default_on_russian_show():
     # Russian show; track 1 = German dub (default), track 2 = original Russian.
     audio = [_a(1, "ger", default=True), _a(2, "rus")]
@@ -19,7 +20,7 @@ def test_detects_german_default_on_russian_show():
     assert m is not None
     assert m.default_lang == "de"
     assert m.native_lang == "ru"
-    assert m.native_audio_ordinal == 2   # 1-based audio ordinal for mkvpropedit
+    assert m.native_audio_ordinal == 2  # 1-based audio ordinal for mkvpropedit
     assert m.native_stream_index == 2
 
 
@@ -43,6 +44,7 @@ def test_falls_back_to_first_stream_when_no_default_flag():
 
 
 # ── no-fire cases ──────────────────────────────────────────────────────────
+
 
 def test_no_fire_when_default_already_original():
     audio = [_a(1, "rus", default=True), _a(2, "ger")]
@@ -93,9 +95,11 @@ def test_normalizes_mixed_tag_dialects():
 
 # ── store: per-file dismiss persistence (migration 016) ────────────────────
 
+
 def _store(tmp_path):
     from subarr.audio_lang_store import AudioLangStore
     from subarr.migrate import run_migrations
+
     db = tmp_path / "a.db"
     run_migrations(db)
     return AudioLangStore(db)
@@ -122,15 +126,19 @@ def test_undismiss(tmp_path):
 
 # ── coverage wiring: _apply_track_mismatch + to_dict contract ──────────────
 
+
 def _probe(audio):
     from subarr.media_probe import ProbeResult
+
     return ProbeResult(canonical_path="x", audio=audio)
 
 
 def test_apply_sets_fields_on_mkv():
     from subarr.coverage_engine import CoverageItem, _apply_track_mismatch
-    item = CoverageItem(media_type="episode", title="Show", original_language="Russian",
-                        file_canonical_path="TV/Show/ep.mkv")
+
+    item = CoverageItem(
+        media_type="episode", title="Show", original_language="Russian", file_canonical_path="TV/Show/ep.mkv"
+    )
     _apply_track_mismatch(item, _probe([_a(1, "ger", default=True), _a(2, "rus")]))
     assert item.default_track_mismatch is True
     assert item.mismatch_default_track_lang == "de"
@@ -144,15 +152,19 @@ def test_apply_sets_fields_on_mkv():
 
 def test_apply_skips_non_mkv():
     from subarr.coverage_engine import CoverageItem, _apply_track_mismatch
-    item = CoverageItem(media_type="movie", title="Mov", original_language="Russian",
-                        file_canonical_path="Movies/Mov/mov.mp4")
+
+    item = CoverageItem(
+        media_type="movie", title="Mov", original_language="Russian", file_canonical_path="Movies/Mov/mov.mp4"
+    )
     _apply_track_mismatch(item, _probe([_a(1, "ger", default=True), _a(2, "rus")]))
     assert item.default_track_mismatch is False  # mkvpropedit is mkv-only
 
 
 def test_apply_noop_when_no_mismatch():
     from subarr.coverage_engine import CoverageItem, _apply_track_mismatch
-    item = CoverageItem(media_type="episode", title="Show", original_language="Russian",
-                        file_canonical_path="TV/Show/ep.mkv")
+
+    item = CoverageItem(
+        media_type="episode", title="Show", original_language="Russian", file_canonical_path="TV/Show/ep.mkv"
+    )
     _apply_track_mismatch(item, _probe([_a(1, "rus", default=True), _a(2, "ger")]))
     assert item.default_track_mismatch is False

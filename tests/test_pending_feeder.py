@@ -1,6 +1,7 @@
 """#66/#116 slice 2: pending-queue feeder. Depth-aware draining, pause,
 shared-queue back-off + dedup, submit-failure isolation, priority order.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,8 +52,11 @@ def store(tmp_path: Path) -> PendingQueueStore:
 
 def _feeder(store, subgen, submit, *, target=2, paused=False):
     return PendingQueueFeeder(
-        store=store, subgen_provider=lambda: subgen, submit_job=submit,
-        target_depth_provider=lambda: target, paused_provider=lambda: paused,
+        store=store,
+        subgen_provider=lambda: subgen,
+        submit_job=submit,
+        target_depth_provider=lambda: target,
+        paused_provider=lambda: paused,
     )
 
 
@@ -79,8 +83,7 @@ async def test_respects_pause(store):
 async def test_backs_off_when_subgen_full_of_foreign_work(store):
     store.enqueue("TV/a.mkv", source="gaps")
     # subgen already has 2 foreign items, target is 2 → no room
-    foreign = FakeSubgen(queued=[{"path": "/media/Other/x.mkv"}],
-                         processing=[{"path": "/media/Other/y.mkv"}])
+    foreign = FakeSubgen(queued=[{"path": "/media/Other/x.mkv"}], processing=[{"path": "/media/Other/y.mkv"}])
     rec = SubmitRecorder()
     n = await _feeder(store, foreign, rec, target=2).tick()
     assert n == 0 and rec.calls == []
@@ -103,7 +106,7 @@ async def test_dedups_path_already_in_subgen(store):
     # the same file is already queued on subgen (foreign-submitted)
     subgen = FakeSubgen(queued=[{"path": sg_path}])
     rec = SubmitRecorder()
-    n = await _feeder(store, subgen, rec, target=2).tick()
+    await _feeder(store, subgen, rec, target=2).tick()
     # adopted as submitted, NOT re-sent through submit_job
     assert rec.calls == []
     assert store.get(job.id).status == STATUS_SUBMITTED
@@ -114,7 +117,7 @@ async def test_submit_failure_isolated_and_marks_error(store):
     store.enqueue("TV/bad.mkv", source="gaps")
     store.enqueue("TV/good.mkv", source="gaps")
     rec = SubmitRecorder(fail_paths={"TV/bad.mkv"})
-    n = await _feeder(store, FakeSubgen(), rec, target=2).tick()
+    await _feeder(store, FakeSubgen(), rec, target=2).tick()
     # bad one errors (doesn't consume a slot), good one still submits
     assert "TV/good.mkv" in rec.calls
     statuses = {j.canonical_path: j.status for j in store.list()}
@@ -162,8 +165,8 @@ async def test_no_overfeed_while_subgen_lags(store):
     n1 = await feeder.tick()
     n2 = await feeder.tick()
     n3 = await feeder.tick()
-    assert n1 == 2                       # first tick fills to target
-    assert n2 == 0 and n3 == 0           # no over-feed despite empty /queue
+    assert n1 == 2  # first tick fills to target
+    assert n2 == 0 and n3 == 0  # no over-feed despite empty /queue
     assert len(rec.calls) == 2
     assert store.count_by_status().get(STATUS_SUBMITTED) == 2
 
@@ -179,11 +182,11 @@ async def test_inflight_reservation_released_when_job_surfaces(store):
     sub = FakeSubgen()
     rec = SubmitRecorder()
     feeder = _feeder(store, sub, rec, target=2)
-    assert await feeder.tick() == 2                      # submit a, b → inflight {a,b}
+    assert await feeder.tick() == 2  # submit a, b → inflight {a,b}
     sub._queued = [{"path": canonical_to_subgen_batch("TV/a.mkv")}]  # a surfaces
-    assert await feeder.tick() == 0                      # depth1(a)+inflight1(b)=2
+    assert await feeder.tick() == 0  # depth1(a)+inflight1(b)=2
     sub._queued = [{"path": canonical_to_subgen_batch("TV/b.mkv")}]  # a done, b surfaced
-    assert await feeder.tick() == 1                      # depth1(b)+inflight0 → submit c
+    assert await feeder.tick() == 1  # depth1(b)+inflight0 → submit c
     assert rec.calls == ["TV/a.mkv", "TV/b.mkv", "TV/c.mkv"]
 
 
@@ -193,6 +196,7 @@ async def test_inflight_reservation_expires_after_grace(store, monkeypatch):
     # must release its slot after the grace window, or the feeder under-feeds
     # forever.
     import subarr.pending_feeder as pf
+
     clock = {"t": 1000.0}
     monkeypatch.setattr(pf.time, "monotonic", lambda: clock["t"])
     store.enqueue("TV/a.mkv", source="gaps")
@@ -200,8 +204,8 @@ async def test_inflight_reservation_expires_after_grace(store, monkeypatch):
     sub = FakeSubgen()  # always empty
     rec = SubmitRecorder()
     feeder = _feeder(store, sub, rec, target=1)
-    assert await feeder.tick() == 1          # submit a → inflight {a}
-    assert await feeder.tick() == 0          # a still reserved → no submit
-    clock["t"] += pf.INFLIGHT_GRACE_S + 1     # age past grace
-    assert await feeder.tick() == 1          # a's slot released → submit b
+    assert await feeder.tick() == 1  # submit a → inflight {a}
+    assert await feeder.tick() == 0  # a still reserved → no submit
+    clock["t"] += pf.INFLIGHT_GRACE_S + 1  # age past grace
+    assert await feeder.tick() == 1  # a's slot released → submit b
     assert rec.calls == ["TV/a.mkv", "TV/b.mkv"]

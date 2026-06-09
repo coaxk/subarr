@@ -45,10 +45,8 @@ def write_migration(dir_: Path, version: int, name: str, sql: str) -> Path:
 
 
 def test_fresh_db_applies_all_migrations(db_path: Path, tmp_migrations: Path):
-    write_migration(tmp_migrations, 1, "baseline",
-                    "CREATE TABLE foo (id INTEGER PRIMARY KEY, name TEXT);")
-    write_migration(tmp_migrations, 2, "add_bar",
-                    "CREATE TABLE bar (id INTEGER PRIMARY KEY);")
+    write_migration(tmp_migrations, 1, "baseline", "CREATE TABLE foo (id INTEGER PRIMARY KEY, name TEXT);")
+    write_migration(tmp_migrations, 2, "add_bar", "CREATE TABLE bar (id INTEGER PRIMARY KEY);")
 
     applied = MigrationRunner(db_path, tmp_migrations).run()
 
@@ -57,25 +55,20 @@ def test_fresh_db_applies_all_migrations(db_path: Path, tmp_migrations: Path):
 
     # Verify tables exist
     conn = sqlite3.connect(str(db_path))
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     names = [r[0] for r in rows]
     assert "foo" in names
     assert "bar" in names
     assert "schema_versions" in names
 
     # schema_versions populated
-    versions = conn.execute(
-        "SELECT version, name FROM schema_versions ORDER BY version"
-    ).fetchall()
+    versions = conn.execute("SELECT version, name FROM schema_versions ORDER BY version").fetchall()
     assert versions == [(1, "001_baseline"), (2, "002_add_bar")]
     conn.close()
 
 
 def test_already_up_to_date_is_noop(db_path: Path, tmp_migrations: Path):
-    write_migration(tmp_migrations, 1, "baseline",
-                    "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
+    write_migration(tmp_migrations, 1, "baseline", "CREATE TABLE foo (id INTEGER PRIMARY KEY);")
     runner = MigrationRunner(db_path, tmp_migrations)
     first = runner.run()
     second = runner.run()
@@ -86,11 +79,10 @@ def test_already_up_to_date_is_noop(db_path: Path, tmp_migrations: Path):
 
 
 def test_failing_migration_rolls_back(db_path: Path, tmp_migrations: Path):
-    write_migration(tmp_migrations, 1, "good",
-                    "CREATE TABLE good (id INTEGER PRIMARY KEY);")
-    write_migration(tmp_migrations, 2, "broken",
-                    "CREATE TABLE broken (id INTEGER PRIMARY KEY); "
-                    "THIS IS NOT VALID SQL;")
+    write_migration(tmp_migrations, 1, "good", "CREATE TABLE good (id INTEGER PRIMARY KEY);")
+    write_migration(
+        tmp_migrations, 2, "broken", "CREATE TABLE broken (id INTEGER PRIMARY KEY); THIS IS NOT VALID SQL;"
+    )
 
     runner = MigrationRunner(db_path, tmp_migrations)
     with pytest.raises(sqlite3.OperationalError):
@@ -98,15 +90,12 @@ def test_failing_migration_rolls_back(db_path: Path, tmp_migrations: Path):
 
     # Good migration committed. Broken did not — version row absent.
     conn = sqlite3.connect(str(db_path))
-    versions = conn.execute(
-        "SELECT version FROM schema_versions ORDER BY version"
-    ).fetchall()
+    versions = conn.execute("SELECT version FROM schema_versions ORDER BY version").fetchall()
     assert versions == [(1,)]
     conn.close()
 
     # Fixing the broken file + re-running should NOT re-apply good.
-    write_migration(tmp_migrations, 2, "broken",
-                    "CREATE TABLE fixed (id INTEGER PRIMARY KEY);")
+    write_migration(tmp_migrations, 2, "broken", "CREATE TABLE fixed (id INTEGER PRIMARY KEY);")
     applied = runner.run()
     assert [m.version for m in applied] == [2]
 
@@ -125,18 +114,14 @@ def test_incremental_apply_after_new_migration(db_path: Path, tmp_migrations: Pa
 def test_discovery_ignores_non_numeric_prefixes(db_path: Path, tmp_migrations: Path):
     write_migration(tmp_migrations, 1, "good", "CREATE TABLE g (id INTEGER PRIMARY KEY);")
     # malformed prefix — discovery should skip + warn
-    (tmp_migrations / "draft_someday.sql").write_text(
-        "CREATE TABLE never (id INTEGER PRIMARY KEY);"
-    )
+    (tmp_migrations / "draft_someday.sql").write_text("CREATE TABLE never (id INTEGER PRIMARY KEY);")
 
     runner = MigrationRunner(db_path, tmp_migrations)
     applied = runner.run()
     assert [m.version for m in applied] == [1]
 
     conn = sqlite3.connect(str(db_path))
-    names = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )}
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
     assert "g" in names
     assert "never" not in names
@@ -150,14 +135,18 @@ def test_run_migrations_helper_uses_bundled_dir(db_path: Path):
     assert applied[0].name == "001_baseline"
     # And every shipped subarr table exists
     conn = sqlite3.connect(str(db_path))
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
     expected = {
-        "scans", "subs_generated", "schedule_config", "auto_queue_rules",
-        "lang_enrichment", "media_probe", "pending_walks",
-        "pending_decisions", "schema_versions",
+        "scans",
+        "subs_generated",
+        "schedule_config",
+        "auto_queue_rules",
+        "lang_enrichment",
+        "media_probe",
+        "pending_walks",
+        "pending_decisions",
+        "schema_versions",
     }
     assert expected.issubset(tables), f"missing: {expected - tables}"
 
@@ -171,18 +160,27 @@ def test_bundled_migrations_full_parity(db_path: Path):
     run_migrations(db_path)
     conn = sqlite3.connect(str(db_path))
     try:
-        tables = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         expected = {
             # 001 baseline
-            "scans", "subs_generated", "schedule_config", "auto_queue_rules",
-            "lang_enrichment", "media_probe", "pending_walks", "pending_decisions",
+            "scans",
+            "subs_generated",
+            "schedule_config",
+            "auto_queue_rules",
+            "lang_enrichment",
+            "media_probe",
+            "pending_walks",
+            "pending_decisions",
             # 002-007
-            "update_checks", "telemetry_state", "onboarding_state",
-            "error_events", "probe_failures",
+            "update_checks",
+            "telemetry_state",
+            "onboarding_state",
+            "error_events",
+            "probe_failures",
             # 008 parity (previously created ONLY by init_schema)
-            "audio_lang_verifications", "series_lang_intent", "coverage_snapshot",
+            "audio_lang_verifications",
+            "series_lang_intent",
+            "coverage_snapshot",
             "schema_versions",
         }
         assert expected.issubset(tables), f"missing tables: {expected - tables}"
@@ -194,9 +192,7 @@ def test_bundled_migrations_full_parity(db_path: Path):
         assert "source" in probe_cols, f"media_probe cols: {probe_cols}"
 
         # Seed: the default coverage_walk schedule row (disabled, opt-in).
-        n = conn.execute(
-            "SELECT COUNT(*) FROM schedule_config WHERE name='coverage_walk'"
-        ).fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM schedule_config WHERE name='coverage_walk'").fetchone()[0]
         assert n == 1
     finally:
         conn.close()
@@ -208,10 +204,8 @@ def test_runner_tolerates_duplicate_column(db_path: Path, tmp_migrations: Path):
     parity migration's ADD COLUMN hits 'duplicate column name'. The runner
     must treat that as a no-op for that statement, still record the
     migration as applied, and NOT abort boot."""
-    write_migration(tmp_migrations, 1, "base",
-                    "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
-    write_migration(tmp_migrations, 2, "addcol",
-                    "ALTER TABLE t ADD COLUMN a TEXT;")  # 'a' already exists
+    write_migration(tmp_migrations, 1, "base", "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
+    write_migration(tmp_migrations, 2, "addcol", "ALTER TABLE t ADD COLUMN a TEXT;")  # 'a' already exists
     runner = MigrationRunner(db_path, tmp_migrations)
     applied = runner.run()  # must NOT raise
     assert [m.version for m in applied] == [1, 2]
@@ -290,8 +284,6 @@ def test_existing_v0x_db_upgrades_cleanly(db_path: Path):
     conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT id FROM scans WHERE id='abc'").fetchone()
     assert row == ("abc",)
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "media_probe" in tables
     conn.close()
