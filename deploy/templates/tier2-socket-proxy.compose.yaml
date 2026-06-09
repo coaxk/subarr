@@ -108,7 +108,7 @@ services:
         max-file: "3"
 
   subgen:
-    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r7   # pin exactly (current; v4.10+ caps for arena/Tuning Lab; r7 = Blackwell/RTX 50xx CUDA 12.8 + gnupg CVE patch)
+    image: ghcr.io/coaxk/subarr-subgen:2026.05.3-r8   # pin exactly (current; v4.10+ caps for arena/Tuning Lab; r8 = +strongpad regroup default (#168); r7 = Blackwell CUDA 12.8 + gnupg CVE)
     container_name: subgen
     restart: unless-stopped
     networks:
