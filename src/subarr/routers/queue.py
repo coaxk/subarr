@@ -476,9 +476,7 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
     # submit time and records provenance. Manual priority + kick() = near-
     # immediate. enqueue dedups if the path is already pending/in-flight.
     pending = request.app.state.pending_queue
-    job = pending.enqueue(
-        canonical, source="manual", audio_language_override=audio_language_override
-    )
+    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override)
     request.app.state.queue_feeder.kick()
     return {"job": job.id, "path": canonical, "status": "pending"}
 
