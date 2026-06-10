@@ -86,6 +86,7 @@ from .routers import (
     gpu,
     home as r_home,
     integrations,
+    libraries as r_libraries,
     logs,
     mode,
     onboarding as r_onboarding,
@@ -766,6 +767,7 @@ app.include_router(gpu.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(integrations.router)
+app.include_router(r_libraries.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
 app.include_router(r_provenance.router)
