@@ -19,6 +19,8 @@ import { RailFooter } from './chrome.jsx';
 // #75: reuse the wizard's form primitives so the in-app credential editor
 // matches onboarding exactly (same input styling + test-result chip).
 import { FormRow, TextInput, TestResult } from './onboarding.jsx';
+// #134: multi-library management (shared with the onboarding paths step).
+import { LibrariesEditor } from './libraries-editor.jsx';
 import {
   deriveTitle, groupRulesAlphabetically, activeLadderLetters,
 } from './lang-rules-util.mjs';
@@ -836,7 +838,7 @@ function ProvidersPanel() {
   );
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules }) {
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries }) {
   // #10: render the same persistent GPU/queue/walker footer that the
   // other pages show in SubRail, so the bottom-left vitals are
   // visible everywhere including Settings. Aside becomes a flex
@@ -865,7 +867,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -889,6 +891,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
         <div style={{ padding: '0 16px 6px' }}><span className="label">subarr</span></div>
         {[
           { id: 'providers', label: 'Providers', active: providersActive, onClick: onSelectProviders },
+          { id: 'libraries', label: 'Libraries', active: librariesActive, onClick: onSelectLibraries },
           { id: 'lang-rules', label: 'Language rules', active: langRulesActive, onClick: onSelectLangRules },
           { id: 'system', label: 'System actions', active: systemActive, onClick: onSelectSystem },
           { id: 'updates', label: 'Updates', active: updatesActive, onClick: onSelectUpdates },
@@ -2063,6 +2066,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? ['Settings', 'Telemetry']
     : view === 'updates' ? ['Settings', 'Updates']
     : view === 'providers' ? ['Settings', 'Providers']
+    : view === 'libraries' ? ['Settings', 'Libraries']
     : view === 'lang-rules' ? ['Settings', 'Language rules']
     : ['Settings'];
 
@@ -2072,6 +2076,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Telemetry'
     : view === 'updates' ? 'Updates'
     : view === 'providers' ? 'Provider leaderboard'
+    : view === 'libraries' ? 'Libraries'
     : view === 'lang-rules' ? 'Language rules'
     : 'Settings';
 
@@ -2081,6 +2086,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Exactly what subarr sends and how to opt in/out.'
     : view === 'updates' ? 'Per-product version checks against GitHub releases.'
     : view === 'providers' ? 'Bazarr provider success rates from your download history.'
+    : view === 'libraries' ? 'Media locations subarr walks. Each library maps a filesystem root to its subgen and *arr path prefixes; the default comes from SUBARR_MEDIA_ROOT.'
     : view === 'lang-rules' ? 'Declared audio languages for whole shows and movies. New downloads inherit automatically; a per-file correction always overrides.'
     : '';
 
@@ -2095,6 +2101,7 @@ export function SettingsPage() {
         updatesActive={view === 'updates'} onSelectUpdates={() => setView('updates')}
         providersActive={view === 'providers'} onSelectProviders={() => setView('providers')}
         langRulesActive={view === 'lang-rules'} onSelectLangRules={() => setView('lang-rules')}
+        librariesActive={view === 'libraries'} onSelectLibraries={() => setView('libraries')}
       />
       <main className="main-canvas" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingBottom: 0 }}>
         <div style={{ flex: 1, padding: '22px 26px 24px', overflow: 'auto' }}>
@@ -2139,6 +2146,11 @@ export function SettingsPage() {
           {view === 'telemetry' && <TelemetryPanel />}
           {view === 'updates' && <UpdatesPanel />}
           {view === 'providers' && <ProvidersPanel />}
+          {view === 'libraries' && (
+            <div style={{ maxWidth: 820 }}>
+              <LibrariesEditor showDetected={true} />
+            </div>
+          )}
           {view === 'lang-rules' && <LangRulesPanel />}
         </div>
       </main>

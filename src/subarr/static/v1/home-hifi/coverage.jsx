@@ -1770,7 +1770,8 @@ export function AudioReviewModal() {
                   Subarr can't read this file from disk. You can still confirm
                   the language below. Common cause: subarr's media mount
                   doesn't match where Sonarr/Plex sees the file. Check
-                  ARR_PATH_PREFIX / SONARR_PATH_PREFIX in Settings.
+                  ARR_PATH_PREFIX or the library's *arr prefix in
+                  Settings → Libraries.
                 </span>
                 {posData.reason && (
                   <span className="mono" style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
