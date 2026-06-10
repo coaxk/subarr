@@ -160,19 +160,33 @@ def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | N
     subarr's canonical 'TV/Foo'. Falsy input passes through unchanged
     (None → None, '' → '').
 
-    #134 Phase 0: the single consolidated copy of what previously lived
-    duplicated in coverage_engine, scheduler, and coverage_actions. `prefix`
-    defaults to settings.arr_path_prefix; Phase 1 threads per-library /
-    per-arr prefixes through this parameter (the config-level
-    sonarr_path_prefix / radarr_path_prefix split from #133 is currently
-    unconsumed — wiring it correctly needs arr identity at each call site,
-    which is exactly what the library model adds).
+    Two modes:
+    - Explicit ``prefix=`` (Phase 0 seam): strip exactly that prefix, emit a
+      library-0-namespace canonical (no '@head'). Back-compat / tests.
+    - Library-aware (``prefix is None``): pick the library whose ``arr_prefix``
+      is the LONGEST match for ``arr_path``, strip it, and prefix '@<slug>/'
+      for non-default libraries. With a single library this is byte-identical
+      to the old single-prefix strip. A path matching no library passes
+      through slash-stripped (unchanged from before).
     """
     if not arr_path:
         return arr_path
-    if prefix is None:
-        prefix = settings.arr_path_prefix
-    s = arr_path
-    if prefix and s.startswith(prefix):
-        s = s[len(prefix) :]
-    return s.strip("/")
+
+    if prefix is not None:
+        s = arr_path
+        if prefix and s.startswith(prefix):
+            s = s[len(prefix) :]
+        return s.strip("/")
+
+    best: Library | None = None
+    best_len = -1
+    for lib in settings.libraries:
+        ap = lib.arr_prefix
+        if ap and arr_path.startswith(ap) and len(ap) > best_len:
+            best, best_len = lib, len(ap)
+    if best is None:
+        return arr_path.strip("/")
+    rel = arr_path[best_len:].strip("/")
+    if best.slug:
+        return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
+    return rel

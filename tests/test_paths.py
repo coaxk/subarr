@@ -162,3 +162,38 @@ def test_subgen_to_canonical_per_library(two_libraries):
     assert subgen_to_canonical("/media2") == "@disk2/"
     # unknown prefix -> best-effort stripped (unchanged behavior)
     assert subgen_to_canonical("/elsewhere/x.mkv") == "elsewhere/x.mkv"
+
+
+def test_strip_arr_prefix_default_library_byte_identical(subarr_env):
+    from subarr.paths import strip_arr_prefix
+
+    # Single library: behaves exactly as today (no @head, default prefix).
+    assert strip_arr_prefix("/data/Media/TV/Foo") == "TV/Foo"
+    assert strip_arr_prefix(None) is None
+    assert strip_arr_prefix("") == ""
+    # Non-matching path passes through slash-stripped (today's behavior).
+    assert strip_arr_prefix("/somewhere/else") == "somewhere/else"
+
+
+def test_strip_arr_prefix_qualifies_non_default_library(two_libraries):
+    from subarr.paths import strip_arr_prefix
+
+    # /data/Media/ -> library 0 (no head); /data/d2/ -> @disk2
+    assert strip_arr_prefix("/data/Media/TV/Foo") == "TV/Foo"
+    assert strip_arr_prefix("/data/d2/Movies/film.mkv") == "@disk2/Movies/film.mkv"
+
+
+def test_strip_arr_prefix_longest_match_wins(two_libraries):
+    # If two prefixes both match, the longer one owns the path. Here only one
+    # matches, but the test documents the longest-match rule.
+    from subarr.paths import strip_arr_prefix
+
+    assert strip_arr_prefix("/data/d2/x") == "@disk2/x"
+
+
+def test_strip_arr_prefix_explicit_override_unchanged(subarr_env):
+    # The explicit `prefix=` seam (Phase 0) keeps single-prefix, no-head
+    # behavior — used by callers/tests that already know the prefix.
+    from subarr.paths import strip_arr_prefix
+
+    assert strip_arr_prefix("/custom/TV/Foo", prefix="/custom/") == "TV/Foo"
