@@ -45,7 +45,8 @@ from typing import Any
 from pathlib import Path
 
 from .config import settings
-from .coverage_engine import IntegrationBundle, _strip_arr_prefix
+from .coverage_engine import IntegrationBundle
+from .paths import strip_arr_prefix
 from .media_probe import AudioStream, ProbeResult, SubtitleStream
 from .probe_store import ProbeStore
 
@@ -158,7 +159,7 @@ class ArrMediainfoSync:
             return
 
         # Translate arr's container-view path → subarr's canonical form.
-        canonical = _strip_arr_prefix(path)
+        canonical = strip_arr_prefix(path)
         if not canonical:
             stats["skipped_no_path"] += 1
             return

@@ -92,3 +92,29 @@ def subgen_to_canonical(subgen_path: str) -> str:
     if prefix and p == prefix:
         return ""
     return p.strip("/")
+
+
+def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | None:
+    """Strip an *arr's container-view path prefix to canonical form.
+
+    Sonarr/Radarr report paths in THEIR container's mount namespace (e.g.
+    'path': '/data/Media/TV/Foo'); stripping the configured prefix yields
+    subarr's canonical 'TV/Foo'. Falsy input passes through unchanged
+    (None → None, '' → '').
+
+    #134 Phase 0: the single consolidated copy of what previously lived
+    duplicated in coverage_engine, scheduler, and coverage_actions. `prefix`
+    defaults to settings.arr_path_prefix; Phase 1 threads per-library /
+    per-arr prefixes through this parameter (the config-level
+    sonarr_path_prefix / radarr_path_prefix split from #133 is currently
+    unconsumed — wiring it correctly needs arr identity at each call site,
+    which is exactly what the library model adds).
+    """
+    if not arr_path:
+        return arr_path
+    if prefix is None:
+        prefix = settings.arr_path_prefix
+    s = arr_path
+    if prefix and s.startswith(prefix):
+        s = s[len(prefix) :]
+    return s.strip("/")
