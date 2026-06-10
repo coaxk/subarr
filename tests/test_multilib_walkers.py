@@ -65,6 +65,19 @@ def test_srt_scan_resolves_in_non_default_library(two_libraries):
     assert coverage_engine._scan_for_srt_recursive("@nope/x") == []
 
 
+def test_audio_audit_walk_spans_all_libraries(two_libraries):
+    """The audio-audit deep-scan worklist must enumerate video files across
+    EVERY library root, emitting @slug/ canonicals for non-default ones."""
+    import importlib
+
+    from subarr import app as app_mod
+
+    importlib.reload(app_mod)
+    canons = [c for c, _mt in app_mod._walk_all_library_files()]
+    assert any(c.startswith("@disk2/") for c in canons), canons
+    assert any(not c.startswith("@") for c in canons), canons  # library 0 too
+
+
 def test_library_canonical_resolves_for_partial_scan(two_libraries):
     """The /api/plex/partial-scan canonical branch (and the completion
     watcher's sidecar lookups) now resolve via canonical_to_fs — a @disk2/
