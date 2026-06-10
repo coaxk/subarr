@@ -31,6 +31,40 @@ def media_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def two_libraries(subarr_env, monkeypatch, tmp_path: Path):
+    """Library 0 = the fixture media_root (empty slug); library 'disk2'
+    rooted at a second tmp dir. Reloads config+paths so settings.libraries
+    reflects both. Returns the disk2 root Path. (#134 Phase 1)"""
+    import json
+
+    d2 = tmp_path / "disk2"
+    (d2 / "Movies").mkdir(parents=True)
+    (d2 / "Movies" / "film.mkv").write_bytes(b"")
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "libraries": [
+                    {
+                        "slug": "disk2",
+                        "name": "Disk 2",
+                        "fs_root": str(d2),
+                        "subgen_prefix": "/media2",
+                        "arr_prefix": "/data/d2/",
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    return d2
+
+
+@pytest.fixture
 def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     compose = tmp_path / "compose.yaml"
     _make_compose(compose)

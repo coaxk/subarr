@@ -8,9 +8,6 @@ scan from the GUI caught it. These tests pin the contract.
 
 from __future__ import annotations
 
-import importlib
-import json
-
 import pytest
 
 
@@ -62,38 +59,6 @@ def test_canonical_to_subgen_batch_handles_unicode(subarr_env):
         canonical_to_subgen_batch("TV/Cette nuit-là/Season 1/ep.mkv")
         == "/media/TV/Cette nuit-là/Season 1/ep.mkv"
     )
-
-
-@pytest.fixture
-def two_libraries(subarr_env, monkeypatch, tmp_path):
-    """Library 0 = the fixture media_root (empty slug); library 'disk2'
-    rooted at a second tmp dir. Reloads config+paths so settings.libraries
-    reflects both."""
-    d2 = tmp_path / "disk2"
-    (d2 / "Movies").mkdir(parents=True)
-    (d2 / "Movies" / "film.mkv").write_bytes(b"")
-    store = tmp_path / "ov.json"
-    store.write_text(
-        json.dumps(
-            {
-                "libraries": [
-                    {
-                        "slug": "disk2",
-                        "name": "Disk 2",
-                        "fs_root": str(d2),
-                        "subgen_prefix": "/media2",
-                        "arr_prefix": "/data/d2/",
-                    }
-                ]
-            }
-        )
-    )
-    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
-    from subarr import config, paths
-
-    importlib.reload(config)
-    importlib.reload(paths)
-    return d2
 
 
 def test_canonical_to_fs_default_library(subarr_env):
