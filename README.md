@@ -216,6 +216,28 @@ Once a verification exists, every downstream submission carries it through an ev
 
 **Will this work with Jellyfin / Emby?** Not yet — a candidate if there's demand. Open a feature request.
 
+## Multiple media locations (libraries)
+
+One media root covers most setups, but if your library spans disjoint mounts — `/mnt/disk1/Movies` here, `/mnt/disk2/TV` there, a 4K library on its own share — subarr models each location as a **library**: a filesystem root (subarr's view), the prefix subgen sees it at, and the path prefix Sonarr/Radarr report it under.
+
+- **The default library is your existing config** — `SUBARR_MEDIA_ROOT` / `SUBGEN_MEDIA_PREFIX` / `ARR_PATH_PREFIX`. A single-location install needs nothing new; nothing changes.
+- **Extra libraries live in the UI** — Settings → Libraries (also offered during onboarding). Subarr reads your Sonarr/Radarr root folders and suggests any location not yet covered as a one-click "Add as library"; a manual add form covers anything auto-detect misses. Each path validates with a live reachability sample before saving, and changes apply immediately — no restart, no env vars.
+- **Mount each location in subarr AND subgen** (mirrored on the *arr side), e.g.:
+
+```yaml
+# subarr
+volumes:
+  - /mnt/nas/Media:/media/library          # default library
+  - /mnt/disk2/Movies4K:/media/disk2       # extra library (fs root: /media/disk2)
+
+# subgen
+volumes:
+  - /mnt/nas/Media:/media                  # default library's subgen prefix
+  - /mnt/disk2/Movies4K:/media2            # extra library's subgen prefix
+```
+
+Internally, extra libraries qualify their file keys with a stable `@<id>/` head while the default library keeps today's keys — which is why existing installs upgrade with zero migration. The simple union-mount workaround (binding several host paths under one container root) still works fine if you prefer it.
+
 ## Known limitations (v1.4)
 
 Transparent before you install.
