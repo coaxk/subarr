@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from .config import settings
+from .libraries import Library
 
 
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts"}
@@ -27,14 +28,41 @@ class PathOutsideRootError(ValueError):
     """The requested path escapes media_root via .. or symlinks."""
 
 
+def _split_canonical(canonical: str) -> tuple[str, str]:
+    """Split a canonical into (slug, relative). A leading '@<slug>/' head
+    yields that slug; otherwise slug is '' (the default library 0). The
+    relative part is stripped of surrounding slashes.
+
+    '@disk2/Movies/x' -> ('disk2', 'Movies/x')
+    'TV/Show'         -> ('', 'TV/Show')
+    '@disk2'          -> ('disk2', '')
+    """
+    s = (canonical or "").strip()
+    if s.startswith("@"):
+        head, _, rest = s[1:].partition("/")
+        return head, rest.strip("/")
+    return "", s.strip("/")
+
+
+def _library_by_slug(slug: str) -> Library:
+    """Resolve a library by slug. Unknown slug is a path-resolution error."""
+    for lib in settings.libraries:
+        if lib.slug == slug:
+            return lib
+    raise PathOutsideRootError(f"unknown library @{slug}")
+
+
 def canonical_to_fs(canonical: str) -> Path:
-    """Resolve canonical (e.g. 'TV/Show/Season 1') to an absolute filesystem path,
-    guarding against traversal. Empty string means the media root itself."""
-    rel = PurePosixPath(canonical.strip().strip("/"))
+    """Resolve a canonical to an absolute filesystem path under its library's
+    root, guarding against traversal. A leading '@<slug>/' selects the
+    library; no head means library 0 (media_root). Empty relative part means
+    the library root itself."""
+    slug, rel_str = _split_canonical(canonical)
+    rel = PurePosixPath(rel_str)
     if any(part == ".." for part in rel.parts):
         raise PathOutsideRootError(canonical)
-
-    root = settings.media_root.resolve()
+    lib = _library_by_slug(slug)
+    root = lib.fs_root.resolve()
     target = (root / Path(*rel.parts)).resolve()
     try:
         target.relative_to(root)
@@ -44,9 +72,27 @@ def canonical_to_fs(canonical: str) -> Path:
 
 
 def fs_to_canonical(p: Path) -> str:
-    """Inverse of canonical_to_fs for a path known to be under media_root."""
-    rel = p.resolve().relative_to(settings.media_root.resolve())
-    return rel.as_posix()
+    """Inverse of canonical_to_fs: find the owning library (longest-matching
+    fs_root) and emit its canonical, prefixing '@<slug>/' for non-default
+    libraries. Raises PathOutsideRootError (a ValueError subclass, preserving
+    the previous raise-type contract) if p is under no library root."""
+    rp = p.resolve()
+    best: tuple[Path, PurePosixPath, Library] | None = None
+    for lib in settings.libraries:
+        root = lib.fs_root.resolve()
+        try:
+            rel = PurePosixPath(rp.relative_to(root).as_posix())
+        except ValueError:
+            continue
+        if best is None or len(root.parts) > len(best[0].parts):
+            best = (root, rel, lib)
+    if best is None:
+        raise PathOutsideRootError(str(p))
+    _, rel, lib = best
+    rel_posix = rel.as_posix()
+    if lib.slug:
+        return f"@{lib.slug}/{rel_posix}" if rel_posix != "." else f"@{lib.slug}/"
+    return rel_posix
 
 
 def canonical_to_subgen_batch(canonical: str) -> str:
@@ -64,8 +110,9 @@ def canonical_to_subgen_batch(canonical: str) -> str:
     never surfaced because every scan test mocked subgen with a transport
     that ignored the directory= value. First live end-to-end scan caught it.
     """
-    rel = canonical.strip().strip("/")
-    prefix = settings.subgen_media_prefix.rstrip("/")
+    slug, rel = _split_canonical(canonical)
+    lib = _library_by_slug(slug)
+    prefix = lib.subgen_prefix.rstrip("/")
     if rel:
         return f"{prefix}/{rel}"
     return prefix + "/"
@@ -81,17 +128,28 @@ def subgen_to_canonical(subgen_path: str) -> str:
     `subgen_media_prefix` prefix. We strip that prefix to get the canonical
     key the provenance ledger is indexed by.
 
-    If the path doesn't start with the configured prefix, it's returned
+    If the path doesn't start with any configured prefix, it's returned
     stripped of leading slashes as a best-effort canonical — the caller
     will simply find no matching ledger entry, which is benign.
+
+    #134 Phase 1: picks the library whose subgen_prefix is the longest match
+    and prefixes '@<slug>/' for non-default libraries. Library 0 output is
+    byte-identical to the previous single-prefix behavior.
     """
     p = (subgen_path or "").strip()
-    prefix = settings.subgen_media_prefix.rstrip("/")
-    if prefix and p.startswith(prefix + "/"):
-        return p[len(prefix) + 1 :].strip("/")
-    if prefix and p == prefix:
-        return ""
-    return p.strip("/")
+    best: Library | None = None
+    best_len = -1
+    for lib in settings.libraries:
+        prefix = lib.subgen_prefix.rstrip("/")
+        if prefix and (p == prefix or p.startswith(prefix + "/")) and len(prefix) > best_len:
+            best, best_len = lib, len(prefix)
+    if best is None:
+        return p.strip("/")
+    prefix = best.subgen_prefix.rstrip("/")
+    rel = "" if p == prefix else p[len(prefix) + 1 :].strip("/")
+    if best.slug:
+        return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
+    return rel
 
 
 def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | None:
@@ -102,19 +160,33 @@ def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | N
     subarr's canonical 'TV/Foo'. Falsy input passes through unchanged
     (None → None, '' → '').
 
-    #134 Phase 0: the single consolidated copy of what previously lived
-    duplicated in coverage_engine, scheduler, and coverage_actions. `prefix`
-    defaults to settings.arr_path_prefix; Phase 1 threads per-library /
-    per-arr prefixes through this parameter (the config-level
-    sonarr_path_prefix / radarr_path_prefix split from #133 is currently
-    unconsumed — wiring it correctly needs arr identity at each call site,
-    which is exactly what the library model adds).
+    Two modes:
+    - Explicit ``prefix=`` (Phase 0 seam): strip exactly that prefix, emit a
+      library-0-namespace canonical (no '@head'). Back-compat / tests.
+    - Library-aware (``prefix is None``): pick the library whose ``arr_prefix``
+      is the LONGEST match for ``arr_path``, strip it, and prefix '@<slug>/'
+      for non-default libraries. With a single library this is byte-identical
+      to the old single-prefix strip. A path matching no library passes
+      through slash-stripped (unchanged from before).
     """
     if not arr_path:
         return arr_path
-    if prefix is None:
-        prefix = settings.arr_path_prefix
-    s = arr_path
-    if prefix and s.startswith(prefix):
-        s = s[len(prefix) :]
-    return s.strip("/")
+
+    if prefix is not None:
+        s = arr_path
+        if prefix and s.startswith(prefix):
+            s = s[len(prefix) :]
+        return s.strip("/")
+
+    best: Library | None = None
+    best_len = -1
+    for lib in settings.libraries:
+        ap = lib.arr_prefix
+        if ap and arr_path.startswith(ap) and len(ap) > best_len:
+            best, best_len = lib, len(ap)
+    if best is None:
+        return arr_path.strip("/")
+    rel = arr_path[best_len:].strip("/")
+    if best.slug:
+        return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
+    return rel
