@@ -109,7 +109,10 @@ async def validate_library(body: ValidateRequest) -> dict:
             return {"ok": False, "error": "not a directory or not reachable", "samples": [], "total": 0}
         entries = sorted(p.iterdir(), key=lambda e: e.name.lower())
     except OSError:
-        log.warning("library validate: unreadable %s", p, exc_info=True)
+        # Strip CR/LF so a crafted fs_root can't forge log lines (CodeQL
+        # py/log-injection).
+        safe = str(p).replace("\r", "\\r").replace("\n", "\\n")
+        log.warning("library validate: unreadable %s", safe, exc_info=True)
         return {
             "ok": False,
             "error": "unreadable (permission or IO error — see subarr logs)",
