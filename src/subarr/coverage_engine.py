@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
-from .paths import UNSUPPORTED_EXTS, strip_arr_prefix
+from .paths import UNSUPPORTED_EXTS, canonical_to_fs, strip_arr_prefix
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -272,7 +272,10 @@ def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
     if not canonical_dir:
         return False, []
     try:
-        full = settings.media_root / Path(canonical_dir)
+        # #134: library-aware resolve (@slug/ heads). PathOutsideRootError is
+        # a ValueError subclass, so unknown libraries fall into the existing
+        # benign-empty handling below.
+        full = canonical_to_fs(canonical_dir)
         if not full.is_dir():
             return False, []
         srts = sorted(p.name for p in full.iterdir() if p.is_file() and p.suffix.lower() == ".srt")
@@ -292,7 +295,8 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
     if not canonical_dir:
         return []
     try:
-        full = settings.media_root / Path(canonical_dir)
+        # #134: library-aware resolve — see _scan_for_srt.
+        full = canonical_to_fs(canonical_dir)
         if not full.is_dir():
             return []
         return sorted(str(p.relative_to(full)) for p in full.rglob("*.srt") if p.is_file())

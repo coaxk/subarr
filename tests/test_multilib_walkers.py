@@ -48,3 +48,18 @@ def test_probe_walker_unknown_library_errors_cleanly(two_libraries):
 
     state = asyncio.run(run())
     assert state.status == "error"
+
+
+def test_srt_scan_resolves_in_non_default_library(two_libraries):
+    from subarr import coverage_engine
+
+    movies = two_libraries / "Movies"
+    (movies / "film.en.srt").write_text("1\n")
+    has, srts = coverage_engine._scan_for_srt("@disk2/Movies")
+    assert has is True and srts == ["film.en.srt"]
+    # recursive variant too
+    rel = coverage_engine._scan_for_srt_recursive("@disk2/Movies")
+    assert rel == ["film.en.srt"]
+    # unknown library -> benign empty (PathOutsideRootError is a ValueError)
+    assert coverage_engine._scan_for_srt("@nope/x") == (False, [])
+    assert coverage_engine._scan_for_srt_recursive("@nope/x") == []
