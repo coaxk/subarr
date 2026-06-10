@@ -39,12 +39,23 @@ vad = [
     "numpy>=1.24,<3.0",
 ]
 # #123: QE/adequacy judge (the tournament summit). LaBSE cross-lingual
-# embeddings via sentence-transformers; validated rho=0.727 vs true accuracy.
-# DELIBERATELY NOT baked into the image (unlike [vad]) — sentence-transformers
-# pulls torch (~2GB). Pure opt-in for now; an onnx-lean LaBSE backend (drop the
-# torch weight, bakeable like silero) is the tracked follow-up optimization.
+# embeddings; validated rho=0.727 vs true accuracy. The torch path
+# (sentence-transformers) is the original backend, kept as fallback + parity
+# reference. NOT baked into the image — it pulls torch (~2GB).
 qe = [
     "sentence-transformers>=2.2,<6.0",
+]
+# #179: the no-torch QE backend (qe_onnx.py) — runs LaBSE's official ONNX
+# export via onnxruntime + numpy (both already in [vad]) + the light tokenizer/
+# weights/download libs. ~MBs of deps instead of torch's ~2GB, so this IS baked
+# into the image like [vad]; the ~1.9GB model file itself is still pulled
+# lazily into the HF cache on first QE use, never baked.
+qe-onnx = [
+    "onnxruntime>=1.16,<2.0",
+    "numpy>=1.24,<3.0",
+    "tokenizers>=0.15,<1.0",
+    "safetensors>=0.4,<1.0",
+    "huggingface_hub>=0.20,<2.0",
 ]
 
 [build-system]
