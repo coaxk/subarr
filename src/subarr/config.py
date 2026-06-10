@@ -168,13 +168,10 @@ class Settings:
     # Subgen sees Sonarr/Radarr paths as /data/Media/<...>; Subarr sees the
     # same files at /media/library/<...>. This prefix is what Sonarr/Radarr
     # store as `path`; we strip it to canonicalise.
+    # #134 Phase 1: per-library arr_prefix (in Library) supersedes the old
+    # #133 sonarr_path_prefix / radarr_path_prefix split, which was defined
+    # but consumed nowhere — removed in favour of libraries[].
     arr_path_prefix: str
-    # #133: per-service path prefixes. Most homelabs have Sonarr at /data/TV/
-    # and Radarr at /data/Movies/ — one shared prefix forced users into a
-    # useless common parent. Both fall back to arr_path_prefix when their
-    # own env var is unset so existing deployments keep working unchanged.
-    sonarr_path_prefix: str
-    radarr_path_prefix: str
 
     # #136: age-based retention for arena_runs (tuning-lab sweeps). The table is
     # append-only and grows unbounded on long-running installs; sweeps older than
@@ -235,17 +232,6 @@ def load() -> Settings:
         tautulli_url=_env_or("TAUTULLI_URL", "http://tautulli:8181"),
         tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", ""),
         arr_path_prefix=_env_or("ARR_PATH_PREFIX", "/data/Media/"),
-        # #133: each falls back to ARR_PATH_PREFIX if its own var is unset,
-        # so users with the legacy single-prefix .env keep working until
-        # they explicitly opt in to split prefixes.
-        sonarr_path_prefix=_env_or(
-            "SONARR_PATH_PREFIX",
-            _env_or("ARR_PATH_PREFIX", "/data/TV/"),
-        ),
-        radarr_path_prefix=_env_or(
-            "RADARR_PATH_PREFIX",
-            _env_or("ARR_PATH_PREFIX", "/data/Movies/"),
-        ),
         ollama_url=_env_or("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=_env_or("OLLAMA_MODEL", "qwen2.5:7b"),
         # #232: defaults to qwen2.5vl:7b (the recommended pull). "auto"
