@@ -33,6 +33,13 @@ log = logging.getLogger(__name__)
 _MODEL_ENV = "SUBARR_QE_MODEL"
 QE_MODEL = "sentence-transformers/LaBSE"
 
+# Pinned repo revision (bandit B615 + supply-chain): an upstream repo change
+# must not silently alter the embeddings our rho=0.727 calibration and the
+# onnx<->torch parity check were validated against. Overridable alongside the
+# repo id; bump deliberately, re-running the parity test.
+_REVISION_ENV = "SUBARR_QE_MODEL_REVISION"
+QE_MODEL_REVISION = "836121a0533e5664b21c7aacc5d22951f2b8b25b"  # 2025-03-06 snapshot
+
 # From sentence_bert_config.json in the model repo.
 MAX_SEQ_LENGTH = 256
 
@@ -90,14 +97,21 @@ _session_cache = None  # (tokenizer, ort_session, input_names, W, b)
 def _fetch(repo: str, filename: str) -> str:
     """Resolve a model file from the HF cache, downloading only on a miss.
     Offline-first for the same reason as qe.py's torch path: hub validation
-    calls on every load can hang some setups."""
+    calls on every load can hang some setups. Revision-pinned (B615) — see
+    QE_MODEL_REVISION. The default pin only applies to the default repo; a
+    custom SUBARR_QE_MODEL tracks its main unless SUBARR_QE_MODEL_REVISION
+    is set too."""
     from huggingface_hub import hf_hub_download
 
+    revision = os.environ.get(_REVISION_ENV)
+    if revision is None and repo == QE_MODEL:
+        revision = QE_MODEL_REVISION
+    revision = revision or None  # "" opts out (track main)
     try:
-        return hf_hub_download(repo_id=repo, filename=filename, local_files_only=True)
+        return hf_hub_download(repo_id=repo, filename=filename, revision=revision, local_files_only=True)
     except Exception:
         log.info("QE onnx: %s/%s not cached — downloading (one-time)", repo, filename)
-        return hf_hub_download(repo_id=repo, filename=filename)
+        return hf_hub_download(repo_id=repo, filename=filename, revision=revision)
 
 
 def _load():

@@ -11,16 +11,19 @@ monkeypatched availability — no model required.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
+# qe_onnx imports numpy/onnxruntime inside functions by design, so importing
+# the module is safe on base CI; the math tests skip without numpy (the
+# repo's test_qe.py pattern), while the backend-selection tests always run.
 from subarr import qe, qe_onnx
 
 
-# ── pure pipeline math ───────────────────────────────────────────────
+# ── pure pipeline math (need numpy; skipped on base CI) ──────────────
 
 
 def test_cls_pool_takes_first_token():
+    np = pytest.importorskip("numpy")
     hidden = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
     pooled = qe_onnx.cls_pool(hidden)
     assert pooled.shape == (2, 4)
@@ -29,6 +32,7 @@ def test_cls_pool_takes_first_token():
 
 
 def test_dense_tanh_matches_torch_linear_semantics():
+    np = pytest.importorskip("numpy")
     # torch.nn.Linear computes x @ W.T + b — the safetensors weight is (out, in).
     x = np.array([[1.0, 2.0]], dtype=np.float32)
     weight = np.array([[0.5, -0.25], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)  # (3, 2)
@@ -40,6 +44,7 @@ def test_dense_tanh_matches_torch_linear_semantics():
 
 
 def test_l2_normalize_unit_rows():
+    np = pytest.importorskip("numpy")
     x = np.array([[3.0, 4.0], [0.0, 2.0]], dtype=np.float32)
     n = qe_onnx.l2_normalize(x)
     assert np.allclose(np.linalg.norm(n, axis=1), [1.0, 1.0], atol=1e-6)
@@ -47,11 +52,13 @@ def test_l2_normalize_unit_rows():
 
 
 def test_l2_normalize_zero_row_stays_finite():
+    np = pytest.importorskip("numpy")
     n = qe_onnx.l2_normalize(np.zeros((1, 4), dtype=np.float32))
     assert np.all(np.isfinite(n))
 
 
 def test_full_pipeline_composition_is_normalized():
+    np = pytest.importorskip("numpy")
     # cls_pool → dense_tanh → l2_normalize on synthetic weights ends on the
     # unit sphere regardless of input scale (what cosine scoring relies on).
     rng = np.random.default_rng(42)
@@ -116,6 +123,7 @@ def test_qe_adequacy_uses_injected_embedder_unchanged():
 def test_onnx_torch_parity_on_multilingual_pairs():
     """The two backends must produce near-identical normalized vectors, so
     cosine scores (and the validated rho=0.727) carry over unchanged."""
+    np = pytest.importorskip("numpy")
     texts = ["bonjour le monde", "hello world", "el gato duerme", "the cat sleeps"]
     try:
         a = np.asarray(qe_onnx.embed(texts))
