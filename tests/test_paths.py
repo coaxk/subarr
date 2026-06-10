@@ -142,3 +142,23 @@ def test_fs_to_canonical_outside_all_roots_raises(subarr_env, tmp_path):
 
     with pytest.raises(PathOutsideRootError):
         fs_to_canonical(tmp_path / "nowhere" / "x.mkv")
+
+
+def test_canonical_to_subgen_batch_per_library(two_libraries):
+    from subarr.paths import canonical_to_subgen_batch
+
+    # library 0 keeps /media (existing regression tests still assert this)
+    assert canonical_to_subgen_batch("TV/Foo") == "/media/TV/Foo"
+    # library disk2 uses its own subgen prefix
+    assert canonical_to_subgen_batch("@disk2/Movies/film.mkv") == "/media2/Movies/film.mkv"
+    assert canonical_to_subgen_batch("@disk2/") == "/media2/"
+
+
+def test_subgen_to_canonical_per_library(two_libraries):
+    from subarr.paths import subgen_to_canonical
+
+    assert subgen_to_canonical("/media/TV/Foo/ep.mkv") == "TV/Foo/ep.mkv"
+    assert subgen_to_canonical("/media2/Movies/film.mkv") == "@disk2/Movies/film.mkv"
+    assert subgen_to_canonical("/media2") == "@disk2/"
+    # unknown prefix -> best-effort stripped (unchanged behavior)
+    assert subgen_to_canonical("/elsewhere/x.mkv") == "elsewhere/x.mkv"

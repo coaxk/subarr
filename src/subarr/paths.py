@@ -110,8 +110,9 @@ def canonical_to_subgen_batch(canonical: str) -> str:
     never surfaced because every scan test mocked subgen with a transport
     that ignored the directory= value. First live end-to-end scan caught it.
     """
-    rel = canonical.strip().strip("/")
-    prefix = settings.subgen_media_prefix.rstrip("/")
+    slug, rel = _split_canonical(canonical)
+    lib = _library_by_slug(slug)
+    prefix = lib.subgen_prefix.rstrip("/")
     if rel:
         return f"{prefix}/{rel}"
     return prefix + "/"
@@ -127,17 +128,28 @@ def subgen_to_canonical(subgen_path: str) -> str:
     `subgen_media_prefix` prefix. We strip that prefix to get the canonical
     key the provenance ledger is indexed by.
 
-    If the path doesn't start with the configured prefix, it's returned
+    If the path doesn't start with any configured prefix, it's returned
     stripped of leading slashes as a best-effort canonical — the caller
     will simply find no matching ledger entry, which is benign.
+
+    #134 Phase 1: picks the library whose subgen_prefix is the longest match
+    and prefixes '@<slug>/' for non-default libraries. Library 0 output is
+    byte-identical to the previous single-prefix behavior.
     """
     p = (subgen_path or "").strip()
-    prefix = settings.subgen_media_prefix.rstrip("/")
-    if prefix and p.startswith(prefix + "/"):
-        return p[len(prefix) + 1 :].strip("/")
-    if prefix and p == prefix:
-        return ""
-    return p.strip("/")
+    best: Library | None = None
+    best_len = -1
+    for lib in settings.libraries:
+        prefix = lib.subgen_prefix.rstrip("/")
+        if prefix and (p == prefix or p.startswith(prefix + "/")) and len(prefix) > best_len:
+            best, best_len = lib, len(prefix)
+    if best is None:
+        return p.strip("/")
+    prefix = best.subgen_prefix.rstrip("/")
+    rel = "" if p == prefix else p[len(prefix) + 1 :].strip("/")
+    if best.slug:
+        return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
+    return rel
 
 
 def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | None:
