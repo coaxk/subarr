@@ -508,10 +508,10 @@ function WantedLangsChip() {
   );
 }
 
-function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, monitoredOnly, setMonitoredOnly }) {
+function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, monitoredOnly, setMonitoredOnly, search, setSearch }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
-      {/* Search */}
+      {/* Search (#188: was a static placeholder span; now a real input) */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         height: 28, padding: '0 10px',
@@ -521,7 +521,26 @@ function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilte
         width: 220,
       }}>
         <Glyph char="⌕" size={12} color="var(--fg-3)" />
-        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>Search title or path…</span>
+        <input
+          type="text"
+          value={search || ''}
+          onChange={(e) => setSearch && setSearch(e.target.value)}
+          placeholder="Search title or path…"
+          style={{
+            flex: 1, minWidth: 0,
+            background: 'transparent', border: 'none', outline: 'none',
+            fontSize: 'var(--text-sm)', color: 'var(--fg-0)',
+            fontFamily: 'var(--font-ui)',
+          }}
+        />
+        {!!(search && search.trim()) && (
+          <span
+            onClick={() => setSearch && setSearch('')}
+            title="Clear search"
+            style={{ cursor: 'pointer', color: 'var(--fg-3)', fontSize: 12, lineHeight: 1 }}>
+            ✕
+          </span>
+        )}
       </div>
 
       {/* Active filter chips */}
@@ -2472,6 +2491,8 @@ export function CoveragePage() {
   const [reasonFilter, setReasonFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [monitoredOnly, setMonitoredOnly] = useState(true);
+  // #188: title/path substring filter, applied alongside the chips.
+  const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(() => new Set());
   const [rowQueuing, setRowQueuing] = useState(() => new Set()); // ids in flight
   const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
@@ -2527,6 +2548,7 @@ export function CoveragePage() {
   // sub subgen would skip), so it never enters the table or bulk-select.
   const rows = useMemo(() => {
     if (!allRows) return [];
+    const q = (search || '').trim().toLowerCase();
     return allRows.filter(r => {
       if (r.vstate !== 'verified') return false;
       // #79: forced-only EN that subgen will skip is non-actionable — it lives
@@ -2535,9 +2557,14 @@ export function CoveragePage() {
       if (monitoredOnly && !r.mon) return false;
       if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
       if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+      // #188: title / episode / canonical-path substring search.
+      if (q
+        && !(r.title || '').toLowerCase().includes(q)
+        && !(r.ep || '').toLowerCase().includes(q)
+        && !(r._canonical_path || '').toLowerCase().includes(q)) return false;
       return true;
     }).map(r => ({ ...r, sel: selected.has(r.id) }));
-  }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected]);
+  }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected, search]);
 
   // Probe-gate buckets — sticky (NOT subject to the UI filters above) and
   // never queueable. They hold rows until the probe runs, then those rows
@@ -2784,6 +2811,7 @@ export function CoveragePage() {
         reasonFilter={reasonFilter} setReasonFilter={setReasonFilter}
         typeFilter={typeFilter} setTypeFilter={setTypeFilter}
         monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
+        search={search} setSearch={setSearch}
       />
 
       {/* Analyzing bucket ABOVE the table — these are files subarr hasn't

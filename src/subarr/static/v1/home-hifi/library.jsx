@@ -208,19 +208,22 @@ function isUnderSelectedAncestor(path, selected) {
   return false;
 }
 
-function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn }) {
+function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn, ancestorMatched = false }) {
   // #194: search visibility. The tree is lazily loaded, so we can't
   // "find" matches inside un-expanded subtrees synchronously. Strategy:
   //   - depth 0 (TV/Movies category roots): always visible during search
   //     so users see the path to their match.
-  //   - depth >= 1 directories + leaf files: name-substring match only.
-  // Result: typing "cheers" shows TV/ → Cheers/ → episodes, instead of
-  // hiding the root TV/ folder because its name doesn't contain "cheers".
+  //   - depth >= 1 directories + leaf files: name-substring match, OR an
+  //     ancestor matched (#187: drilling INTO a matched series must show
+  //     its seasons/episodes even though "Season 1" doesn't contain the
+  //     search term — without this, expanding a search hit rendered
+  //     nothing and clicks appeared dead).
+  // Result: typing "cheers" shows TV/ → Cheers/ → seasons → episodes.
   const searchActive = !!(search && search.trim());
   const nameMatches = !search || entry.name.toLowerCase().includes(search.toLowerCase());
   const isVisible = searchActive && entry.is_dir && depth === 0
-    ? true                  // category roots stay visible while searching
-    : nameMatches;          // everything else: must match
+    ? true                              // category roots stay visible while searching
+    : (nameMatches || ancestorMatched); // match here OR anywhere above
   const passesFilter = filterFn ? filterFn(entry) : true;
   if (!isVisible || !passesFilter) return null;
 
@@ -383,6 +386,7 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
               onToggleSelect={onToggleSelect}
               search={search}
               filterFn={filterFn}
+              ancestorMatched={ancestorMatched || (searchActive && nameMatches && depth > 0)}
             />
           ))}
         </>
@@ -407,7 +411,7 @@ function CheckBox({ checked }) {
 // Connected wrapper: manages its own expand state + lazy child fetch.
 // Hoisting this to a top-level component (rather than a recursive
 // inline) keeps each node's local hooks isolated.
-function ConnectedTreeNode({ entry, depth, selected, onToggleSelect, search, filterFn }) {
+function ConnectedTreeNode({ entry, depth, selected, onToggleSelect, search, filterFn, ancestorMatched = false }) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [childrenData, setChildrenData] = useState(null);
   const [childrenLoading, setChildrenLoading] = useState(false);
@@ -467,6 +471,7 @@ function ConnectedTreeNode({ entry, depth, selected, onToggleSelect, search, fil
       onToggleExpand={toggleExpand}
       search={search}
       filterFn={filterFn}
+      ancestorMatched={ancestorMatched}
     />
   );
 }
