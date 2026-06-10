@@ -53,13 +53,16 @@ def _library_by_slug(slug: str) -> Library:
 
 
 def canonical_to_fs(canonical: str) -> Path:
-    """Resolve canonical (e.g. 'TV/Show/Season 1') to an absolute filesystem path,
-    guarding against traversal. Empty string means the media root itself."""
-    rel = PurePosixPath(canonical.strip().strip("/"))
+    """Resolve a canonical to an absolute filesystem path under its library's
+    root, guarding against traversal. A leading '@<slug>/' selects the
+    library; no head means library 0 (media_root). Empty relative part means
+    the library root itself."""
+    slug, rel_str = _split_canonical(canonical)
+    rel = PurePosixPath(rel_str)
     if any(part == ".." for part in rel.parts):
         raise PathOutsideRootError(canonical)
-
-    root = settings.media_root.resolve()
+    lib = _library_by_slug(slug)
+    root = lib.fs_root.resolve()
     target = (root / Path(*rel.parts)).resolve()
     try:
         target.relative_to(root)
@@ -69,9 +72,27 @@ def canonical_to_fs(canonical: str) -> Path:
 
 
 def fs_to_canonical(p: Path) -> str:
-    """Inverse of canonical_to_fs for a path known to be under media_root."""
-    rel = p.resolve().relative_to(settings.media_root.resolve())
-    return rel.as_posix()
+    """Inverse of canonical_to_fs: find the owning library (longest-matching
+    fs_root) and emit its canonical, prefixing '@<slug>/' for non-default
+    libraries. Raises PathOutsideRootError (a ValueError subclass, preserving
+    the previous raise-type contract) if p is under no library root."""
+    rp = p.resolve()
+    best: tuple[Path, PurePosixPath, Library] | None = None
+    for lib in settings.libraries:
+        root = lib.fs_root.resolve()
+        try:
+            rel = PurePosixPath(rp.relative_to(root).as_posix())
+        except ValueError:
+            continue
+        if best is None or len(root.parts) > len(best[0].parts):
+            best = (root, rel, lib)
+    if best is None:
+        raise PathOutsideRootError(str(p))
+    _, rel, lib = best
+    rel_posix = rel.as_posix()
+    if lib.slug:
+        return f"@{lib.slug}/{rel_posix}" if rel_posix != "." else f"@{lib.slug}/"
+    return rel_posix
 
 
 def canonical_to_subgen_batch(canonical: str) -> str:

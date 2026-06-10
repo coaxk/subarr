@@ -63,3 +63,82 @@ def test_canonical_to_subgen_batch_handles_unicode(subarr_env):
         canonical_to_subgen_batch("TV/Cette nuit-là/Season 1/ep.mkv")
         == "/media/TV/Cette nuit-là/Season 1/ep.mkv"
     )
+
+
+@pytest.fixture
+def two_libraries(subarr_env, monkeypatch, tmp_path):
+    """Library 0 = the fixture media_root (empty slug); library 'disk2'
+    rooted at a second tmp dir. Reloads config+paths so settings.libraries
+    reflects both."""
+    d2 = tmp_path / "disk2"
+    (d2 / "Movies").mkdir(parents=True)
+    (d2 / "Movies" / "film.mkv").write_bytes(b"")
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "libraries": [
+                    {
+                        "slug": "disk2",
+                        "name": "Disk 2",
+                        "fs_root": str(d2),
+                        "subgen_prefix": "/media2",
+                        "arr_prefix": "/data/d2/",
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    return d2
+
+
+def test_canonical_to_fs_default_library(subarr_env):
+    from subarr.config import settings
+    from subarr.paths import canonical_to_fs
+
+    # Byte-identical to today: library 0 resolves under media_root.
+    assert canonical_to_fs("TV/Show") == (settings.media_root / "TV" / "Show").resolve()
+
+
+def test_canonical_to_fs_qualified_library(two_libraries):
+    from subarr.paths import canonical_to_fs
+
+    assert canonical_to_fs("@disk2/Movies/film.mkv") == (two_libraries / "Movies" / "film.mkv").resolve()
+
+
+def test_canonical_to_fs_traversal_guard_per_root(two_libraries):
+    from subarr.paths import PathOutsideRootError, canonical_to_fs
+
+    with pytest.raises(PathOutsideRootError):
+        canonical_to_fs("@disk2/../escape")
+
+
+def test_canonical_to_fs_unknown_library_raises(subarr_env):
+    from subarr.paths import PathOutsideRootError, canonical_to_fs
+
+    with pytest.raises(PathOutsideRootError):
+        canonical_to_fs("@nope/x")
+
+
+def test_fs_to_canonical_roundtrip_both_libraries(two_libraries):
+    from subarr.config import settings
+    from subarr.paths import canonical_to_fs, fs_to_canonical
+
+    p0 = settings.media_root / "TV" / "Show" / "ep.mkv"
+    assert fs_to_canonical(p0) == "TV/Show/ep.mkv"  # library 0: no @head
+    p2 = two_libraries / "Movies" / "film.mkv"
+    assert fs_to_canonical(p2) == "@disk2/Movies/film.mkv"
+    # round-trips
+    assert canonical_to_fs(fs_to_canonical(p2)) == p2.resolve()
+
+
+def test_fs_to_canonical_outside_all_roots_raises(subarr_env, tmp_path):
+    from subarr.paths import PathOutsideRootError, fs_to_canonical
+
+    with pytest.raises(PathOutsideRootError):
+        fs_to_canonical(tmp_path / "nowhere" / "x.mkv")
