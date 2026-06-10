@@ -20,9 +20,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..config import settings
 from ..integrations import IntegrationError
-from ..paths import PathOutsideRootError, canonical_to_fs
+from ..paths import PathOutsideRootError, canonical_to_fs, strip_arr_prefix
 from ..audio_lang_store import resolve_audio_language_override
 
 router = APIRouter(prefix="/api", tags=["coverage"])
@@ -34,16 +33,6 @@ class CoverageQueueRequest(BaseModel):
     # Fallback for movies / rows missing sonarr id.
     canonical_path: str | None = None
     reverse: bool = False
-
-
-def _strip_arr_prefix(arr_path: str) -> str:
-    """Mirror of coverage_engine._strip_arr_prefix — kept inline here to
-    avoid a circular import; the prefix is one env var."""
-    prefix = settings.arr_path_prefix
-    s = arr_path or ""
-    if prefix and s.startswith(prefix):
-        s = s[len(prefix) :]
-    return s.strip("/")
 
 
 @router.post("/coverage/queue", status_code=202)
@@ -80,7 +69,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         arr_path = ep_file.get("path")
         if not arr_path:
             raise HTTPException(500, detail=f"sonarr episode_file {ep_file_id} has no path field")
-        canonical = _strip_arr_prefix(arr_path)
+        canonical = strip_arr_prefix(arr_path)
         resolved_via = f"sonarr_episode_id={req.sonarr_episode_id}"
 
     elif req.canonical_path:

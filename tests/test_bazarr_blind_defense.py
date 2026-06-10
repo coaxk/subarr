@@ -178,7 +178,7 @@ async def test_bazarr_blind_synthetic_row_reaches_score_without_nameerror(monkey
     # Isolate from disk + the probe/score machinery — the NameError fires when
     # Python evaluates the `ignore_forced` arg, BEFORE _score runs, so a stubbed
     # _score still exposes it.
-    monkeypatch.setattr(ce, "_strip_arr_prefix", lambda p: p)
+    monkeypatch.setattr(ce, "strip_arr_prefix", lambda p: p)
 
     async def _no_index(dirs):
         return {}
