@@ -11,6 +11,7 @@ onboarding clobber guard (#33) does not apply.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -21,6 +22,7 @@ from ..config import settings
 from ..libraries import Library, LibraryConfigError, build_libraries, slugify
 
 router = APIRouter(prefix="/api/settings", tags=["libraries"])
+log = logging.getLogger(__name__)
 
 
 class LibraryIn(BaseModel):
@@ -90,12 +92,29 @@ async def put_libraries(body: LibrariesPut) -> dict:
 
 @router.post("/libraries/validate")
 async def validate_library(body: ValidateRequest) -> dict:
-    p = Path(body.fs_root)
-    if not p.is_dir():
-        return {"ok": False, "error": "not a directory or not reachable", "samples": [], "total": 0}
+    """Reachability sample for a CANDIDATE library root.
+
+    Deliberately accepts a not-yet-configured path — the whole point is
+    checking a new mount before saving it — so there is no existing root to
+    contain it to (same admin-config surface and pattern as onboarding's
+    /probe-paths). Hardening: absolute paths only, resolved before use, and
+    errors are logged server-side, never echoed to the client.
+    """
+    raw = Path(body.fs_root)
+    if not raw.is_absolute():
+        return {"ok": False, "error": "fs_root must be an absolute path", "samples": [], "total": 0}
+    p = raw.resolve()
     try:
+        if not p.is_dir():
+            return {"ok": False, "error": "not a directory or not reachable", "samples": [], "total": 0}
         entries = sorted(p.iterdir(), key=lambda e: e.name.lower())
-    except OSError as e:
-        return {"ok": False, "error": f"unreadable: {e}", "samples": [], "total": 0}
+    except OSError:
+        log.warning("library validate: unreadable %s", p, exc_info=True)
+        return {
+            "ok": False,
+            "error": "unreadable (permission or IO error — see subarr logs)",
+            "samples": [],
+            "total": 0,
+        }
     samples = [("📁 " + e.name + "/") if e.is_dir() else ("📄 " + e.name) for e in entries[:5]]
     return {"ok": True, "error": None, "samples": samples, "total": len(entries)}
