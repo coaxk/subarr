@@ -23,7 +23,11 @@ COPY src/ ./src/
 # from onboarding to /config so the image stays model-free and the user makes
 # the explicit choice. Without the model present, subarr falls back to the
 # ffmpeg silencedetect picker, so this extra is inert until enabled.
-RUN pip install --no-cache-dir ".[vad]"
+# #179: also bake the no-torch QE runtime ([qe-onnx] adds tokenizers +
+# safetensors + huggingface_hub on top of [vad]'s onnxruntime/numpy — ~MBs,
+# NO torch). The ~1.9GB LaBSE ONNX model is NOT baked; it's pulled into the
+# HF cache on first QE use. Until then the judge stays structural-only.
+RUN pip install --no-cache-dir ".[vad,qe-onnx]"
 
 EXPOSE 9922
 

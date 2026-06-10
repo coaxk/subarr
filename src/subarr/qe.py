@@ -13,8 +13,14 @@ Split mirrors vad.py:
 
 Opt-in like the silero VAD extra. When the embedder is unavailable, qe_adequacy
 returns None and the tournament composite falls back to the structural judge
-(no penalty). The default backend is sentence-transformers/LaBSE; an onnx-lean
-packaging (drop the torch weight) is a tracked follow-up.
+(no penalty).
+
+Two interchangeable backends produce the same normalized LaBSE vectors (#179):
+  - onnx (preferred): qe_onnx.py — onnxruntime + numpy + tokenizers, NO torch.
+    Light enough to bake like the VAD extra ([qe-onnx]).
+  - torch: sentence-transformers — the original heavy path ([qe]), kept as the
+    fallback and the parity reference.
+SUBARR_QE_BACKEND=auto|onnx|torch forces one; auto prefers onnx.
 """
 
 from __future__ import annotations
@@ -47,9 +53,11 @@ def cosine_similarity(a, b) -> float:
     return float(dot / (na * nb))
 
 
-def qe_available() -> bool:
-    """True iff the QE embedder backend is importable. Never raises — callers
-    fall back to the structural judge when False."""
+# Backend selection (#179): auto prefers the no-torch onnx path.
+_BACKEND_ENV = "SUBARR_QE_BACKEND"
+
+
+def _torch_available() -> bool:
     try:
         import sentence_transformers  # noqa: F401
     except Exception:
@@ -57,11 +65,29 @@ def qe_available() -> bool:
     return True
 
 
+def _onnx_available() -> bool:
+    from . import qe_onnx
+
+    return qe_onnx.onnx_qe_available()
+
+
+def qe_available() -> bool:
+    """True iff a QE embedder backend is importable (honouring
+    SUBARR_QE_BACKEND). Never raises — callers fall back to the structural
+    judge when False."""
+    backend = os.environ.get(_BACKEND_ENV, "auto")
+    if backend == "onnx":
+        return _onnx_available()
+    if backend == "torch":
+        return _torch_available()
+    return _onnx_available() or _torch_available()
+
+
 _embedder_cache = None
 
 
-def _default_embed(texts):
-    """Embed texts with LaBSE (sentence-transformers). Lazy + process-cached.
+def _torch_embed(texts):
+    """Embed with sentence-transformers LaBSE. Lazy + process-cached.
     Live-verified I/O, not unit-tested (the model is the boundary)."""
     global _embedder_cache
     from sentence_transformers import SentenceTransformer
@@ -77,6 +103,30 @@ def _default_embed(texts):
         except Exception:
             _embedder_cache = SentenceTransformer(model)
     return _embedder_cache.encode(list(texts), normalize_embeddings=True)
+
+
+def _default_embed(texts):
+    """Dispatch to the selected backend. Both produce the same normalized
+    LaBSE vectors (parity-gated in tests/test_qe_onnx.py). In auto mode an
+    onnx-side failure falls back to torch once, loudly."""
+    backend = os.environ.get(_BACKEND_ENV, "auto")
+    if backend == "torch":
+        return _torch_embed(texts)
+    if backend == "onnx":
+        from . import qe_onnx
+
+        return qe_onnx.embed(texts)
+    # auto: prefer onnx (no torch), fall back to the torch path on any failure.
+    if _onnx_available():
+        from . import qe_onnx
+
+        try:
+            return qe_onnx.embed(texts)
+        except Exception:
+            if not _torch_available():
+                raise
+            log.warning("QE onnx backend failed; falling back to torch", exc_info=True)
+    return _torch_embed(texts)
 
 
 def qe_adequacy(source: str, hyp: str, *, embedder=None) -> float | None:
