@@ -78,6 +78,30 @@ def test_audio_audit_walk_spans_all_libraries(two_libraries):
     assert any(not c.startswith("@") for c in canons), canons  # library 0 too
 
 
+def test_sidecar_root_guard_accepts_all_library_roots(two_libraries):
+    import importlib
+
+    from subarr.routers import sidecar
+
+    importlib.reload(sidecar)
+    p = two_libraries / "Movies" / "film.mkv"
+    resolved = sidecar._resolve_under_root(str(p))  # must NOT raise
+    assert resolved == p.resolve()
+
+
+def test_sidecar_root_guard_still_rejects_outside(two_libraries, tmp_path):
+    import importlib
+
+    import pytest
+    from fastapi import HTTPException
+
+    from subarr.routers import sidecar
+
+    importlib.reload(sidecar)
+    with pytest.raises(HTTPException):
+        sidecar._resolve_under_root(str(tmp_path / "outside" / "x.srt"))
+
+
 def test_library_canonical_resolves_for_partial_scan(two_libraries):
     """The /api/plex/partial-scan canonical branch (and the completion
     watcher's sidecar lookups) now resolve via canonical_to_fs — a @disk2/
