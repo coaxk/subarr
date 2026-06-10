@@ -63,3 +63,13 @@ def test_srt_scan_resolves_in_non_default_library(two_libraries):
     # unknown library -> benign empty (PathOutsideRootError is a ValueError)
     assert coverage_engine._scan_for_srt("@nope/x") == (False, [])
     assert coverage_engine._scan_for_srt_recursive("@nope/x") == []
+
+
+def test_library_canonical_resolves_for_partial_scan(two_libraries):
+    """The /api/plex/partial-scan canonical branch (and the completion
+    watcher's sidecar lookups) now resolve via canonical_to_fs — a @disk2/
+    canonical must land under disk2's root, not media_root."""
+    from subarr.paths import canonical_to_fs
+
+    expected = (two_libraries / "Movies" / "film.mkv").resolve()
+    assert canonical_to_fs("@disk2/Movies/film.mkv") == expected
