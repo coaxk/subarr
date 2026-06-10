@@ -8,7 +8,12 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # mkvtoolnix provides `mkvpropedit` for the #159 default-audio-track swap — an
 # in-place Matroska header edit (no remux) that makes a show's original-language
 # track the default so subgen stops transcribing a dub into double-translated subs.
+# `apt-get upgrade` pulls base-image security patches between python:3.12-slim
+# rebuilds — the trivy gate fails on fixable HIGH/CRITICAL CVEs in base
+# packages (first hit: CVE-2026-45447 in libssl3t64, fixed in deb13u2 while
+# the base still shipped u1). Patch-don't-suppress, same as subarr-subgen.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
