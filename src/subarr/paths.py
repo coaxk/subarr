@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from .config import settings
+from .libraries import Library
 
 
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts"}
@@ -25,6 +26,30 @@ UNSUPPORTED_EXTS = {".iso", ".img", ".nrg", ".mdf", ".bin"}
 
 class PathOutsideRootError(ValueError):
     """The requested path escapes media_root via .. or symlinks."""
+
+
+def _split_canonical(canonical: str) -> tuple[str, str]:
+    """Split a canonical into (slug, relative). A leading '@<slug>/' head
+    yields that slug; otherwise slug is '' (the default library 0). The
+    relative part is stripped of surrounding slashes.
+
+    '@disk2/Movies/x' -> ('disk2', 'Movies/x')
+    'TV/Show'         -> ('', 'TV/Show')
+    '@disk2'          -> ('disk2', '')
+    """
+    s = (canonical or "").strip()
+    if s.startswith("@"):
+        head, _, rest = s[1:].partition("/")
+        return head, rest.strip("/")
+    return "", s.strip("/")
+
+
+def _library_by_slug(slug: str) -> Library:
+    """Resolve a library by slug. Unknown slug is a path-resolution error."""
+    for lib in settings.libraries:
+        if lib.slug == slug:
+            return lib
+    raise PathOutsideRootError(f"unknown library @{slug}")
 
 
 def canonical_to_fs(canonical: str) -> Path:

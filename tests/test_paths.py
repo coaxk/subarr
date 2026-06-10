@@ -8,6 +8,23 @@ scan from the GUI caught it. These tests pin the contract.
 
 from __future__ import annotations
 
+import importlib
+import json
+from pathlib import Path
+
+import pytest
+
+
+def test_split_canonical_default_and_qualified(subarr_env):
+    from subarr.paths import _split_canonical
+
+    assert _split_canonical("TV/Show/ep.mkv") == ("", "TV/Show/ep.mkv")
+    assert _split_canonical("/TV/Show/") == ("", "TV/Show")
+    assert _split_canonical("@disk2/Movies/x.mkv") == ("disk2", "Movies/x.mkv")
+    assert _split_canonical("@disk2/") == ("disk2", "")
+    assert _split_canonical("@disk2") == ("disk2", "")
+    assert _split_canonical("") == ("", "")
+
 
 def test_canonical_to_subgen_batch_strips_and_prefixes(subarr_env):
     from subarr.paths import canonical_to_subgen_batch
