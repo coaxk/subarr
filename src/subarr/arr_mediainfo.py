@@ -42,11 +42,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from pathlib import Path
 
-from .config import settings
 from .coverage_engine import IntegrationBundle
-from .paths import strip_arr_prefix
+from .paths import PathOutsideRootError, canonical_to_fs, strip_arr_prefix
 from .media_probe import AudioStream, ProbeResult, SubtitleStream
 from .probe_store import ProbeStore
 
@@ -167,13 +165,14 @@ class ArrMediainfoSync:
         # Cache-key inputs: stat the file IF visible on our mount; if not,
         # use arr's `size` + 0.0 mtime fallback so we still surface the data
         # (won't auto-invalidate when the file changes — next ffprobe walk
-        # will, which is the source-of-truth path anyway).
-        subarr_path = settings.media_root / Path(canonical)
+        # will, which is the source-of-truth path anyway). #134: resolve via
+        # the library-aware layer; an unresolvable canonical takes the same
+        # fallback as an invisible mount.
         try:
-            st = subarr_path.stat()
+            st = canonical_to_fs(canonical).stat()
             mtime = st.st_mtime
             size = st.st_size
-        except OSError:
+        except (OSError, PathOutsideRootError):
             mtime = 0.0
             size = int(row.get("size") or 0)
 

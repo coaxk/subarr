@@ -32,6 +32,7 @@ from pathlib import Path
 
 from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
+from .paths import PathOutsideRootError, canonical_to_fs
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
 from .provenance import ProvenanceStore
@@ -330,9 +331,12 @@ class CompletionWatcher:
             return
         if not self._plex.is_configured():
             return
-        from pathlib import Path
-
-        subarr_full = str(_settings.media_root / Path(video_canonical))
+        try:
+            # #134: library-aware resolve (@slug/ heads).
+            subarr_full = str(canonical_to_fs(video_canonical))
+        except PathOutsideRootError:
+            log.warning("plex partial-scan skipped: unresolvable canonical %s", video_canonical)
+            return
         try:
             result = await self._plex.partial_scan(subarr_full)
             log.info(
@@ -372,14 +376,12 @@ class CompletionWatcher:
         """Locate the .srt subgen wrote next to the video. Subgen's default
         naming is <basename>.en.srt; fall back to any .srt sharing the
         basename if the language tag differs."""
-        from pathlib import Path
-        from .config import settings
-
-        full = settings.media_root / Path(video_canonical)
         try:
+            # #134: library-aware resolve (@slug/ heads).
+            full = canonical_to_fs(video_canonical)
             if not full.exists():
                 return None
-        except OSError:
+        except (OSError, PathOutsideRootError):
             return None
         stem = full.stem
         parent = full.parent

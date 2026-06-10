@@ -187,6 +187,44 @@ def _arena_audio_tracks(app_, media_path):
     return out
 
 
+def _walk_all_library_files():
+    """#134: enumerate every video file across ALL library roots for the
+    audio-audit deep scan. Yields (canonical, mtime|None); canonicals carry
+    @slug/ heads for non-default libraries (fs_to_canonical). Unreachable
+    roots are skipped, never abort the audit."""
+    import os
+    from pathlib import Path as _P
+
+    from .paths import VIDEO_EXTS, fs_to_canonical
+
+    seen: set[str] = set()
+    for lib in settings.libraries:
+        try:
+            if not lib.fs_root.is_dir():
+                continue
+            walk = os.walk(lib.fs_root)
+        except Exception:
+            continue
+        for dirpath, _dirs, files in walk:
+            for fn in files:
+                dot = fn.rfind(".")
+                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
+                    continue
+                fp = os.path.join(dirpath, fn)
+                try:
+                    c = fs_to_canonical(_P(fp))
+                except Exception:
+                    continue
+                if c in seen:
+                    continue
+                seen.add(c)
+                try:
+                    mt = os.stat(fp).st_mtime
+                except OSError:
+                    mt = None
+                yield (c, mt)
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     # Schema migrations run BEFORE any store touches the DB. After they
@@ -416,41 +454,12 @@ async def lifespan(app_: FastAPI):
         return out
 
     def _library_worklist():
-        # Opt-in deep scan: every video file under the media root, not just the
-        # tracked set. Tags come from coverage where known (else None → bilingual/
-        # multitrack still detected, mislabel needs a tag to disagree with).
-        import os
-        from .paths import VIDEO_EXTS, fs_to_canonical
-
-        root = settings.media_root
+        # Opt-in deep scan: every video file across ALL library roots (#134),
+        # not just the tracked set. Tags come from coverage where known (else
+        # None → bilingual/multitrack still detected, mislabel needs a tag to
+        # disagree with).
         tag_map = _coverage_tag_map()
-        out = []
-        seen = set()
-        try:
-            walk = os.walk(root)
-        except Exception:
-            return []
-        for dirpath, _dirs, files in walk:
-            for fn in files:
-                dot = fn.rfind(".")
-                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
-                    continue
-                fp = os.path.join(dirpath, fn)
-                try:
-                    from pathlib import Path as _P
-
-                    c = fs_to_canonical(_P(fp))
-                except Exception:
-                    continue
-                if c in seen:
-                    continue
-                seen.add(c)
-                try:
-                    mt = os.stat(fp).st_mtime
-                except OSError:
-                    mt = None
-                out.append((c, tag_map.get(c), mt))
-        return out
+        return [(c, tag_map.get(c), mt) for c, mt in _walk_all_library_files()]
 
     def _audit_worklist(scope: str = "coverage"):
         return _library_worklist() if scope == "library" else _coverage_worklist()

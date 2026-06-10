@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..config import settings
+from ..paths import PathOutsideRootError, canonical_to_fs
 from ..sidecar_scanner import apply_rename, scan
 
 router = APIRouter(prefix="/api", tags=["sidecar"])
@@ -32,17 +33,19 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_under_root(path_str: str) -> Path:
-    """Resolve a user-supplied path and verify it sits inside the media root.
+    """Resolve a user-supplied path and verify it sits inside ANY configured
+    library root (#134 — was: the single media root).
 
     Defence against ../-traversal and absolute-path escape attempts.
     """
     p = Path(path_str).resolve()
-    root = settings.media_root.resolve()
-    try:
-        p.relative_to(root)
-    except ValueError:
-        raise HTTPException(400, detail=f"path escapes media root: {p}")
-    return p
+    for lib in settings.libraries:
+        try:
+            p.relative_to(lib.fs_root.resolve())
+            return p
+        except ValueError:
+            continue
+    raise HTTPException(400, detail=f"path escapes media root: {p}")
 
 
 @router.get("/sidecar/scan")
@@ -63,12 +66,17 @@ def sidecar_scan(
     if root is None:
         scan_root = settings.media_root
     else:
-        # Allow caller to pass either a path relative to media_root OR an
-        # absolute path that resolves under it.
+        # Allow caller to pass either a canonical (library-aware: may carry
+        # an @<slug>/ head, #134) OR an absolute path that resolves under
+        # any library root.
         candidate = Path(root)
         if not candidate.is_absolute():
-            candidate = settings.media_root / candidate
-        scan_root = _resolve_under_root(str(candidate))
+            try:
+                scan_root = canonical_to_fs(root)
+            except PathOutsideRootError:
+                raise HTTPException(400, detail=f"invalid root: {root}")
+        else:
+            scan_root = _resolve_under_root(str(candidate))
     if not scan_root.exists():
         raise HTTPException(404, detail=f"root not found: {scan_root}")
     if loose_threshold < 0.0 or loose_threshold > 1.0:
