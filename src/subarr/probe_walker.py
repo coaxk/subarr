@@ -18,7 +18,6 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from .config import settings
 from .media_probe import ProbeError, probe
 from .paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
 from .probe_store import ProbeStore
@@ -129,7 +128,16 @@ class ProbeWalker:
 
     async def _run(self, state: WalkState) -> None:
         try:
-            root_fs = settings.media_root / state.root
+            # #134: resolve via the library-aware path layer — state.root is a
+            # canonical and may carry an @<slug>/ head selecting a non-default
+            # library root.
+            try:
+                root_fs = canonical_to_fs(state.root)
+            except PathOutsideRootError:
+                state.status = "error"
+                state.errors.append({"error": f"invalid root: {state.root}"})
+                state.finished_at = time.time()
+                return
             if not root_fs.exists() or not root_fs.is_dir():
                 state.status = "error"
                 state.errors.append({"error": f"root not found: {state.root}"})
