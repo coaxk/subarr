@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .libraries import Library, LibraryConfigError, build_libraries
+
 log = logging.getLogger(__name__)
 
 
@@ -182,6 +184,13 @@ class Settings:
     # pruning (keep everything). Set SUBARR_ARENA_RETENTION_DAYS to override.
     arena_retention_days: int
 
+    # #134 Phase 1: the validated library list. Library 0 (slug "") mirrors
+    # the legacy media_root / subgen_media_prefix / arr_path_prefix scalars
+    # for back-compat; additional libraries come from the persisted override
+    # store. Built in load() after the scalars + overrides are resolved.
+    # Tuple (not list) because Settings is frozen.
+    libraries: tuple[Library, ...] = ()
+
 
 def load() -> Settings:
     # See _env_or docstring for the empty-string fall-through rule (#127).
@@ -256,6 +265,29 @@ def load() -> Settings:
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )
     _apply_persisted_overrides(_s)
+
+    # #134 Phase 1: build the library list. Library 0 = the legacy scalars
+    # (which _apply_persisted_overrides may have adjusted). Extras come from
+    # the override store's "libraries" key. Fail-soft: any config error logs
+    # and degrades to the single default library so boot never breaks.
+    _default_lib = Library(
+        slug="",
+        name="default",
+        fs_root=_s.media_root,
+        subgen_prefix=_s.subgen_media_prefix,
+        arr_prefix=_s.arr_path_prefix,
+    )
+    try:
+        from . import config_store
+
+        _raw_extras = config_store.load_overrides().get("libraries", [])
+        if not isinstance(_raw_extras, list):
+            _raw_extras = []
+        _libs = build_libraries(_default_lib, _raw_extras)
+    except LibraryConfigError:
+        log.warning("invalid libraries[] config; using single default library", exc_info=True)
+        _libs = (_default_lib,)
+    object.__setattr__(_s, "libraries", _libs)
     return _s
 
 
