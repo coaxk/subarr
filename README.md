@@ -56,7 +56,9 @@ services:
       - UMASK=022
       - SUBARR_DB_PATH=/data/subarr.db     # SQLite + persisted settings live here
     volumes:
-      - ./subarr/data:/data                # subarr.db (override the path with SUBARR_DB_PATH)
+      - ./subarr/data:/data                # REQUIRED — your verifications + settings live here.
+                                           # Without a persistent volume, everything is wiped on
+                                           # every recreate (and subarr will warn you on boot).
       - /path/to/media:/media/library:rw   # same path Bazarr and subgen see
 ```
 
@@ -267,6 +269,7 @@ What to do about it:
 - For a consistent live copy of a running instance: `docker exec subarr sqlite3 /data/subarr.db ".backup /data/subarr-backup.db"`, then pick up the backup file. Copying `subarr.db` while subarr is writing can produce a torn copy (WAL); stopping the container first also works.
 - **Keep `/data` on a local disk, not NFS/SMB.** SQLite in WAL mode over network filesystems is a well-known corruption hazard. Your media library on NAS is fine — that's read-mostly; the database is not.
 - Subarr runs an integrity check (`PRAGMA quick_check`) on every boot. If your database is damaged you'll see it on the **Health page** and the red header pill — back up `/data` immediately at that point, before anything else writes.
+- **Make sure `/data` is an actual volume.** If you run without one (a bare container, or you removed the volume line), every `docker compose up` starts from an empty database — all your verifications gone, and a brand-new install each time. Subarr detects this on boot and flags it loudly on the Health page; if you see that warning, add a volume for `/data` before you do anything else.
 
 ## Security
 

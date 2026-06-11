@@ -83,6 +83,11 @@ class TelemetryPayload:
     # keyed "ExcType:module:line". Type + location + count ONLY — never
     # messages, tracebacks, or paths (those stay local in task_health).
     crash_counts_24h: dict[str, int] = field(default_factory=dict)
+    # #196/#202 retention signals. install_age_days = days since this
+    # install_id was created (tells genuine retention from id-churn).
+    # data_persistent = is /data a real mount (None = couldn't tell).
+    install_age_days: float = 0.0
+    data_persistent: bool | None = None
     docker_tier: int = 1
 
     def to_dict(self) -> dict[str, Any]:
@@ -101,6 +106,8 @@ class TelemetryPayload:
             "walks_per_day_30d": self.walks_per_day_30d,
             "error_counts_30d": self.error_counts_30d,
             "crash_counts_24h": self.crash_counts_24h,
+            "install_age_days": self.install_age_days,
+            "data_persistent": self.data_persistent,
             "docker_tier": self.docker_tier,
         }
 
@@ -248,6 +255,10 @@ class TelemetryCollector:
             walks_per_day_30d=float(stats.get("walks_per_day_30d") or 0.0),
             error_counts_30d=stats.get("error_counts_30d") or {},
             crash_counts_24h=stats.get("crash_counts_24h") or {},
+            # install_age_days is telemetry's own data (created_at), computed
+            # here rather than via the provider.
+            install_age_days=round(max(0.0, (time.time() - st.created_at) / 86400.0), 1),
+            data_persistent=stats.get("data_persistent"),
             docker_tier=int(stats.get("docker_tier") or 1),
         )
 
@@ -474,6 +485,8 @@ def make_default_stats_provider(app_state) -> Any:
             "walks_per_day_30d": _walks_per_day_30d(app_state),
             "error_counts_30d": _error_counts_30d(app_state),
             "crash_counts_24h": _crash_counts_24h(app_state),
+            # #202: persistence verdict cached at boot (None = couldn't tell).
+            "data_persistent": getattr(app_state, "data_persistent", None),
             "docker_tier": docker_tier,
         }
 
