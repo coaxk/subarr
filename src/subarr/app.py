@@ -757,19 +757,23 @@ app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 # Middleware stack (#138). Starlette wraps the LAST-added middleware
 # OUTERMOST, so registration order below is the REVERSE of execution
 # order. Target, from the wire inward:
-#   BasicAuth -> SecurityHeaders -> GZip -> routes
-# so register GZip first, then SecurityHeaders, then BasicAuth last.
+#   BasicAuth -> ApiKey -> Csrf -> SecurityHeaders -> GZip -> routes
+# so register inward-first: GZip, SecurityHeaders, Csrf, ApiKey, BasicAuth.
 #   - GZip compresses route/static bodies >=1KB (text/JSON/JS/CSS).
-#   - SecurityHeaders stamps CSP + hardening headers on every response
-#     (static assets + health included).
+#   - SecurityHeaders stamps CSP + hardening headers on every response.
+#   - Csrf (#198) rejects cross-origin browser writes to /api/* (default on).
+#   - ApiKey (#198) gates /api/* when SUBARR_API_KEY is set (no-op otherwise).
 #   - BasicAuth is outermost so a 401 challenge returns before any body
 #     is built or compressed. No-op when SUBARR_USER/SUBARR_PASS unset.
 from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
 from .security_headers import SecurityHeadersMiddleware  # noqa: E402
 from .auth import BasicAuthMiddleware  # noqa: E402
+from .api_security import ApiKeyMiddleware, CsrfOriginMiddleware  # noqa: E402
 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CsrfOriginMiddleware, enabled=settings.csrf_protection)
+app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
 app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
 
 app.include_router(browse.router)

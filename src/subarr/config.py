@@ -162,6 +162,18 @@ class Settings:
     auth_user: str
     auth_pass: str
 
+    # #198: optional API key (arr convention). When set, every /api/* call
+    # (except health, the same-origin UI bootstrap, and static) requires
+    # X-Api-Key or ?apikey=. Empty = no key (the bundled UI on a trusted LAN
+    # just works). Orthogonal to basic auth — basic auth gates the human/
+    # browser surface, the key gates programmatic + cross-origin access.
+    api_key: str
+    # #198: same-origin CSRF gate on unsafe /api/* methods. On by default
+    # (the API can restart subgen / mutate Sonarr; a malicious page POSTing
+    # at a LAN IP must not reach it). Set SUBARR_CSRF_PROTECTION=0 only if a
+    # trusted non-browser client trips it.
+    csrf_protection: bool
+
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
     # canonical-to-subarr form used everywhere else (relative to media_root).
@@ -247,6 +259,12 @@ def load() -> Settings:
         ),
         auth_user=os.environ.get("SUBARR_USER", ""),
         auth_pass=os.environ.get("SUBARR_PASS", ""),
+        # #198: empty = off (key auth opt-in). The UI reads it via the
+        # same-origin /api/ui-bootstrap handout, so a configured key doesn't
+        # break the bundled frontend.
+        api_key=os.environ.get("SUBARR_API_KEY", ""),
+        csrf_protection=_env_or("SUBARR_CSRF_PROTECTION", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
         # #136: default 30 days. 0/negative disables arena-run pruning.
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )

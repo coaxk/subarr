@@ -14,6 +14,25 @@ router = APIRouter(prefix="/api", tags=["admin"])
 log = logging.getLogger(__name__)
 
 
+@router.get("/ui-bootstrap")
+async def ui_bootstrap(request: Request) -> dict:
+    """#198: hand the configured API key to the bundled frontend, but ONLY
+    to scripts running on a page we served. Gated on Sec-Fetch-Site ==
+    same-origin: a cross-site page can neither set that header nor read this
+    response (CORS). Returns an empty key when none is configured (the UI
+    then sends no X-Api-Key, which is correct — the middleware is a no-op)."""
+    from ..config import settings
+
+    sfs = request.headers.get("sec-fetch-site", "").lower()
+    if sfs and sfs != "same-origin":
+        raise HTTPException(403, detail="ui-bootstrap is same-origin only")
+    # Header-less requests (no Sec-Fetch-Site at all) are direct hits, not
+    # same-origin page fetches — also denied so curl can't lift the key.
+    if not sfs:
+        raise HTTPException(403, detail="ui-bootstrap is same-origin only")
+    return {"api_key": settings.api_key}
+
+
 @router.post("/restart")
 async def restart_subgen(request: Request) -> dict:
     docker_ops = request.app.state.docker
