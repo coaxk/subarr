@@ -108,6 +108,7 @@ from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .crash_store import CrashStore
+from .db_integrity import check_db_integrity
 from .error_store import ErrorStore
 from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
@@ -269,6 +270,11 @@ async def lifespan(app_: FastAPI):
     # class) surfaces instead of freezing quietly. Each supervised loop records
     # success/failure per cycle; /api/health/tasks + the header pill read it.
     app_.state.task_health = TaskHealthStore(settings.db_path, crash_recorder=app_.state.crashes.record)
+    # #196: quick_check on boot — irreplaceable user data (verifications,
+    # intents, provenance) lives in this one file, and corruption must be
+    # loud (Health page + red pill), not silently half-working. Never blocks
+    # boot on failure; milliseconds on healthy files.
+    check_db_integrity(settings.db_path, app_.state.task_health)
     # Seed the roster so all supervised loops show on the Health page from boot
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.

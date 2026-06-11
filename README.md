@@ -254,6 +254,20 @@ Transparent before you install.
 - Jellyfin / Emby are not yet supported.
 - Compose example uses bind mounts. Named volumes work but you lose the "same path Bazarr and subgen see" sanity.
 
+## Backing up your data
+
+Everything subarr knows lives in two files on the `/data` volume, and some of it is genuinely irreplaceable:
+
+- **`/data/subarr.db`** — the database. Contains your **audio-language verifications** (every "I listened and confirmed this track" click — hours of your judgment that cannot be regenerated), series language intents, the provenance ledger (which provider gave you which sub, when), Tuning Lab history, scan history, and the install's telemetry identity.
+- **`/data/subarr-overrides.json`** — settings changed from the UI (credentials, libraries, toggles).
+
+What to do about it:
+
+- **Include `/data` in whatever backup tool you already run** (restic, borg, Backrest, duplicati — anything). Probe data and coverage rebuild themselves; verifications do not.
+- For a consistent live copy of a running instance: `docker exec subarr sqlite3 /data/subarr.db ".backup /data/subarr-backup.db"`, then pick up the backup file. Copying `subarr.db` while subarr is writing can produce a torn copy (WAL); stopping the container first also works.
+- **Keep `/data` on a local disk, not NFS/SMB.** SQLite in WAL mode over network filesystems is a well-known corruption hazard. Your media library on NAS is fine — that's read-mostly; the database is not.
+- Subarr runs an integrity check (`PRAGMA quick_check`) on every boot. If your database is damaged you'll see it on the **Health page** and the red header pill — back up `/data` immediately at that point, before anything else writes.
+
 ## Security
 
 - Bandit, Semgrep, pip-audit, Trivy run on every push to `coaxk/subarr` and `coaxk/subarr-subgen`. SARIF uploads to the GitHub Security tab.
