@@ -1,6 +1,6 @@
 // Home dashboard body — stages, host telemetry, next run + activity.
 
-import { Sparkline, Delta, StatusDot, Glyph, genSpark } from './atoms.jsx';
+import { Sparkline, Delta, StatusDot, Glyph } from './atoms.jsx';
 import { useLiveChromeCounts } from './chrome.jsx';
 
 // Hooks come from the global React (CDN). Under the old in-browser
@@ -39,79 +39,6 @@ export function useLiveDashboard(intervalMs = 5000) {
   return data;
 }
 
-// ─── Demo data (fallback) ────────────────────────────────────────
-const STAGES = [
-  {
-    id: 'discovered',
-    label: 'discovered',
-    count: 12482,
-    delta: 47,
-    spark: genSpark(20, 8, 4),
-    top: '/TV/Severance/Season 02/Severance.S02E08.mkv',
-    topMeta: '4.2 GB · 58m',
-  },
-  {
-    id: 'probing',
-    label: 'probing',
-    count: 38,
-    delta: 12,
-    spark: genSpark(20, 6, 5),
-    top: '/Movies/Dune Part Two (2024)/Dune.Part.Two.2160p.mkv',
-    topMeta: '20.4 GB · 2h46',
-    live: true,
-  },
-  {
-    id: 'wanted',
-    label: 'bazarr-wanted',
-    count: 217,
-    delta: -8,
-    spark: genSpark(20, 12, 6),
-    top: '/TV/Andor/Season 01/Andor.S01E04.mkv',
-    topMeta: 'eng · 8.6',
-  },
-  {
-    id: 'scanning',
-    label: 'transcribing',
-    count: 6,
-    delta: 6,
-    spark: genSpark(20, 4, 3),
-    top: '/Movies/Anora (2024)/Anora.2024.1080p.mkv',
-    topMeta: 'subgen · 14s remaining',
-    live: true,
-  },
-  {
-    id: 'written',
-    label: 'written-back',
-    count: 1023,
-    delta: 39,
-    spark: genSpark(20, 18, 6),
-    top: '/TV/Fallout/Season 01/Fallout.S01E03.mkv',
-    topMeta: 'eng · 9.1',
-    tail: '4 failed',
-    tailKind: 'error',
-  },
-];
-
-const INTEGRATIONS = [
-  { name: 'Bazarr',   ver: '1.5.6',  ping: 12,  status: 'ok',    extra: '658 wanted' },
-  { name: 'Sonarr',   ver: '4.0.9',  ping: 62,  status: 'ok',    extra: '4 instances' },
-  { name: 'Radarr',   ver: '5.8.3',  ping: 71,  status: 'ok',    extra: '2 instances' },
-  { name: 'Tautulli', ver: '2.14.3', ping: 23,  status: 'ok',    extra: '142 plays/wk' },
-  { name: 'subgen',   ver: '0.9.2',  ping: 866, status: 'error', extra: 'HTTP 502 · 14m ago' },
-];
-
-const ACTIVITY = [
-  { t: '14:32:08', rel: '1s',  kind: 'written-back', path: '/TV/Severance/Season 02/Severance.S02E07.mkv',         meta: 'eng · 9.4' },
-  { t: '14:31:54', rel: '15s', kind: 'scanned',      path: '/Movies/Furiosa (2024)/Furiosa.2024.mkv',              meta: 'subgen · 22s' },
-  { t: '14:31:40', rel: '29s', kind: 'queued',       path: '/TV/Shogun/Season 01/Shogun.S01E08.mkv',               meta: 'eng' },
-  { t: '14:30:11', rel: '2m',  kind: 'probed',       path: '/TV/Andor/Season 01/Andor.S01E04.mkv',                 meta: '2h12m · 5.1' },
-  { t: '14:29:22', rel: '3m',  kind: 'failed',       path: '/Movies/Madame Web (2024)/Madame.Web.2024.mkv',        meta: 'opensubs 429' },
-  { t: '14:28:50', rel: '3m',  kind: 'written-back', path: '/TV/Fallout/Season 01/Fallout.S01E03.mkv',             meta: 'eng · 9.1' },
-  { t: '14:28:33', rel: '4m',  kind: 'scanned',      path: '/TV/3 Body Problem/Season 01/3 Body Problem.S01E05.mkv', meta: 'subgen · 31s' },
-  { t: '14:27:11', rel: '5m',  kind: 'probed',       path: '/TV/Ripley/Season 01/Ripley.S01E03.mkv',               meta: '54m · 5.1' },
-  { t: '14:26:48', rel: '5m',  kind: 'queued',       path: '/Movies/Civil War (2024)/Civil.War.2024.mkv',          meta: 'eng' },
-  { t: '14:25:02', rel: '7m',  kind: 'written-back', path: '/TV/Ripley/Season 01/Ripley.S01E02.mkv',               meta: 'eng,ita · 8.4' },
-];
 
 const KIND_STYLE = {
   'discovered':   { dot: 'muted',  fg: 'var(--fg-2)' },
@@ -367,13 +294,36 @@ function GpuWidget({ data }) {
     setUtilHist((h) => [...h.slice(-59), Math.round(data.util_pct)]);
   }, [data]);
   const spark = utilHist;
-  const util = data ? Math.round(data.util_pct) : 67;
-  const vramUsedGB = data ? (data.vram_used_mb / 1024) : 8.4;
-  const vramTotalGB = data ? (data.vram_total_mb / 1024) : 12;
-  const tempC = data ? Math.round(data.temp_c) : 64;
-  const powerW = data ? Math.round(data.power_w) : 142;
-  const powerCapW = data ? Math.round(data.power_cap_w) : 200;
-  const gpuName = data ? data.name : 'NVIDIA RTX 4070';
+  // #193: no GPU data → an honest "no data" state, never demo numbers.
+  // (CPU-only boxes and subgen-down installs were seeing a fabricated
+  // RTX 4070 at 67% util.)
+  if (!data) {
+    return (
+      <div data-testid="dashboard-gpu" style={{
+        background: 'var(--bg-1)',
+        border: 'var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '12px 14px',
+        display: 'flex', flexDirection: 'column', gap: 10,
+        minWidth: 0, height: '100%', justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="label">GPU</span>
+        </div>
+        <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
+          no GPU telemetry — none detected, or subgen is unreachable.
+        </div>
+        <div style={{ height: 44 }} />
+      </div>
+    );
+  }
+  const util = Math.round(data.util_pct);
+  const vramUsedGB = data.vram_used_mb / 1024;
+  const vramTotalGB = data.vram_total_mb / 1024;
+  const tempC = Math.round(data.temp_c);
+  const powerW = Math.round(data.power_w);
+  const powerCapW = Math.round(data.power_cap_w);
+  const gpuName = data.name;
   const busy = util > 5;
   return (
     <div data-testid="dashboard-gpu" style={{
@@ -729,9 +679,11 @@ const ACTIVITY_FILTERS = [
 ];
 
 function ActivityCard({ data }) {
-  // data: live array from /api/home/dashboard.activity, or null → fall
-  // back to demo ACTIVITY.
-  const allRows = (data && data.length) ? data : ACTIVITY;
+  // data: live array from /api/home/dashboard.activity. #193: empty/null
+  // renders the honest empty state below — NEVER demo rows. A new install
+  // saw fabricated activity for files that don't exist and reasonably
+  // concluded subarr was writing mystery files.
+  const allRows = data || [];
   const [filter, setFilter] = useState('all');
   // #100: cap to a handful + no inner scroll. "View full activity" already
   // covers the expanded view, and a shorter card rolls the bottom of the

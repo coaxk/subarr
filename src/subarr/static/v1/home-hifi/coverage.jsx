@@ -215,42 +215,6 @@ function normalizeRow(item, idx, settleMinutes = 0) {
   };
 }
 
-// ─── Demo dataset (fallback for design preview only) ────────────
-const COVERAGE_ROWS = [
-  { id: 1,  score: 9.4, type: 'tv',  title: 'Severance',                ep: 'S02E08', langs: ['eng','spa','fre'], mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: true,  size: '4.2 GB' },
-  { id: 2,  score: 9.2, type: 'tv',  title: 'Shogun',                   ep: 'S01E09', langs: ['eng','jpn'],       mon: 1, disk: 0, emb: 1, audio: 'jpn',     reason: 'embedded-only', sel: true,  size: '5.1 GB' },
-  { id: 3,  score: 8.9, type: 'mov', title: 'Dune: Part Two',           ep: '',       langs: ['eng','fre'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '20.4 GB' },
-  { id: 4,  score: 8.6, type: 'tv',  title: 'Andor',                    ep: 'S01E04', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'bazarr-wanted', sel: true,  size: '3.8 GB' },
-  { id: 5,  score: 8.4, type: 'tv',  title: 'Fallout',                  ep: 'S01E03', langs: ['eng'],             mon: 1, disk: 1, emb: 0, audio: 'eng',     reason: 'low-score',     sel: false, size: '4.0 GB' },
-  { id: 6,  score: 8.2, type: 'mov', title: 'Anora',                    ep: '',       langs: ['eng','rus'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: true,  size: '6.8 GB' },
-  { id: 7,  score: 7.9, type: 'tv',  title: '3 Body Problem',           ep: 'S01E05', langs: ['eng','zho'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '3.6 GB' },
-  { id: 8,  score: 7.6, type: 'mov', title: 'Furiosa: A Mad Max Saga',  ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 1, audio: 'eng',     reason: 'embedded-only', sel: false, size: '14.2 GB' },
-  { id: 9,  score: 7.4, type: 'tv',  title: 'House of the Dragon',      ep: 'S02E01', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '4.4 GB' },
-  { id: 10, score: 7.2, type: 'tv',  title: 'Ripley',                   ep: 'S01E03', langs: ['eng','ita'],       mon: 1, disk: 0, emb: 0, audio: 'eng,ita', reason: 'no-track',      sel: false, size: '2.9 GB' },
-  { id: 11, score: 7.1, type: 'mov', title: 'The Bikeriders',           ep: '',       langs: ['eng'],             mon: 0, disk: 0, emb: 0, audio: 'eng',     reason: 'unmonitored',   sel: false, size: '5.2 GB' },
-  { id: 12, score: 6.9, type: 'tv',  title: 'X-Men \u201997',           ep: 'S01E05', langs: ['eng','jpn'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '1.4 GB' },
-  { id: 13, score: 6.8, type: 'tv',  title: 'Ripley',                   ep: 'S01E02', langs: ['eng','ita'],       mon: 1, disk: 0, emb: 0, audio: 'eng,ita', reason: 'no-track',      sel: false, size: '2.7 GB' },
-  { id: 14, score: 6.5, type: 'mov', title: 'Civil War',                ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '7.1 GB' },
-  { id: 15, score: 6.3, type: 'tv',  title: 'Mr. & Mrs. Smith',         ep: 'S01E07', langs: ['eng'],             mon: 1, disk: 1, emb: 0, audio: 'eng',     reason: 'low-score',     sel: false, size: '3.8 GB' },
-  { id: 16, score: 6.1, type: 'tv',  title: 'The Acolyte',              ep: 'S01E02', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '4.1 GB' },
-  { id: 17, score: 5.9, type: 'tv',  title: 'X-Men \u201997',           ep: 'S01E04', langs: ['eng','jpn'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '1.4 GB' },
-  { id: 18, score: 5.6, type: 'mov', title: 'Late Night with the Devil',ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '3.4 GB' },
-  { id: 19, score: 5.2, type: 'tv',  title: 'Sugar',                    ep: 'S01E04', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'bazarr-wanted', sel: false, size: '2.1 GB' },
-  { id: 20, score: 5.0, type: 'mov', title: 'Hit Man',                  ep: '',       langs: ['eng'],             mon: 1, disk: 1, emb: 0, audio: 'eng',     reason: 'low-score',     sel: false, size: '5.6 GB' },
-  { id: 21, score: 4.9, type: 'tv',  title: 'The Sympathizer',          ep: 'S01E03', langs: ['eng','vie'],       mon: 1, disk: 0, emb: 0, audio: 'eng,vie', reason: 'no-track',      sel: false, size: '3.0 GB' },
-  { id: 22, score: 4.7, type: 'tv',  title: 'Sugar',                    ep: 'S01E03', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'bazarr-wanted', sel: false, size: '2.1 GB' },
-  { id: 23, score: 4.4, type: 'mov', title: 'Challengers',              ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 1, audio: 'eng',     reason: 'embedded-only', sel: false, size: '5.8 GB' },
-  { id: 24, score: 4.2, type: 'tv',  title: 'Dark Matter',              ep: 'S01E06', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '3.3 GB' },
-  { id: 25, score: 4.0, type: 'tv',  title: 'Bridgerton',               ep: 'S03E04', langs: ['eng','fre'],       mon: 0, disk: 0, emb: 0, audio: 'eng',     reason: 'unmonitored',   sel: false, size: '4.7 GB' },
-  { id: 26, score: 3.8, type: 'mov', title: 'I.S.S.',                   ep: '',       langs: ['eng','rus'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '4.4 GB' },
-  { id: 27, score: 3.6, type: 'tv',  title: 'Star Wars: The Bad Batch', ep: 'S03E12', langs: ['eng'],             mon: 1, disk: 1, emb: 0, audio: 'eng',     reason: 'low-score',     sel: false, size: '1.6 GB' },
-  { id: 28, score: 3.3, type: 'mov', title: 'Drive-Away Dolls',         ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '4.9 GB' },
-  { id: 29, score: 3.1, type: 'tv',  title: 'Palm Royale',              ep: 'S01E08', langs: ['eng','spa'],       mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '2.8 GB' },
-  { id: 30, score: 2.8, type: 'tv',  title: 'Resident Alien',           ep: 'S03E06', langs: ['eng'],             mon: 0, disk: 0, emb: 0, audio: 'eng',     reason: 'unmonitored',   sel: false, size: '2.0 GB' },
-  { id: 31, score: 2.5, type: 'mov', title: 'Argylle',                  ep: '',       langs: ['eng'],             mon: 1, disk: 0, emb: 1, audio: 'eng',     reason: 'embedded-only', sel: false, size: '6.2 GB' },
-  { id: 32, score: 2.1, type: 'tv',  title: 'Dr. Who',                  ep: 'S14E03', langs: ['eng'],             mon: 1, disk: 0, emb: 0, audio: 'eng',     reason: 'no-track',      sel: false, size: '2.3 GB' },
-];
-
 // Score colour gradient: violet (hi) → cyan (mid) → muted (lo).
 function scoreColor(s) {
   if (s >= 8.5) return 'var(--violet-400)';
