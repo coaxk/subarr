@@ -15,14 +15,15 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 1.4
+## New in 1.5
 
-- **Job Aftercare — a quality check after every transcribe.** Every finished job gets a post-transcription pass. A dedicated Aftercare page (plus a header pill and a dashboard panel) surfaces flagged subtitles — failures and readability problems — with a country flag, language, source tag, and composite score per row, and a legend explaining each flag. Requeue straight from there. Honest by design: it flags problems, it does not hand out confident grades.
-- **Wrong default audio track, fixed in one click.** Subarr now detects when a file's *default* audio track is not the original language — the setup that makes Whisper double-translate (an English dub set as default on a foreign-original film). Review flags these, and you can swap the original track to default in place (instant, lossless, via `mkvpropedit`) or dismiss — individually or in bulk.
-- **The advanced queue governs everything now.** Manual scans and requeues used to bypass the queue and flood subgen. Now every submission routes through the pending queue — visible, throttled to your target depth, and reorderable (step-wise up/down) — while staying near-instant (manual jumps the line plus an immediate feeder kick).
-- **Verified subtitle segmentation, baked in.** The regroup config tuned in our segmentation arena ("strongpad") is now the default in the `subarr-subgen` image — it roughly halves hard-to-read high-CPS cues and eliminates sub-half-second micro-cues, validated across multiple languages. Overridable.
+- **Multiple media locations (libraries).** Your library no longer has to live under one root. Model each location — a second disk, a 4K share, an anime mount — as a library with its own subgen and *arr path prefixes. Auto-suggested from your Sonarr/Radarr root folders in Settings → Libraries (plus a manual add form), validated live, applied without a restart. Existing single-root installs change nothing — zero migration.
+- **Runs on your Pi — multi-arch images.** `ghcr.io/coaxk/subarr` now publishes linux/arm64 alongside amd64. Pi 4/5 users: no more exec-format errors, no more building locally.
+- **Coverage stays trustworthy through restarts.** A transient Sonarr/Bazarr hiccup during a build (the stack-restart special) used to replace your coverage snapshot with an all-"Analyzing" wall for ~10 minutes. Degraded builds are now held — the last good snapshot keeps serving until the stack is actually back.
+- **Crash visibility, fleet edition.** When a background loop fails, subarr now (with telemetry on) reports the exception type + module:line + count — never messages, tracebacks, or paths. A release regression that slips past CI shows up across the fleet in hours instead of festering silently. Full detail stays local on the Health page; the transparency panel shows exactly what's sent.
+- **Search actually searches.** Library search results now drill down (clicking a matched show shows its seasons), and the Coverage title/path search box is a real input that filters the table.
 
-*The Tuning Lab, audio-language verification, library-wide audio scan, and the global recipe leaderboard landed in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+*Job Aftercare, default-track mismatch fix, and queue authority landed in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
 
 ---
 
@@ -238,7 +239,7 @@ volumes:
 
 Internally, extra libraries qualify their file keys with a stable `@<id>/` head while the default library keeps today's keys — which is why existing installs upgrade with zero migration. The simple union-mount workaround (binding several host paths under one container root) still works fine if you prefer it.
 
-## Known limitations (v1.4)
+## Known limitations (v1.5)
 
 Transparent before you install.
 
@@ -251,7 +252,6 @@ Transparent before you install.
 - SQLite only. No Postgres backend.
 - Single-host. Workers / multi-host are an explicit non-goal until users ask.
 - Jellyfin / Emby are not yet supported.
-- arm64 builds are not yet published. Pi 4 / 5 users need to build locally for now.
 - Compose example uses bind mounts. Named volumes work but you lose the "same path Bazarr and subgen see" sanity.
 
 ## Security
