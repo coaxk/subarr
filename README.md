@@ -270,6 +270,16 @@ What to do about it:
 
 ## Security
 
+### Authentication & access
+
+Subarr's API can mutate Sonarr, trigger Bazarr tasks, edit your library roots, and restart subgen — so guard it like any other *arr.
+
+- **API key** (recommended if subarr is reachable beyond a fully trusted LAN). Set `SUBARR_API_KEY` to any string; every `/api/*` call then requires it as an `X-Api-Key` header or `?apikey=` query (the arr convention — the query form lets subgen's `WEBHOOK_URL_COMPLETED` carry it). The bundled UI fetches the key from a same-origin-only endpoint and sends it automatically, so the web app keeps working. `/api/health` stays open for container healthchecks. Unset by default — a trusted-LAN install needs nothing.
+- **CSRF protection** is on by default: cross-origin browser writes to `/api/*` are rejected (a malicious page can't blind-POST at your LAN IP through your browser). Non-browser clients (curl, the subgen webhook) are unaffected. Set `SUBARR_CSRF_PROTECTION=0` only if a trusted automation client trips it.
+- **HTTP Basic auth** (`SUBARR_USER` + `SUBARR_PASS`) gates the human/browser surface as an in-product fallback. For anything internet-facing, a reverse proxy with real auth (Authelia, Caddy, Traefik forward-auth) remains the recommended posture.
+
+### Posture
+
 - Bandit, Semgrep, pip-audit, Trivy run on every push to `coaxk/subarr` and `coaxk/subarr-subgen`. SARIF uploads to the GitHub Security tab.
 - Constant-time auth comparison (`secrets.compare_digest`). Regression tested.
 - API keys never appear in any HTTP response, masked surface, raw key only in dataclass internals. Regression tested.

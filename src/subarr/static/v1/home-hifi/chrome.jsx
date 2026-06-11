@@ -6,6 +6,10 @@
 // 4, etc.) were design preview only — they were the same lie the
 // frontend-backend wiring audit flagged.
 
+// #198: side-effect import — installs the global fetch wrapper that stamps
+// X-Api-Key on /api/* calls when a key is configured. Every page loads
+// chrome, so importing it here covers the whole UI in one place.
+import './api-fetch.mjs';
 import { Wordmark, Glyph, StatusDot } from './atoms.jsx';
 
 const { useState, useEffect } = React;
