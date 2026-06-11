@@ -107,6 +107,7 @@ from .arena_store import ArenaStore
 from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
+from .crash_store import CrashStore
 from .error_store import ErrorStore
 from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
@@ -258,10 +259,16 @@ async def lifespan(app_: FastAPI):
     app_.state.scans = ScanStore(settings.db_path)
     # Anonymous error-class log for telemetry (schema via migration 006).
     app_.state.errors = ErrorStore(settings.db_path)
+    # #157 P2: sanitized fleet crash aggregates (type + module:line only).
+    # Fed by TaskHealthStore.record_failure below; aggregated into the daily
+    # ping as crash_counts_24h. Pruned on boot (error_events never was — don't
+    # repeat that gap).
+    app_.state.crashes = CrashStore(settings.db_path)
+    app_.state.crashes.prune(days=30)
     # #157: per-loop health so a silently-crashing background task (the #79
     # class) surfaces instead of freezing quietly. Each supervised loop records
     # success/failure per cycle; /api/health/tasks + the header pill read it.
-    app_.state.task_health = TaskHealthStore(settings.db_path)
+    app_.state.task_health = TaskHealthStore(settings.db_path, crash_recorder=app_.state.crashes.record)
     # Seed the roster so all supervised loops show on the Health page from boot
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.

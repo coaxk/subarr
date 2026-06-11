@@ -1804,6 +1804,18 @@ function TelemetryPanel() {
         <Row label="Last ping"
              value={fmt(data.last_ping_at)}
              hint={data.last_ping_at ? ago(data.last_ping_at) : 'no successful send yet'} />
+        {(() => {
+          // #157 P2: crash-report transparency. Counts only — the full
+          // sanitized detail is visible in the payload JSON below.
+          const cc = (last && last.crash_counts_24h) || {};
+          const types = Object.keys(cc).length;
+          const total = Object.values(cc).reduce((a, b) => a + b, 0);
+          return (
+            <Row label="Crash reports (24h)"
+                 value={types ? `${total} crash${total === 1 ? '' : 'es'} · ${types} type${types === 1 ? '' : 's'}` : 'none'}
+                 hint="exception type + module:line + count only — never messages, tracebacks, or paths" />
+          );
+        })()}
         {data.last_error && (
           <Row label="Last error"
                value={data.last_error}
