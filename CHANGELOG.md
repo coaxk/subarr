@@ -5,6 +5,47 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.5.0] - 2026-06-11
+
+### Added
+- **Multiple media locations / libraries (#134).** Media is now modeled as a
+  list of libraries, each with its own filesystem root, subgen prefix, and
+  *arr path prefix. Managed in Settings → Libraries (and onboarding):
+  Sonarr/Radarr root folders not covered by any library surface as one-click
+  "Add as library" suggestions, plus a manual add form with live path
+  validation; changes apply without a restart. Internally, extra libraries
+  qualify canonical keys with a stable `@<id>/` head while the default
+  library keeps today's keys — existing installs upgrade with zero
+  migration.
+- **Multi-arch images — linux/arm64 (#70).** `ghcr.io/coaxk/subarr` now
+  builds for amd64 + arm64; Pi 4/5 installs work out of the box.
+- **Fleet crash telemetry (#157 Phase 2).** Supervised-loop failures report
+  a sanitized aggregate — exception type + module:line + count ONLY, never
+  messages/tracebacks/paths — alongside the daily telemetry ping (opt-out
+  with the same toggle). Full local detail stays on the Health page; the
+  transparency panel shows a crash-reports row and the exact payload.
+
+### Fixed
+- **Degraded coverage builds no longer clobber the warm snapshot (#167).**
+  A build whose Bazarr/Sonarr/Radarr fetch failed while the cached snapshot
+  had it healthy is held (the last good snapshot keeps serving, with a loud
+  log), capped at 3 consecutive holds. Kills the ~10-minute all-"Analyzing"
+  wall after stack restarts.
+- **Library search drill-down (#187).** Clicking a search-matched folder now
+  shows its contents — children of a match were previously re-filtered by
+  the search term and rendered nothing.
+- **Coverage title/path search (#188).** The search box is now a real input
+  that filters the table (it was a static placeholder).
+- Dead `SONARR_PATH_PREFIX`/`RADARR_PATH_PREFIX` config removed (#133 —
+  defined but never consumed; per-library *arr prefixes supersede them) and
+  the stale Settings hint referencing them reworded.
+
+### Transparency
+- A worker-side validation bug had been rejecting telemetry pings
+  fleet-wide since 2026-06-08 (numeric `docker_tier` vs a string-only
+  validator). Fixed server-side — no client action needed; install stats
+  were undercounted for ~3 days.
+
 ## [1.4.0] - 2026-06-09
 
 ### Added
