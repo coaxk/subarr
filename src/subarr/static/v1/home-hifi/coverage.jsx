@@ -2260,6 +2260,24 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
   });
 
   const out = [];
+  // Section header for the TV side, mirroring the "Movies" header below so the
+  // tree is symmetric (shows used to start with no top-line heading).
+  const tvRows = [];
+  for (const show of tree.values()) tvRows.push(...show.all);
+  if (tvRows.length) {
+    out.push(
+      <GroupHeader
+        key="tv-header"
+        depth={0}
+        label="TV Shows"
+        onClick={() => {}}
+        expanded={true}
+        allSelected={tvRows.every((r) => selected.has(r.id))}
+        indeterminate={tvRows.some((r) => selected.has(r.id))}
+        rightMeta={`${tvRows.length} ep${tvRows.length === 1 ? '' : 's'} wanted · ${tree.size} show${tree.size === 1 ? '' : 's'}`}
+      />
+    );
+  }
   for (const show of tree.values()) {
     const showExpanded = expandedShows.has(show.title);
     const epCount = show.all.length;
