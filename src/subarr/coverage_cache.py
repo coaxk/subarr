@@ -49,6 +49,30 @@ log = logging.getLogger(__name__)
 # 5-min refresh cadence.
 _EAGER_PROBE_CAP = 400
 
+# #167: publish gate. A build whose CRITICAL source failed (configured but
+# errored) while the cached snapshot had it healthy is a degraded build —
+# build_coverage degrades integration failures to empty data (best-effort by
+# design), which yields a structurally-valid snapshot where every row is
+# unprobed (no series paths) and the Sonarr-derived synthetic rows vanish.
+# Publishing that clobbers a good warm snapshot for ~10 minutes after a
+# stack restart. Held builds keep serving the warm snapshot; the cap stops
+# a genuinely-down integration from pinning a stale snapshot forever.
+_CRITICAL_SOURCES = ("bazarr", "sonarr", "radarr")
+_MAX_CONSECUTIVE_HOLDS = 3
+
+
+def degraded_sources(new_sources: dict | None, cached_sources: dict | None) -> list[str]:
+    """Critical sources that FAILED in the new build (configured + ok:false)
+    but were healthy in the cached snapshot's build. configured:false is not
+    a failure — an intentionally unwired integration never degrades a build."""
+    out: list[str] = []
+    for name in _CRITICAL_SOURCES:
+        n = (new_sources or {}).get(name) or {}
+        c = (cached_sources or {}).get(name) or {}
+        if n.get("configured") and not n.get("ok") and c.get("ok"):
+            out.append(name)
+    return out
+
 
 def eager_probe_targets(items: list[dict[str, Any]], cap: int = _EAGER_PROBE_CAP) -> list[str]:
     """Canonical paths of rows the probe-gate is hiding because they're
@@ -148,6 +172,8 @@ class CoverageCache:
         self._pending_args: tuple | None = None  # args for the follow-up
         self._refresh_task: asyncio.Task | None = None
         self._debounce_handle: asyncio.TimerHandle | None = None
+        # #167: consecutive degraded-build holds (see degraded_sources).
+        self._consecutive_holds = 0
 
     # ─── #104: debounce / coalesce ──────────────────────────────────
     @property
@@ -355,6 +381,27 @@ class CoverageCache:
                 )
                 body = report.to_dict()
                 duration = time.time() - started
+
+                # #167 publish gate: a build whose critical source newly
+                # failed is degraded (all-unprobed rows, vanished synthetic
+                # rows) — hold it and keep serving the warm snapshot instead
+                # of clobbering it. Cap consecutive holds so a genuinely-down
+                # integration still publishes (and surfaces) eventually.
+                cached = self._cached
+                held = degraded_sources(body["sources"], cached.sources if cached else None)
+                if held and cached is not None and self._consecutive_holds < _MAX_CONSECUTIVE_HOLDS:
+                    self._consecutive_holds += 1
+                    log.warning(
+                        "coverage build HELD, not published (#167): %s failed while the "
+                        "cached snapshot has them healthy (hold %d/%d) — serving the warm "
+                        "snapshot; will retry next refresh",
+                        ", ".join(held),
+                        self._consecutive_holds,
+                        _MAX_CONSECUTIVE_HOLDS,
+                    )
+                    return cached
+                self._consecutive_holds = 0
+
                 snap = self.store(
                     items=body["items"],
                     totals=body["totals"],
