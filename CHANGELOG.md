@@ -5,6 +5,17 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.5.1] - 2026-06-11
+
+### Fixed
+- **The Overview showed sample/demo rows when there was no real activity
+  yet (#193).** New installs saw fabricated "Recent activity" entries for
+  files that don't exist (including an impossible `opensubs 429` failure),
+  and CPU-only installs saw placeholder GPU numbers. Both now show honest
+  empty states. Thanks to u0126 (r/Softwarr) for the report — the rest of
+  their dashboard (66k files discovered, 8k Bazarr-wanted) was real and
+  working; the demo fallback was manufacturing the confusion.
+
 ## [1.5.0] - 2026-06-11
 
 ### Added
