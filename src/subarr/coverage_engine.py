@@ -1509,6 +1509,11 @@ async def build_coverage(
         title = w.get("title") or w.get("movieTitle") or ""
         m = radarr_by_title.get(title.strip().lower(), {})
         canonical = strip_arr_prefix(m.get("path"))
+        # Resolve the actual movie FILE (not just the folder) so an unprobed
+        # movie can be eager-probed — _attach_probe_movie only fills this in
+        # when a probe already exists, leaving unprobed wanted movies stuck in
+        # Analyzing forever (same parity gap the blind-defense pass fixes).
+        _movie_file_canonical = strip_arr_prefix((m.get("movieFile") or {}).get("path"))
         # #228: iterdir on each movie folder blocks the event loop. Shallow
         # scan (one level deep) so per-call cost is small, but with 500+
         # movies the cumulative block is real. Thread it.
@@ -1523,6 +1528,7 @@ async def build_coverage(
             monitored=m.get("monitored"),
             tags=_tags_for(m, radarr_tags),
             canonical_path=canonical,
+            file_canonical_path=_movie_file_canonical,
             has_sub_on_disk=has_srt,
             sub_files_seen=srts,
             bazarr_radarr_id=m.get("id"),
@@ -1585,6 +1591,30 @@ async def build_coverage(
             whisper_verifications=whisper_verifications,
             sources=sources,
             plex_hints=plex_audio_hints,
+            ignore_forced_subtitles=ignore_forced,
+        )
+
+    # Radarr movie-coverage pass. Movies otherwise appear ONLY via Bazarr's
+    # monitored-wanted list, so any movie that's unmonitored-in-Bazarr (or that
+    # Bazarr's wanted endpoint omits) was invisible — a Radarr user could see
+    # zero of their movies. This surfaces every Radarr movie with a file that's
+    # missing English coverage, carrying `monitored` so the Coverage chip
+    # filters as usual. Broader than the Sonarr foreign-only defense by design.
+    if bundle.radarr.is_configured():
+        items = await _add_radarr_blind_movie_rows(
+            radarr_movies,
+            items,
+            radarr_tags=radarr_tags,
+            radarr_missing_ids=radarr_missing_ids,
+            radarr_recent_ids=radarr_recent_ids,
+            activity=activity,
+            tt_signals=tt_signals,
+            probe_by_series_prefix=probe_by_series_prefix,
+            failed_idx=probe_failed_by_prefix,
+            user_verifications=user_verifications,
+            whisper_verifications=whisper_verifications,
+            plex_hints=plex_audio_hints,
+            sources=sources,
             ignore_forced_subtitles=ignore_forced,
         )
 
@@ -1850,6 +1880,106 @@ async def _add_bazarr_blind_synthetic_rows(
         synthetic_added,
         len(foreign_series),
     )
+    return items
+
+
+async def _add_radarr_blind_movie_rows(
+    radarr_movies: list[dict],
+    items: list[CoverageItem],
+    *,
+    radarr_tags: dict[int, str],
+    radarr_missing_ids: set[int],
+    radarr_recent_ids: dict[int, float],
+    activity: dict,
+    tt_signals: dict,
+    probe_by_series_prefix: dict[str, list],
+    failed_idx: dict[str, list],
+    user_verifications: dict[str, str],
+    whisper_verifications: dict[str, str],
+    plex_hints: dict[str, str],
+    sources: dict,
+    ignore_forced_subtitles: bool,
+) -> list[CoverageItem]:
+    """Surface Radarr movies missing English subtitle coverage.
+
+    The movie analog of the Bazarr-blind defense, but BROADER: where the TV
+    pass only keeps suspect-audio foreign episodes, this keeps any movie with
+    a file that lacks an English sub (embedded or sidecar), because movies
+    otherwise reach Coverage ONLY through Bazarr's monitored-wanted list — so
+    an unmonitored-in-Bazarr movie missing a sub was completely invisible.
+
+    Every row runs the SAME funnel as the wanted path: _attach_probe_movie
+    (embedded detection + L1–L4 audio classify + track mismatch), the file
+    path is resolved up front so the probe-gate eager-probes unprobed movies,
+    and _score applies the movie signals. `monitored` rides along so the
+    Coverage 'monitored' chip filters as usual.
+    """
+    seen_radarr_ids = {
+        it.bazarr_radarr_id for it in items if it.media_type == "movie" and it.bazarr_radarr_id
+    }
+    seen_files = {it.file_canonical_path for it in items if it.file_canonical_path}
+    added = 0
+    for m in radarr_movies:
+        if not isinstance(m, dict) or not m.get("hasFile"):
+            continue
+        rid = m.get("id")
+        if rid and rid in seen_radarr_ids:
+            continue
+        file_path = (m.get("movieFile") or {}).get("path")
+        file_canonical = strip_arr_prefix(file_path)
+        if not file_canonical or file_canonical in seen_files:
+            continue
+        folder_canonical = strip_arr_prefix(m.get("path"))
+        item = CoverageItem(
+            media_type="movie",
+            title=m.get("title") or "(unknown)",
+            original_language=(m.get("originalLanguage") or {}).get("name"),
+            monitored=m.get("monitored"),
+            tags=_tags_for(m, radarr_tags),
+            canonical_path=folder_canonical,
+            file_canonical_path=file_canonical,  # parity: lets eager-probe ffprobe the file
+            bazarr_radarr_id=rid,
+            missing_subtitles=["en"],
+        )
+        if rid and rid in radarr_missing_ids:
+            item.pending_download = True
+        _attach_probe_movie(
+            item,
+            probe_by_series_prefix,
+            tautulli_hints=activity.get("audio_lang_hints") or {},
+            user_verifications=user_verifications,
+            failed_idx=failed_idx,
+            plex_hints=plex_hints,
+            whisper_verifications=whisper_verifications,
+        )
+        # Drop confirmed-covered movies: an embedded English track, or an EN
+        # sidecar on disk, means this is not a gap (Bazarr was right to omit
+        # it). Unprobed movies are KEPT (verification_state stays "unprobed")
+        # so the probe-gate + eager-probe resolve them next build, exactly
+        # like TV — never silently dropped.
+        if item.verification_state == "verified":
+            has_en = bool(item.embedded_en)
+            if not has_en and folder_canonical:
+                _has_srt, srts = await asyncio.to_thread(_scan_for_srt, folder_canonical)
+                stem = file_canonical.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                has_en = any(_is_en_sidecar_for(s, stem) for s in srts)
+            if has_en:
+                continue
+        _score(
+            item,
+            tt_signals,
+            now_playing_titles=activity["now_playing_titles"],
+            transcoding_titles=activity["transcoding_titles"],
+            just_imported_movies=radarr_recent_ids,
+            ignore_forced_subtitles=ignore_forced_subtitles,
+        )
+        items.append(item)
+        seen_files.add(file_canonical)
+        if rid:
+            seen_radarr_ids.add(rid)
+        added += 1
+    sources["radarr_movie_coverage"] = {"ok": True, "movies_added": added}
+    log.info("radarr movie-coverage: added %d movie rows missing English coverage", added)
     return items
 
 
