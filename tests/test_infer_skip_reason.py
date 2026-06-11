@@ -20,6 +20,7 @@ import types
 import pytest
 
 from subarr import paths
+from subarr.libraries import Library
 from subarr.routers.queue import _infer_skip_reason
 
 
@@ -29,7 +30,9 @@ def media_tree(tmp_path, monkeypatch):
 
     settings is a frozen dataclass, so instead of mutating it we swap the
     `settings` reference that paths.canonical_to_fs resolves against for a
-    lightweight stub exposing only `.media_root`.
+    lightweight stub. #134 Phase 1: canonical_to_fs resolves via
+    settings.libraries, so the stub carries a single default library (slug
+    "") rooted at the tmp tree.
 
     Returns (root, show_dir). Tests drop sidecars next to ep.mkv and assert
     the inferred skip reason for canonical path 'TV/Show/ep.mkv'.
@@ -38,7 +41,13 @@ def media_tree(tmp_path, monkeypatch):
     show = root / "TV" / "Show"
     show.mkdir(parents=True)
     (show / "ep.mkv").write_bytes(b"")
-    monkeypatch.setattr(paths, "settings", types.SimpleNamespace(media_root=root))
+    stub = types.SimpleNamespace(
+        media_root=root,
+        libraries=(
+            Library(slug="", name="default", fs_root=root, subgen_prefix="/media", arr_prefix="/data/Media/"),
+        ),
+    )
+    monkeypatch.setattr(paths, "settings", stub)
     return root, show
 
 

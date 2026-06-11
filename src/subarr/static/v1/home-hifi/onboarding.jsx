@@ -6,6 +6,10 @@
 // re-runnable from Settings → Re-run setup.
 
 import { Wordmark, StatusDot } from './atoms.jsx';
+// #134: multi-library section in the paths step. (Cycle note: that module
+// imports FormRow/TextInput back from here — fine, both sides are function
+// declarations resolved at render time via ESM live bindings.)
+import { LibrariesEditor } from './libraries-editor.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -270,17 +274,10 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
   // is actually empty. User sees /media/library, expects Continue to work.
   React.useEffect(() => {
     if (!progress.media_root) setField('media_root', '/media/library');
+    // #134: arr_path_prefix is the DEFAULT library's *arr prefix. (The old
+    // #133 per-service sonarr/radarr prefixes were dead config — superseded
+    // by per-library prefixes in Settings → Libraries / the section below.)
     if (!progress.arr_path_prefix) setField('arr_path_prefix', '/data/Media/');
-    // #133: per-service path prefixes. Default to the legacy
-    // arr_path_prefix if the user already had it set; otherwise the
-    // most common *arr layouts (Sonarr at /data/TV/, Radarr at
-    // /data/Movies/).
-    if (!progress.sonarr_path_prefix) {
-      setField('sonarr_path_prefix', progress.arr_path_prefix || '/data/TV/');
-    }
-    if (!progress.radarr_path_prefix) {
-      setField('radarr_path_prefix', progress.arr_path_prefix || '/data/Movies/');
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -352,20 +349,12 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           placeholder="/media/library"
         />
       </FormRow>
-      <FormRow label="Sonarr's container view of media"
-        hint="Look in your Sonarr compose.yaml under `volumes:` — the right side of the mount that holds your TV library (e.g. /mnt/nas/Media/TV:/data/TV → use /data/TV).">
+      <FormRow label="Sonarr/Radarr's container view of media"
+        hint="Look in your *arr compose.yaml under `volumes:` — the right side of the mount holding your library (e.g. /mnt/nas/Media:/data/Media → use /data/Media/).">
         <TextInput
-          value={progress.sonarr_path_prefix || progress.arr_path_prefix || '/data/TV/'}
-          onChange={(v) => setField('sonarr_path_prefix', v)}
-          placeholder="/data/TV/"
-        />
-      </FormRow>
-      <FormRow label="Radarr's container view of media"
-        hint="Same idea, in your Radarr compose.yaml under `volumes:` — right side of the mount holding your movie library.">
-        <TextInput
-          value={progress.radarr_path_prefix || progress.arr_path_prefix || '/data/Movies/'}
-          onChange={(v) => setField('radarr_path_prefix', v)}
-          placeholder="/data/Movies/"
+          value={progress.arr_path_prefix || '/data/Media/'}
+          onChange={(v) => setField('arr_path_prefix', v)}
+          placeholder="/data/Media/"
         />
       </FormRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -391,6 +380,17 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
           </div>
         )
       )}
+      {/* #134: multi-library (optional). Saves directly via
+          PUT /api/settings/libraries — no wizard-progress plumbing; libraries
+          have no env backing so the clobber guard doesn't apply. */}
+      <details style={{ marginTop: 4 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+          Multiple media locations? Add more libraries (optional)
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          <LibrariesEditor showDetected={true} />
+        </div>
+      </details>
     </div>
   );
 }

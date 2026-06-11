@@ -7,7 +7,6 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..config import settings
 from ..docker_client import DockerUnavailable
 from ..integrations import IntegrationError
 
@@ -71,12 +70,12 @@ async def plex_partial_scan(req: PartialScanRequest, request: Request) -> dict:
     plex = request.app.state.integrations.plex
     if not plex.is_configured():
         raise HTTPException(503, detail="Plex not configured (PLEX_URL/PLEX_TOKEN)")
-    from pathlib import Path
-
     p = req.path
-    # Treat anything that isn't absolute as canonical-relative-to-media_root.
+    # Treat anything that isn't absolute as a canonical (library-aware, #134).
     if not p.startswith("/"):
-        p = str(settings.media_root / Path(p))
+        from ..paths import canonical_to_fs
+
+        p = str(canonical_to_fs(p))
     try:
         return await plex.partial_scan(p)
     except IntegrationError as e:

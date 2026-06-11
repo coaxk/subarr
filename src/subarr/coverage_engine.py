@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
-from .paths import UNSUPPORTED_EXTS
+from .paths import UNSUPPORTED_EXTS, canonical_to_fs, strip_arr_prefix
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -260,18 +260,6 @@ class IntegrationBundle:
 # ───────────────────────────── helpers ──────────────────────────────────────
 
 
-def _strip_arr_prefix(arr_path: str | None) -> str | None:
-    """Sonarr returns 'path': '/data/Media/TV/Foo' (its container view).
-    Strip the configured prefix to canonical form 'TV/Foo'."""
-    if not arr_path:
-        return None
-    prefix = settings.arr_path_prefix
-    s = arr_path
-    if prefix and s.startswith(prefix):
-        s = s[len(prefix) :]
-    return s.strip("/")
-
-
 def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
     """Shallow check: does any *.srt exist directly under <media_root>/<canonical>?
     Returns (has_any, list_of_filenames). Best-effort; errors swallowed.
@@ -284,7 +272,10 @@ def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
     if not canonical_dir:
         return False, []
     try:
-        full = settings.media_root / Path(canonical_dir)
+        # #134: library-aware resolve (@slug/ heads). PathOutsideRootError is
+        # a ValueError subclass, so unknown libraries fall into the existing
+        # benign-empty handling below.
+        full = canonical_to_fs(canonical_dir)
         if not full.is_dir():
             return False, []
         srts = sorted(p.name for p in full.iterdir() if p.is_file() and p.suffix.lower() == ".srt")
@@ -304,7 +295,8 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
     if not canonical_dir:
         return []
     try:
-        full = settings.media_root / Path(canonical_dir)
+        # #134: library-aware resolve — see _scan_for_srt.
+        full = canonical_to_fs(canonical_dir)
         if not full.is_dir():
             return []
         return sorted(str(p.relative_to(full)) for p in full.rglob("*.srt") if p.is_file())
@@ -464,7 +456,7 @@ def _episode_file_canonical(
     abs_path = ep_file_paths.get(ep_file_id) if ep_file_id else None
     if not abs_path:
         return None
-    return _strip_arr_prefix(abs_path) or abs_path
+    return strip_arr_prefix(abs_path) or abs_path
 
 
 def _stale_for_episode(
@@ -1402,7 +1394,7 @@ async def build_coverage(
     # rglobs were the dominant cost of the build (minutes). The loop then
     # just reads from this index.
     _ep_canonical_dirs = [
-        _strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps
+        strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps
     ]
     series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
 
@@ -1441,7 +1433,7 @@ async def build_coverage(
     for w in bz_eps:
         sonarr_id = w.get("sonarrSeriesId")
         s = sonarr_by_id.get(sonarr_id, {})
-        canonical = _strip_arr_prefix(s.get("path"))
+        canonical = strip_arr_prefix(s.get("path"))
         if canonical and canonical not in series_srt_index:
             # #104: normally pre-populated by the parallel pre-scan above.
             # This inline fallback only fires for a dir that wasn't in the
@@ -1516,7 +1508,7 @@ async def build_coverage(
     for w in bz_movs:
         title = w.get("title") or w.get("movieTitle") or ""
         m = radarr_by_title.get(title.strip().lower(), {})
-        canonical = _strip_arr_prefix(m.get("path"))
+        canonical = strip_arr_prefix(m.get("path"))
         # #228: iterdir on each movie folder blocks the event loop. Shallow
         # scan (one level deep) so per-call cost is small, but with 500+
         # movies the cumulative block is real. Thread it.
@@ -1718,7 +1710,7 @@ async def _add_bazarr_blind_synthetic_rows(
     # that previously ran strictly one-at-a-time.
     _foreign_dirs = [
         c
-        for c in (_strip_arr_prefix(s.get("path")) for s in foreign_series)
+        for c in (strip_arr_prefix(s.get("path")) for s in foreign_series)
         if c and c not in series_srt_index
     ]
     series_srt_index.update(await _build_srt_index_parallel(_foreign_dirs))
@@ -1726,7 +1718,7 @@ async def _add_bazarr_blind_synthetic_rows(
     synthetic_added = 0
     for s in foreign_series:
         sid = s.get("id")
-        series_canonical = _strip_arr_prefix(s.get("path"))
+        series_canonical = strip_arr_prefix(s.get("path"))
         if series_canonical and series_canonical not in series_srt_index:
             # #104: defensive inline fallback (pre-scan above normally
             # covers this). Offloaded so it never blocks the loop (#228).
@@ -1745,7 +1737,7 @@ async def _add_bazarr_blind_synthetic_rows(
             arr_file_path = ep_file_paths.get(ep_file_id)
             if not arr_file_path:
                 continue
-            file_canonical = _strip_arr_prefix(arr_file_path)
+            file_canonical = strip_arr_prefix(arr_file_path)
             if not file_canonical:
                 continue
             if ep_id in seen_ep_ids or file_canonical in seen_files:

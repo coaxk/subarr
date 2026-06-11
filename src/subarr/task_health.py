@@ -93,13 +93,17 @@ class TaskHealth:
 class TaskHealthStore:
     """Thread-safe SQLite store, one upserted row per task (mirrors update_checks)."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, crash_recorder=None):
         self._path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
+        # #157 P2: optional callable(exc) -> None. record_failure feeds every
+        # supervised-loop exception to it (CrashStore.record), making this the
+        # single choke point for the sanitized fleet crash aggregates.
+        self._crash_recorder = crash_recorder
 
     def register(self, task_name: str, *, expected_interval_s: float | None = None) -> None:
         """Seed a row so a task appears (as 'never run yet') before its first
@@ -143,6 +147,13 @@ class TaskHealthStore:
         """A cycle raised: capture type + traceback (the silent loops used to
         discard this), bump the failure streak."""
         try:
+            # #157 P2: sanitized fleet counter (type + module:line only).
+            # Best-effort and FIRST so a SQL hiccup below can't starve it.
+            if self._crash_recorder is not None:
+                try:
+                    self._crash_recorder(exc)
+                except Exception:
+                    pass
             now = time.time()
             exc_type = type(exc).__name__
             detail = _redact_secrets("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))[

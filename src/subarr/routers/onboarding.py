@@ -318,6 +318,37 @@ async def auto_detect(request: Request) -> dict[str, Any]:
     return {"available": True, "services": enriched, "count": len(enriched)}
 
 
+@router.get("/onboarding/root-folders")
+async def root_folders(request: Request) -> dict[str, Any]:
+    """#134 Phase 0: the *arrs' configured root folders, best-effort per
+    service. The ground truth Phase 1's multi-library auto-detect builds on;
+    immediately useful for verifying that a mount layout actually covers
+    every root folder Sonarr/Radarr manage."""
+    bundle = request.app.state.integrations
+    out: dict[str, Any] = {}
+    for name in ("sonarr", "radarr"):
+        client = getattr(bundle, name, None)
+        if client is None or not client.is_configured():
+            out[name] = {"configured": False, "folders": []}
+            continue
+        try:
+            folders = await client.root_folders()
+            out[name] = {
+                "configured": True,
+                "folders": [
+                    {
+                        "path": f.get("path"),
+                        "accessible": f.get("accessible"),
+                        "free_space": f.get("freeSpace"),
+                    }
+                    for f in folders
+                ],
+            }
+        except Exception as e:  # noqa: BLE001 — best-effort diagnostics surface
+            out[name] = {"configured": True, "folders": [], "error": str(e)[:200]}
+    return out
+
+
 # ─── Mount detection (#130) ─────────────────────────────────────────
 
 

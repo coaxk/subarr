@@ -8,7 +8,12 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # mkvtoolnix provides `mkvpropedit` for the #159 default-audio-track swap — an
 # in-place Matroska header edit (no remux) that makes a show's original-language
 # track the default so subgen stops transcribing a dub into double-translated subs.
+# `apt-get upgrade` pulls base-image security patches between python:3.12-slim
+# rebuilds — the trivy gate fails on fixable HIGH/CRITICAL CVEs in base
+# packages (first hit: CVE-2026-45447 in libssl3t64, fixed in deb13u2 while
+# the base still shipped u1). Patch-don't-suppress, same as subarr-subgen.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,7 +28,11 @@ COPY src/ ./src/
 # from onboarding to /config so the image stays model-free and the user makes
 # the explicit choice. Without the model present, subarr falls back to the
 # ffmpeg silencedetect picker, so this extra is inert until enabled.
-RUN pip install --no-cache-dir ".[vad]"
+# #179: also bake the no-torch QE runtime ([qe-onnx] adds tokenizers +
+# safetensors + huggingface_hub on top of [vad]'s onnxruntime/numpy — ~MBs,
+# NO torch). The ~1.9GB LaBSE ONNX model is NOT baked; it's pulled into the
+# HF cache on first QE use. Until then the judge stays structural-only.
+RUN pip install --no-cache-dir ".[vad,qe-onnx]"
 
 EXPOSE 9922
 

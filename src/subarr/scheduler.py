@@ -28,7 +28,7 @@ from typing import Any
 from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
 from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs
+from .paths import PathOutsideRootError, canonical_to_fs, strip_arr_prefix
 from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
 from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
@@ -46,16 +46,6 @@ from .schedule_store import (
 log = logging.getLogger(__name__)
 
 TICK_S = 60
-
-
-def _strip_arr_prefix(arr_path: str) -> str:
-    from .config import settings
-
-    prefix = settings.arr_path_prefix
-    s = arr_path or ""
-    if prefix and s.startswith(prefix):
-        s = s[len(prefix) :]
-    return s.strip("/")
 
 
 def _due(sched: ScheduleConfig, now: datetime.datetime, last_run_at: float | None) -> bool:
@@ -514,7 +504,7 @@ class Scheduler:
                     ep_file = await self._bundle.sonarr.episode_file(ep_file_id)
                     arr_path = ep_file.get("path")
                     if arr_path:
-                        canonical = _strip_arr_prefix(arr_path)
+                        canonical = strip_arr_prefix(arr_path)
             except IntegrationError as e:
                 return None, f"{title}: sonarr resolve failed: {e}"
 
@@ -563,7 +553,7 @@ class Scheduler:
                     ep_file = await self._bundle.sonarr.episode_file(ep_file_id)
                     arr_path = ep_file.get("path")
                     if arr_path:
-                        canonical = _strip_arr_prefix(arr_path)
+                        canonical = strip_arr_prefix(arr_path)
             except IntegrationError as e:
                 return None, f"{item.title}: sonarr resolve failed: {e}"
 

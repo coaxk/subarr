@@ -23,6 +23,13 @@ class RadarrClient(IntegrationClient):
     async def status(self) -> dict[str, Any]:
         return await self._get("/api/v3/system/status")
 
+    async def root_folders(self) -> list[dict[str, Any]]:
+        """GET /api/v3/rootfolder — the configured root folders (path,
+        accessible, freeSpace). #134 Phase 0: the ground truth for the
+        multi-library model — Phase 1 auto-derives `libraries[]` from these
+        so multi-root onboarding stays zero-config."""
+        return await self._get("/api/v3/rootfolder")
+
     async def movies(self) -> list[dict[str, Any]]:
         return await self._get("/api/v3/movie")
 

@@ -86,6 +86,7 @@ from .routers import (
     gpu,
     home as r_home,
     integrations,
+    libraries as r_libraries,
     logs,
     mode,
     onboarding as r_onboarding,
@@ -106,6 +107,7 @@ from .arena_store import ArenaStore
 from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
+from .crash_store import CrashStore
 from .error_store import ErrorStore
 from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
@@ -187,6 +189,44 @@ def _arena_audio_tracks(app_, media_path):
     return out
 
 
+def _walk_all_library_files():
+    """#134: enumerate every video file across ALL library roots for the
+    audio-audit deep scan. Yields (canonical, mtime|None); canonicals carry
+    @slug/ heads for non-default libraries (fs_to_canonical). Unreachable
+    roots are skipped, never abort the audit."""
+    import os
+    from pathlib import Path as _P
+
+    from .paths import VIDEO_EXTS, fs_to_canonical
+
+    seen: set[str] = set()
+    for lib in settings.libraries:
+        try:
+            if not lib.fs_root.is_dir():
+                continue
+            walk = os.walk(lib.fs_root)
+        except Exception:
+            continue
+        for dirpath, _dirs, files in walk:
+            for fn in files:
+                dot = fn.rfind(".")
+                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
+                    continue
+                fp = os.path.join(dirpath, fn)
+                try:
+                    c = fs_to_canonical(_P(fp))
+                except Exception:
+                    continue
+                if c in seen:
+                    continue
+                seen.add(c)
+                try:
+                    mt = os.stat(fp).st_mtime
+                except OSError:
+                    mt = None
+                yield (c, mt)
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     # Schema migrations run BEFORE any store touches the DB. After they
@@ -219,10 +259,16 @@ async def lifespan(app_: FastAPI):
     app_.state.scans = ScanStore(settings.db_path)
     # Anonymous error-class log for telemetry (schema via migration 006).
     app_.state.errors = ErrorStore(settings.db_path)
+    # #157 P2: sanitized fleet crash aggregates (type + module:line only).
+    # Fed by TaskHealthStore.record_failure below; aggregated into the daily
+    # ping as crash_counts_24h. Pruned on boot (error_events never was — don't
+    # repeat that gap).
+    app_.state.crashes = CrashStore(settings.db_path)
+    app_.state.crashes.prune(days=30)
     # #157: per-loop health so a silently-crashing background task (the #79
     # class) surfaces instead of freezing quietly. Each supervised loop records
     # success/failure per cycle; /api/health/tasks + the header pill read it.
-    app_.state.task_health = TaskHealthStore(settings.db_path)
+    app_.state.task_health = TaskHealthStore(settings.db_path, crash_recorder=app_.state.crashes.record)
     # Seed the roster so all supervised loops show on the Health page from boot
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.
@@ -416,41 +462,12 @@ async def lifespan(app_: FastAPI):
         return out
 
     def _library_worklist():
-        # Opt-in deep scan: every video file under the media root, not just the
-        # tracked set. Tags come from coverage where known (else None → bilingual/
-        # multitrack still detected, mislabel needs a tag to disagree with).
-        import os
-        from .paths import VIDEO_EXTS, fs_to_canonical
-
-        root = settings.media_root
+        # Opt-in deep scan: every video file across ALL library roots (#134),
+        # not just the tracked set. Tags come from coverage where known (else
+        # None → bilingual/multitrack still detected, mislabel needs a tag to
+        # disagree with).
         tag_map = _coverage_tag_map()
-        out = []
-        seen = set()
-        try:
-            walk = os.walk(root)
-        except Exception:
-            return []
-        for dirpath, _dirs, files in walk:
-            for fn in files:
-                dot = fn.rfind(".")
-                if dot < 0 or fn[dot:].lower() not in VIDEO_EXTS:
-                    continue
-                fp = os.path.join(dirpath, fn)
-                try:
-                    from pathlib import Path as _P
-
-                    c = fs_to_canonical(_P(fp))
-                except Exception:
-                    continue
-                if c in seen:
-                    continue
-                seen.add(c)
-                try:
-                    mt = os.stat(fp).st_mtime
-                except OSError:
-                    mt = None
-                out.append((c, tag_map.get(c), mt))
-        return out
+        return [(c, tag_map.get(c), mt) for c, mt in _walk_all_library_files()]
 
     def _audit_worklist(scope: str = "coverage"):
         return _library_worklist() if scope == "library" else _coverage_worklist()
@@ -757,6 +774,7 @@ app.include_router(gpu.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(integrations.router)
+app.include_router(r_libraries.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
 app.include_router(r_provenance.router)
