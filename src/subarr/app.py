@@ -108,6 +108,7 @@ from .aftercare_store import AfterCareStore
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .crash_store import CrashStore
+from .data_persistence import check_data_persistence
 from .db_integrity import check_db_integrity
 from .error_store import ErrorStore
 from .task_health import TaskHealthStore
@@ -275,6 +276,10 @@ async def lifespan(app_: FastAPI):
     # loud (Health page + red pill), not silently half-working. Never blocks
     # boot on failure; milliseconds on healthy files.
     check_db_integrity(settings.db_path, app_.state.task_health)
+    # #196/#202: warn loudly if /data isn't a persistent volume (recreate =
+    # all verifications/intents lost + a fresh telemetry id). Verdict cached
+    # for the telemetry data_persistent signal. None = unknown (not a container).
+    app_.state.data_persistent = check_data_persistence(settings.db_path, app_.state.task_health)
     # Seed the roster so all supervised loops show on the Health page from boot
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.
