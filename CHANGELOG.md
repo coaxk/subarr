@@ -5,6 +5,30 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.5.2] - 2026-06-12
+
+### Added
+- **Movie coverage (Radarr).** Movies missing a subtitle now appear in
+  Coverage/Gaps. Previously movies reached Coverage only through Bazarr's
+  monitored-wanted list, so any movie that was unmonitored in Bazarr was
+  invisible — a Radarr-heavy user could see zero of their movies. Every
+  Radarr movie with a file that's missing English coverage is now surfaced
+  and runs the exact same verification funnel as TV (ffprobe, embedded-sub
+  detection, the calibrated audio-language check, default-track mismatch,
+  scoring). The Coverage tree gained a "TV Shows" section header to match
+  the existing "Movies" one.
+- **Retention/persistence signals in telemetry** (opt-out as always):
+  `install_age_days` and `data_persistent`.
+
+### Fixed
+- **Loud warning when `/data` isn't a persistent volume.** Running without a
+  volume for `/data` silently wiped every verification on each recreate. Boot
+  now detects an ephemeral `/data` and flags it on the Health page; the
+  compose example marks the volume required.
+- Unprobed movies are now eager-probed correctly (the movie file path is
+  resolved up front), so they flow from "Analyzing" to verified like episodes
+  instead of getting stuck.
+
 ## [1.5.1] - 2026-06-11
 
 ### Fixed

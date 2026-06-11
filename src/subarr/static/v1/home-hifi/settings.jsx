@@ -857,7 +857,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
       }}>
       <div style={{ padding: '0 16px 12px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0, fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--fg-0)' }}>Settings</h2>
-        <span className="num mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>v1.5.1</span>
+        <span className="num mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>v1.5.2</span>
       </div>
       <div style={{ marginBottom: 14 }}>
         <div style={{ padding: '0 16px 6px' }}>
