@@ -7,6 +7,7 @@ import {
   HostStrip,
   NextRunActivitySplit,
   WelcomeCard,
+  UpdateNudgeCard,
   AfterCarePanel,
   useLiveDashboard,
 } from '../dashboard.jsx';
@@ -20,9 +21,9 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Live dashboard data — /api/home/dashboard polled every 5s.
-  // Each section falls back to demo constants when its slice is null
-  // (first paint, or backend unreachable).
+  // Live dashboard data — /api/home/dashboard polled every 5s. Sections
+  // render honest empty/loading states when their slice is null (#193 —
+  // never demo data).
   const live = useLiveDashboard();
 
   return (
@@ -33,6 +34,7 @@ function App() {
         <main className="main-canvas">
           <PageHeader now={now} />
           <WelcomeCard />
+          <UpdateNudgeCard />
           <StagesRow data={live && live.stages} />
           <AfterCarePanel />
           <HostStrip
