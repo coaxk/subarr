@@ -45,6 +45,10 @@ class TautulliClient(IntegrationClient):
         try:
             data = await self._cmd("get_tautulli_info")
             version = (data or {}).get("tautulli_version")
+            # Tautulli reports "v2.17.1" with the prefix baked in; the
+            # Settings grid prefixes its own "v" — strip to avoid "vv2.17.1".
+            if isinstance(version, str):
+                version = version.lstrip("v")
             return {"result": "success", "version": version}
         except IntegrationError:
             await self._cmd("status")

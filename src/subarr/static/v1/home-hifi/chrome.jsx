@@ -87,6 +87,11 @@ async function _fetchChromeCounts() {
   // stays stable. subarr_version backs the header label so it reflects
   // the actually-running build instead of a hardcoded string.
   next.update_available = !!updates?.any_update_available;
+  // Name WHAT has the update — "Update" alone reads as "subarr is stale"
+  // even when it's the companion subgen image. Always a string (possibly
+  // '') so the shallow-equal dedup stays stable.
+  next.update_products = (updates?.products || [])
+    .filter((p) => p.has_update).map((p) => p.product).join(', ');
   const subarrProduct = (updates?.products || []).find((p) => p.product === 'subarr');
   if (subarrProduct?.current_version) next.subarr_version = subarrProduct.current_version;
   if (subarrProduct?.has_update && subarrProduct.latest_version) {
@@ -308,7 +313,7 @@ export function TopBar({ section = 'overview' }) {
       {counts.update_available && (
         <a href="/settings#updates" title={counts.subarr_latest
             ? `Update available — v${counts.subarr_latest.replace(/^v/, '')}. View in Settings.`
-            : 'Update available. View in Settings.'}
+            : `Update available${counts.update_products ? ` for ${counts.update_products}` : ''}. View in Settings.`}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
             marginRight: 14, padding: '3px 9px',
@@ -322,7 +327,8 @@ export function TopBar({ section = 'overview' }) {
           onMouseEnter={e => (e.currentTarget.style.background = 'var(--violet-500-a20, rgba(139,92,246,0.20))')}
           onMouseLeave={e => (e.currentTarget.style.background = 'var(--violet-500-a12, rgba(139,92,246,0.12))')}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--violet-400, #a78bfa)' }} />
-          Update
+          Update{counts.update_products && counts.update_products !== 'subarr'
+            ? ` · ${counts.update_products}` : ''}
         </a>
       )}
 

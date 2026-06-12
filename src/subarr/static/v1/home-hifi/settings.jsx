@@ -1847,6 +1847,13 @@ function TelemetryPanel() {
 }
 
 // ─── Updates panel ───────────────────────────────────────────────
+// Per-product "how do I actually update" hint, shown on the row when an
+// update is available (the most common support question after the badge).
+const UPDATE_HOWTO = {
+  subarr: 'update: docker compose pull && docker compose up -d (on your subarr stack)',
+  'subarr-subgen': 'update: docker compose pull && docker compose up -d (on your subgen stack — image ghcr.io/coaxk/subarr-subgen)',
+};
+
 function UpdatesPanel() {
   const { data, refresh, refreshing } = useUpdatesState();
 
@@ -1869,7 +1876,11 @@ function UpdatesPanel() {
             label={`${p.product} ${p.has_update ? '· update available' : ''}`}
             hint={p.last_error
               ? `error: ${p.last_error}`
-              : (p.latest_released_at ? `released ${new Date(p.latest_released_at * 1000).toLocaleDateString()}` : 'no release info')}
+              : p.has_update
+                ? (UPDATE_HOWTO[p.product] || (p.latest_released_at ? `released ${new Date(p.latest_released_at * 1000).toLocaleDateString()}` : ''))
+                : !p.current_version && p.latest_version
+                  ? 'installed release unknown (older build does not report its release tag) · latest shown'
+                  : (p.latest_released_at ? `released ${new Date(p.latest_released_at * 1000).toLocaleDateString()}` : 'no release info')}
             control={
               <span className="mono" style={{ fontSize: 'var(--text-sm)' }}>
                 <span style={{ color: 'var(--fg-1)' }}>{p.current_version || '—'}</span>
