@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v1.4-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-774_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v1.5-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-901_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
