@@ -5,6 +5,41 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.5.3] - 2026-06-12
+
+### Added
+- **"What you're missing" update card on the dashboard (#203).** When your
+  install is behind, the Overview shows the releases you've missed by title
+  (not just "an update exists"), dismissable per-version. Reads the GitHub
+  releases Atom feed; no API key needed.
+- **Find a better config (#165).** Flagged aftercare jobs now have a one-click
+  action that opens the Tuning Lab pre-loaded with that exact file and its
+  detected language — instead of blind-requeueing the same configuration that
+  produced the bad subtitle.
+- **Two new subtitle quality signals (#216, first slice).** Aftercare now
+  detects ad/boilerplate text in a subtitle's opening/closing cues
+  ("downloaded from...", VIP-ad blocks, ripper credits — in a generated sub
+  these are hallucinations) and sync overrun (cues ending well past the
+  file's actual duration, meaning the subtitle was made for a different cut).
+  Both flag for review with their own chips. Neither changes sweep scoring.
+- **Single-process guard (#204).** Two subarr processes sharing one database
+  corrupt it slowly and confusingly. Boot now takes a lock file next to the
+  database and surfaces a loud Health warning if another instance holds it.
+
+### Fixed
+- **Unhandled request errors now reach crash telemetry (#199)** instead of
+  only background-loop crashes, so 500s are visible on the Health page.
+- **Deep-link query parameters survive page redirects.** `/arena?path=...`
+  (and every screen route) previously dropped its query string.
+
+### Maintenance
+- **Database retention (#197).** Scan history, error events, resolved
+  approval walks, and year-old aftercare results are now pruned at boot.
+  Protective rules: pending approvals and flagged-but-unreviewed aftercare
+  rows are never pruned, regardless of age.
+- Top-level RELEASING.md + a full operations runbook for the telemetry
+  worker (#205).
+
 ## [1.5.2] - 2026-06-12
 
 ### Added
