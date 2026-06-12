@@ -5,6 +5,29 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.5.4] - 2026-06-13
+
+A first-run polish release ahead of wider launch. No migrations, no config
+changes.
+
+### Fixed
+- **No more phantom "update available" on a current install.** subarr-subgen
+  uses date-style release tags while its internal patch version is separate;
+  the update check compared the two and always disagreed, so a fully
+  up-to-date install was told to update. It now compares like for like and
+  only flags a real update.
+- **The header update badge now names what has the update** (subarr vs the
+  companion subgen image) instead of an unlabeled "Update".
+- **Tautulli and Ollama now show their versions** in the Settings
+  integrations grid; fixed a doubled "v" on the Tautulli version.
+- **The Updates page shows the exact upgrade command** for whatever has an
+  update.
+
+### Docs
+- README install section now calls out the only two choices that matter
+  (which subgen image, and GPU passthrough); everything else the first-run
+  wizard handles.
+
 ## [1.5.3] - 2026-06-12
 
 ### Added
