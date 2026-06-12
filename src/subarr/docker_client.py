@@ -92,6 +92,48 @@ class DockerOps:
 
         return await asyncio.to_thread(_do)
 
+    async def nvidia_runtime_available(self) -> bool | None:
+        """Detection tier 2 (spec §2.1): does the Docker host have the
+        nvidia runtime registered? True/False, or None when Docker itself
+        is unreachable (fail-soft — the wizard degrades to manual entry,
+        it never errors). Async: docker info() blocks on a dead socket."""
+
+        def _do() -> bool:
+            info = self._get().info()
+            return "nvidia" in (info.get("Runtimes") or {})
+
+        try:
+            return await asyncio.to_thread(_do)
+        except Exception as e:
+            log.debug("nvidia_runtime_available failed (non-fatal): %s", e)
+            return None
+
+    async def subgen_current_config(self) -> dict:
+        """Detection tier 3 (spec §2.1): subgen's CURRENT transcription env +
+        GPU reservation, for the current-vs-recommended diff. Reads the same
+        container attrs container_info() already trusts."""
+
+        def _do() -> dict:
+            client = self._get()
+            try:
+                c = client.containers.get(settings.subgen_container)
+            except NotFound:
+                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+            attrs = c.attrs
+            env_list = ((attrs.get("Config") or {}).get("Env")) or []
+            env = dict(e.split("=", 1) for e in env_list if "=" in e)
+            device_requests = ((attrs.get("HostConfig") or {}).get("DeviceRequests")) or []
+            has_gpu = any((d or {}).get("Driver") == "nvidia" for d in device_requests)
+            return {
+                "whisper_model": env.get("WHISPER_MODEL"),
+                "transcribe_device": env.get("TRANSCRIBE_DEVICE"),
+                "compute_type": env.get("COMPUTE_TYPE"),
+                "has_gpu_reservation": has_gpu,
+                "image": (attrs.get("Config") or {}).get("Image"),
+            }
+
+        return await asyncio.to_thread(_do)
+
     async def recent_progress(self, tail: int = 80) -> dict[str, dict]:
         """Snapshot recent subgen log lines and pull the latest progress
         update per file. Returns {filename_prefix → {pct, cur_s, tot_s,

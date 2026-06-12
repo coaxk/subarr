@@ -131,6 +131,7 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
         queue,
         scan,
         schedule as r_schedule,
+        subgen_setup,
     )
 
     for m in [
@@ -173,6 +174,7 @@ def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
         r_enrichment,
         r_probe,
         bazarr_sync,
+        subgen_setup,
         app_mod,
     ]:
         importlib.reload(m)

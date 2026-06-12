@@ -29,7 +29,7 @@ def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
 
     async def fake_run_smi(exe, args):
         if any(a.startswith("--query-gpu") for a in args):
-            return "NVIDIA RTX 4090, 8192, 24576, 16384, 35, 12, 62, 220.5, 450.0\n"
+            return "NVIDIA RTX 4090, 8192, 24576, 16384, 35, 12, 62, 220.5, 450.0, 8.9, 576.02\n"
         if any(a.startswith("--query-compute-apps") for a in args):
             return "12345, python.exe, 7000\n"
         return ""
@@ -46,7 +46,42 @@ def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
     assert body["memory"]["total_mib"] == 24576.0
     assert body["utilization"]["gpu_pct"] == 35.0
     assert body["temperature_c"] == 62.0
+    assert body["compute_cap"] == 8.9
+    assert body["driver_version"] == "576.02"
     assert body["processes"] == [{"pid": 12345, "name": "python.exe", "memory_mib": 7000.0}]
+
+
+def test_gpu_falls_back_to_legacy_fields_on_old_driver(app_with_stub, monkeypatch):
+    """Old drivers reject compute_cap as a query field (non-zero exit). The
+    endpoint must retry with the legacy 9-field set so the vitals footer
+    survives, returning null for the new fields."""
+    from subarr.routers import gpu as gpu_mod
+
+    queries = []
+
+    async def fake_run_smi(exe, args):
+        if any(a.startswith("--query-gpu") for a in args):
+            query = next(a for a in args if a.startswith("--query-gpu"))
+            queries.append(query)
+            if "compute_cap" in query:
+                raise RuntimeError('nvidia-smi exit 6: "compute_cap" is not a valid field to query')
+            return "NVIDIA GTX 1080, 4096, 8192, 4096, 20, 10, 55, 110.0, 180.0\n"
+        if any(a.startswith("--query-compute-apps") for a in args):
+            return ""
+        return ""
+
+    monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: "fake-smi")
+    monkeypatch.setattr(gpu_mod, "_run_smi", fake_run_smi)
+
+    r = app_with_stub.get("/api/gpu")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["online"] is True
+    assert body["name"] == "NVIDIA GTX 1080"
+    assert body["memory"]["total_mib"] == 8192.0
+    assert body["compute_cap"] is None
+    assert body["driver_version"] is None
+    assert len(queries) == 2  # 11-field attempt, then legacy retry
 
 
 # ───── Container info + restart ─────────────────────────────────────────────

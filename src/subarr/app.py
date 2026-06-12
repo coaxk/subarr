@@ -96,6 +96,7 @@ from .routers import (
     scan,
     schedule as r_schedule,
     sidecar as r_sidecar,
+    subgen_setup as r_subgen_setup,
     telemetry as r_telemetry,
     updates as r_updates,
     vad as r_vad,
@@ -847,6 +848,7 @@ app.include_router(r_vad.router)
 app.include_router(r_arena.router)
 app.include_router(r_audio_audit.router)
 app.include_router(r_aftercare.router)
+app.include_router(r_subgen_setup.router)
 
 
 @app.get("/api/health")

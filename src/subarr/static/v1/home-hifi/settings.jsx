@@ -21,6 +21,7 @@ import { RailFooter } from './chrome.jsx';
 import { FormRow, TextInput, TestResult } from './onboarding.jsx';
 // #134: multi-library management (shared with the onboarding paths step).
 import { LibrariesEditor } from './libraries-editor.jsx';
+import { SubgenSetupFlow } from './subgen-setup.jsx';
 import {
   deriveTitle, groupRulesAlphabetically, activeLadderLetters,
 } from './lang-rules-util.mjs';
@@ -838,7 +839,7 @@ function ProvidersPanel() {
   );
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries }) {
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries, subgenTuningActive, onSelectSubgenTuning }) {
   // #10: render the same persistent GPU/queue/walker footer that the
   // other pages show in SubRail, so the bottom-left vitals are
   // visible everywhere including Settings. Aside becomes a flex
@@ -867,7 +868,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive && !subgenTuningActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -893,6 +894,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           { id: 'providers', label: 'Providers', active: providersActive, onClick: onSelectProviders },
           { id: 'libraries', label: 'Libraries', active: librariesActive, onClick: onSelectLibraries },
           { id: 'lang-rules', label: 'Language rules', active: langRulesActive, onClick: onSelectLangRules },
+          { id: 'subgen-tuning', label: 'Subgen tuning', active: subgenTuningActive, onClick: onSelectSubgenTuning },
           { id: 'system', label: 'System actions', active: systemActive, onClick: onSelectSystem },
           { id: 'updates', label: 'Updates', active: updatesActive, onClick: onSelectUpdates },
           { id: 'telemetry', label: 'Telemetry', active: telemetryActive, onClick: onSelectTelemetry },
@@ -2070,7 +2072,7 @@ export function SettingsPage() {
   // the named view rather than dropping the user on the default integration.
   useEffect(() => {
     const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
-    if (['providers', 'telemetry', 'system', 'updates', 'lang-rules'].includes(hash)) {
+    if (['providers', 'telemetry', 'system', 'updates', 'lang-rules', 'subgen-tuning'].includes(hash)) {
       setView(hash);
     }
     // #207: 'integrations' lands on the summary tile grid rather than
@@ -2097,6 +2099,7 @@ export function SettingsPage() {
     : view === 'providers' ? ['Settings', 'Providers']
     : view === 'libraries' ? ['Settings', 'Libraries']
     : view === 'lang-rules' ? ['Settings', 'Language rules']
+    : view === 'subgen-tuning' ? ['Settings', 'Subgen tuning']
     : ['Settings'];
 
   const heading = view === 'integration' && selected ? selected.name
@@ -2107,6 +2110,7 @@ export function SettingsPage() {
     : view === 'providers' ? 'Provider leaderboard'
     : view === 'libraries' ? 'Libraries'
     : view === 'lang-rules' ? 'Language rules'
+    : view === 'subgen-tuning' ? 'Subgen tuning'
     : 'Settings';
 
   const subhead = view === 'integration' && selected ? 'Live status from the integrations health probe.'
@@ -2117,6 +2121,7 @@ export function SettingsPage() {
     : view === 'providers' ? 'Bazarr provider success rates from your download history.'
     : view === 'libraries' ? 'Media locations subarr walks. Each library maps a filesystem root to its subgen and *arr path prefixes; the default comes from SUBARR_MEDIA_ROOT.'
     : view === 'lang-rules' ? 'Declared audio languages for whole shows and movies. New downloads inherit automatically; a per-file correction always overrides.'
+    : view === 'subgen-tuning' ? 'Hardware-matched Whisper model, device and compute type.'
     : '';
 
   return (
@@ -2130,6 +2135,7 @@ export function SettingsPage() {
         updatesActive={view === 'updates'} onSelectUpdates={() => setView('updates')}
         providersActive={view === 'providers'} onSelectProviders={() => setView('providers')}
         langRulesActive={view === 'lang-rules'} onSelectLangRules={() => setView('lang-rules')}
+        subgenTuningActive={view === 'subgen-tuning'} onSelectSubgenTuning={() => setView('subgen-tuning')}
         librariesActive={view === 'libraries'} onSelectLibraries={() => setView('libraries')}
       />
       <main className="main-canvas" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingBottom: 0 }}>
@@ -2181,6 +2187,7 @@ export function SettingsPage() {
             </div>
           )}
           {view === 'lang-rules' && <LangRulesPanel />}
+          {view === 'subgen-tuning' && <SubgenSetupFlow />}
         </div>
       </main>
     </div>

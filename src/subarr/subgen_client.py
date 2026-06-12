@@ -113,6 +113,9 @@ class SubgenCapabilities:
     # subarr's coverage gates the forced-only-EN partial gap on it so users
     # only see an actionable gap the connected subgen will actually fill.
     ignore_forced_subtitles: bool = False
+    # r9+ capability: POST /config runtime model/compute switching. Gate
+    # post_config() calls on this — older images 404 the endpoint.
+    runtime_config: bool = False
     # v4.3+ patch revision string ('v4.3', 'v4.4', ...) when published by
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
@@ -141,6 +144,7 @@ class SubgenCapabilities:
             "asr_vanilla_base": self.asr_vanilla_base,
             "asr_detected_language": self.asr_detected_language,
             "ignore_forced_subtitles": self.ignore_forced_subtitles,
+            "runtime_config": self.runtime_config,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
             "release_tag": self.release_tag,
         }
@@ -162,6 +166,7 @@ class SubgenCapabilities:
             asr_vanilla_base=False,
             asr_detected_language=False,
             ignore_forced_subtitles=False,
+            runtime_config=False,
             subarr_subgen_patch_rev=None,
         )
 
@@ -288,6 +293,7 @@ class SubgenClient:
         asr_vanilla_base = False
         asr_detected_language = False
         ignore_forced_subtitles = False
+        runtime_config = False
         patch_rev: str | None = None
         release_tag: str | None = None
         try:
@@ -318,6 +324,7 @@ class SubgenClient:
                             asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
                             ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
+                            runtime_config = bool(caps_block.get("runtime_config"))
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -343,6 +350,7 @@ class SubgenClient:
             asr_vanilla_base=asr_vanilla_base,
             asr_detected_language=asr_detected_language,
             ignore_forced_subtitles=ignore_forced_subtitles,
+            runtime_config=runtime_config,
             subarr_subgen_patch_rev=patch_rev,
             release_tag=release_tag,
         )
@@ -358,6 +366,28 @@ class SubgenClient:
             not caps.is_subarr_subgen,
         )
         return caps
+
+    async def post_config(
+        self, *, model: str | None = None, compute_type: str | None = None
+    ) -> tuple[int, dict]:
+        """POST /config — runtime model/compute switch (subarr-subgen r9+,
+        gated on caps.runtime_config). Returns (status_code, body). subgen
+        guarantees it ends on a working model (rollback contract); callers
+        surface body['reason']/'current_model' on failure."""
+        params: dict[str, str] = {}
+        if model:
+            params["model"] = model
+        if compute_type:
+            params["compute_type"] = compute_type
+        try:
+            r = await self._client.post("/config", params=params)
+        except httpx.HTTPError as e:
+            raise SubgenUnavailable(f"subgen /config failed: {e}") from e
+        try:
+            body = r.json()
+        except ValueError:
+            body = {}
+        return r.status_code, body
 
     async def batch(
         self,
