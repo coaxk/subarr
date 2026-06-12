@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from ..subgen_client import SubgenUnavailable
 from ..subgen_config_gen import (
     detection_passthrough_snippet,
     generate_env_additions,
@@ -202,7 +203,19 @@ async def apply(body: ApplyBody, request: Request) -> dict[str, Any]:
                 f"{body.vram_total_mb} MB — pick a smaller model or int8 variant"
             ),
         }
-    status, resp = await _post_config(request.app, model=body.model, compute_type=body.compute_type)
+    try:
+        status, resp = await _post_config(request.app, model=body.model, compute_type=body.compute_type)
+    except SubgenUnavailable as e:
+        # Transport failure is AMBIGUOUS — the switch may or may not have
+        # landed before the connection died. Tell the user to re-detect.
+        return {
+            "ok": False,
+            "reason": "subgen_unreachable",
+            "detail": (
+                f"subgen did not answer — the change may or may not have applied; "
+                f"re-run detection once subgen is back ({e})"
+            ),
+        }
     if status == 200 and resp.get("ok"):
         return {"ok": True, "model": resp.get("model"), "compute_type": resp.get("compute_type")}
     return {

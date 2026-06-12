@@ -164,3 +164,22 @@ def test_apply_success(client, monkeypatch):
         "/api/subgen-setup/apply", json={"model": "small", "compute_type": "float16", "vram_total_mb": 12288}
     ).json()
     assert d == {"ok": True, "model": "small", "compute_type": "float16"}
+
+
+def test_apply_surfaces_transport_failure_not_500(client, monkeypatch):
+    import subarr.routers.subgen_setup as ss
+    from subarr.subgen_client import SubgenUnavailable
+
+    monkeypatch.setattr(ss, "_subgen_caps", lambda app: _caps(True, True, True))
+
+    async def dead_subgen(app, **kw):
+        raise SubgenUnavailable("subgen /config failed: connection refused")
+
+    monkeypatch.setattr(ss, "_post_config", dead_subgen)
+    r = client.post(
+        "/api/subgen-setup/apply", json={"model": "small", "compute_type": "int8", "vram_total_mb": 12288}
+    )
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is False and d["reason"] == "subgen_unreachable"
+    assert "may or may not" in d["detail"]
