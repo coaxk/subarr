@@ -151,6 +151,22 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
             style={{ fontSize: 'var(--text-xs)' }}>
             {isBusy ? '…' : 'Requeue'}
           </button>
+          {/* #165: requeue re-runs the SAME config and often reproduces the
+              same junk — this hands the file to the Tuning Lab to find a
+              better one. Deep-link via query params (arena pre-seeds from
+              ?path=/&lang= on mount). */}
+          <button
+            onClick={() => {
+              const q = new URLSearchParams({ path: item.canonical_path });
+              if (item.language) q.set('lang', item.language);
+              window.location.href = `/arena?${q.toString()}`;
+            }}
+            disabled={isBusy}
+            title="Open the Tuning Lab pre-loaded with this file to compare recipes"
+            className="btn sm"
+            style={{ fontSize: 'var(--text-xs)' }}>
+            Find a better config
+          </button>
           <span
             onClick={() => onToggleExpand(item.id)}
             role="button" tabIndex={0}

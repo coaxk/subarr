@@ -306,10 +306,29 @@ function KnobReference() {
 }
 
 // ── configure sweep ──────────────────────────────────────────────────────────
+// #165: aftercare's "Find a better config" deep-links here with the flagged
+// file (+ its detected language) so the sweep form arrives pre-seeded. Read
+// once at module load — the params describe this navigation, not live state.
+// Aftercare's language field is ISO-639-1 (normalize_lang output) while LANGS
+// uses the bibliographic 3-letter codes Whisper expects, so map 2→3 here.
+const _ISO1_TO_BIB = {
+  ar: 'ara', bg: 'bul', zh: 'chi', hr: 'hrv', cs: 'cze', da: 'dan', nl: 'dut',
+  en: 'eng', fi: 'fin', fr: 'fre', de: 'ger', el: 'gre', he: 'heb', hi: 'hin',
+  hu: 'hun', id: 'ind', it: 'ita', ja: 'jpn', ko: 'kor', no: 'nor', pl: 'pol',
+  pt: 'por', ro: 'rum', ru: 'rus', sr: 'srp', es: 'spa', sv: 'swe', th: 'tha',
+  tr: 'tur', uk: 'ukr', vi: 'vie',
+};
+const _seedParams = new URLSearchParams(window.location.search);
+const _seedPath = _seedParams.get('path') || '';
+const _seedLangRaw = (_seedParams.get('lang') || '').toLowerCase();
+const _seedLang = _ISO1_TO_BIB[_seedLangRaw] || _seedLangRaw;
+
 function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
-  const [mediaPath, setMediaPath] = useState('');
+  const [mediaPath, setMediaPath] = useState(_seedPath);
   const [picking, setPicking] = useState(false);
-  const [sourceLang, setSourceLang] = useState('');
+  const [sourceLang, setSourceLang] = useState(
+    () => (LANGS.some(([code]) => code === _seedLang) ? _seedLang : '')
+  );
   const [selected, setSelected] = useState(() => new Set(DEFAULT_SELECTED));
   const [custom, setCustom] = useState([]);
   // #141 follow-up: in-flight guard. Queueing is async (one POST per file),
