@@ -40,6 +40,53 @@ def _cue_text(cue) -> str:
     return " ".join(getattr(cue, "lines", []) or []).strip()
 
 
+# #216 — scene-release ad/boilerplate markers. Provider-sourced srt files
+# carry these in their opening/closing cues ("Downloaded from OpenSubtitles",
+# VIP-ad blocks, ripper credits); a Whisper-GENERATED sub containing one is a
+# hallucination. Substring match against lower-cased cue text, edge cues only
+# (legit dialogue can quote a URL mid-file; injected ads live at the edges).
+_AD_PATTERNS = (
+    "opensubtitles",
+    "addic7ed",
+    "podnapisi",
+    "subscene",
+    "yify",
+    "downloaded from",
+    "ripped by",
+    "encoded by",
+    "sync by",
+    "synced by",
+    "sync and corrections",
+    "corrected by",
+    "advertise your product",
+    "remove all ads",
+    "become vip member",
+    "support us and become",
+    "www.",
+    "http://",
+    "https://",
+)
+
+
+def ad_boilerplate_hits(cues, *, edge: int = 5) -> int:
+    """Count edge cues (first/last `edge`) containing an ad/boilerplate
+    marker. Returns 0 for empty input."""
+    if not cues:
+        return 0
+    head = cues[:edge]
+    tail = cues[-edge:] if len(cues) > edge else []
+    seen_ids = set()
+    hits = 0
+    for c in [*head, *tail]:
+        if id(c) in seen_ids:
+            continue
+        seen_ids.add(id(c))
+        t = _cue_text(c).lower()
+        if any(p in t for p in _AD_PATTERNS):
+            hits += 1
+    return hits
+
+
 def silence_text_ratio(cues, speech_ranges) -> float:
     """Fraction of total cue time that falls OUTSIDE detected speech — i.e.
     subtitle text where the audio has no voice (hallucination). 0.0 when

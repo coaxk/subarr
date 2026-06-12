@@ -31,6 +31,7 @@ from typing import Any
 
 from .subtitle_readability import ReadabilityReport, analyze_srt, parse_srt
 from .transcript_signals import (
+    ad_boilerplate_hits,
     canned_phrase_hits,
     repeated_line_ratio,
     silence_text_ratio,
@@ -187,6 +188,7 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
                     "repeated_line_ratio": 0.0,
                     "canned_phrase_hits": 0,
                     "uncovered_speech_ratio": 0.0,
+                    "ad_boilerplate_hits": 0,
                     "qe_adequacy": None,
                     "non_speech_clip": True,
                 },
@@ -251,6 +253,9 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
         "repeated_line_ratio": round(rep, 4),
         "canned_phrase_hits": canned,
         "uncovered_speech_ratio": round(uncov, 4),
+        # #216: signal-only — deliberately NOT in qe_penalty, so the #123
+        # composite calibration is untouched. Aftercare flags on it.
+        "ad_boilerplate_hits": ad_boilerplate_hits(cues),
         "qe_adequacy": round(qadq, 4) if qadq is not None else None,
     }
 

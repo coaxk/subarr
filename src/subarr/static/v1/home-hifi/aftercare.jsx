@@ -24,7 +24,8 @@ function langFlag(code) {
 function badgeKind(item) {
   if (!item.flagged) return 'ok';
   const crit = (item.readability?.issues || []).some(i => i.severity === 'critical');
-  if (item.composite < 50 || crit || (item.signals?.canned_phrase_hits || 0) > 0) return 'error';
+  if (item.composite < 50 || crit || (item.signals?.canned_phrase_hits || 0) > 0
+      || (item.signals?.ad_boilerplate_hits || 0) > 0) return 'error';
   return 'warn';
 }
 
@@ -33,6 +34,8 @@ function flagChips(item) {
   const s = item.signals || {}, c = (item.readability || {}).counts || {};
   if ((s.repeated_line_ratio || 0) > 0) out.push(`${Math.round(s.repeated_line_ratio * 100)}% repeats`);
   if ((s.canned_phrase_hits || 0) > 0) out.push(`${s.canned_phrase_hits} canned`);
+  if ((s.ad_boilerplate_hits || 0) > 0) out.push(`${s.ad_boilerplate_hits} ad/boilerplate`);
+  if ((s.sync_overrun_s || 0) > 30) out.push(`${Math.round(s.sync_overrun_s)}s overrun`);
   if (c.cps) out.push(`${c.cps} CPS issue${c.cps === 1 ? '' : 's'}`);
   if (c.overlap) out.push(`${c.overlap} overlap`);
   return out;

@@ -12,12 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .subtitle_readability import parse_srt
 from .tournament import Entrant, score_entrant
 
 # Flag-bar thresholds (tunable; exposed as constants so Settings can surface
 # them later without touching logic).
 AFTERCARE_COMPOSITE_MIN = 65.0
 AFTERCARE_REPEAT_MAX = 0.20
+# #216: cues running this far past the media's actual end = desynced or
+# generated against the wrong cut. Generous on purpose — container duration
+# and the last cue legitimately disagree by a few seconds.
+AFTERCARE_SYNC_OVERRUN_MAX_S = 30.0
 
 
 @dataclass
@@ -37,6 +42,13 @@ def _is_flagged(card) -> bool:
     sig = card.signals or {}
     if (sig.get("canned_phrase_hits") or 0) > 0:
         return True
+    # #216: ad/boilerplate in a GENERATED sub is hallucination; sync overrun
+    # means the cues outlive the media. Both come in via the signals dict
+    # (ad hits from score_entrant, overrun added by evaluate_subtitle).
+    if (sig.get("ad_boilerplate_hits") or 0) > 0:
+        return True
+    if (sig.get("sync_overrun_s") or 0.0) > AFTERCARE_SYNC_OVERRUN_MAX_S:
+        return True
     if (sig.get("repeated_line_ratio") or 0.0) > AFTERCARE_REPEAT_MAX:
         return True
     issues = (card.readability or {}).get("issues", [])
@@ -47,9 +59,26 @@ def _is_flagged(card) -> bool:
     return False
 
 
-def evaluate_subtitle(srt_text: str) -> AftercareEvaluation:
-    """Judge one produced subtitle. No source_text / speech_ranges (Track A)."""
+def evaluate_subtitle(srt_text: str, *, media_duration_s: float | None = None) -> AftercareEvaluation:
+    """Judge one produced subtitle. No source_text / speech_ranges (Track A).
+
+    media_duration_s (optional, from the ffprobe cache) enables the #216
+    sync-overrun check: cues ending well past the media's end mean the sub
+    was generated against a different cut or has drifted. Span coverage is
+    recorded as a signal but never flags (sparse end-of-file dialogue is
+    legitimate)."""
     card = score_entrant(Entrant(label="aftercare", srt_text=srt_text))
+    signals = dict(card.signals or {})
+    if media_duration_s and media_duration_s > 0:
+        try:
+            cues = parse_srt(srt_text)
+            if cues:
+                last_end_s = max(c.end_ms for c in cues) / 1000.0
+                signals["sync_overrun_s"] = round(max(0.0, last_end_s - media_duration_s), 1)
+                signals["sync_span_ratio"] = round(last_end_s / media_duration_s, 3)
+        except Exception:  # noqa: BLE001 - a sync hint must never break judging
+            pass
+    card.signals = signals or None
     return AftercareEvaluation(
         composite=float(card.composite),
         cue_count=int(card.cue_count),
