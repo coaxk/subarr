@@ -63,7 +63,8 @@ def parse_smi_csv(line: str) -> GpuInfo | None:
     """Parse one nvidia-smi CSV row: `name, memory.total[, memory.free],
     compute_cap[, driver_version]`. Tolerates ' MiB' suffixes (paste without
     ,nounits). Returns None on anything unparseable — callers fall through
-    to manual entry, never crash."""
+    to manual entry, never crash. Multi-GPU output: the FIRST line (GPU 0)
+    wins."""
     parts = (
         [p.strip() for p in (line or "").strip().splitlines()[0].split(",")] if (line or "").strip() else []
     )
@@ -121,6 +122,12 @@ def derive_compute_type(
         )
     if model_fit(model, "float16", vram_total_mb=vram_total_mb) == "fits":
         return ComputeDerivation("float16", "your GPU supports fast half-precision")
+    int8_fit = model_fit(model, "int8_float16", vram_total_mb=vram_total_mb)
+    if int8_fit == "no_fit":
+        return ComputeDerivation(
+            "int8_float16",
+            f"{model} is larger than this card even quantized — pick a smaller model",
+        )
     return ComputeDerivation(
         "int8_float16",
         f"fits {model} in less VRAM while keeping FP16 speed",
