@@ -29,7 +29,7 @@ def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
 
     async def fake_run_smi(exe, args):
         if any(a.startswith("--query-gpu") for a in args):
-            return "NVIDIA RTX 4090, 8192, 24576, 16384, 35, 12, 62, 220.5, 450.0\n"
+            return "NVIDIA RTX 4090, 8192, 24576, 16384, 35, 12, 62, 220.5, 450.0, 8.9, 576.02\n"
         if any(a.startswith("--query-compute-apps") for a in args):
             return "12345, python.exe, 7000\n"
         return ""
@@ -46,6 +46,8 @@ def test_gpu_parses_csv_output(app_with_stub, monkeypatch):
     assert body["memory"]["total_mib"] == 24576.0
     assert body["utilization"]["gpu_pct"] == 35.0
     assert body["temperature_c"] == 62.0
+    assert body["compute_cap"] == 8.9
+    assert body["driver_version"] == "576.02"
     assert body["processes"] == [{"pid": 12345, "name": "python.exe", "memory_mib": 7000.0}]
 
 

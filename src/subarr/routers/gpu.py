@@ -39,7 +39,8 @@ def _nvidia_smi_path() -> str | None:
 _GPU_FIELDS = (
     "name,memory.used,memory.total,memory.free,"
     "utilization.gpu,utilization.memory,temperature.gpu,"
-    "power.draw,power.limit"
+    "power.draw,power.limit,"
+    "compute_cap,driver_version"
 )
 
 
@@ -87,7 +88,7 @@ async def gpu_status() -> dict[str, Any]:
         return {"online": False, "error": "nvidia-smi returned no data"}
 
     parts = [p.strip() for p in first.split(",")]
-    if len(parts) < 9:
+    if len(parts) < 11:
         return {"online": False, "error": f"unexpected nvidia-smi shape: {first!r}"}
 
     result: dict[str, Any] = {
@@ -107,6 +108,10 @@ async def gpu_status() -> dict[str, Any]:
             "draw_w": _parse_float(parts[7]),
             "limit_w": _parse_float(parts[8]),
         },
+        # [guided setup] compute_cap derives compute_type (>=7.0 -> native
+        # fp16); driver_version supports a too-old-driver warning.
+        "compute_cap": _parse_float(parts[9]),
+        "driver_version": parts[10],
         "processes": [],
     }
 
