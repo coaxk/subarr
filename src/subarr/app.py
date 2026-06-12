@@ -358,6 +358,18 @@ async def lifespan(app_: FastAPI):
     # passed in directly (watcher judges each completed job's .srt on the fly).
     app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.aftercare.prune()  # #197: 365d, never touches unreviewed flags
+
+    def _probe_duration_lookup(canonical: str) -> float | None:
+        """#216: the file's ffprobe duration for aftercare's sync-overrun
+        signal. Resolved live — probe_store is constructed later in lifespan
+        (same pattern as the arena fallback-lang closure above)."""
+        try:
+            store = getattr(app_.state, "probe_store", None)
+            pr = store.get((canonical or "").strip().lstrip("/")) if store is not None else None
+            return getattr(pr, "duration_s", None)
+        except Exception:
+            return None
+
     app_.state.watcher = CompletionWatcher(
         provenance=app_.state.provenance,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -369,6 +381,7 @@ async def lifespan(app_: FastAPI):
         bundle_provider=lambda: app_.state.integrations,
         subgen_provider=lambda: app_.state.subgen,
         aftercare_store=app_.state.aftercare,
+        duration_lookup=_probe_duration_lookup,
     )
     app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()

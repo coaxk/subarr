@@ -75,6 +75,7 @@ class CompletionWatcher:
         bundle_provider=None,
         subgen_provider=None,
         aftercare_store=None,
+        duration_lookup=None,
     ):
         # Clients are resolved live so onboarding can swap them on
         # app.state without restarting the watcher. When a bundle_provider
@@ -97,6 +98,9 @@ class CompletionWatcher:
         self._caps_provider = caps_provider or (lambda: None)
         self._warned_no_queue = False
         self._aftercare = aftercare_store
+        # #216: canonical_path -> media duration_s (or None), resolved from
+        # the ffprobe cache. Enables aftercare's sync-overrun signal.
+        self._duration_lookup = duration_lookup or (lambda canonical: None)
 
     @property
     def _subgen(self):
@@ -362,7 +366,11 @@ class CompletionWatcher:
             if not srt_path:
                 return
             text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
-            ev = evaluate_subtitle(text)
+            try:
+                duration_s = self._duration_lookup(entry.canonical_path)
+            except Exception:  # noqa: BLE001 - probe lookup must not block judging
+                duration_s = None
+            ev = evaluate_subtitle(text, media_duration_s=duration_s)
             self._aftercare.record(
                 canonical_path=entry.canonical_path,
                 completed_at=time.time(),
