@@ -107,6 +107,24 @@ def test_plan_mode_routing_matrix(client, monkeypatch):
     assert d["device"] == "cpu"
 
 
+def test_plan_rejects_media_host_path_with_newline(client, monkeypatch):
+    """media_host_path is interpolated into generated YAML — newlines would
+    allow injecting arbitrary compose keys. Must 422."""
+    import subarr.routers.subgen_setup as ss
+
+    monkeypatch.setattr(ss, "_subgen_caps", lambda app: _caps(False, False, False))
+    r = client.post(
+        "/api/subgen-setup/plan",
+        json={
+            "model": "small",
+            "vram_total_mb": None,
+            "compute_cap": None,
+            "media_host_path": "/mnt/x\nevil: true",
+        },
+    )
+    assert r.status_code == 422
+
+
 def test_apply_precheck_blocks_no_fit(client, monkeypatch):
     import subarr.routers.subgen_setup as ss
 

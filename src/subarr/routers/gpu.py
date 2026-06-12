@@ -36,12 +36,15 @@ def _nvidia_smi_path() -> str | None:
     return shutil.which("nvidia-smi")
 
 
-_GPU_FIELDS = (
+# Original 9-field query — kept as a fallback for old drivers where
+# compute_cap is "not a valid field to query" (nvidia-smi exits non-zero).
+_GPU_FIELDS_LEGACY = (
     "name,memory.used,memory.total,memory.free,"
     "utilization.gpu,utilization.memory,temperature.gpu,"
-    "power.draw,power.limit,"
-    "compute_cap,driver_version"
+    "power.draw,power.limit"
 )
+
+_GPU_FIELDS = _GPU_FIELDS_LEGACY + ",compute_cap,driver_version"
 
 
 async def _run_smi(exe: str, args: list[str]) -> str:
@@ -78,17 +81,29 @@ async def gpu_status() -> dict[str, Any]:
     if exe is None:
         return {"online": False, "error": "nvidia-smi not found"}
 
+    legacy = False
     try:
         gpu_csv = await _run_smi(exe, [f"--query-gpu={_GPU_FIELDS}", "--format=csv,nounits,noheader"])
     except Exception as e:
-        return {"online": False, "error": str(e)}
+        # Old drivers don't support the compute_cap/driver_version query
+        # fields and exit non-zero. Retry once with the legacy 9-field set so
+        # the existing GPU vitals footer keeps working; the new fields just
+        # come back null.
+        log.debug("11-field nvidia-smi query failed, retrying legacy fields: %s", e)
+        try:
+            gpu_csv = await _run_smi(
+                exe, [f"--query-gpu={_GPU_FIELDS_LEGACY}", "--format=csv,nounits,noheader"]
+            )
+            legacy = True
+        except Exception as e2:
+            return {"online": False, "error": str(e2)}
 
     first = gpu_csv.strip().splitlines()[0] if gpu_csv.strip() else ""
     if not first:
         return {"online": False, "error": "nvidia-smi returned no data"}
 
     parts = [p.strip() for p in first.split(",")]
-    if len(parts) < 11:
+    if len(parts) < (9 if legacy else 11):
         return {"online": False, "error": f"unexpected nvidia-smi shape: {first!r}"}
 
     result: dict[str, Any] = {
@@ -112,8 +127,8 @@ async def gpu_status() -> dict[str, Any]:
         # MUST stay the last two query fields; compute_cap derives
         # compute_type (>=7.0 -> native fp16), driver_version supports a
         # too-old-driver warning.
-        "compute_cap": _parse_float(parts[9]),
-        "driver_version": parts[10],
+        "compute_cap": None if legacy else _parse_float(parts[9]),
+        "driver_version": None if legacy else parts[10],
         "processes": [],
     }
 

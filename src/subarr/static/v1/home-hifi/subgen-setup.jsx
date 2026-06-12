@@ -309,11 +309,13 @@ export function SubgenSetupFlow({ onComplete }) {
               )}
               {applyResult && !applyResult.ok && (
                 <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)', lineHeight: 1.5 }}>
-                  {applyResult.reason === 'precheck_no_fit' || applyResult.reason === 'oom'
-                    ? `${plan.model} didn't fit on your GPU — kept ${applyResult.current_model || 'your current model'}. Try an int8 variant or free up VRAM and retry.`
-                    : applyResult.reason === 'subgen_unreachable'
-                      ? applyResult.detail
-                      : `Apply failed: ${applyResult.reason}${applyResult.detail ? ` — ${applyResult.detail}` : ''}`}
+                  {applyResult.rolled_back === false
+                    ? 'subgen could not restore the previous model after the failed switch — restart the subgen container, then re-run detection.'
+                    : applyResult.reason === 'precheck_no_fit' || applyResult.reason === 'oom'
+                      ? `${plan.model} didn't fit on your GPU — kept ${applyResult.current_model || 'your current model'}. Try an int8 variant or free up VRAM and retry.`
+                      : applyResult.reason === 'subgen_unreachable'
+                        ? applyResult.detail
+                        : `Apply failed: ${applyResult.reason}${applyResult.detail ? ` — ${applyResult.detail}` : ''}`}
                 </div>
               )}
             </div>

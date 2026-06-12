@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ..subgen_client import SubgenUnavailable
 from ..subgen_config_gen import (
@@ -130,6 +130,16 @@ class PlanBody(BaseModel):
     vram_total_mb: int | None = None
     compute_cap: float | None = None
     media_host_path: str = "/path/to/media"
+
+    @field_validator("media_host_path")
+    @classmethod
+    def _sanitize_media_host_path(cls, v: str) -> str:
+        # Interpolated into generated YAML — newlines would allow injecting
+        # arbitrary keys into the compose snippet.
+        v = v.strip()
+        if "\n" in v or "\r" in v:
+            raise ValueError("media_host_path must not contain newlines")
+        return v
 
 
 @router.post("/plan")
