@@ -95,6 +95,20 @@ class PendingStore:
         with self._lock:
             self._conn.close()
 
+    def prune(self, days: int = 30) -> int:
+        """#197: resolved/expired manual-confirm walks are history once
+        decided; their decisions cascade with them (FK). PROTECTIVE RULE:
+        status='pending' walks are the user's open approval queue — never
+        pruned, regardless of age. Run on boot."""
+        import time
+
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM pending_walks WHERE created_at < ? AND status != ?",
+                (time.time() - days * 86400, STATUS_PENDING),
+            )
+            return cur.rowcount
+
     # ── create ────────────────────────────────────────────────────────
 
     def create_walk(self, *, considered: int, items: list[dict]) -> PendingWalk:

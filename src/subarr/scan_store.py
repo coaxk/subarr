@@ -254,6 +254,19 @@ class ScanStore:
             cur = self._conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
             return cur.rowcount > 0
 
+    def prune(self, days: int = 180) -> int:
+        """#197: scan history is otherwise unbounded (one row per run,
+        forever). Anything this old — whatever its status — is history; a
+        six-month-old 'running' row is an orphan, not a job. Run on boot."""
+        import time
+
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM scans WHERE created_at < ?",
+                (time.time() - days * 86400,),
+            )
+            return cur.rowcount
+
     def delete_where_status_in(self, statuses: list[str], older_than: float | None = None) -> int:
         """Bulk-purge scans matching a status list (e.g. ['done', 'error',
         'skipped']). Optional age cutoff (epoch) restricts to old rows."""
