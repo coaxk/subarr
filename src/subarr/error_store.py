@@ -53,6 +53,20 @@ class ErrorStore:
             log.debug("error_store.counts_since failed: %s", e)
             return {}
 
+    def prune(self, days: int = 60) -> None:
+        """#197: telemetry reads a 30d window; rows beyond ~2x that are dead
+        weight on long-running installs. Run on boot. Best-effort."""
+        try:
+            import time
+
+            with self._lock:
+                self._conn.execute(
+                    "DELETE FROM error_events WHERE occurred_at < ?",
+                    (time.time() - days * 86400,),
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug("error_store.prune failed: %s", e)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

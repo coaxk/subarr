@@ -46,6 +46,21 @@ class AfterCareStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
 
+    def prune(self, days: int = 365) -> int:
+        """#197: one row per completed job, otherwise forever. A year keeps
+        the #95 passive-tuning signal window intact while bounding growth.
+        PROTECTIVE RULE: flagged-but-unreviewed rows are the user's review
+        backlog — never pruned, regardless of age. Run on boot."""
+        import time
+
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM aftercare_results WHERE completed_at < ? "
+                "AND NOT (flagged = 1 AND reviewed_at IS NULL)",
+                (time.time() - days * 86400,),
+            )
+            return cur.rowcount
+
     def record(
         self, *, canonical_path: str, completed_at: float, evaluation: AftercareEvaluation, source: str | None
     ) -> None:

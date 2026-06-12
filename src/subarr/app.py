@@ -260,8 +260,10 @@ async def lifespan(app_: FastAPI):
     # All schema is owned by migrations (run_migrations above, before any
     # store is constructed). Stores no longer self-create tables.
     app_.state.scans = ScanStore(settings.db_path)
+    app_.state.scans.prune()  # #197: scan history, 180d
     # Anonymous error-class log for telemetry (schema via migration 006).
     app_.state.errors = ErrorStore(settings.db_path)
+    app_.state.errors.prune()  # #197: telemetry reads 30d; keep 60d
     # #157 P2: sanitized fleet crash aggregates (type + module:line only).
     # Fed by TaskHealthStore.record_failure below; aggregated into the daily
     # ping as crash_counts_24h. Pruned on boot (error_events never was — don't
@@ -355,6 +357,7 @@ async def lifespan(app_: FastAPI):
     # #156: construct aftercare store before CompletionWatcher so it can be
     # passed in directly (watcher judges each completed job's .srt on the fly).
     app_.state.aftercare = AfterCareStore(settings.db_path)
+    app_.state.aftercare.prune()  # #197: 365d, never touches unreviewed flags
     app_.state.watcher = CompletionWatcher(
         provenance=app_.state.provenance,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -507,6 +510,7 @@ async def lifespan(app_: FastAPI):
         audio_lang=app_.state.audio_lang,
     )
     app_.state.pending = PendingStore(settings.db_path)
+    app_.state.pending.prune()  # #197: resolved walks 30d; pending never pruned
     app_.state.onboarding = OnboardingStore(settings.db_path)
     app_.state.scheduler = Scheduler(
         schedule_store=app_.state.schedule,
