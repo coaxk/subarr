@@ -1873,9 +1873,15 @@ function UpdatesPanel() {
             control={
               <span className="mono" style={{ fontSize: 'var(--text-sm)' }}>
                 <span style={{ color: 'var(--fg-1)' }}>{p.current_version || '—'}</span>
-                {p.latest_version && p.latest_version !== p.current_version && (
+                {/* compare v-stripped (the backend's update_available rule):
+                    "1.5.3" vs tag "v1.5.3" is up to date, not an upgrade */}
+                {p.latest_version
+                  && String(p.latest_version).replace(/^v/, '') !== String(p.current_version || '').replace(/^v/, '')
+                  ? (
                   <> <span style={{ color: 'var(--fg-3)' }}>→</span> <span style={{ color: p.has_update ? 'var(--violet-400)' : 'var(--fg-1)' }}>{p.latest_version}</span></>
-                )}
+                ) : p.latest_version ? (
+                  <> <span style={{ color: 'var(--ok-500, #34d399)', fontSize: 'var(--text-xs)' }}>up to date</span></>
+                ) : null}
                 {p.release_notes_url && (
                   <> · <a href={p.release_notes_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--fg-2)' }}>notes</a></>
                 )}
