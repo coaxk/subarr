@@ -774,7 +774,16 @@ from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
 from .security_headers import SecurityHeadersMiddleware  # noqa: E402
 from .auth import BasicAuthMiddleware  # noqa: E402
 from .api_security import ApiKeyMiddleware, CsrfOriginMiddleware  # noqa: E402
+from .request_crash_capture import RequestCrashCaptureMiddleware  # noqa: E402
 
+# #199: innermost — sees only exceptions that escaped route handlers (500s),
+# records the sanitized (type, module:line) into CrashStore, re-raises. The
+# recorder resolves app.state lazily because the store is built in lifespan,
+# after this module-level registration.
+app.add_middleware(
+    RequestCrashCaptureMiddleware,
+    crash_recorder=lambda exc: getattr(app.state, "crashes", None) and app.state.crashes.record(exc),
+)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CsrfOriginMiddleware, enabled=settings.csrf_protection)
