@@ -906,8 +906,12 @@ if _STATIC_DIR.is_dir():
         }
 
         def _make_v1_route(html_file: str):
-            def _v1_screen():
-                return RedirectResponse(url=f"/static/v1/{html_file}", status_code=302)
+            # #165: forward the query string — deep-links like /arena?path=…
+            # must survive the redirect or the page mounts with an empty
+            # window.location.search and the pre-seed silently no-ops.
+            def _v1_screen(request: Request):
+                q = f"?{request.url.query}" if request.url.query else ""
+                return RedirectResponse(url=f"/static/v1/{html_file}{q}", status_code=302)
 
             return _v1_screen
 
