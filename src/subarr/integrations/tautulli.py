@@ -38,9 +38,17 @@ class TautulliClient(IntegrationClient):
         return resp.get("data")
 
     async def status(self) -> dict[str, Any]:
-        # cmd=status returns {response:{result:success, data:null}} when up.
-        await self._cmd("status")
-        return {"result": "success"}
+        # cmd=get_tautulli_info doubles as the liveness check AND returns
+        # tautulli_version for the Settings status grid (cmd=status returned
+        # data:null, leaving Tautulli the only versionless row). Fail-soft to
+        # the old bare status cmd for ancient Tautulli builds.
+        try:
+            data = await self._cmd("get_tautulli_info")
+            version = (data or {}).get("tautulli_version")
+            return {"result": "success", "version": version}
+        except IntegrationError:
+            await self._cmd("status")
+            return {"result": "success"}
 
     async def history(self, length: int = 200, days: int | None = 30) -> list[dict[str, Any]]:
         """Return playback history rows (newest first).
