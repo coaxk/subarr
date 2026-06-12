@@ -223,6 +223,7 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                 "name": name,
                 "online": True,
                 "configured": True,
+                "version": await client.version(),
                 "badges": {
                     "models": len(models),
                     "model_names": ", ".join(m.get("name", "?") for m in models[:3])

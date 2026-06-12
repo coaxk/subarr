@@ -88,6 +88,19 @@ class OllamaClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def version(self) -> str | None:
+        """GET /api/version — Ollama's own version string for the Settings
+        status grid. Best-effort: returns None on any failure (the tags()
+        probe owns reachability; version is cosmetic)."""
+        try:
+            r = await self._client.get("/api/version")
+            if r.status_code == 200:
+                v = (r.json() or {}).get("version")
+                return str(v) if v else None
+        except (httpx.HTTPError, ValueError):
+            pass
+        return None
+
     async def tags(self) -> dict[str, Any]:
         """GET /api/tags — list of installed models. Used for health probe."""
         try:
