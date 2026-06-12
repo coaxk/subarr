@@ -92,14 +92,18 @@ class DockerOps:
 
         return await asyncio.to_thread(_do)
 
-    def nvidia_runtime_available(self) -> bool | None:
+    async def nvidia_runtime_available(self) -> bool | None:
         """Detection tier 2 (spec §2.1): does the Docker host have the
         nvidia runtime registered? True/False, or None when Docker itself
         is unreachable (fail-soft — the wizard degrades to manual entry,
-        it never errors)."""
-        try:
+        it never errors). Async: docker info() blocks on a dead socket."""
+
+        def _do() -> bool:
             info = self._get().info()
             return "nvidia" in (info.get("Runtimes") or {})
+
+        try:
+            return await asyncio.to_thread(_do)
         except Exception as e:
             log.debug("nvidia_runtime_available failed (non-fatal): %s", e)
             return None

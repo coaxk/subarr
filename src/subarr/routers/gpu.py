@@ -108,8 +108,10 @@ async def gpu_status() -> dict[str, Any]:
             "draw_w": _parse_float(parts[7]),
             "limit_w": _parse_float(parts[8]),
         },
-        # [guided setup] compute_cap derives compute_type (>=7.0 -> native
-        # fp16); driver_version supports a too-old-driver warning.
+        # [guided setup] parts[9]=compute_cap, parts[10]=driver_version —
+        # MUST stay the last two query fields; compute_cap derives
+        # compute_type (>=7.0 -> native fp16), driver_version supports a
+        # too-old-driver warning.
         "compute_cap": _parse_float(parts[9]),
         "driver_version": parts[10],
         "processes": [],

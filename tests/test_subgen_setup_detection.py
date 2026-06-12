@@ -22,14 +22,14 @@ def test_docker_nvidia_runtime_available(subarr_env):
             return {"Runtimes": {"runc": {}, "nvidia": {"path": "nvidia-container-runtime"}}}
 
     ops._client = _FakeClient()
-    assert ops.nvidia_runtime_available() is True
+    assert asyncio.run(ops.nvidia_runtime_available()) is True
 
     class _FakeNoNvidia:
         def info(self):
             return {"Runtimes": {"runc": {}}}
 
     ops._client = _FakeNoNvidia()
-    assert ops.nvidia_runtime_available() is False
+    assert asyncio.run(ops.nvidia_runtime_available()) is False
 
 
 def test_docker_nvidia_runtime_unavailable_docker_down(subarr_env):
@@ -43,7 +43,7 @@ def test_docker_nvidia_runtime_unavailable_docker_down(subarr_env):
 
     ops._client = _Boom()
     # Fail-soft: detection tier degrades, never raises into the wizard.
-    assert ops.nvidia_runtime_available() is None
+    assert asyncio.run(ops.nvidia_runtime_available()) is None
 
 
 def test_subgen_current_config_reads_env_and_gpu(subarr_env):
