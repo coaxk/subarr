@@ -117,6 +117,12 @@ class SubgenCapabilities:
     # subgen. Lets subarr feature-gate behaviour without sniffing each
     # capability individually.
     subarr_subgen_patch_rev: str | None = None
+    # #224: the GHCR release tag this image was built from (e.g.
+    # 'v2026.05.3-r9'), baked at build time and published by subarr-subgen
+    # r9+. THIS is what update checks compare against the repo's release
+    # tags — the patch_rev scheme (v4.x) can never match a date-style tag.
+    # None on older builds → the update checker won't claim an update.
+    release_tag: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +142,7 @@ class SubgenCapabilities:
             "asr_detected_language": self.asr_detected_language,
             "ignore_forced_subtitles": self.ignore_forced_subtitles,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
+            "release_tag": self.release_tag,
         }
 
     @classmethod
@@ -282,6 +289,7 @@ class SubgenClient:
         asr_detected_language = False
         ignore_forced_subtitles = False
         patch_rev: str | None = None
+        release_tag: str | None = None
         try:
             qr = await self._client.get("/queue")
             if 200 <= qr.status_code < 300:
@@ -295,6 +303,10 @@ class SubgenClient:
                         rev = body.get("subarr_subgen_patch_rev")
                         if isinstance(rev, str):
                             patch_rev = rev
+                        # #224: r9+ publishes its baked image tag here.
+                        tag = body.get("subarr_subgen_release_tag")
+                        if isinstance(tag, str) and tag:
+                            release_tag = tag
                         caps_block = body.get("capabilities") or {}
                         if isinstance(caps_block, dict):
                             audio_language_override = bool(caps_block.get("audio_language_override"))
@@ -332,6 +344,7 @@ class SubgenClient:
             asr_detected_language=asr_detected_language,
             ignore_forced_subtitles=ignore_forced_subtitles,
             subarr_subgen_patch_rev=patch_rev,
+            release_tag=release_tag,
         )
         log.info(
             "subgen capabilities: version=%s patch_rev=%s has_queue=%s has_batch=%s "

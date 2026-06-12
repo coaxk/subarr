@@ -588,15 +588,17 @@ async def lifespan(app_: FastAPI):
     # upstream version when running vanilla subgen (no patch_rev), and
     # to None when subgen is unreachable.
     _subgen_caps = getattr(app_.state, "subgen_caps", None)
-    if _subgen_caps and getattr(_subgen_caps, "subarr_subgen_patch_rev", None):
-        _subgen_current = _subgen_caps.subarr_subgen_patch_rev
-    elif _subgen_caps and _subgen_caps.version:
-        # Vanilla subgen — keep the legacy behaviour (compare upstream
-        # version against the McCloudS/subgen tag, though release_notes
-        # link still points to our repo by DEFAULT_PRODUCTS).
-        _subgen_current = _subgen_caps.version
-    else:
-        _subgen_current = None
+    # #224: the #108 comparison broke when subarr-subgen's tagging moved
+    # from patch-rev style (v4.x) to date style (v2026.05.3-rN) — the
+    # patch_rev can never string-match a tag, so every install (including
+    # a fully-current one) showed a permanent fake "update available".
+    # Trust rule: only claim a current version when subgen reports its
+    # actual RELEASE TAG (`release_tag` in caps, shipped by subarr-subgen
+    # r9+). Unknown current → the checker shows the latest release but
+    # never claims an update (missed_releases/update_available both treat
+    # None as "don't guess"). Vanilla subgen comparison is equally broken
+    # against our repo's tags — #223 redoes that flow properly.
+    _subgen_current = getattr(_subgen_caps, "release_tag", None) if _subgen_caps else None
     from .update_checker import UpdateChecker
 
     current_versions = {
