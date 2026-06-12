@@ -10,6 +10,7 @@ import { Wordmark, StatusDot } from './atoms.jsx';
 // imports FormRow/TextInput back from here — fine, both sides are function
 // declarations resolved at render time via ESM live bindings.)
 import { LibrariesEditor } from './libraries-editor.jsx';
+import { SubgenSetupFlow } from './subgen-setup.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -22,6 +23,10 @@ const STEPS = [
   { id: 'radarr',   label: 'Radarr',        group: 'integrations', service: 'radarr', optional: true },
   { id: 'tautulli', label: 'Tautulli',      group: 'integrations', service: 'tautulli', optional: true },
   { id: 'subgen',   label: 'subgen',        group: 'integrations', service: 'subgen' },
+  // Guided hardware-matched model/compute setup. Frontend-only step —
+  // the backend persists step as a clamped numeric index (0..MAX_STEP),
+  // so inserting here keeps every index in range.
+  { id: 'subgen-setup', label: 'subgen tuning', group: 'integrations', optional: true },
   { id: 'ollama',   label: 'Ollama',        group: 'integrations', service: 'ollama', optional: true },
   { id: 'gpu',      label: 'GPU check',     group: 'review' },
   { id: 'speech',   label: 'Speech detection', group: 'review' },
@@ -921,6 +926,26 @@ export function OnboardingPage() {
   const renderStep = () => {
     if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} autoDetectError={autoDetectError} />;
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
+    if (step.id === 'subgen-setup') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span className="label" style={{ color: 'var(--violet-400)' }}>integrations</span>
+              <span style={{ width: 12, height: 1, background: 'var(--bg-4)' }} />
+              <span className="label" style={{ color: 'var(--fg-3)' }}>optional</span>
+            </div>
+            <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
+              Tune subgen
+            </h1>
+            <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
+              Match the Whisper model, device and compute type to your hardware. Skip for now if you'd rather do this later from Settings → Subgen tuning.
+            </p>
+          </div>
+          <SubgenSetupFlow onComplete={() => goTo(state.step + 1)} />
+        </div>
+      );
+    }
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
     if (step.id === 'speech')  return <StepSpeech />;
