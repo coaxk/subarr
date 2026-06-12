@@ -114,6 +114,7 @@ from .error_store import ErrorStore
 from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
 from .scheduler import Scheduler
+from .single_process import check_single_process
 from .subgen_client import SubgenClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -280,6 +281,10 @@ async def lifespan(app_: FastAPI):
     # all verifications/intents lost + a fresh telemetry id). Verdict cached
     # for the telemetry data_persistent signal. None = unknown (not a container).
     app_.state.data_persistent = check_data_persistence(settings.db_path, app_.state.task_health)
+    # #204: exactly one subarr process per database. The handle must live on
+    # app.state — the flock dies with it. Second worker / second container on
+    # the same /data → red Health task + loud log (we warn, never brick boot).
+    app_.state.process_lock = check_single_process(settings.db_path, app_.state.task_health)
     # Seed the roster so all supervised loops show on the Health page from boot
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.
