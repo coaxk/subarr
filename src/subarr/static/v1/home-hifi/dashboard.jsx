@@ -747,6 +747,87 @@ function ActivityCard({ data }) {
   );
 }
 
+// #203: "what you're missing" update nudge. The bare version chip didn't
+// convert (the fleet sat on 1.1.0 for weeks), so when an update exists we
+// show the missed RELEASE TITLES — our titles are descriptive, so they ARE
+// the digest. Dismissal is keyed to the latest version: each new release
+// re-surfaces the card once.
+export function UpdateNudgeCard() {
+  const [subarrState, setSubarrState] = React.useState(null);
+  const [dismissed, setDismissed] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch('/api/updates', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const s = ((d && d.products) || []).find((p) => p.product === 'subarr');
+        if (!s || !s.has_update) return;
+        try {
+          if (localStorage.getItem(`subarr.updateNudge.dismissed.${s.latest_version}`) === '1') {
+            setDismissed(true);
+          }
+        } catch {}
+        setSubarrState(s);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (!subarrState || dismissed) return null;
+  const missed = subarrState.missed_releases || [];
+  const shown = missed.slice(0, 5);
+  const more = missed.length - shown.length;
+  const dismiss = () => {
+    try { localStorage.setItem(`subarr.updateNudge.dismissed.${subarrState.latest_version}`, '1'); } catch {}
+    setDismissed(true);
+  };
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(34,211,161,0.08), rgba(139,92,246,0.05))',
+      border: '1px solid rgba(34,211,161,0.30)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '14px 18px',
+      display: 'flex', flexDirection: 'column', gap: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 18 }}>⬆️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>
+            {subarrState.latest_version} is out — you're on {subarrState.current_version}
+            {missed.length > 1 ? ` (${missed.length} releases behind)` : ''}
+          </div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            Upgrade with <span className="mono">docker compose pull && docker compose up -d</span> — no migration, no config changes.
+          </div>
+        </div>
+        {subarrState.release_notes_url && (
+          <a className="btn sm" href={subarrState.release_notes_url} target="_blank" rel="noreferrer">
+            Release notes
+          </a>
+        )}
+        <button className="btn sm ghost" onClick={dismiss} title="Hide until the next release">
+          dismiss
+        </button>
+      </div>
+      {shown.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 30 }}>
+          {shown.map((m) => (
+            <div key={m.tag} style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)' }}>
+              {m.notes_url
+                ? <a href={m.notes_url} target="_blank" rel="noreferrer" style={{ color: 'var(--fg-1)', textDecoration: 'none' }}>• {m.title || m.tag}</a>
+                : <>• {m.title || m.tag}</>}
+            </div>
+          ))}
+          {more > 0 && (
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>…and {more} more</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // v1.0 #147: post-onboarding "what next" guidance. Shown for 7 days after
 // completion, dismissible (localStorage). Walks the user through the
 // first 4 things to do once setup finishes. Prevents the "now what?"

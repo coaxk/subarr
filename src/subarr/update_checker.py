@@ -39,11 +39,12 @@ Design choices:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import time
 import defusedxml.ElementTree as ET  # XXE / billion-laughs hardened (B314)
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -60,30 +61,15 @@ _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 _MAX_FEED_BYTES = 4_000_000
 
 
-def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
-    """Parse a GitHub `releases.atom` feed → the newest release as a dict
-    ``{tag, released_at, notes_url, body}``, or ``None`` when the feed has
-    no entries (repo has no published releases yet) or can't be parsed.
+def _parse_entry(entry) -> dict[str, Any]:
+    """One atom <entry> → {tag, title, released_at, notes_url, body}.
 
     Tag resolution: prefer the entry's alternate ``<link>`` href
     (``.../releases/tag/<tag>``), fall back to the ``<id>`` suffix. The
-    entry ``<title>`` is the release *name* (e.g. "subarr 1.2.1 — hotfix"),
-    NOT the tag, so we never use it for the version.
+    entry ``<title>`` is the release *name* (e.g. "v1.5.2 - movie coverage"),
+    NOT the tag, so we never use it for the version — but it IS the human
+    digest the #203 nudge renders.
     """
-    if not xml_text or len(xml_text) > _MAX_FEED_BYTES:
-        return None
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        # Malformed XML, or defusedxml rejecting a DTD/entity/external-ref
-        # (EntitiesForbidden, DTDForbidden, ...). A feed we can't safely
-        # parse is treated as "no info" — never crash the poll loop.
-        return None
-
-    entry = root.find(f"{_ATOM_NS}entry")
-    if entry is None:
-        return None
-
     notes_url: str | None = None
     tag: str | None = None
     # GitHub gives each entry a single alternate link to the release page.
@@ -108,10 +94,72 @@ def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
         except ValueError:
             pass
 
+    title_el = entry.find(f"{_ATOM_NS}title")
+    title = (title_el.text or "").strip() if title_el is not None else ""
+
     content = entry.find(f"{_ATOM_NS}content")
     body = content.text if content is not None else None
 
-    return {"tag": tag, "released_at": released_at, "notes_url": notes_url, "body": body}
+    return {"tag": tag, "title": title, "released_at": released_at, "notes_url": notes_url, "body": body}
+
+
+def parse_atom_entries(xml_text: str) -> list[dict[str, Any]]:
+    """All releases in a `releases.atom` feed, newest first (GitHub's order),
+    each ``{tag, title, released_at, notes_url, body}``. Empty list when the
+    feed has no entries or can't be parsed — never raises."""
+    if not xml_text or len(xml_text) > _MAX_FEED_BYTES:
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        # Malformed XML, or defusedxml rejecting a DTD/entity/external-ref
+        # (EntitiesForbidden, DTDForbidden, ...). A feed we can't safely
+        # parse is treated as "no info" — never crash the poll loop.
+        return []
+    return [_parse_entry(e) for e in root.findall(f"{_ATOM_NS}entry")]
+
+
+def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
+    """The newest release as ``{tag, released_at, notes_url, body}`` (the
+    original single-entry contract), or ``None`` when the feed is empty."""
+    entries = parse_atom_entries(xml_text)
+    return entries[0] if entries else None
+
+
+def missed_releases(entries: list[dict[str, Any]], current_version: str | None) -> list[dict[str, Any]]:
+    """The releases an install is missing: every feed entry NEWER than its
+    current version (entries are newest-first; we take until we hit the
+    current tag). Current version older than the feed window → the whole
+    feed is missed. Unknown current → [] (never guess). Bodies stripped —
+    only {tag, title, notes_url, released_at} travel to the UI."""
+    if not current_version:
+        return []
+    cur = current_version.lstrip("v")
+    out: list[dict[str, Any]] = []
+    for e in entries:
+        tag = (e.get("tag") or "").lstrip("v")
+        if tag and tag == cur:
+            break
+        out.append(
+            {
+                "tag": e.get("tag"),
+                "title": e.get("title") or e.get("tag") or "",
+                "notes_url": e.get("notes_url"),
+                "released_at": e.get("released_at"),
+            }
+        )
+    return out
+
+
+def _load_missed_json(raw: str | None) -> list[dict[str, Any]]:
+    """missed_json column → list, fail-soft (bad JSON reads as empty)."""
+    if not raw:
+        return []
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, list) else []
+    except Exception:
+        return []
 
 
 # Default products subarr tracks. Each row maps to one update_checks row.
@@ -139,6 +187,10 @@ class UpdateState:
     is_breaking: bool
     checked_at: float
     last_error: str | None
+    # #203: releases between current and latest — [{tag, title, notes_url,
+    # released_at}], newest first. Titles only (the atom <title> is our own
+    # release name), so there's no HTML body to sanitize anywhere.
+    missed_releases: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def has_update(self) -> bool:
@@ -163,6 +215,7 @@ class UpdateState:
             "checked_at": self.checked_at,
             "last_error": self.last_error,
             "has_update": self.has_update,
+            "missed_releases": self.missed_releases,
         }
 
 
@@ -217,7 +270,7 @@ class UpdateChecker:
             rows = conn.execute(
                 "SELECT product, repo, current_version, latest_version, "
                 "       latest_released_at, release_notes_url, is_breaking, "
-                "       checked_at, last_error "
+                "       checked_at, last_error, missed_json "
                 "FROM update_checks ORDER BY product"
             ).fetchall()
         finally:
@@ -233,6 +286,7 @@ class UpdateChecker:
                 is_breaking=bool(r[6]),
                 checked_at=r[7],
                 last_error=r[8],
+                missed_releases=_load_missed_json(r[9]),
             )
             for r in rows
         ]
@@ -303,7 +357,8 @@ class UpdateChecker:
             return
         r.raise_for_status()
 
-        parsed = parse_atom_feed(r.text)
+        entries = parse_atom_entries(r.text)
+        parsed = entries[0] if entries else None
         if parsed is None or not parsed.get("tag"):
             log.debug("atom feed for %s has no releases yet", repo)
             self._write_error(product, repo, "no public release")
@@ -315,6 +370,9 @@ class UpdateChecker:
         raw_body: str = parsed.get("body") or ""
         release_body = raw_body.lower()
         is_breaking = "breaking" in release_body or "[breaking]" in release_body
+        # #203: everything between the install's version and latest — the
+        # release titles are the "what you're missing" digest.
+        missed = missed_releases(entries, self._current.get(product))
 
         self._write_state(
             product=product,
@@ -325,6 +383,7 @@ class UpdateChecker:
             release_notes_url=notes_url,
             is_breaking=is_breaking,
             last_error=None,
+            missed=missed,
         )
         log.info("update poll: %s → latest=%s (current=%s)", product, latest_tag, self._current.get(product))
 
@@ -341,6 +400,7 @@ class UpdateChecker:
         release_notes_url: str | None,
         is_breaking: bool,
         last_error: str | None,
+        missed: list[dict[str, Any]] | None = None,
     ) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
         try:
@@ -348,8 +408,8 @@ class UpdateChecker:
                 "INSERT INTO update_checks "
                 "(product, repo, current_version, latest_version, "
                 " latest_released_at, release_notes_url, is_breaking, "
-                " checked_at, last_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " checked_at, last_error, missed_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(product) DO UPDATE SET "
                 "  repo=excluded.repo, "
                 "  current_version=excluded.current_version, "
@@ -358,7 +418,8 @@ class UpdateChecker:
                 "  release_notes_url=excluded.release_notes_url, "
                 "  is_breaking=excluded.is_breaking, "
                 "  checked_at=excluded.checked_at, "
-                "  last_error=excluded.last_error",
+                "  last_error=excluded.last_error, "
+                "  missed_json=excluded.missed_json",
                 (
                     product,
                     repo,
@@ -369,6 +430,7 @@ class UpdateChecker:
                     1 if is_breaking else 0,
                     time.time(),
                     last_error,
+                    json.dumps(missed or []),
                 ),
             )
         finally:
