@@ -122,6 +122,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger(__name__)
 
 
+def _subgen_update_version(release_tag: str | None) -> str | None:
+    """Current subarr-subgen version for the update check (#224 + dev-build
+    guard). Only a real release tag (e.g. 'v2026.05.3-r9') is comparable to
+    the repo's release tags. A `dev-<sha>` local/soak build (scripts/build.sh)
+    or a missing tag is unreleased and uncomparable, so it resolves to None —
+    the checker then shows the latest release but never claims an update,
+    rather than falsely nagging an upgrade that points BACKWARD to the last
+    release."""
+    if not release_tag or release_tag.startswith("dev"):
+        return None
+    return release_tag
+
+
 def _arena_fallback_lang(app_, media_path):
     """Arena fallback source language when Whisper robust detection is
     inconclusive: the file's KNOWN spoken/audio language.
@@ -599,7 +612,9 @@ async def lifespan(app_: FastAPI):
     # never claims an update (missed_releases/update_available both treat
     # None as "don't guess"). Vanilla subgen comparison is equally broken
     # against our repo's tags — #223 redoes that flow properly.
-    _subgen_current = getattr(_subgen_caps, "release_tag", None) if _subgen_caps else None
+    _subgen_current = _subgen_update_version(
+        getattr(_subgen_caps, "release_tag", None) if _subgen_caps else None
+    )
     from .update_checker import UpdateChecker
 
     current_versions = {
