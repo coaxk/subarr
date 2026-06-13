@@ -77,6 +77,22 @@ After onboarding you can edit any integration's URL and API key (and the Plex to
 
 **Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned `.srt` files whose basename drifted from the video. Read-only blocks this. If you don't want it, set `SUBARR_SIDECAR_RENAME=0` and mount `:ro`, the rest of the product works.
 
+### Hardened deployment (optional)
+
+Subarr's image runs `python -m subarr.app` directly — it doesn't switch users or need any Linux capabilities, so you can drop them all. Verified to boot clean with nothing added back:
+
+```yaml
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:    { cpus: '1.0', memory: 1G }
+        reservations: { cpus: '0.25', memory: 256M }
+```
+
+The image already ships a `HEALTHCHECK` (hits `/api/health`), so Compose and orchestrators get container health for free — no `healthcheck:` block needed. Add an `SUBARR_API_KEY` (see [Security](#security)) if it's reachable beyond a trusted LAN.
+
 **Plex (optional).** Set `PLEX_URL` + `PLEX_TOKEN` (and optionally `PLEX_SECTION`) to enable two things: an instant Plex library refresh the moment subarr writes a sub (instead of waiting for Plex's own periodic scan), and the opt-in per-show audio-language read (`PLEX_AUDIO_HINTS=1`). Plex shows in the dashboard + Settings integration health either way, so you can see its status at a glance. Activity/now-playing still comes through Tautulli.
 
 ## Two ways to use subarr
@@ -287,7 +303,7 @@ Subarr's API can mutate Sonarr, trigger Bazarr tasks, edit your library roots, a
 
 ### Posture
 
-- Bandit, Semgrep, pip-audit, Trivy run on every push to `coaxk/subarr` and `coaxk/subarr-subgen`. SARIF uploads to the GitHub Security tab.
+- Bandit, Semgrep, pip-audit, Trivy, CodeQL, and zizmor (GitHub Actions auditor) run on every push to `coaxk/subarr`; the same gate set (minus pip-audit, which is N/A — subgen ships no pip package) runs on `coaxk/subarr-subgen`. SARIF uploads to the GitHub Security tab.
 - Constant-time auth comparison (`secrets.compare_digest`). Regression tested.
 - API keys never appear in any HTTP response, masked surface, raw key only in dataclass internals. Regression tested.
 - Every filesystem operation routes through `canonical_to_fs()` which rejects path-traversal outside the configured media root. Regression tested.
@@ -295,6 +311,15 @@ Subarr's API can mutate Sonarr, trigger Bazarr tasks, edit your library roots, a
 - `shell=False` everywhere. No user input flows into `subprocess.run`. Grepped in CI.
 - Telemetry payload contents enumerated in `src/subarr/telemetry.py` with a regression test (`test_payload_never_includes_forbidden_fields`) guarding against accidental fingerprintable fields.
 - Reporting a vulnerability: `security@subarr.com`. We acknowledge within 72 hours. Full policy in [`SECURITY.md`](SECURITY.md).
+
+## API reference
+
+Every subarr instance serves its own interactive API docs (FastAPI):
+
+- **`/docs`** — Swagger UI: browse and try every endpoint live.
+- **`/openapi.json`** — the raw OpenAPI 3 spec; feed it to Postman/Insomnia/Bruno or generate a typed client (`openapi-typescript`, `orval`).
+
+When `SUBARR_API_KEY` is set, send it as `X-Api-Key` (or `?apikey=`) on `/api/*` calls — the docs pages themselves stay open so you can read the surface before authenticating.
 
 ## Telemetry
 
