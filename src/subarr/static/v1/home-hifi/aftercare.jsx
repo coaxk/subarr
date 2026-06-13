@@ -41,6 +41,35 @@ function flagChips(item) {
   return out;
 }
 
+// Per-component breakdown shown on hover over the score (the "why this
+// number" the chips only hint at). Reads the values already on the row —
+// no scoring math is reconstructed here, so it can't drift from the
+// backend; clean dimensions are shown too ("0% repeats") so the user sees
+// what's NOT wrong, not just what is.
+function scoreBreakdown(item) {
+  const s = item.signals || {};
+  const c = (item.readability || {}).counts || {};
+  const sig = [
+    `looping/repeats ${Math.round((s.repeated_line_ratio || 0) * 100)}%`,
+    `hallucination (canned) ${s.canned_phrase_hits || 0}`,
+  ];
+  if (s.ad_boilerplate_hits != null) sig.push(`ad/boilerplate ${s.ad_boilerplate_hits || 0}`);
+  if (s.sync_overrun_s != null) sig.push(`sync overrun ${Math.round(s.sync_overrun_s || 0)}s`);
+  const read = [];
+  if (c.cps) read.push(`${c.cps} CPS`);
+  if (c.too_long) read.push(`${c.too_long} too-long`);
+  if (c.too_short) read.push(`${c.too_short} too-short`);
+  if (c.lines) read.push(`${c.lines} over-2-line`);
+  if (c.cpl) read.push(`${c.cpl} long-line`);
+  if (c.overlap) read.push(`${c.overlap} overlap`);
+  return [
+    `Structural score ${Math.round(item.composite)} — not a transcription-accuracy grade.`,
+    '',
+    `Failure signals: ${sig.join(' · ')}`,
+    `Readability: ${read.length ? read.join(', ') : 'clean'}`,
+  ].join('\n');
+}
+
 function timeAgo(ts) {
   if (!ts) return 'never';
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -115,11 +144,12 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
           </span>
         )}
 
-        {/* Composite (structural — muted, flagged only) */}
+        {/* Composite (structural — muted, flagged only). Hover = the
+            per-component breakdown borrowed from the competitive review. */}
         {item.flagged && (
-          <span title="structural score — not a transcription-accuracy grade"
+          <span title={scoreBreakdown(item)}
             style={{ flex: 'none', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
-              fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>
+              fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right', cursor: 'help' }}>
             {Math.round(item.composite)}
           </span>
         )}
