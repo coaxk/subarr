@@ -16,14 +16,21 @@ DOUBLE = "/api/audio-lang/audio-lang/series-intent"
 
 
 def _intent_methods(app):
-    """Map HTTP method -> set of registered paths for the series-intent
-    handlers, read straight off the app's route table."""
+    """Map HTTP method -> set of registered series-intent paths, read off the
+    app's route table BY PATH.
+
+    Deliberately NOT by handler `.name`: name-based introspection is unreliable
+    across the suite's module-reload + collection-order state (the served route
+    can resolve correctly at the right path while its route object's `.name`
+    comes back empty in some orders). The routing CONTRACT is the path, so we
+    assert on that — same regression coverage (single vs double prefix),
+    order-independent."""
     by_method: dict[str, set[str]] = {}
     for r in app.routes:
-        name = getattr(r, "name", "")
-        if name in {"upsert_series_intent", "list_series_intents", "delete_series_intent"}:
-            for m in getattr(r, "methods", set()):
-                by_method.setdefault(m, set()).add(r.path)
+        path = getattr(r, "path", "")
+        if path.endswith("/series-intent"):
+            for m in getattr(r, "methods", set()) or set():
+                by_method.setdefault(m, set()).add(path)
     return by_method
 
 
