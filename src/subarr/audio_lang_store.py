@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .log_safe import scrub
+
 
 # Schema (audio_lang_verifications + idx, series_lang_intent) is owned by
 # migrations/008_init_schema_parity.sql. run_migrations() runs at boot
@@ -431,7 +433,7 @@ def resolve_audio_language_override(
             "%s: REFUSING override=%s for %s — verification has no source field (corrupt store entry?)",
             caller,
             lang,
-            canonical,
+            scrub(canonical),
         )
         return None
     if conf < _MIN_CONFIDENCE:
@@ -440,7 +442,7 @@ def resolve_audio_language_override(
             "(source=%s). Let subgen detect from audio instead.",
             caller,
             lang,
-            canonical,
+            scrub(canonical),
             conf,
             _MIN_CONFIDENCE,
             src,
@@ -453,7 +455,7 @@ def resolve_audio_language_override(
             "%s: forwarding RISKY override=%s for %s (source=%s, conf=%.2f, evidence=%s)",
             caller,
             lang,
-            canonical,
+            scrub(canonical),
             src,
             conf,
             evidence_keys,
@@ -463,7 +465,7 @@ def resolve_audio_language_override(
             "%s: forwarding audio_language_override=%s for %s (source=%s, conf=%.2f, evidence=%s)",
             caller,
             lang,
-            canonical,
+            scrub(canonical),
             src,
             conf,
             evidence_keys,

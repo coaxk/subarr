@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from ..audio_lang_store import resolve_audio_language_override
 from ..config import settings
+from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..scan_store import (
     PATH_STATUS_ERROR,
@@ -376,9 +377,9 @@ async def subgen_webhook_completed(
     matched = await watcher.complete_by_canonical(canonical)
     log.info(
         "subgen completion webhook: event=%s file=%s canonical=%s matched=%d",
-        payload.event,
-        payload.file,
-        canonical,
+        scrub(payload.event),  # webhook fields are untrusted (no auth by default)
+        scrub(payload.file),
+        scrub(canonical),
         matched,
     )
     return {

@@ -22,6 +22,7 @@ from ..audio_sampler import (
     find_dialog_positions,
 )
 from ..config import settings
+from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..subgen_client import SubgenUnavailable
 
@@ -162,7 +163,7 @@ async def _propagate_to_sonarr(
         ep_file_id,
         target["name"],
         target["id"],
-        canonical_path,
+        scrub(canonical_path),
     )
 
     # Kick Bazarr's "Sync with Sonarr" task so it picks up the new audio
