@@ -1,0 +1,58 @@
+name: security-drift
+
+# Keeps the code-scanning baseline at zero open HIGH/CRITICAL alerts.
+#
+# Why scheduled-on-main rather than a per-PR gate:
+#   - CodeQL processes alerts ASYNC after its job, in a separate workflow
+#     (codeql.yml) — a per-PR gate can't reliably `needs:` it and would race
+#     the alerts API (false pass).
+#   - Fork PRs get a reduced GITHUB_TOKEN that can't read code-scanning alerts
+#     — a per-PR gate breaks on the external PRs it's meant to guard.
+#   - CodeQL ALREADY annotates PRs inline with new findings, so at-review
+#     visibility is covered. This is the safety net: if a HIGH lands on main
+#     (slipped past review, or an --admin merge), this goes red within a day.
+#
+# This is a LOUD detector, not a hard gate — it is intentionally NOT a required
+# status check (a solo --admin merge bypasses required checks anyway). A red run
+# means: triage the Security tab — fix it, or dismiss with a documented reason.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # daily 08:00 UTC (staggered from the other security crons)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  open-high-alerts:
+    name: no open HIGH code-scanning alerts
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: read
+    steps:
+      - name: fail on any open high/critical code-scanning alert (dismissed excluded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # state=open already excludes dismissed/fixed alerts. --paginate so a
+          # HIGH can't hide behind a page of mediums. Filter on the SECURITY
+          # severity (high/critical), not the rule severity (error/warning/note).
+          matches="$(gh api --paginate \
+            "repos/${REPO}/code-scanning/alerts?state=open&per_page=100" \
+            --jq '.[]
+                  | select(((.rule.security_severity_level // "") == "high")
+                        or ((.rule.security_severity_level // "") == "critical"))
+                  | "  - " + (.rule.id)
+                    + " (" + (.rule.security_severity_level)
+                    + ") @ " + (.most_recent_instance.location.path // "?")
+                    + ":" + ((.most_recent_instance.location.start_line // 0) | tostring)')"
+          if [ -n "${matches}" ]; then
+            echo "::error::Open HIGH/CRITICAL code-scanning alerts on the default branch:"
+            printf '%s\n' "${matches}"
+            echo "Triage in the Security tab: fix the code, or dismiss with a documented reason."
+            exit 1
+          fi
+          echo "Clean: no open HIGH/CRITICAL code-scanning alerts on the default branch."
