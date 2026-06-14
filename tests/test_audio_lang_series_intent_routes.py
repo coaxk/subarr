@@ -15,32 +15,28 @@ SINGLE = "/api/audio-lang/series-intent"
 DOUBLE = "/api/audio-lang/audio-lang/series-intent"
 
 
-def _intent_methods(app):
-    """Map HTTP method -> set of registered series-intent paths, read off the
-    app's route table BY PATH.
-
-    Deliberately NOT by handler `.name`: name-based introspection is unreliable
-    across the suite's module-reload + collection-order state (the served route
-    can resolve correctly at the right path while its route object's `.name`
-    comes back empty in some orders). The routing CONTRACT is the path, so we
-    assert on that — same regression coverage (single vs double prefix),
-    order-independent."""
-    by_method: dict[str, set[str]] = {}
-    for r in app.routes:
-        path = getattr(r, "path", "")
-        if path.endswith("/series-intent"):
-            for m in getattr(r, "methods", set()) or set():
-                by_method.setdefault(m, set()).add(path)
-    return by_method
-
-
 def test_routes_registered_at_single_prefix(app_with_stub):
-    by_method = _intent_methods(app_with_stub.app)
-    assert by_method.get("PUT") == {SINGLE}
-    assert by_method.get("GET") == {SINGLE}
-    assert by_method.get("DELETE") == {SINGLE}
-    # the double-prefixed path must not exist for any method
-    assert all(DOUBLE not in paths for paths in by_method.values())
+    """The series-intent CRUD must resolve at the single, correctly-prefixed
+    path and NOT at the double-prefixed one. Asserted through real requests —
+    the routing contract as a client sees it — rather than `app.routes`
+    introspection, which proved unreliable in CI (the served app and the
+    fixture's `.app` attribute diverge there, so the route table came back
+    without these routes even though requests to them succeed). The front-door
+    check is both robust and a truer statement of the regression it guards."""
+    # PUT + GET resolve at the single prefix...
+    assert app_with_stub.get(SINGLE).status_code == 200
+    assert (
+        app_with_stub.put(SINGLE, json={"series_prefix": "TV/PrefixCheck/", "lang_code": "eng"}).status_code
+        == 200
+    )
+    # ...and the double-prefixed path does not exist for ANY method (the
+    # original bug: decorators repeated the router prefix).
+    assert app_with_stub.get(DOUBLE).status_code == 404
+    assert (
+        app_with_stub.put(DOUBLE, json={"series_prefix": "TV/PrefixCheck/", "lang_code": "eng"}).status_code
+        == 404
+    )
+    assert app_with_stub.delete(DOUBLE, params={"series_prefix": "TV/PrefixCheck/"}).status_code == 404
 
 
 def test_get_resolves_at_single_path(app_with_stub):
