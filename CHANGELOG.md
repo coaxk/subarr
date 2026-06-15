@@ -5,6 +5,47 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [1.6.0] - 2026-06-14
+
+Headline: subarr now configures Whisper for your hardware. No migrations; no
+config changes for existing installs.
+
+### Added
+- **Guided subgen setup (#231).** A detect-guide-apply flow in the onboarding
+  wizard and a new Settings → Subgen tuning panel. It detects the GPU (own
+  nvidia-smi, falling back to a Docker-runtime probe, then a paste-the-output
+  manual path), recommends a Whisper model from VRAM, and *derives* the
+  compute type from compute capability (float16 on Volta+, int8 on older
+  cards, int8_float16 when VRAM is tight) with the reasoning shown. Delivers
+  the config either as a copy-paste compose/env block (any subgen) or applied
+  live via the subarr-subgen runtime endpoint. Pairs with subarr-subgen r9,
+  which bakes the tuned kwargs + strongpad regroup, adds an entrypoint
+  device-guard, and exposes the runtime-config endpoint.
+- **No-auth warning banner (#238).** subarr ships with no authentication by
+  default; the dashboard now warns (dismissible) when none is configured, so
+  a default install is an informed choice rather than a silent exposure. New
+  unauthenticated `GET /api/auth-status` backs it (reports only the boolean,
+  no secret).
+- **Aftercare score breakdown.** Hover a flagged subtitle's composite score to
+  see the contributing signals (looping, hallucination, ad/boilerplate, sync
+  overrun) and readability counts.
+- Two new aftercare quality signals shipped in 1.5.3 (ad/boilerplate detection
+  in edge cues, sync-overrun vs media duration) are surfaced here.
+
+### Fixed
+- **Log injection (CWE-117, #239).** User-supplied strings (subgen webhook
+  fields, canonical paths) are scrubbed of control characters before logging.
+- **Dev/locally-built images no longer nag a backward update (#233).** A
+  `dev-<sha>` subgen tag is treated as unreleased rather than compared against
+  release tags.
+- Tautulli/Ollama versions now show in Settings; the Updates page compares
+  versions v-prefix-insensitively (no more `1.6.0 → v1.6.0` phantom upgrade).
+
+### Security / ops
+- Hardened compose example (`cap_drop: ALL`, no-new-privileges), documented
+  Swagger/OpenAPI at `/docs`, CodeQL added as a gate, and a daily
+  security-drift check that fails on any open HIGH code-scanning alert.
+
 ## [1.5.4] - 2026-06-13
 
 A first-run polish release ahead of wider launch. No migrations, no config

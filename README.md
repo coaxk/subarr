@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v1.5-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-904_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v1.6-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-957_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -15,15 +15,15 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 1.5
+## New in 1.6
 
-- **Multiple media locations (libraries).** Your library no longer has to live under one root. Model each location — a second disk, a 4K share, an anime mount — as a library with its own subgen and *arr path prefixes. Auto-suggested from your Sonarr/Radarr root folders in Settings → Libraries (plus a manual add form), validated live, applied without a restart. Existing single-root installs change nothing — zero migration.
-- **Runs on your Pi — multi-arch images.** `ghcr.io/coaxk/subarr` now publishes linux/arm64 alongside amd64. Pi 4/5 users: no more exec-format errors, no more building locally.
-- **Coverage stays trustworthy through restarts.** A transient Sonarr/Bazarr hiccup during a build (the stack-restart special) used to replace your coverage snapshot with an all-"Analyzing" wall for ~10 minutes. Degraded builds are now held — the last good snapshot keeps serving until the stack is actually back.
-- **Crash visibility, fleet edition.** When a background loop fails, subarr now (with telemetry on) reports the exception type + module:line + count — never messages, tracebacks, or paths. A release regression that slips past CI shows up across the fleet in hours instead of festering silently. Full detail stays local on the Health page; the transparency panel shows exactly what's sent.
-- **Search actually searches.** Library search results now drill down (clicking a matched show shows its seasons), and the Coverage title/path search box is a real input that filters the table.
+- **Guided subgen setup — it configures Whisper for your hardware.** The onboarding wizard (and a new Settings → Subgen tuning panel) detects your GPU, reads its VRAM and compute capability, recommends a Whisper model, and *derives* the right compute type with the reasoning shown. Then it either hands you a ready-to-paste compose block or, on subarr-subgen, applies it live. No more guessing model vs device vs precision. No GPU detected? It walks you through a one-line command and parses the result.
+- **subarr-subgen ships the tuned defaults (r9).** The companion image now bakes the segmentation + anti-hallucination kwargs that used to live in one maintainer's compose, plus a runtime-config endpoint that powers the guided setup's live-apply and an entrypoint that actually uses your GPU. Stock `mccloud/subgen` still works in compat mode.
+- **A heads-up when you have no auth.** A default install has no authentication — anyone who can reach it can drive your library. The dashboard now says so (dismissible), so it's an informed choice, not a silent exposure.
+- **Aftercare explains itself.** Hover a flagged subtitle's score to see exactly which signals pulled it down (looping, hallucination, ad/boilerplate, sync drift) and the readability counts.
+- Plus: log-injection hardening, an honest update nudge for locally-built images, a hardened compose example, and documented Swagger/OpenAPI at `/docs`.
 
-*Job Aftercare, default-track mismatch fix, and queue authority landed in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+*Multi-library, arm64 images, and fleet crash telemetry landed in 1.5; Job Aftercare and queue authority in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
 
 ---
 

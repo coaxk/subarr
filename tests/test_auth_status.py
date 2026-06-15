@@ -32,7 +32,9 @@ def test_auth_status_endpoint_shape(subarr_env):
 
     from subarr.routers import admin
 
-    out = asyncio.get_event_loop().run_until_complete(admin.auth_status())
+    # asyncio.run() spins a fresh loop — get_event_loop() RuntimeErrors in the
+    # full-suite context once an earlier async test has closed the current loop.
+    out = asyncio.run(admin.auth_status())
     assert set(out) == {"configured"}
     assert isinstance(out["configured"], bool)
 
