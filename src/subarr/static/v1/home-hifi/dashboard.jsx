@@ -752,6 +752,63 @@ function ActivityCard({ data }) {
 // show the missed RELEASE TITLES — our titles are descriptive, so they ARE
 // the digest. Dismissal is keyed to the latest version: each new release
 // re-surfaces the card once.
+// #238: subarr ships with no auth by default. A default install is reachable
+// by anyone who can hit the port — and the API drives Sonarr/Radarr, restarts
+// subgen, edits library roots. This warns once (dismissible) so a new install
+// makes an INFORMED choice rather than being silently wide open. Hidden the
+// moment any auth is configured (api key or HTTP Basic) — auth-status reports it.
+export function NoAuthWarningCard() {
+  const [show, setShow] = React.useState(false);
+
+  React.useEffect(() => {
+    fetch('/api/auth-status', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d || d.configured) return;
+        try {
+          if (localStorage.getItem('subarr.noAuthBanner.dismissed') === '1') return;
+        } catch {}
+        setShow(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (!show) return null;
+  const dismiss = () => {
+    try { localStorage.setItem('subarr.noAuthBanner.dismissed', '1'); } catch {}
+    setShow(false);
+  };
+
+  return (
+    <div style={{
+      background: 'rgba(245,158,11,0.08)',
+      border: '1px solid var(--warn-500, rgba(245,158,11,0.45))',
+      borderRadius: 'var(--radius-lg)',
+      padding: '14px 18px',
+      display: 'flex', alignItems: 'center', gap: 12,
+    }}>
+      <span style={{ fontSize: 18 }}>⚠️</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)' }}>
+          No authentication is configured
+        </div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+          Anyone who can reach this address can control your library, trigger Sonarr/Radarr, and change settings.
+          On a trusted home LAN that may be fine. If subarr is reachable from anywhere else, set{' '}
+          <span className="mono">SUBARR_API_KEY</span> (or put it behind a reverse proxy with auth).
+        </div>
+      </div>
+      <a className="btn sm" href="https://github.com/coaxk/subarr#security" target="_blank" rel="noreferrer">
+        How to secure it
+      </a>
+      <button className="btn sm ghost" onClick={dismiss} title="I understand — hide this">
+        dismiss
+      </button>
+    </div>
+  );
+}
+
+
 export function UpdateNudgeCard() {
   const [subarrState, setSubarrState] = React.useState(null);
   const [dismissed, setDismissed] = React.useState(false);

@@ -44,6 +44,9 @@ _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _KEY_BYPASS_EXACT = {
     "/api/health",  # docker HEALTHCHECK + uptime monitors
     "/api/ui-bootstrap",  # same-origin-gated key handout (route enforces)
+    "/api/auth-status",  # boolean "is auth configured" for the no-auth banner;
+    # leaks nothing an unauthenticated /api/* probe wouldn't already reveal, and
+    # MUST be readable in the no-auth case the banner targets.
 }
 _KEY_BYPASS_PREFIXES = ("/static/",)
 

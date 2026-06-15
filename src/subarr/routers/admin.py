@@ -33,6 +33,24 @@ async def ui_bootstrap(request: Request) -> dict:
     return {"api_key": settings.api_key}
 
 
+def _auth_is_configured(api_key: str, auth_user: str, auth_pass: str) -> bool:
+    """True if ANY authentication is configured: an API key, or a COMPLETE
+    HTTP Basic pair (a half-set user-without-pass is not valid auth)."""
+    return bool(api_key) or bool(auth_user and auth_pass)
+
+
+@router.get("/auth-status")
+async def auth_status() -> dict:
+    """Whether any authentication is configured. Backs the dashboard's
+    no-auth warning banner (#238). Intentionally unauthenticated + leaks no
+    secret — it only reports the boolean an attacker could already infer by
+    probing /api/* without a key, and it must be readable precisely in the
+    no-auth case the banner exists for."""
+    from ..config import settings
+
+    return {"configured": _auth_is_configured(settings.api_key, settings.auth_user, settings.auth_pass)}
+
+
 @router.post("/restart")
 async def restart_subgen(request: Request) -> dict:
     docker_ops = request.app.state.docker

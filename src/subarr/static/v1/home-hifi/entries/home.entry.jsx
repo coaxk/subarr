@@ -8,6 +8,7 @@ import {
   NextRunActivitySplit,
   WelcomeCard,
   UpdateNudgeCard,
+  NoAuthWarningCard,
   AfterCarePanel,
   useLiveDashboard,
 } from '../dashboard.jsx';
@@ -33,6 +34,7 @@ function App() {
         <SubRail section="overview" activeId="dashboard" />
         <main className="main-canvas">
           <PageHeader now={now} />
+          <NoAuthWarningCard />
           <WelcomeCard />
           <UpdateNudgeCard />
           <StagesRow data={live && live.stages} />
