@@ -40,6 +40,38 @@ class TestDiscoverExternalSrts:
         assert found == [str(tmp_path / "A.en.srt")]
 
 
+class TestCuePreview:
+    def test_returns_sanitized_first_cue(self):
+        srt = "1\n00:00:01,000 --> 00:00:03,000\n{\\an8}<i>Downloaded from spam.com</i>\n"
+        assert ea.cue_preview(srt) == "Downloaded from spam.com"
+
+    def test_skips_empty_cues_to_first_renderable(self):
+        srt = "1\n00:00:01,000 --> 00:00:02,000\n{\\an8}\n\n2\n00:00:03,000 --> 00:00:04,000\nReal line\n"
+        assert ea.cue_preview(srt) == "Real line"
+
+    def test_none_when_no_renderable_cue(self):
+        assert ea.cue_preview("not an srt at all") is None
+
+    def test_truncates_long_cue_with_ellipsis(self):
+        body = "x" * 500
+        srt = f"1\n00:00:01,000 --> 00:00:03,000\n{body}\n"
+        out = ea.cue_preview(srt, limit=50)
+        assert len(out) == 50 and out.endswith("…")
+
+
+class TestResolveMediaForSrt:
+    def test_finds_sibling_video_by_stem_prefix(self, tmp_path):
+        (tmp_path / "Show.S01E01.mkv").write_text("v")
+        srt = tmp_path / "Show.S01E01.en.srt"
+        srt.write_text("s")
+        assert ea.resolve_media_for_srt(str(srt)) == tmp_path / "Show.S01E01.mkv"
+
+    def test_none_when_no_sibling_video(self, tmp_path):
+        srt = tmp_path / "Orphan.en.srt"
+        srt.write_text("s")
+        assert ea.resolve_media_for_srt(str(srt)) is None
+
+
 class TestIsSubarrGenerated:
     def test_subgen_filename_marker_is_ours(self):
         assert ea.is_subarr_generated("/m/Show.S01E01.subgen.large-v3.en.srt", set())

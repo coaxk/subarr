@@ -106,6 +106,7 @@ from .arena import AsrRunner
 from .arena_service import ArenaService
 from .arena_store import ArenaStore
 from .aftercare_store import AfterCareStore
+from .existing_audit_service import ExistingAuditService
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .crash_store import CrashStore
@@ -372,6 +373,12 @@ async def lifespan(app_: FastAPI):
     # passed in directly (watcher judges each completed job's .srt on the fly).
     app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.aftercare.prune()  # #197: 365d, never touches unreviewed flags
+    # #216: library-wide audit of EXISTING external subs, single-flight bg task.
+    app_.state.existing_audit = ExistingAuditService(
+        aftercare_store=app_.state.aftercare,
+        provenance=app_.state.provenance,
+        libraries=settings.libraries,
+    )
 
     def _probe_duration_lookup(canonical: str) -> float | None:
         """#216: the file's ffprobe duration for aftercare's sync-overrun

@@ -23,15 +23,31 @@ async def pending(request: Request) -> dict[str, Any]:
     return {"count": store.pending_count()}
 
 
+@router.post("/audit")
+async def start_audit(request: Request) -> dict[str, Any]:
+    """#216: kick off the library-wide existing-subtitle audit. Single-flight —
+    `started=false` means one is already running (not an error)."""
+    svc = request.app.state.existing_audit
+    started = svc.start()
+    return {"started": started, "status": svc.status()}
+
+
+@router.get("/audit/status")
+async def audit_status(request: Request) -> dict[str, Any]:
+    """#216: progress for the existing-sub audit (running, done/total, summary)."""
+    return request.app.state.existing_audit.status()
+
+
 @router.get("/results")
 async def results(
     request: Request,
     view: str = Query("flagged", pattern="^(flagged|all)$"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    source: str | None = Query(None, max_length=40),
 ) -> dict[str, Any]:
     store = request.app.state.aftercare
-    items = store.list_results(view=view, limit=limit, offset=offset)
+    items = store.list_results(view=view, limit=limit, offset=offset, source=source)
     # Best-effort enrich each row with the show's language from the in-memory
     # coverage snapshot (per-language is the tuning axis — drives the flag + the
     # #168 loop). No schema cost; read-time lookup against the cached snapshot.

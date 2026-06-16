@@ -27,6 +27,7 @@ def test_migration_creates_aftercare_table(tmp_path):
         "readability_json",
         "signals_json",
         "source",
+        "preview",
         "reviewed_at",
         "created_at",
     } <= cols
@@ -83,3 +84,36 @@ def test_mark_reviewed(tmp_path):
     assert s.mark_reviewed(row["id"]) is True
     assert s.pending_count() == 0
     assert s.mark_reviewed(999999) is False
+
+
+def test_preview_round_trips(tmp_path):
+    # #216: the sanitized cue snippet persists and comes back on read
+    s = _store(tmp_path)
+    s.record(
+        canonical_path="TV/A/e1.en.srt",
+        completed_at=1.0,
+        evaluation=_ev(True),
+        source="existing_audit",
+        preview="Downloaded from spam.com",
+    )
+    row = s.list_results(view="all", limit=50, offset=0)[0]
+    assert row["preview"] == "Downloaded from spam.com"
+
+
+def test_preview_defaults_null_for_generated_rows(tmp_path):
+    s = _store(tmp_path)
+    s.record(canonical_path="TV/A/e1.mkv", completed_at=1.0, evaluation=_ev(False), source="subgenscan")
+    assert s.list_results(view="all", limit=50, offset=0)[0]["preview"] is None
+
+
+def test_list_results_source_filter(tmp_path):
+    # #216: the review page filters audited external subs from watcher rows
+    s = _store(tmp_path)
+    s.record(
+        canonical_path="TV/A/ext.en.srt", completed_at=1.0, evaluation=_ev(True), source="existing_audit"
+    )
+    s.record(canonical_path="TV/A/gen.mkv", completed_at=1.0, evaluation=_ev(True), source="subgenscan")
+    audited = s.list_results(view="all", limit=50, offset=0, source="existing_audit")
+    assert [r["canonical_path"] for r in audited] == ["TV/A/ext.en.srt"]
+    everything = s.list_results(view="all", limit=50, offset=0)
+    assert len(everything) == 2
