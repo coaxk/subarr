@@ -885,15 +885,34 @@ def health() -> dict:
 @app.get("/api/health/tasks")
 def health_tasks() -> dict:
     """#157: per-loop background-task health. Powers the header pill (any
-    unhealthy) + the Health page (per-task status, last error, traceback)."""
+    unhealthy) + the Health page (per-task status, last error, traceback).
+    #234: each task carries `can_run_now` so the page shows a Run-now button
+    on the loops that support an on-demand trigger."""
+    from .jobs import can_run_now
+
     th = getattr(app.state, "task_health", None)
     states = th.states() if th is not None else []
     return {
-        "tasks": [t.to_dict() for t in states],
+        "tasks": [{**t.to_dict(), "can_run_now": can_run_now(t.task_name)} for t in states],
         "any_unhealthy": any(t.is_unhealthy for t in states),
         "unhealthy_count": sum(1 for t in states if t.is_unhealthy),
         "version": __version__,  # for the "Report a problem" prefill
     }
+
+
+@app.post("/api/health/tasks/{task_name}/run")
+async def run_health_task(task_name: str) -> dict:
+    """#234: trigger a background loop on demand. 400 if the job isn't
+    runnable; 409 if its component isn't available yet (early boot)."""
+    from fastapi import HTTPException
+
+    from .jobs import can_run_now, run_job
+
+    if not can_run_now(task_name):
+        raise HTTPException(400, detail=f"job {task_name!r} does not support run-now")
+    if not await run_job(app.state, task_name):
+        raise HTTPException(409, detail=f"job {task_name!r} could not be triggered right now")
+    return {"ran": True, "task_name": task_name}
 
 
 _STATIC_DIR = Path(__file__).parent / "static"

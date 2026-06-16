@@ -49,11 +49,17 @@ const linkStyle = {
   fontSize: 'var(--text-sm)', color: 'var(--violet-400)', textDecoration: 'none',
 };
 
-function TaskRow({ t, version }) {
+function TaskRow({ t, version, onRun }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
+  const doRun = (e) => {
+    e.stopPropagation();
+    setRunning(true);
+    Promise.resolve(onRun && onRun(t.task_name)).finally(() => setRunning(false));
+  };
   const copyTrace = (e) => {
     e.stopPropagation();
     navigator.clipboard.writeText(t.last_error_detail || '')
@@ -80,6 +86,13 @@ function TaskRow({ t, version }) {
             </span>
           ) : null}
         </span>
+        {t.can_run_now && (
+          <button onClick={doRun} disabled={running}
+            title="Trigger this job now"
+            className="btn sm" style={{ flex: 'none', fontSize: 'var(--text-2xs)' }}>
+            {running ? '…' : 'Run now'}
+          </button>
+        )}
         <span style={{ flex: 'none', fontSize: 'var(--text-sm)', color: unhealthy ? 'var(--error-400, #f87171)' : 'var(--fg-3)' }}>
           {unhealthy ? 'unhealthy' : 'healthy'}
         </span>
@@ -137,6 +150,12 @@ export function HealthPage() {
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
 
+  // #234: trigger a runnable loop on demand, then reload status.
+  const runJob = useCallback((name) =>
+    fetch(`/api/health/tasks/${encodeURIComponent(name)}/run`, { method: 'POST', credentials: 'same-origin' })
+      .then(() => load())
+      .catch(() => {}), [load]);
+
   const unhealthy = (tasks || []).filter((t) => t.is_unhealthy).length;
 
   return (
@@ -169,7 +188,7 @@ export function HealthPage() {
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} version={version} />)}
+          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} version={version} onRun={runJob} />)}
           {tasks && tasks.length === 0 && (
             <div style={{ color: 'var(--fg-3)', padding: 12 }}>No supervised tasks yet.</div>
           )}
