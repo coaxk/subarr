@@ -180,9 +180,12 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
           <button
             onClick={() => onRequeue(item)}
             disabled={isBusy}
+            title={item.source === 'existing_audit'
+              ? 'Regenerate this subtitle from the audio (subgen)'
+              : 'Send the file back to subgen with the same config'}
             className="btn sm"
             style={{ fontSize: 'var(--text-xs)' }}>
-            {isBusy ? '…' : 'Requeue'}
+            {isBusy ? '…' : (item.source === 'existing_audit' ? 'Regenerate' : 'Requeue')}
           </button>
           {/* #165: requeue re-runs the SAME config and often reproduces the
               same junk — this hands the file to the Tuning Lab to find a
@@ -209,6 +212,17 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
           </span>
         </div>
       </div>
+
+      {/* #216: sanitized snippet of a representative cue — shows the actual
+          junk (scene-release ad, gibberish) for an audited external sub. */}
+      {item.preview && (
+        <div title={item.preview}
+          style={{ margin: '-2px 0 6px 44px', fontSize: 'var(--text-xs)',
+            color: 'var(--fg-3)', fontStyle: 'italic',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          “{item.preview}”
+        </div>
+      )}
 
       {expanded && (
         <div style={{
@@ -302,14 +316,18 @@ function Legend() {
 
 export function AftercarePage() {
   const [view, setView] = useState('flagged');
+  const [source, setSource] = useState(null); // null = all sources; 'existing_audit' = audited externals
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+  const [audit, setAudit] = useState({ running: false, done: 0, total: 0 }); // #216 audit progress
 
   const refetch = useCallback(async () => {
-    const r = await fetch(`/api/aftercare/results?view=${view}`, { credentials: 'same-origin' });
+    const q = new URLSearchParams({ view });
+    if (source) q.set('source', source);
+    const r = await fetch(`/api/aftercare/results?${q.toString()}`, { credentials: 'same-origin' });
     if (r.ok) setData(await r.json());
-  }, [view]);
+  }, [view, source]);
 
   useEffect(() => {
     refetch();
@@ -317,19 +335,46 @@ export function AftercarePage() {
     return () => clearInterval(id);
   }, [refetch]);
 
+  // #216: existing-subtitle audit. Single-flight on the server; here we POST to
+  // start, then poll status until it finishes and refetch the (now-populated)
+  // results. On mount we read status once so the button reflects a run already
+  // in flight (e.g. started in another tab).
+  const pollAudit = useCallback(async () => {
+    const s = await fetch('/api/aftercare/audit/status', { credentials: 'same-origin' });
+    if (!s.ok) return;
+    const st = await s.json();
+    setAudit({ running: !!st.running, done: st.done || 0, total: st.total || 0 });
+    if (st.running) setTimeout(pollAudit, 1500);
+    else refetch();
+  }, [refetch]);
+
+  useEffect(() => { pollAudit(); }, [pollAudit]);
+
+  const runAudit = useCallback(async () => {
+    setAudit((a) => ({ ...a, running: true }));
+    await fetch('/api/aftercare/audit', { method: 'POST', credentials: 'same-origin' });
+    setTimeout(pollAudit, 800);
+  }, [pollAudit]);
+
   const acknowledge = useCallback(async (item) => {
     setBusy(item.id);
     try { await fetch(`/api/aftercare/${item.id}/acknowledge`, { method: 'POST', credentials: 'same-origin' }); }
     finally { setBusy(null); refetch(); }
   }, [refetch]);
 
+  // Requeue for our own jobs; for audited EXTERNAL subs, regenerate-from-audio
+  // (the server resolves the sibling video — the .srt path can't be transcribed).
   const requeue = useCallback(async (item) => {
     setBusy(item.id);
     try {
-      await fetch('/api/queue/requeue', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin', body: JSON.stringify({ path: item.canonical_path }),
-      });
+      if (item.source === 'existing_audit') {
+        await fetch(`/api/aftercare/${item.id}/regenerate`, { method: 'POST', credentials: 'same-origin' });
+      } else {
+        await fetch('/api/queue/requeue', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin', body: JSON.stringify({ path: item.canonical_path }),
+        });
+      }
       await fetch(`/api/aftercare/${item.id}/acknowledge`, { method: 'POST', credentials: 'same-origin' });
     } finally { setBusy(null); refetch(); }
   }, [refetch]);
@@ -371,8 +416,8 @@ export function AftercarePage() {
         </div>
       </div>
 
-      {/* View toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {/* View toggle + source filter + existing-sub audit trigger (#216) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {viewPills.map((p) => (
           <span key={p.id} onClick={() => setView(p.id)}
             role="button" tabIndex={0}
@@ -382,7 +427,24 @@ export function AftercarePage() {
             {p.label}
           </span>
         ))}
+        <span style={{ width: 1, height: 16, background: 'var(--bg-3)', margin: '0 2px' }} />
+        {[{ id: null, label: 'all sources' }, { id: 'existing_audit', label: 'existing audit' }].map((p) => (
+          <span key={p.id || 'all'} onClick={() => setSource(p.id)}
+            role="button" tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSource(p.id); }}
+            className={`chip ${source === p.id ? 'violet' : ''}`}
+            style={{ cursor: 'pointer' }}>
+            {p.label}
+          </span>
+        ))}
         <span style={{ flex: 1 }} />
+        <button onClick={runAudit} disabled={audit.running}
+          title="Scan the external subtitles you already have and score their quality"
+          className="btn sm" style={{ fontSize: 'var(--text-xs)' }}>
+          {audit.running
+            ? `Auditing…${audit.total ? ` ${audit.done}/${audit.total}` : ''}`
+            : 'Audit existing subtitles'}
+        </button>
         <Legend />
       </div>
 
