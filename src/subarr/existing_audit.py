@@ -70,6 +70,40 @@ def discover_external_srts(roots: Iterable[Path], *, max_depth: int | None = Non
     return sorted(found)
 
 
+def cue_preview(text: str, *, limit: int = 160) -> str | None:
+    """A short, SANITIZED snippet of the first non-empty cue — shown in the
+    review UI to explain why an external sub is flagged (scene-release ads tend
+    to be the opening cue). Returns None if there's no renderable cue. The
+    snippet is sanitized here so the stored/served value is never raw markup."""
+    from .subtitle_readability import parse_srt
+    from .subtitle_sanitize import sanitize_cue_text
+
+    for cue in parse_srt(text):
+        clean = sanitize_cue_text(cue.text)
+        if clean:
+            return clean[: limit - 1] + "…" if len(clean) > limit else clean
+    return None
+
+
+def resolve_media_for_srt(srt_path: str) -> Path | None:
+    """Find the video an external .srt belongs to: a sibling file whose stem is
+    a prefix of the srt's stem (Show.S01E01.en.srt -> Show.S01E01.mkv). Used to
+    fetch the media duration for the sync-overrun check. None if no match."""
+    from .sidecar_scanner import VIDEO_EXTS
+
+    srt = Path(srt_path)
+    parent = srt.parent
+    if not parent.is_dir():
+        return None
+    srt_stem = srt.stem  # drops only ".srt"
+    best: Path | None = None
+    for sib in parent.iterdir():
+        if sib.suffix.lower() in VIDEO_EXTS and srt_stem.startswith(sib.stem):
+            if best is None or len(sib.stem) > len(best.stem):
+                best = sib  # longest matching stem = most specific video
+    return best
+
+
 @dataclass
 class AuditSummary:
     total: int = 0  # paths considered
@@ -88,6 +122,7 @@ async def run_existing_audit(
     evaluate: Callable[[str, float | None], AftercareEvaluation],
     record: Callable[..., None],
     now: float,
+    make_preview: Callable[[str], str | None] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> AuditSummary:
     """Score each external sidecar SRT and store the result.
@@ -114,6 +149,7 @@ async def run_existing_audit(
                 completed_at=now,
                 evaluation=evaluation,
                 source=EXISTING_AUDIT_SOURCE,
+                preview=make_preview(text) if make_preview is not None else None,
             )
             summary.scanned += 1
             if evaluation.flagged:
