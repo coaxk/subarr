@@ -61,7 +61,7 @@ async def test_vanilla_poll_reads_version_constant(tmp_path):
     run_migrations(db)
 
     def handler(req: httpx.Request) -> httpx.Response:
-        assert "raw.githubusercontent.com" in str(req.url)  # raw file, not the atom feed
+        assert req.url.host == "raw.githubusercontent.com"  # raw file host, not the atom feed
         return httpx.Response(200, text="subgen_version = '2026.06.4'\nimport os\n")
 
     c = _vanilla_checker(db, handler)
