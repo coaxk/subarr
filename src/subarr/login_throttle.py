@@ -23,13 +23,13 @@ def parse_cidrs(csv: str | None) -> list[ipaddress._BaseNetwork]:
     becomes a /32 (or /128). Bad entries are logged and skipped, never fatal."""
     out: list[ipaddress._BaseNetwork] = []
     for raw in (csv or "").split(","):
-        token = raw.strip()
-        if not token:
+        cidr = raw.strip()
+        if not cidr:
             continue
         try:
-            out.append(ipaddress.ip_network(token, strict=False))
+            out.append(ipaddress.ip_network(cidr, strict=False))
         except ValueError:
-            log.warning("ignoring invalid CIDR/IP in config: %r", token)
+            log.warning("ignoring invalid CIDR/IP in config: %r", cidr)
     return out
 
 
