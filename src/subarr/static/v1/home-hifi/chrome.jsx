@@ -197,6 +197,36 @@ function railItems(section, counts) {
 }
 
 // ─── Top bar ─────────────────────────────────────────────────────
+// #238: sign-out, shown only when a forms-login session is active (hidden when
+// auth is delegated to a proxy / env basic — there's no subarr session to drop).
+function LogoutControl() {
+  const [authed, setAuthed] = useState(false);
+  useEffect(() => {
+    fetch('/api/auth/state', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => setAuthed(!!(s && s.authed)))
+      .catch(() => {});
+  }, []);
+  if (!authed) return null;
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } finally {
+      window.location.assign('/login');
+    }
+  };
+  return (
+    <button
+      onClick={logout}
+      title="Sign out"
+      className="btn ghost sm"
+      style={{ marginLeft: 12, fontSize: 'var(--text-xs)' }}
+    >
+      Sign out
+    </button>
+  );
+}
+
 export function TopBar({ section = 'overview' }) {
   const counts = useLiveChromeCounts();
   // Derive health from live integrations health.
@@ -335,6 +365,7 @@ export function TopBar({ section = 'overview' }) {
       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num mono">
         {counts.subarr_version ? `v${counts.subarr_version.replace(/^v/, '')}` : 'v1.0.1'}
       </span>
+      <LogoutControl />
     </header>
   );
 }
