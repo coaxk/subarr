@@ -8,9 +8,20 @@
 const { useState, useEffect } = React;
 
 function _safeNext() {
-  const next = new URLSearchParams(window.location.search).get('next');
-  // open-redirect guard: local absolute path only (not "//evil.com")
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  // open-redirect guard: resolve `next` against our own origin and only accept it
+  // if it stays same-origin. Parsing via URL() normalizes the sneaky cases a naive
+  // prefix check misses — "//evil.com", "/\evil.com" (browsers fold "\" to "/"),
+  // "https:/evil.com", etc. — all resolve to a foreign origin and get rejected.
+  const raw = new URLSearchParams(window.location.search).get('next') || '/';
+  try {
+    const u = new URL(raw, window.location.origin);
+    if (u.origin === window.location.origin) {
+      return u.pathname + u.search + u.hash;
+    }
+  } catch {
+    /* malformed → fall through to safe default */
+  }
+  return '/';
 }
 
 const card = {

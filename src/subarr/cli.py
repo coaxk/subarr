@@ -18,7 +18,7 @@ from .auth_store import AuthStore
 from .config import settings
 from .migrate import run_migrations
 
-_MIN_PASSWORD = 8
+_MIN_LEN = 8
 
 
 def reset_auth(store: AuthStore) -> int:
@@ -28,8 +28,8 @@ def reset_auth(store: AuthStore) -> int:
 
 
 def set_password(store: AuthStore, username: str, password: str) -> int:
-    if len(password) < _MIN_PASSWORD:
-        print(f"error: password must be at least {_MIN_PASSWORD} characters", file=sys.stderr)
+    if len(password) < _MIN_LEN:
+        print(f"error: password must be at least {_MIN_LEN} characters", file=sys.stderr)
         return 2
     h, salt, iters = hash_password(password)
     store.set_credential(username, h, salt, iters)
