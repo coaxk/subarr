@@ -174,12 +174,13 @@ def _query_param(query_string: bytes, key: str) -> str:
     return vals[0] if vals else ""
 
 
-def current_principal(scope, *, settings) -> str | None:
+def current_principal(scope, *, settings, store=None) -> str | None:
     """Resolve the request's principal, or None. Order: session cookie →
     env basic (ONLY when the username matches SUBARR_USER — a non-matching
     Basic header, e.g. a reverse proxy passing a domain credential downstream,
-    falls through and is NEVER rejected here) → env API key. Returning None
-    lets the gate decide the 401/redirect; this function never denies."""
+    falls through and is NEVER rejected here) → env API key → managed API key
+    (#259, when a store is provided). Returning None lets the gate decide the
+    401/redirect; this function never denies."""
     session = scope.get("session") or {}
     if session.get("user"):
         return str(session["user"])
@@ -196,12 +197,17 @@ def current_principal(scope, *, settings) -> str | None:
                 return user
             # username/pass mismatch → fall through (do NOT reject here)
 
-    if settings.api_key:
-        key = headers.get(b"x-api-key", b"").decode("latin-1") or _query_param(
-            scope.get("query_string", b""), "apikey"
-        )
-        if key and secrets.compare_digest(key, settings.api_key):
+    # The presented API key (env or managed) arrives the same way.
+    key = headers.get(b"x-api-key", b"").decode("latin-1") or _query_param(
+        scope.get("query_string", b""), "apikey"
+    )
+    if key:
+        if settings.api_key and secrets.compare_digest(key, settings.api_key):
             return "api-key"
+        if store is not None:
+            row = store.verify_api_key(key)
+            if row is not None:
+                return f"key:{row['label']}"
 
     return None
 
@@ -272,7 +278,7 @@ class AuthGateMiddleware:
             await self._app(scope, receive, send)
             return
 
-        if current_principal(scope, settings=self._settings) is not None:
+        if current_principal(scope, settings=self._settings, store=store) is not None:
             await self._app(scope, receive, send)
             return
 

@@ -78,5 +78,57 @@ class AuthStore:
             self._conn.execute("DELETE FROM auth_credential WHERE id = 1")
             self._conn.commit()
 
+    # ─── #259 managed API keys ──────────────────────────────────────
+    # Multi-row, unlike the single admin credential. Tokens are high-entropy, so
+    # they are stored as an unsalted SHA-256 (token_hash, UNIQUE → indexed
+    # lookup). The plaintext is never persisted.
+
+    # last_used_at is only re-written when the previous touch is older than this,
+    # so a polling client can't write to SQLite on every request.
+    _LAST_USED_THROTTLE_S = 60.0
+
+    def create_api_key(self, label: str, token_hash: str, last4: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO api_key (label, token_hash, last4, created_at) VALUES (?, ?, ?, ?)",
+                (label, token_hash, last4, time.time()),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def list_api_keys(self) -> list[dict[str, Any]]:
+        """Metadata only — never returns token_hash."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, label, last4, created_at, last_used_at FROM api_key ORDER BY created_at"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def verify_api_key(self, token: str, *, now: float | None = None) -> dict[str, Any] | None:
+        """Hash the presented token, look it up (indexed), and on a hit record a
+        throttled last_used_at. Returns {id, label} or None. Never raises."""
+        from .api_keys import hash_key
+
+        ts = time.time() if now is None else now
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, label, last_used_at FROM api_key WHERE token_hash = ?",
+                (hash_key(token),),
+            ).fetchone()
+            if row is None:
+                return None
+            last_used = row["last_used_at"]
+            if last_used is None or (ts - last_used) >= self._LAST_USED_THROTTLE_S:
+                self._conn.execute("UPDATE api_key SET last_used_at = ? WHERE id = ?", (ts, row["id"]))
+                self._conn.commit()
+            return {"id": row["id"], "label": row["label"]}
+
+    def delete_api_key(self, key_id: int) -> bool:
+        """True if a row was removed (revoke)."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM api_key WHERE id = ?", (key_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     def close(self) -> None:
         self._conn.close()

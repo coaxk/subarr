@@ -27,6 +27,13 @@ breaking config changes.
     session-fixation), generic login errors (no user enumeration),
     `secrets.compare_digest` throughout.
 
+### Added
+- **Managed API keys (#259).** Mint named API keys in **Settings → API keys** for
+  scripts and integrations — beyond the single env `SUBARR_API_KEY`. Each key has
+  full access, is shown once at creation (stored only as a SHA-256 hash), is sent
+  as `X-API-Key`/`?apikey=`, can be revoked instantly, and shows a last-used time
+  so stale keys are obvious.
+
 ### Fixed
 - **Env-configured installs no longer forced into the onboarding wizard (#262).**
   The root route only sends you to the first-run wizard when the install is
