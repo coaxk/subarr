@@ -5,6 +5,28 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [Unreleased]
+
+### Security
+- **Forced authentication (#238).** subarr now requires a login by default,
+  matching modern Sonarr/Radarr. A fresh install (or the first launch after
+  upgrading from a no-auth version) shows a one-time setup screen to create an
+  admin account; thereafter a login page + session cookie. **Existing installs
+  that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are NOT
+  forced into setup** — those keep working, so automation survives the upgrade.
+  - **Recovery (no DB surgery):** env override (`SUBARR_USER`/`SUBARR_PASS`),
+    `SUBARR_AUTH_RESET=1` (clear → setup), or
+    `docker exec subarr python -m subarr.cli reset-auth` / `set-password`.
+  - **Proxy users:** `SUBARR_AUTH_DISABLED=1` delegates auth to your reverse
+    proxy (Authelia/Caddy/Traefik) — no double login; a non-matching upstream
+    Basic header is ignored, not rejected.
+  - **Sessions:** `SUBARR_SESSION_SECRET` persists logins across restarts
+    (unset = ephemeral, re-login after restart — never a lockout);
+    `SUBARR_COOKIE_SAMESITE=none` for cross-site dashboard iframes.
+  - Hardening: pbkdf2 password hashing, session rotation on login (anti
+    session-fixation), generic login errors (no user enumeration),
+    `secrets.compare_digest` throughout.
+
 ## [1.6.0] - 2026-06-14
 
 Headline: subarr now configures Whisper for your hardware. No migrations; no
