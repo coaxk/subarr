@@ -8,6 +8,7 @@ the stored credential OR the env override (recovery). On success the session is
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -31,6 +32,17 @@ def _store(request: Request):
 
 def _settings(request: Request):
     return request.app.state.settings
+
+
+def _client_ip(request: Request) -> str:
+    """Resolve the real client IP for throttling — honours X-Forwarded-For only
+    from configured trusted proxies (see #260)."""
+    from ..login_throttle import resolve_client_ip
+
+    peer = request.client.host if request.client else ""
+    xff = request.headers.get("x-forwarded-for", "")
+    trusted = getattr(request.app.state, "trusted_proxies", [])
+    return resolve_client_ip(peer, xff, trusted)
 
 
 @router.get("/state")
@@ -66,10 +78,27 @@ async def setup(creds: Credentials, request: Request) -> dict[str, Any]:
 
 @router.post("/login")
 async def login(creds: Credentials, request: Request) -> dict[str, Any]:
+    # #260: brute-force throttle, keyed on the resolved client IP. Setup is NOT
+    # throttled — it creates the account (nothing to guess) and we don't want to
+    # lock a first-run user out of their own setup.
+    ip = _client_ip(request)
+    throttle = getattr(request.app.state, "login_throttle", None)
+    if throttle is not None:
+        blocked, retry_after = throttle.check(ip, now=time.time())
+        if blocked:
+            raise HTTPException(
+                429,
+                detail="too many sign-in attempts; try again shortly",
+                headers={"Retry-After": str(retry_after)},
+            )
     if verify_login(creds.username, creds.password, store=_store(request), settings=_settings(request)):
+        if throttle is not None:
+            throttle.clear(ip)  # reset on success
         request.session.clear()  # rotate (anti session-fixation)
         request.session["user"] = creds.username
         return {"ok": True, "username": creds.username}
+    if throttle is not None:
+        throttle.record_failure(ip, now=time.time())
     raise HTTPException(401, detail="invalid username or password")
 
 
@@ -77,3 +106,19 @@ async def login(creds: Credentials, request: Request) -> dict[str, Any]:
 async def logout(request: Request) -> dict[str, Any]:
     request.session.clear()
     return {"ok": True}
+
+
+@router.get("/throttle-config")
+def throttle_config(request: Request) -> dict[str, Any]:
+    """#260: effective brute-force-throttle config, read-only (set via env). No
+    secrets — just the tunables + the parsed proxy/allowlist ranges for the
+    Settings panel."""
+    from ..login_throttle import parse_cidrs
+
+    s = _settings(request)
+    return {
+        "max_attempts": s.login_max_attempts,
+        "window_s": s.login_window_s,
+        "trusted_proxies": [str(n) for n in parse_cidrs(s.trusted_proxies)],
+        "allowlist": [str(n) for n in parse_cidrs(s.login_allowlist)],
+    }

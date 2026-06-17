@@ -28,6 +28,12 @@ breaking config changes.
     `secrets.compare_digest` throughout.
 
 ### Added
+- **Login brute-force throttle (#260).** Failed sign-ins are rate-limited per
+  client IP (sliding window, default 5 / 300s, then a short wait — never a
+  permanent lockout). `SUBARR_TRUSTED_PROXIES` keys the limit on the real client
+  IP behind a reverse proxy (only that hop's `X-Forwarded-For` is trusted);
+  `SUBARR_LOGIN_ALLOWLIST` exempts trusted ranges entirely. Both default empty;
+  effective values shown read-only under Settings → Login security.
 - **Managed API keys (#259).** Mint named API keys in **Settings → API keys** for
   scripts and integrations — beyond the single env `SUBARR_API_KEY`. Each key has
   full access, is shown once at creation (stored only as a SHA-256 hash), is sent
