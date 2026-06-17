@@ -22,6 +22,18 @@ function fmtInterval(s) {
   return `${Math.round(s / 3600)}h`;
 }
 
+// #252: a future timestamp as "in Xm" (or "due" when overdue). Returns null
+// for event-driven loops (no next_run_at) so the column stays blank for them.
+function timeUntil(ts) {
+  if (!ts) return null;
+  const s = Math.floor(ts - Date.now() / 1000);
+  if (s <= 0) return 'due';
+  if (s < 60) return `in ${s}s`;
+  if (s < 3600) return `in ${Math.floor(s / 60)}m`;
+  if (s < 86400) return `in ${Math.floor(s / 3600)}h`;
+  return `in ${Math.floor(s / 86400)}d`;
+}
+
 const REPO = 'https://github.com/coaxk/subarr';
 
 // Build a prefilled GitHub new-issue URL. We deliberately do NOT auto-embed
@@ -99,6 +111,10 @@ function TaskRow({ t, version, onRun }) {
         <span style={{ width: 130, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}
           title="Last successful cycle">
           ok {timeAgo(t.last_success_at)}
+        </span>
+        <span style={{ width: 80, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}
+          title="Estimated next run (last success + cadence)">
+          {t.next_run_at ? `next ${timeUntil(t.next_run_at)}` : ''}
         </span>
         <span style={{ width: 90, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: t.consecutive_failures ? 'var(--error-400, #f87171)' : 'var(--fg-3)' }}
           title="Consecutive failed cycles">
