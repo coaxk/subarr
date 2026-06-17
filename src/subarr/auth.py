@@ -206,6 +206,21 @@ def current_principal(scope, *, settings) -> str | None:
     return None
 
 
+def verify_login(username: str, password: str, *, store, settings) -> bool:
+    """True if the pair matches the **env override** (`SUBARR_USER`/`PASS` —
+    the always-on recovery credential) or the **stored** credential. Constant-
+    time throughout; generic on caller side (never reveal which check failed)."""
+    if settings.auth_user and settings.auth_pass:
+        if secrets.compare_digest(username, settings.auth_user) and secrets.compare_digest(
+            password, settings.auth_pass
+        ):
+            return True
+    cred = store.get_credential()
+    if cred and secrets.compare_digest(username, cred["username"]):
+        return verify_password(password, cred["password_hash"], cred["salt"], cred["iterations"])
+    return False
+
+
 def needs_setup(settings, store) -> bool:
     """First-run setup is needed only when NOTHING provides auth: no stored
     credential AND no env basic-user AND no env API key. Any env credential ⇒
