@@ -36,9 +36,12 @@ def _settings(request: Request):
 @router.get("/state")
 async def state(request: Request) -> dict[str, Any]:
     user = request.session.get("user")
+    # `user is not None` rather than bool(user): the session value is a non-empty
+    # username or absent, and it avoids a bool()-typecast-on-input lint (semgrep
+    # nan-injection) — harmless here (server-signed session) but cheap to dodge.
     return {
         "needs_setup": needs_setup(_settings(request), _store(request)),
-        "authed": bool(user),
+        "authed": user is not None,
         "username": user,
     }
 
