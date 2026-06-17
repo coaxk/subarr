@@ -16,12 +16,11 @@ describe('apiFetch', () => {
     expect(window.location.assign).not.toHaveBeenCalled();
   });
 
-  it('redirects to /login?next=<current> and throws on 401', async () => {
+  it('throws on 401 (the global session guard owns the redirect+notice)', async () => {
     globalThis.fetch = vi.fn(async () => ({ status: 401 }));
     await expect(apiFetch('/api/thing')).rejects.toThrow('unauthenticated');
-    expect(window.location.assign).toHaveBeenCalledWith(
-      '/login?next=' + encodeURIComponent('/dashboard?tab=x'),
-    );
+    // apiFetch must NOT redirect itself — that would preempt the guard's notice.
+    expect(window.location.assign).not.toHaveBeenCalled();
   });
 
   it('passes non-401 responses through without redirecting', async () => {

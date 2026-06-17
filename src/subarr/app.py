@@ -867,14 +867,21 @@ from .auth import AuthGateMiddleware  # noqa: E402
 from .api_security import CsrfOriginMiddleware  # noqa: E402
 from .request_crash_capture import RequestCrashCaptureMiddleware  # noqa: E402
 
-# #238: signed session-cookie secret. From SUBARR_SESSION_SECRET (persists logins
-# across restarts) or an ephemeral per-boot value (sessions reset on restart — a
-# re-login, never a lockout). Resolved at import with NO DB access.
-_session_secret = settings.session_secret or _secrets.token_urlsafe(48)
-if not settings.session_secret:
+# #238: signed session-cookie secret. Priority: SUBARR_SESSION_SECRET env →
+# the secret PERSISTED in the DB (auth_secret table) → an ephemeral per-boot
+# value. The DB-persisted secret means logins survive restarts AND uvicorn
+# --reload with no env required (the ephemeral fallback was silently logging
+# everyone out on every restart/reload). The DB read is best-effort + guarded;
+# if the data dir isn't reachable at import we fall back to ephemeral.
+from .auth_store import load_or_create_session_secret as _load_secret  # noqa: E402
+
+_session_secret = settings.session_secret or _load_secret(settings.db_path)
+if not _session_secret:
+    _session_secret = _secrets.token_urlsafe(48)
     log.warning(
-        "SUBARR_SESSION_SECRET unset — using an ephemeral session secret; logins "
-        "reset on restart. Set it to a long random string to persist sessions."
+        "session secret is EPHEMERAL (no SUBARR_SESSION_SECRET and the DB-persisted "
+        "secret was unavailable) — logins reset on restart. This should be rare; set "
+        "SUBARR_SESSION_SECRET to a long random string if it persists."
     )
 
 # #199: innermost — sees only exceptions that escaped route handlers (500s),

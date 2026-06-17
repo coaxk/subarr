@@ -35,6 +35,14 @@ breaking config changes.
   so stale keys are obvious.
 
 ### Fixed
+- **Logins now survive restarts and reloads.** The session-signing secret is
+  persisted in the database instead of being regenerated per boot, so a
+  container restart/update no longer silently logs everyone out. `SUBARR_SESSION_SECRET`
+  remains an optional explicit override. (#238 follow-up.)
+- **Graceful session expiry.** A global guard turns any `/api/*` 401 into a
+  visible "session expired" notice + redirect to login (with `?next=`), instead
+  of silent dead clicks. The login page gained a subarr logo and a "Forgot your
+  password?" panel with the CLI/env recovery steps.
 - **Env-configured installs no longer forced into the onboarding wizard (#262).**
   The root route only sends you to the first-run wizard when the install is
   genuinely unconfigured. An install set up via env vars (the common arr-stack

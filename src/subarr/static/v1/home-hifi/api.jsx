@@ -11,9 +11,11 @@
 export async function apiFetch(url, opts = {}) {
   const r = await fetch(url, { credentials: 'same-origin', ...opts });
   if (r.status === 401) {
-    const here = window.location.pathname + window.location.search;
-    window.location.assign(`/login?next=${encodeURIComponent(here)}`);
-    // Reject so callers don't try to parse a redirected/empty body.
+    // The global session guard (session-guard.js, injected into every bundle)
+    // wraps window.fetch and owns the user-facing "session expired" notice +
+    // redirect to /login. apiFetch just throws so the caller stops parsing a
+    // 401 body — it must NOT redirect here too, or it would preempt the
+    // guard's notice with an instant jump.
     throw new Error('unauthenticated');
   }
   return r;

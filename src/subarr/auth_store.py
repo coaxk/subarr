@@ -15,6 +15,42 @@ from pathlib import Path
 from typing import Any
 
 
+# DDL for the session-secret table, duplicated from migration 021 so the
+# import-time bootstrap below can run BEFORE run_migrations (the SessionMiddleware
+# resolves its secret at import; migrations run later, in the lifespan). Both are
+# `CREATE TABLE IF NOT EXISTS`, so they coexist harmlessly.
+_AUTH_SECRET_DDL = (
+    "CREATE TABLE IF NOT EXISTS auth_secret ("
+    " id INTEGER PRIMARY KEY CHECK (id = 1), secret TEXT NOT NULL, created_at REAL NOT NULL)"
+)
+
+
+def load_or_create_session_secret(db_path) -> str | None:
+    """Return the persisted session-signing secret, creating it (and its table)
+    if absent. Used at import to seed SessionMiddleware so logins survive
+    restarts and --reload. Returns None if the DB can't be opened (e.g. importing
+    on a host without the data dir, or in a read-only context) — the caller then
+    falls back to an ephemeral per-boot secret rather than crashing at import."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(_AUTH_SECRET_DDL)
+            row = conn.execute("SELECT secret FROM auth_secret WHERE id = 1").fetchone()
+            if row is not None:
+                return row[0]
+            conn.execute(
+                "INSERT OR IGNORE INTO auth_secret (id, secret, created_at) VALUES (1, ?, ?)",
+                (secrets.token_urlsafe(48), time.time()),
+            )
+            conn.commit()
+            return conn.execute("SELECT secret FROM auth_secret WHERE id = 1").fetchone()[0]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — any DB failure → caller uses ephemeral
+        return None
+
+
 class AuthStore:
     def __init__(self, db_path: Path):
         self._lock = threading.Lock()
