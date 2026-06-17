@@ -98,6 +98,41 @@ def test_never_run_is_not_unhealthy():
     assert h.is_unhealthy is False
 
 
+def _health(**over):
+    base = dict(
+        task_name="t",
+        last_success_at=1000.0,
+        last_error_at=None,
+        last_error_type=None,
+        last_error_detail=None,
+        consecutive_failures=0,
+        total_runs=1,
+        total_failures=0,
+        expected_interval_s=60.0,
+        updated_at=1000.0,
+    )
+    base.update(over)
+    return TaskHealth(**base)
+
+
+def test_next_run_at_is_last_success_plus_interval():
+    assert _health(last_success_at=1000.0, expected_interval_s=60.0).next_run_at == 1060.0
+
+
+def test_next_run_at_none_without_interval():
+    # event-driven loop (no cadence) has no schedule to project
+    assert _health(expected_interval_s=None).next_run_at is None
+
+
+def test_next_run_at_none_before_first_success():
+    assert _health(last_success_at=None).next_run_at is None
+
+
+def test_to_dict_exposes_next_run_at():
+    d = _health(last_success_at=1000.0, expected_interval_s=60.0).to_dict()
+    assert d["next_run_at"] == 1060.0
+
+
 def test_record_is_best_effort_never_raises(store):
     store.close()  # break the connection
     # Must not raise even though the DB is unusable — health recording must

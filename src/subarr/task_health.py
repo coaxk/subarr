@@ -62,6 +62,15 @@ class TaskHealth:
     updated_at: float
 
     @property
+    def next_run_at(self) -> float | None:
+        """#252: estimated next-fire epoch for an interval loop (last success +
+        its cadence). None when the cadence is unknown or it hasn't run yet —
+        event-driven loops (no expected_interval_s) have no schedule to show."""
+        if self.expected_interval_s and self.last_success_at is not None:
+            return self.last_success_at + self.expected_interval_s
+        return None
+
+    @property
     def is_unhealthy(self) -> bool:
         if self.consecutive_failures >= UNHEALTHY_CONSECUTIVE:
             return True
@@ -85,6 +94,7 @@ class TaskHealth:
             "total_runs": self.total_runs,
             "total_failures": self.total_failures,
             "expected_interval_s": self.expected_interval_s,
+            "next_run_at": self.next_run_at,
             "updated_at": self.updated_at,
             "is_unhealthy": self.is_unhealthy,
         }
