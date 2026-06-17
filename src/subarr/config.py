@@ -40,6 +40,13 @@ def _env_or(name: str, default: str) -> str:
     return raw
 
 
+def _normalize_samesite(v: str) -> str:
+    """#238: session-cookie SameSite — lax (default) / strict / none. Anything
+    unrecognized falls back to the safe `lax` rather than erroring at boot."""
+    val = (v or "").strip().lower()
+    return val if val in ("lax", "strict", "none") else "lax"
+
+
 @dataclass(frozen=True)
 class Settings:
     # Root of the media library the folder tree browses. Inside container: /media/library.
@@ -174,6 +181,33 @@ class Settings:
     # trusted non-browser client trips it.
     csrf_protection: bool
 
+    # #238 forced auth.
+    # SUBARR_AUTH_DISABLED — turn built-in auth fully off (a reverse proxy owns
+    # auth: Authelia / Caddy / Traefik). Skips the setup gate + the no-auth banner.
+    auth_disabled: bool
+    # SUBARR_AUTH_RESET — clear the stored credential on boot, back to first-run
+    # setup. A recovery lever; document alongside the env override + CLI.
+    auth_reset: bool
+    # SUBARR_COOKIE_SAMESITE — session cookie SameSite: lax (default) / strict /
+    # none. `none` is for embedding subarr in a cross-site dashboard iframe and
+    # forces Secure (https), per browser rules.
+    cookie_samesite: str
+    # SUBARR_SESSION_SECRET — signs the session cookie. Set it (any long random
+    # string) to keep logins across restarts; empty ⇒ an ephemeral per-boot
+    # secret (sessions reset on restart — you just log in again, never locked
+    # out). Empty is the off-signal, so bare get (not _env_or).
+    session_secret: str
+
+    # #260 login brute-force throttle. trusted_proxies: CIDRs whose
+    # X-Forwarded-For we believe (to key the throttle on the real client IP
+    # behind a reverse proxy). login_allowlist: CIDRs exempt from the throttle
+    # entirely ("never block my LAN"). Both empty by default (no XFF trust, no
+    # exemptions). max_attempts/window_s tune the sliding window.
+    trusted_proxies: str
+    login_allowlist: str
+    login_max_attempts: int
+    login_window_s: int
+
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
     # canonical-to-subarr form used everywhere else (relative to media_root).
@@ -265,6 +299,14 @@ def load() -> Settings:
         api_key=os.environ.get("SUBARR_API_KEY", ""),
         csrf_protection=_env_or("SUBARR_CSRF_PROTECTION", "1").strip().lower()
         not in ("0", "false", "no", "off"),
+        auth_disabled=_env_or("SUBARR_AUTH_DISABLED", "0").strip().lower() in ("1", "true", "yes", "on"),
+        auth_reset=_env_or("SUBARR_AUTH_RESET", "0").strip().lower() in ("1", "true", "yes", "on"),
+        cookie_samesite=_normalize_samesite(_env_or("SUBARR_COOKIE_SAMESITE", "lax")),
+        session_secret=os.environ.get("SUBARR_SESSION_SECRET", ""),
+        trusted_proxies=os.environ.get("SUBARR_TRUSTED_PROXIES", ""),
+        login_allowlist=os.environ.get("SUBARR_LOGIN_ALLOWLIST", ""),
+        login_max_attempts=int(_env_or("SUBARR_LOGIN_MAX_ATTEMPTS", "5")),
+        login_window_s=int(_env_or("SUBARR_LOGIN_WINDOW_S", "300")),
         # #136: default 30 days. 0/negative disables arena-run pruning.
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )

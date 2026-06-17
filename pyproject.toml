@@ -19,6 +19,10 @@ dependencies = [
     # defusedxml replaces stdlib xml.etree for parsing untrusted *arr config.
     # Bandit B314 flagged the raw stdlib usage; defusedxml is the drop-in fix.
     "defusedxml>=0.7,<1.0",
+    # #238: signed session cookies via Starlette SessionMiddleware. itsdangerous
+    # is the Pallets lib Starlette uses for this (ubiquitous, audited). We don't
+    # hand-roll session crypto.
+    "itsdangerous>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

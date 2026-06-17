@@ -7,9 +7,11 @@
   "scripts": {
     "build:frontend": "node scripts/build-frontend.mjs",
     "dev:frontend": "node scripts/build-frontend.mjs --watch",
-    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'"
+    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'",
+    "test:frontend": "vitest run"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "vitest": "4.1.9"
   }
 }

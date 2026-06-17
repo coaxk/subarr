@@ -60,3 +60,23 @@ jobs:
             echo "::error::Frontend bundles are stale. Run 'npm run build:frontend' locally and commit the result."
             exit 1
           fi
+
+  # Frontend unit tests (#201). Pure-logic coverage (formatters, language
+  # normalization, filters, payload mappers) — the bug class behind #193/#188,
+  # which had zero tests. Runs beside the drift check; vitest, node env.
+  unit:
+    name: frontend unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run test:frontend

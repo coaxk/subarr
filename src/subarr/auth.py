@@ -31,6 +31,8 @@ If you need any of the above, put subarr behind Authelia.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import logging
 import secrets
 
@@ -129,3 +131,188 @@ def is_path_bypassed(path: str) -> bool:
     if path in _BYPASS_EXACT:
         return True
     return any(path.startswith(p) for p in _BYPASS_PREFIXES)
+
+
+# ─── #238 forced auth: hashing, principal resolution, the gate ──────────────
+
+_PBKDF2_ITERS = 200_000
+
+
+def hash_password(password: str, *, iterations: int = _PBKDF2_ITERS) -> tuple[str, str, int]:
+    """Return (hash_hex, salt_hex, iterations). pbkdf2-hmac-sha256, fresh salt."""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return dk.hex(), salt.hex(), iterations
+
+
+def verify_password(password: str, password_hash: str, salt: str, iterations: int) -> bool:
+    """Constant-time verify. False (never raises) on malformed stored values."""
+    try:
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), int(iterations))
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(dk.hex(), password_hash)
+
+
+def _decode_basic(auth_hdr: str) -> tuple[str, str] | None:
+    if not auth_hdr.startswith("Basic "):
+        return None
+    try:
+        decoded = base64.b64decode(auth_hdr[len("Basic ") :]).decode("utf-8")
+    except Exception:  # noqa: BLE001 - any decode failure → not a usable Basic header
+        return None
+    if ":" not in decoded:
+        return None
+    user, _, pw = decoded.partition(":")
+    return user, pw
+
+
+def _query_param(query_string: bytes, key: str) -> str:
+    from urllib.parse import parse_qs
+
+    vals = parse_qs(query_string.decode("latin-1")).get(key)
+    return vals[0] if vals else ""
+
+
+def current_principal(scope, *, settings, store=None) -> str | None:
+    """Resolve the request's principal, or None. Order: session cookie →
+    env basic (ONLY when the username matches SUBARR_USER — a non-matching
+    Basic header, e.g. a reverse proxy passing a domain credential downstream,
+    falls through and is NEVER rejected here) → env API key → managed API key
+    (#259, when a store is provided). Returning None lets the gate decide the
+    401/redirect; this function never denies."""
+    session = scope.get("session") or {}
+    if session.get("user"):
+        return str(session["user"])
+
+    headers = dict(scope.get("headers") or [])
+
+    if settings.auth_user and settings.auth_pass:
+        cred = _decode_basic(headers.get(b"authorization", b"").decode("latin-1"))
+        if cred is not None:
+            user, pw = cred
+            if secrets.compare_digest(user, settings.auth_user) and secrets.compare_digest(
+                pw, settings.auth_pass
+            ):
+                return user
+            # username/pass mismatch → fall through (do NOT reject here)
+
+    # The presented API key (env or managed) arrives the same way.
+    key = headers.get(b"x-api-key", b"").decode("latin-1") or _query_param(
+        scope.get("query_string", b""), "apikey"
+    )
+    if key:
+        if settings.api_key and secrets.compare_digest(key, settings.api_key):
+            return "api-key"
+        if store is not None:
+            row = store.verify_api_key(key)
+            if row is not None:
+                return f"key:{row['label']}"
+
+    return None
+
+
+def verify_login(username: str, password: str, *, store, settings) -> bool:
+    """True if the pair matches the **env override** (`SUBARR_USER`/`PASS` —
+    the always-on recovery credential) or the **stored** credential. Constant-
+    time throughout; generic on caller side (never reveal which check failed)."""
+    if settings.auth_user and settings.auth_pass:
+        if secrets.compare_digest(username, settings.auth_user) and secrets.compare_digest(
+            password, settings.auth_pass
+        ):
+            return True
+    cred = store.get_credential()
+    if cred and secrets.compare_digest(username, cred["username"]):
+        return verify_password(password, cred["password_hash"], cred["salt"], cred["iterations"])
+    return False
+
+
+def needs_setup(settings, store) -> bool:
+    """First-run setup is needed only when NOTHING provides auth: no stored
+    credential AND no env basic-user AND no env API key. Any env credential ⇒
+    False, so existing api-key/basic installs are never forced into setup
+    (their cron/scripts keep working through the upgrade)."""
+    if settings.auth_user or settings.api_key:
+        return False
+    return not store.has_credential()
+
+
+_GATE_BYPASS_EXACT = {
+    "/api/health",
+    "/login",
+    "/setup",
+    "/api/auth/state",
+    "/api/auth/login",
+    "/api/auth/logout",
+}
+_GATE_BYPASS_PREFIXES = ("/static/",)
+
+
+class AuthGateMiddleware:
+    """#238: require a principal on every non-bypassed route, unless auth is
+    delegated (SUBARR_AUTH_DISABLED). In first-run setup mode, unauthenticated
+    requests are steered to /setup; otherwise to /login (HTML) or 401 (/api/*)."""
+
+    def __init__(self, app, *, settings, get_store):
+        self._app = app
+        self._settings = settings
+        # Lazy: the AuthStore is built in the lifespan startup, AFTER this
+        # middleware is registered at import. get_store() resolves it per request.
+        self._get_store = get_store
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or self._settings.auth_disabled:
+            await self._app(scope, receive, send)
+            return
+
+        store = self._get_store()
+        if store is None:
+            # Pre-lifespan (store not built yet) never serves real traffic; fail
+            # open rather than crash on the off chance a request arrives early.
+            await self._app(scope, receive, send)
+            return
+
+        path = scope.get("path", "/")
+        setup_mode = needs_setup(self._settings, store)
+        if self._bypassed(path, setup_mode):
+            await self._app(scope, receive, send)
+            return
+
+        if current_principal(scope, settings=self._settings, store=store) is not None:
+            await self._app(scope, receive, send)
+            return
+
+        if setup_mode:
+            await _redirect(send, "/setup")
+        elif path.startswith("/api/"):
+            await _deny_json(send)
+        else:
+            await _redirect(send, "/login")
+
+    def _bypassed(self, path: str, setup_mode: bool) -> bool:
+        if path in _GATE_BYPASS_EXACT or any(path.startswith(p) for p in _GATE_BYPASS_PREFIXES):
+            return True
+        # The setup endpoint is reachable WITHOUT auth only while setup is needed.
+        return setup_mode and path == "/api/auth/setup"
+
+
+async def _redirect(send, location: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 302,
+            "headers": [(b"location", location.encode("latin-1"))],
+        }
+    )
+    await send({"type": "http.response.body", "body": b""})
+
+
+async def _deny_json(send) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
+    await send({"type": "http.response.body", "body": b'{"detail": "authentication required"}'})

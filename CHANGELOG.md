@@ -5,6 +5,58 @@ All notable changes to subarr are documented here. The format follows
 [Semantic Versioning](https://semver.org/) — major bumps signal
 breaking config changes.
 
+## [Unreleased]
+
+### Security
+- **Forced authentication (#238).** subarr now requires a login by default,
+  matching modern Sonarr/Radarr. A fresh install (or the first launch after
+  upgrading from a no-auth version) shows a one-time setup screen to create an
+  admin account; thereafter a login page + session cookie. **Existing installs
+  that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are NOT
+  forced into setup** — those keep working, so automation survives the upgrade.
+  - **Recovery (no DB surgery):** env override (`SUBARR_USER`/`SUBARR_PASS`),
+    `SUBARR_AUTH_RESET=1` (clear → setup), or
+    `docker exec subarr python -m subarr.cli reset-auth` / `set-password`.
+  - **Proxy users:** `SUBARR_AUTH_DISABLED=1` delegates auth to your reverse
+    proxy (Authelia/Caddy/Traefik) — no double login; a non-matching upstream
+    Basic header is ignored, not rejected.
+  - **Sessions:** `SUBARR_SESSION_SECRET` persists logins across restarts
+    (unset = ephemeral, re-login after restart — never a lockout);
+    `SUBARR_COOKIE_SAMESITE=none` for cross-site dashboard iframes.
+  - Hardening: pbkdf2 password hashing, session rotation on login (anti
+    session-fixation), generic login errors (no user enumeration),
+    `secrets.compare_digest` throughout.
+
+### Added
+- **Login brute-force throttle (#260).** Failed sign-ins are rate-limited per
+  client IP (sliding window, default 5 / 300s, then a short wait — never a
+  permanent lockout). `SUBARR_TRUSTED_PROXIES` keys the limit on the real client
+  IP behind a reverse proxy (only that hop's `X-Forwarded-For` is trusted);
+  `SUBARR_LOGIN_ALLOWLIST` exempts trusted ranges entirely. Both default empty;
+  effective values shown read-only under Settings → Login security.
+- **Managed API keys (#259).** Mint named API keys in **Settings → API keys** for
+  scripts and integrations — beyond the single env `SUBARR_API_KEY`. Each key has
+  full access, is shown once at creation (stored only as a SHA-256 hash), is sent
+  as `X-API-Key`/`?apikey=`, can be revoked instantly, and shows a last-used time
+  so stale keys are obvious.
+
+### Fixed
+- **Logins now survive restarts and reloads.** The session-signing secret is
+  persisted in the database instead of being regenerated per boot, so a
+  container restart/update no longer silently logs everyone out. `SUBARR_SESSION_SECRET`
+  remains an optional explicit override. (#238 follow-up.)
+- **Graceful session expiry.** A global guard turns any `/api/*` 401 into a
+  visible "session expired" notice + redirect to login (with `?next=`), instead
+  of silent dead clicks. The login page gained a subarr logo and a "Forgot your
+  password?" panel with the CLI/env recovery steps.
+- **Env-configured installs no longer forced into the onboarding wizard (#262).**
+  The root route only sends you to the first-run wizard when the install is
+  genuinely unconfigured. An install set up via env vars (the common arr-stack
+  pattern) lands on the dashboard instead of a blank wizard after login.
+  Relatedly, the wizard now **pre-fills from live settings** (secrets masked) so
+  an explicit "Re-run setup" reflects current config, and "Test connection"
+  falls back to the stored credential when a masked field is left untouched.
+
 ## [1.6.0] - 2026-06-14
 
 Headline: subarr now configures Whisper for your hardware. No migrations; no

@@ -22,6 +22,18 @@ function fmtInterval(s) {
   return `${Math.round(s / 3600)}h`;
 }
 
+// #252: a future timestamp as "in Xm" (or "due" when overdue). Returns null
+// for event-driven loops (no next_run_at) so the column stays blank for them.
+function timeUntil(ts) {
+  if (!ts) return null;
+  const s = Math.floor(ts - Date.now() / 1000);
+  if (s <= 0) return 'due';
+  if (s < 60) return `in ${s}s`;
+  if (s < 3600) return `in ${Math.floor(s / 60)}m`;
+  if (s < 86400) return `in ${Math.floor(s / 3600)}h`;
+  return `in ${Math.floor(s / 86400)}d`;
+}
+
 const REPO = 'https://github.com/coaxk/subarr';
 
 // Build a prefilled GitHub new-issue URL. We deliberately do NOT auto-embed
@@ -49,11 +61,17 @@ const linkStyle = {
   fontSize: 'var(--text-sm)', color: 'var(--violet-400)', textDecoration: 'none',
 };
 
-function TaskRow({ t, version }) {
+function TaskRow({ t, version, onRun }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
+  const doRun = (e) => {
+    e.stopPropagation();
+    setRunning(true);
+    Promise.resolve(onRun && onRun(t.task_name)).finally(() => setRunning(false));
+  };
   const copyTrace = (e) => {
     e.stopPropagation();
     navigator.clipboard.writeText(t.last_error_detail || '')
@@ -80,12 +98,23 @@ function TaskRow({ t, version }) {
             </span>
           ) : null}
         </span>
+        {t.can_run_now && (
+          <button onClick={doRun} disabled={running}
+            title="Trigger this job now"
+            className="btn sm" style={{ flex: 'none', fontSize: 'var(--text-2xs)' }}>
+            {running ? '…' : 'Run now'}
+          </button>
+        )}
         <span style={{ flex: 'none', fontSize: 'var(--text-sm)', color: unhealthy ? 'var(--error-400, #f87171)' : 'var(--fg-3)' }}>
           {unhealthy ? 'unhealthy' : 'healthy'}
         </span>
         <span style={{ width: 130, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}
           title="Last successful cycle">
           ok {timeAgo(t.last_success_at)}
+        </span>
+        <span style={{ width: 80, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}
+          title="Estimated next run (last success + cadence)">
+          {t.next_run_at ? `next ${timeUntil(t.next_run_at)}` : ''}
         </span>
         <span style={{ width: 90, textAlign: 'right', flex: 'none', fontSize: 'var(--text-sm)', color: t.consecutive_failures ? 'var(--error-400, #f87171)' : 'var(--fg-3)' }}
           title="Consecutive failed cycles">
@@ -137,6 +166,12 @@ export function HealthPage() {
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
 
+  // #234: trigger a runnable loop on demand, then reload status.
+  const runJob = useCallback((name) =>
+    fetch(`/api/health/tasks/${encodeURIComponent(name)}/run`, { method: 'POST', credentials: 'same-origin' })
+      .then(() => load())
+      .catch(() => {}), [load]);
+
   const unhealthy = (tasks || []).filter((t) => t.is_unhealthy).length;
 
   return (
@@ -169,7 +204,7 @@ export function HealthPage() {
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} version={version} />)}
+          {(tasks || []).map((t) => <TaskRow key={t.task_name} t={t} version={version} onRun={runJob} />)}
           {tasks && tasks.length === 0 && (
             <div style={{ color: 'var(--fg-3)', padding: 12 }}>No supervised tasks yet.</div>
           )}

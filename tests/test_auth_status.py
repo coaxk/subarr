@@ -29,18 +29,14 @@ def test_auth_is_configured(subarr_env, api_key, user, pwd, expected):
 
 def test_auth_status_endpoint_shape(subarr_env):
     import asyncio
+    import types
 
     from subarr.routers import admin
 
-    # asyncio.run() spins a fresh loop — get_event_loop() RuntimeErrors in the
-    # full-suite context once an earlier async test has closed the current loop.
-    out = asyncio.run(admin.auth_status())
+    # #238: auth_status now reads request.app.state.auth_store. A fake request
+    # with no store exercises the "no stored cred" path; we assert SHAPE (the
+    # boolean value depends on env/store and is covered elsewhere).
+    req = types.SimpleNamespace(app=types.SimpleNamespace(state=types.SimpleNamespace(auth_store=None)))
+    out = asyncio.run(admin.auth_status(req))
     assert set(out) == {"configured"}
     assert isinstance(out["configured"], bool)
-
-
-def test_auth_status_bypasses_api_key_middleware(subarr_env):
-    # must be readable in the no-auth case the banner targets
-    from subarr.api_security import _KEY_BYPASS_EXACT
-
-    assert "/api/auth-status" in _KEY_BYPASS_EXACT

@@ -31,6 +31,7 @@ const OUTDIR = resolve(ROOT, 'src/subarr/static/v1/home-hifi');
 
 // One IIFE bundle per HTML page. Entry file name → output file name.
 const PAGES = [
+  'auth',
   'onboarding',
   'home',
   'coverage',
@@ -55,6 +56,10 @@ const baseOptions = {
   ),
   outdir: OUTDIR,
   bundle: true,
+  // #238 follow-up: inject the global session-expiry guard into EVERY page
+  // bundle from one place (it wraps window.fetch on load — see session-guard.js).
+  // Excludes /api/auth/* internally, so it's safe even on the auth page.
+  inject: [resolve(OUTDIR, 'session-guard.js')],
   format: 'iife',
   target: ['es2020'],
   jsx: 'transform',

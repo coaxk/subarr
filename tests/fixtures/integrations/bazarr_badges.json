@@ -1,0 +1,8 @@
+{
+  "episodes": 3,
+  "movies": 1,
+  "providers": 5,
+  "status": 0,
+  "sonarr_signalr": "connected",
+  "radarr_signalr": "connected"
+}

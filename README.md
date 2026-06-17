@@ -293,13 +293,25 @@ What to do about it:
 
 ## Security
 
-### Authentication & access
+### Authentication
 
-Subarr's API can mutate Sonarr, trigger Bazarr tasks, edit your library roots, and restart subgen — so guard it like any other *arr.
+Subarr's API can mutate Sonarr, trigger Bazarr tasks, edit your library roots, and restart subgen — so it **requires authentication by default** (matching modern Sonarr/Radarr).
 
-- **API key** (recommended if subarr is reachable beyond a fully trusted LAN). Set `SUBARR_API_KEY` to any string; every `/api/*` call then requires it as an `X-Api-Key` header or `?apikey=` query (the arr convention — the query form lets subgen's `WEBHOOK_URL_COMPLETED` carry it). The bundled UI fetches the key from a same-origin-only endpoint and sends it automatically, so the web app keeps working. `/api/health` stays open for container healthchecks. Unset by default — a trusted-LAN install needs nothing.
-- **CSRF protection** is on by default: cross-origin browser writes to `/api/*` are rejected (a malicious page can't blind-POST at your LAN IP through your browser). Non-browser clients (curl, the subgen webhook) are unaffected. Set `SUBARR_CSRF_PROTECTION=0` only if a trusted automation client trips it.
-- **HTTP Basic auth** (`SUBARR_USER` + `SUBARR_PASS`) gates the human/browser surface as an in-product fallback. For anything internet-facing, a reverse proxy with real auth (Authelia, Caddy, Traefik forward-auth) remains the recommended posture.
+- **First-run setup.** On first launch (or first launch after upgrading from a no-auth version) subarr shows a one-time screen to create an admin username + password. After that, a normal login page + session cookie. Existing installs that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are **not** forced into setup — those credentials keep working, so cron/scripts don't break on upgrade.
+- **Locked out? Three recovery paths** (none need DB surgery):
+  1. **Env override** — set `SUBARR_USER` + `SUBARR_PASS` in your compose and restart; that pair always logs in.
+  2. **Reset** — set `SUBARR_AUTH_RESET=1` and restart to clear the stored credential and return to the setup screen.
+  3. **CLI** — `docker exec subarr python -m subarr.cli reset-auth` (or `set-password --username admin --password '…'`).
+- **Behind a reverse proxy that already authenticates** (Authelia / Caddy / Traefik forward-auth)? Set `SUBARR_AUTH_DISABLED=1` to turn subarr's built-in login off and let the proxy own auth (no double login). A non-matching upstream `Authorization: Basic` header is ignored, never rejected, so chained proxies don't break subarr.
+- **Sessions persist across restarts automatically** — the signing secret is stored in subarr's database, so a container restart or update no longer logs you out. Set `SUBARR_SESSION_SECRET` only if you want to pin it explicitly (e.g. to share one secret across replicas); leaving it unset is fine. Embedding subarr in a cross-site dashboard iframe (Organizr/Homer)? Set `SUBARR_COOKIE_SAMESITE=none` (requires HTTPS).
+- **Session expiry is handled gracefully** — if your session lapses, the next API call shows a brief "session expired" notice and sends you to the login page (with a `?next=` back to where you were), instead of dead clicks. The login page also has a **"Forgot your password?"** panel spelling out the CLI / env recovery paths.
+- **Brute-force throttle** — failed sign-ins are rate-limited per client IP (default: `SUBARR_LOGIN_MAX_ATTEMPTS=5` failures per `SUBARR_LOGIN_WINDOW_S=300` seconds, then a short wait — never a permanent lockout). Two optional CIDR lists tune it, set in your compose:
+  - `SUBARR_TRUSTED_PROXIES` — your reverse proxy's IP/range, so the throttle keys on the **real client IP** from `X-Forwarded-For` instead of the proxy's address. Only XFF from these hops is trusted; a spoofed header from anywhere else is ignored.
+  - `SUBARR_LOGIN_ALLOWLIST` — IPs/ranges that **never** get throttled (your LAN, an automation box).
+  - Both default empty. The effective values are shown read-only under **Settings → Login security**.
+- **API key** (`SUBARR_API_KEY`) and **HTTP Basic** (`SUBARR_USER`/`SUBARR_PASS`) remain accepted principals for automation/recovery, sent as `X-Api-Key`/`?apikey=` or a Basic header.
+- **Managed API keys.** Beyond the single env `SUBARR_API_KEY`, you can mint named keys in **Settings → API keys** for scripts and integrations. Each has full access and is shown **once** at creation (copy it then — it's stored only as a SHA-256 hash, never retrievable). Send it as `X-API-Key`/`?apikey=` just like the env key; revoke any key instantly from the same panel. The list shows when each key was last used, so stale keys are easy to spot.
+- **CSRF protection** is on by default: cross-origin browser writes to `/api/*` are rejected. Non-browser clients (curl, the subgen webhook) are unaffected. Set `SUBARR_CSRF_PROTECTION=0` only if a trusted automation client trips it.
 
 ### Posture
 

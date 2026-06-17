@@ -60,6 +60,25 @@ def test_health():
     assert r.json()["status"] == "ok"
 
 
+def test_health_tasks_carry_can_run_now():
+    # #234: the endpoint returns the tasks list and every row that IS present
+    # advertises a boolean can_run_now (loops register on first tick, so the
+    # list may be empty this early — the can_run_now logic itself is unit-
+    # tested in test_jobs).
+    r = _client().get("/api/health/tasks")
+    assert r.status_code == 200
+    body = r.json()
+    assert "tasks" in body and "any_unhealthy" in body
+    assert all(isinstance(t.get("can_run_now"), bool) for t in body["tasks"])
+
+
+def test_run_unsupported_job_is_400():
+    # #234: monitor-only loops reject run-now (not a 404 — they exist, just
+    # aren't manually triggerable).
+    r = _client().post("/api/health/tasks/scheduler/run")
+    assert r.status_code == 400
+
+
 def test_browse_root_lists_tv():
     r = _client().get("/api/browse")
     assert r.status_code == 200

@@ -1,0 +1,12 @@
+[
+  {
+    "id": 12,
+    "title": "Example Show",
+    "path": "/tv/Example Show",
+    "monitored": true,
+    "tags": [],
+    "languageProfileId": 1,
+    "seriesType": "standard",
+    "statistics": { "episodeFileCount": 10, "episodeCount": 10, "sizeOnDisk": 1234567890 }
+  }
+]

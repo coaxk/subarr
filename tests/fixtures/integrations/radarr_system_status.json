@@ -1,0 +1,11 @@
+{
+  "appName": "Radarr",
+  "instanceName": "Radarr",
+  "version": "5.14.0.9383",
+  "buildTime": "2024-09-01T00:00:00Z",
+  "isDocker": true,
+  "runtimeName": "dotnet",
+  "osName": "ubuntu",
+  "branch": "master",
+  "authentication": "forms"
+}

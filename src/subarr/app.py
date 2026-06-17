@@ -64,10 +64,12 @@ from .probe_walker import ProbeWalker
 from .pending_feeder import PendingQueueFeeder
 from .pending_queue import PendingQueueStore
 from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
-from .onboarding import OnboardingStore
+from .onboarding import OnboardingStore, install_is_configured
 from .routers import (
     admin,
     aftercare as r_aftercare,
+    api_keys as r_api_keys,
+    auth as r_auth,
     arbiter as r_arbiter,
     arena as r_arena,
     arr_mediainfo as r_arr_mediainfo,
@@ -106,6 +108,7 @@ from .arena import AsrRunner
 from .arena_service import ArenaService
 from .arena_store import ArenaStore
 from .aftercare_store import AfterCareStore
+from .existing_audit_service import ExistingAuditService
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .crash_store import CrashStore
@@ -257,6 +260,28 @@ async def lifespan(app_: FastAPI):
     applied = run_migrations(settings.db_path)
     if applied:
         log.info("schema migrations applied this boot: %s", [m.name for m in applied])
+
+    # #238: auth. Migrations (above) created the auth tables before we open the
+    # store. settings + store live on app.state for the auth router + gate.
+    from .auth_store import AuthStore
+
+    app_.state.settings = settings
+    app_.state.auth_store = AuthStore(settings.db_path)
+    if settings.auth_reset:
+        app_.state.auth_store.clear_credential()
+        log.warning("SUBARR_AUTH_RESET set — cleared the stored credential; first-run setup will show.")
+
+    # #260 login brute-force throttle + the trusted-proxy set used to resolve the
+    # real client IP behind a reverse proxy. Parsed once here from env config.
+    from .login_throttle import LoginThrottle, parse_cidrs
+
+    app_.state.trusted_proxies = parse_cidrs(settings.trusted_proxies)
+    app_.state.login_throttle = LoginThrottle(
+        max_attempts=settings.login_max_attempts,
+        window_s=settings.login_window_s,
+        allowlist=parse_cidrs(settings.login_allowlist),
+    )
+
     app_.state.subgen = SubgenClient()
     # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth
@@ -372,6 +397,12 @@ async def lifespan(app_: FastAPI):
     # passed in directly (watcher judges each completed job's .srt on the fly).
     app_.state.aftercare = AfterCareStore(settings.db_path)
     app_.state.aftercare.prune()  # #197: 365d, never touches unreviewed flags
+    # #216: library-wide audit of EXISTING external subs, single-flight bg task.
+    app_.state.existing_audit = ExistingAuditService(
+        aftercare_store=app_.state.aftercare,
+        provenance=app_.state.provenance,
+        libraries=settings.libraries,
+    )
 
     def _probe_duration_lookup(canonical: str) -> float | None:
         """#216: the file's ffprobe duration for aftercare's sync-overrun
@@ -615,15 +646,43 @@ async def lifespan(app_: FastAPI):
     _subgen_current = _subgen_update_version(
         getattr(_subgen_caps, "release_tag", None) if _subgen_caps else None
     )
-    from .update_checker import UpdateChecker
+    from .update_checker import (
+        DEFAULT_PRODUCTS,
+        VANILLA_SUBGEN_PRODUCT,
+        VANILLA_SUBGEN_RAW_URL,
+        VANILLA_SUBGEN_REPO,
+        UpdateChecker,
+    )
 
-    current_versions = {
-        "subarr": __version__,
-        "subarr-subgen": _subgen_current,
-    }
+    # #223: show ONE subgen-family row matched to the CONNECTED subgen. Vanilla
+    # McCloudS/subgen has no releases, so it can't use the Atom feed — route it
+    # through the version-constant path against its installed version. When the
+    # build is our subarr-subgen (or subgen is unreachable, where the default
+    # image is the safe assumption), keep the Atom-feed product.
+    _is_vanilla = _subgen_caps is not None and getattr(_subgen_caps, "is_subarr_subgen", True) is False
+    if _is_vanilla:
+        products = {
+            "subarr": DEFAULT_PRODUCTS["subarr"],
+            VANILLA_SUBGEN_PRODUCT: VANILLA_SUBGEN_REPO,
+        }
+        vanilla_products = {VANILLA_SUBGEN_PRODUCT: VANILLA_SUBGEN_RAW_URL}
+        current_versions = {
+            "subarr": __version__,
+            # the upstream version subgen reports via its API (e.g. '2026.06.4')
+            VANILLA_SUBGEN_PRODUCT: getattr(_subgen_caps, "version", None),
+        }
+    else:
+        products = DEFAULT_PRODUCTS
+        vanilla_products = None
+        current_versions = {
+            "subarr": __version__,
+            "subarr-subgen": _subgen_current,
+        }
     app_.state.update_checker = UpdateChecker(
         db_path=settings.db_path,
+        products=products,
         current_version_resolver=current_versions,
+        vanilla_products=vanilla_products,
     )
     app_.state.update_checker._health = app_.state.task_health  # #157 supervision
     app_.state.update_checker.start()
@@ -811,10 +870,30 @@ app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 #   - BasicAuth is outermost so a 401 challenge returns before any body
 #     is built or compressed. No-op when SUBARR_USER/SUBARR_PASS unset.
 from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+import secrets as _secrets  # noqa: E402
+from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
+
 from .security_headers import SecurityHeadersMiddleware  # noqa: E402
-from .auth import BasicAuthMiddleware  # noqa: E402
-from .api_security import ApiKeyMiddleware, CsrfOriginMiddleware  # noqa: E402
+from .auth import AuthGateMiddleware  # noqa: E402
+from .api_security import CsrfOriginMiddleware  # noqa: E402
 from .request_crash_capture import RequestCrashCaptureMiddleware  # noqa: E402
+
+# #238: signed session-cookie secret. Priority: SUBARR_SESSION_SECRET env →
+# the secret PERSISTED in the DB (auth_secret table) → an ephemeral per-boot
+# value. The DB-persisted secret means logins survive restarts AND uvicorn
+# --reload with no env required (the ephemeral fallback was silently logging
+# everyone out on every restart/reload). The DB read is best-effort + guarded;
+# if the data dir isn't reachable at import we fall back to ephemeral.
+from .auth_store import load_or_create_session_secret as _load_secret  # noqa: E402
+
+_session_secret = settings.session_secret or _load_secret(settings.db_path)
+if not _session_secret:
+    _session_secret = _secrets.token_urlsafe(48)
+    log.warning(
+        "session secret is EPHEMERAL (no SUBARR_SESSION_SECRET and the DB-persisted "
+        "secret was unavailable) — logins reset on restart. This should be rare; set "
+        "SUBARR_SESSION_SECRET to a long random string if it persists."
+    )
 
 # #199: innermost — sees only exceptions that escaped route handlers (500s),
 # records the sanitized (type, module:line) into CrashStore, re-raises. The
@@ -827,9 +906,26 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CsrfOriginMiddleware, enabled=settings.csrf_protection)
-app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
-app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
+# #238: forced-auth gate. Replaces the optional BasicAuth + ApiKey middlewares —
+# the gate accepts session OR env-basic OR api-key as principals (current_principal).
+# SessionMiddleware is registered LAST so it is OUTERMOST: it populates
+# scope["session"] before the gate reads it.
+app.add_middleware(
+    AuthGateMiddleware,
+    settings=settings,
+    get_store=lambda: getattr(app.state, "auth_store", None),
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    session_cookie="subarr_session",
+    same_site=settings.cookie_samesite,
+    https_only=(settings.cookie_samesite == "none"),
+    max_age=14 * 24 * 3600,
+)
 
+app.include_router(r_auth.router)
+app.include_router(r_api_keys.router)
 app.include_router(browse.router)
 app.include_router(mode.router)
 app.include_router(queue.router)
@@ -878,15 +974,34 @@ def health() -> dict:
 @app.get("/api/health/tasks")
 def health_tasks() -> dict:
     """#157: per-loop background-task health. Powers the header pill (any
-    unhealthy) + the Health page (per-task status, last error, traceback)."""
+    unhealthy) + the Health page (per-task status, last error, traceback).
+    #234: each task carries `can_run_now` so the page shows a Run-now button
+    on the loops that support an on-demand trigger."""
+    from .jobs import can_run_now
+
     th = getattr(app.state, "task_health", None)
     states = th.states() if th is not None else []
     return {
-        "tasks": [t.to_dict() for t in states],
+        "tasks": [{**t.to_dict(), "can_run_now": can_run_now(t.task_name)} for t in states],
         "any_unhealthy": any(t.is_unhealthy for t in states),
         "unhealthy_count": sum(1 for t in states if t.is_unhealthy),
         "version": __version__,  # for the "Report a problem" prefill
     }
+
+
+@app.post("/api/health/tasks/{task_name}/run")
+async def run_health_task(task_name: str) -> dict:
+    """#234: trigger a background loop on demand. 400 if the job isn't
+    runnable; 409 if its component isn't available yet (early boot)."""
+    from fastapi import HTTPException
+
+    from .jobs import can_run_now, run_job
+
+    if not can_run_now(task_name):
+        raise HTTPException(400, detail=f"job {task_name!r} does not support run-now")
+    if not await run_job(app.state, task_name):
+        raise HTTPException(409, detail=f"job {task_name!r} could not be triggered right now")
+    return {"ran": True, "task_name": task_name}
 
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -922,6 +1037,8 @@ if _STATIC_DIR.is_dir():
         # The pretty URL is the source of truth for cross-screen links in
         # chrome.jsx; the underlying .html file is an implementation detail.
         _V1_SCREENS = {
+            "/login": "auth.html",  # #238: forced-auth setup/login (gate-bypassed)
+            "/setup": "auth.html",
             "/home": "home.html",
             "/coverage": "coverage.html",
             "/onboarding": "onboarding.html",
@@ -960,7 +1077,12 @@ if _STATIC_DIR.is_dir():
         if store is not None:
             try:
                 state = store.get()
-                if not state.is_complete:
+                # #262: only force the wizard on a genuine first run. An install
+                # configured via env vars never completes the wizard, so gating
+                # on is_complete alone dragged established users into a blank
+                # wizard after login. Explicit "Re-run setup" links straight to
+                # /onboarding and so is unaffected by this gate.
+                if not state.is_complete and not install_is_configured(settings):
                     return RedirectResponse(url="/onboarding", status_code=302)
             except Exception as e:
                 log.warning("onboarding state lookup failed at /: %r", e)

@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "seriesTitle": "Example Show",
+      "episodeTitle": "Pilot",
+      "episode_number": "1x01",
+      "sonarrSeriesId": 12,
+      "sonarrEpisodeId": 345,
+      "missing_subtitles": [{ "name": "English", "code2": "en", "code3": "eng", "forced": false, "hi": false }],
+      "sceneName": "Example.Show.S01E01.1080p.WEB.h264-GROUP",
+      "tags": [],
+      "monitored": "True"
+    }
+  ],
+  "total": 1
+}
