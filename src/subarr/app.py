@@ -622,15 +622,43 @@ async def lifespan(app_: FastAPI):
     _subgen_current = _subgen_update_version(
         getattr(_subgen_caps, "release_tag", None) if _subgen_caps else None
     )
-    from .update_checker import UpdateChecker
+    from .update_checker import (
+        DEFAULT_PRODUCTS,
+        VANILLA_SUBGEN_PRODUCT,
+        VANILLA_SUBGEN_RAW_URL,
+        VANILLA_SUBGEN_REPO,
+        UpdateChecker,
+    )
 
-    current_versions = {
-        "subarr": __version__,
-        "subarr-subgen": _subgen_current,
-    }
+    # #223: show ONE subgen-family row matched to the CONNECTED subgen. Vanilla
+    # McCloudS/subgen has no releases, so it can't use the Atom feed — route it
+    # through the version-constant path against its installed version. When the
+    # build is our subarr-subgen (or subgen is unreachable, where the default
+    # image is the safe assumption), keep the Atom-feed product.
+    _is_vanilla = _subgen_caps is not None and getattr(_subgen_caps, "is_subarr_subgen", True) is False
+    if _is_vanilla:
+        products = {
+            "subarr": DEFAULT_PRODUCTS["subarr"],
+            VANILLA_SUBGEN_PRODUCT: VANILLA_SUBGEN_REPO,
+        }
+        vanilla_products = {VANILLA_SUBGEN_PRODUCT: VANILLA_SUBGEN_RAW_URL}
+        current_versions = {
+            "subarr": __version__,
+            # the upstream version subgen reports via its API (e.g. '2026.06.4')
+            VANILLA_SUBGEN_PRODUCT: getattr(_subgen_caps, "version", None),
+        }
+    else:
+        products = DEFAULT_PRODUCTS
+        vanilla_products = None
+        current_versions = {
+            "subarr": __version__,
+            "subarr-subgen": _subgen_current,
+        }
     app_.state.update_checker = UpdateChecker(
         db_path=settings.db_path,
+        products=products,
         current_version_resolver=current_versions,
+        vanilla_products=vanilla_products,
     )
     app_.state.update_checker._health = app_.state.task_health  # #157 supervision
     app_.state.update_checker.start()

@@ -1854,6 +1854,8 @@ function TelemetryPanel() {
 const UPDATE_HOWTO = {
   subarr: 'update: docker compose pull && docker compose up -d (on your subarr stack)',
   'subarr-subgen': 'update: docker compose pull && docker compose up -d (on your subgen stack — image ghcr.io/coaxk/subarr-subgen)',
+  // #223: vanilla McCloudS/subgen (no releases — version read from subgen.py on main)
+  subgen: 'update: docker compose pull && docker compose up -d (on your subgen stack). Tip: switch the image to ghcr.io/coaxk/subarr-subgen for tuned defaults + tuning-lab support.',
 };
 
 function UpdatesPanel() {
