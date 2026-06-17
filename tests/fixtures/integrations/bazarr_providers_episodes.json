@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "provider": "opensubtitlescom",
+      "score": 92,
+      "release_info": ["Example.Show.S01E01.1080p.WEB.h264-GROUP"],
+      "forced": false,
+      "hi": false,
+      "uploader": "someuser",
+      "url": "https://www.opensubtitles.com/en/subtitles/example",
+      "matches": ["series", "season", "episode", "resolution"],
+      "dont_matches": []
+    }
+  ]
+}
