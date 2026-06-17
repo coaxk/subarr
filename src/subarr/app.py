@@ -1017,6 +1017,8 @@ if _STATIC_DIR.is_dir():
         # The pretty URL is the source of truth for cross-screen links in
         # chrome.jsx; the underlying .html file is an implementation detail.
         _V1_SCREENS = {
+            "/login": "auth.html",  # #238: forced-auth setup/login (gate-bypassed)
+            "/setup": "auth.html",
             "/home": "home.html",
             "/coverage": "coverage.html",
             "/onboarding": "onboarding.html",

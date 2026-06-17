@@ -31,6 +31,7 @@ const OUTDIR = resolve(ROOT, 'src/subarr/static/v1/home-hifi');
 
 // One IIFE bundle per HTML page. Entry file name → output file name.
 const PAGES = [
+  'auth',
   'onboarding',
   'home',
   'coverage',
