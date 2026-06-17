@@ -57,23 +57,42 @@ no-auth banner: intentional delegation is not exposure.
     restart; rotating it logs everyone out, which is also the manual "kill all
     sessions" lever).
   - Single-account model (matches arr; multi-user is YAGNI).
+  - **Init + concurrency (review #3):** the table is created by a **migration**
+    that runs in the lifespan startup hook, *before* uvicorn accepts
+    connections — so the burst of tab requests at boot never races to
+    initialize. The credential row is keyed at a fixed `id=1` and setup uses an
+    **atomic insert-if-absent** (`INSERT … WHERE NOT EXISTS` / `INSERT OR
+    IGNORE`), so two concurrent `POST /setup` calls can't double-create.
 - **`auth.py` (rework):**
   - `hash_password` / `verify_password`: `hashlib.pbkdf2_hmac('sha256', …)`,
     per-cred random salt, ~200k iterations, `hmac.compare_digest` verify.
   - `current_principal(request)`: resolve session / env-basic / api-key → a
-    principal or None. Used by the middleware.
+    principal or None. Used by the middleware. **Basic-header fall-through
+    (review #1):** a present `Authorization: Basic` header is only treated as a
+    subarr principal when its username equals `SUBARR_USER` AND the password
+    verifies; any other Basic header (e.g. a reverse proxy passing a
+    domain-level credential downstream) is **ignored — never a 401**. Returning
+    None falls through to the next principal; only the gate decides the 401.
 - **`SessionMiddleware`** (Starlette built-in; adds the `itsdangerous` dep,
   pinned): signed session cookie, `secret_key` from `auth_store`. Cookie is
   **HttpOnly**, **SameSite=Lax**, `https_only=False` (plain-http LAN works;
   TLS-terminating-proxy users are covered by their proxy — forwarded-proto
   Secure handling is a documented follow-up). **Session is rotated on login**
-  (anti session-fixation).
+  (anti session-fixation). **SameSite knob (review #5):** `SUBARR_COOKIE_SAMESITE`
+  overrides the `Lax` default; `none` (subarr embedded in a cross-site dashboard
+  iframe — Organizr/Homer) forces `https_only=True`, since browsers reject
+  `SameSite=None` without `Secure`. Thin pass-through to SessionMiddleware.
 - **`AuthGateMiddleware` (new):** the enforcement gate. If `SUBARR_AUTH_DISABLED`
   → pass through. Else: bypass paths (below) pass; otherwise require a principal,
   else 401 (JSON for `/api/*`) or redirect to `/login` (HTML). Replaces the
   optional-only `BasicAuthMiddleware` (its checks fold into `current_principal`).
 - **`routers/auth.py`:**
   - `GET  /api/auth/state` — `{needs_setup, authed, username?}`. Bypassed.
+    **needs_setup is env-aware (review #4):** `needs_setup = (no stored cred)
+    AND (no env SUBARR_USER) AND (no env SUBARR_API_KEY)`. Any env credential ⇒
+    `needs_setup=false`, even with a blank SQLite row — so an existing
+    api-key/basic install upgrading to this version is NOT forced into setup and
+    cron/scripts hitting the API keep working. The gate enforces the same rule.
   - `POST /api/auth/setup` — create the admin cred; **allowed only when
     needs_setup** (409 otherwise). Auto-logs-in (sets session).
   - `POST /api/auth/login` — verify (stored or env) → rotate+set session. Generic
@@ -86,6 +105,13 @@ no-auth banner: intentional delegation is not exposure.
     matching Sonarr/Radarr) + links the recovery doc.
   - **login** form — username/password, generic error.
   - **logout** control in the chrome.
+  - **Global 401 interceptor (review #2):** a shared fetch wrapper all API calls
+    route through; on `401` it wipes local auth state and redirects to
+    `/login?next=<current>`. Without it a session that expires mid-session (or a
+    restart that invalidates the cookie) makes background polls 401 and the UI
+    spins/errors silently instead of bouncing to login. (subarr's fetches are
+    currently scattered — Phase A introduces the one wrapper and routes calls
+    through it.)
 
 ### Flows
 
@@ -138,6 +164,14 @@ lands somewhere usable.
 - recovery: env override accepted; `SUBARR_AUTH_RESET` clears; CLI reset/set.
 - migration: env-basic/api-key install NOT forced into setup.
 - enumeration: same response/shape for unknown-user vs wrong-password.
+- review #1: a Basic header with a non-matching username falls through (no 401)
+  and a valid session on the same request is still honored.
+- review #4: `/api/auth/state` returns `needs_setup=false` when `SUBARR_API_KEY`
+  (or `SUBARR_USER`) is set even with an empty cred row; true only when all
+  three are absent.
+- review #3: concurrent `POST /setup` creates exactly one credential (atomic).
+- review #5: `SUBARR_COOKIE_SAMESITE=none` ⇒ cookie SameSite=None + Secure.
+- review #2 (frontend): the fetch wrapper redirects to `/login?next=` on 401.
 
 ## Out of scope (Phase A)
 
