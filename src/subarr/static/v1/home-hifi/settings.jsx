@@ -15,6 +15,7 @@
 // render read-only with a "managed by env" note (env stays authoritative).
 
 import { SectionCard, StatusDot, LangTag } from './atoms.jsx';
+import { apiFetch } from './api.jsx';
 import { RailFooter } from './chrome.jsx';
 // #75: reuse the wizard's form primitives so the in-app credential editor
 // matches onboarding exactly (same input styling + test-result chip).
@@ -1717,7 +1718,150 @@ function SystemPanel() {
           <a href="/onboarding" className="btn sm" style={{ textDecoration: 'none' }}>Open onboarding wizard</a>
         </div>
       </SectionCard>
+
+      <ApiKeysCard />
     </div>
+  );
+}
+
+// ─── API keys (#259) ─────────────────────────────────────────────
+// Mint/list/revoke long-lived keys for scripts + integrations. The plaintext
+// token is shown exactly once, at creation — never retrievable again.
+function ApiKeysCard() {
+  const [keys, setKeys] = useState(null);
+  const [label, setLabel] = useState('');
+  const [fresh, setFresh] = useState(null);   // {label, token} shown once
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/auth/keys');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setKeys((await r.json()).keys || []);
+    } catch (e) {
+      if (e.message !== 'unauthenticated') setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const ago = (ts) => {
+    if (!ts) return 'never';
+    const dt = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (dt < 60) return `${dt}s ago`;
+    if (dt < 3600) return `${Math.floor(dt / 60)}m ago`;
+    if (dt < 86400) return `${Math.floor(dt / 3600)}h ago`;
+    return `${Math.floor(dt / 86400)}d ago`;
+  };
+
+  const create = async () => {
+    const name = label.trim();
+    if (!name) return;
+    setBusy(true); setError('');
+    try {
+      const r = await apiFetch('/api/auth/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: name }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(b.detail || `HTTP ${r.status}`);
+      }
+      const b = await r.json();
+      setFresh({ label: b.label, token: b.token });
+      setLabel('');
+      await load();
+    } catch (e) {
+      if (e.message !== 'unauthenticated') setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (id, lbl) => {
+    if (!window.confirm(`Revoke key "${lbl}"? Anything using it will stop working immediately.`)) return;
+    try {
+      const r = await apiFetch(`/api/auth/keys/${id}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      if (e.message !== 'unauthenticated') setError(e.message);
+    }
+  };
+
+  return (
+    <SectionCard label="API keys">
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+        Keys for scripts and integrations that call subarr's API. Each key has full
+        access. Send it as an <code>X-API-Key</code> header or <code>?apikey=</code> query.
+      </div>
+
+      {fresh && (
+        <div style={{
+          background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)',
+          padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--warn-400, #fbbf24)', fontWeight: 600 }}>
+            Copy this now — you won't see it again.
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <code style={{ flex: 1, wordBreak: 'break-all', fontSize: 'var(--text-sm)' }}>{fresh.token}</code>
+            <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(fresh.token); }}>Copy</button>
+            <button className="btn sm ghost" onClick={() => setFresh(null)}>Done</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
+          placeholder="Label (e.g. home-assistant)"
+          maxLength={64}
+          style={{
+            flex: 1, padding: '8px 10px', background: 'var(--bg-0)', border: 'var(--border)',
+            borderRadius: 'var(--radius-md)', color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
+          }} />
+        <button className="btn sm violet" onClick={create} disabled={busy || !label.trim()}>
+          {busy ? '…' : 'Generate'}
+        </button>
+      </div>
+
+      {error && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-400, #f87171)' }}>{error}</div>}
+
+      {keys && keys.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: 'var(--fg-2)' }}>
+              <th style={{ padding: '4px 6px' }}>Label</th>
+              <th style={{ padding: '4px 6px' }}>Key</th>
+              <th style={{ padding: '4px 6px' }}>Created</th>
+              <th style={{ padding: '4px 6px' }}>Last used</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {keys.map((k) => (
+              <tr key={k.id} style={{ borderTop: 'var(--border)' }}>
+                <td style={{ padding: '6px' }}>{k.label}</td>
+                <td style={{ padding: '6px', fontFamily: 'monospace' }}>sbar_…{k.last4}</td>
+                <td style={{ padding: '6px', color: 'var(--fg-2)' }}>{ago(k.created_at)}</td>
+                <td style={{ padding: '6px', color: 'var(--fg-2)' }}>{ago(k.last_used_at)}</td>
+                <td style={{ padding: '6px', textAlign: 'right' }}>
+                  <button className="btn sm ghost" onClick={() => revoke(k.id, k.label)}>Revoke</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {keys && keys.length === 0 && (
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>No API keys yet.</div>
+      )}
+    </SectionCard>
   );
 }
 

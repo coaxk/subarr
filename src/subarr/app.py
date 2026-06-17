@@ -68,6 +68,7 @@ from .onboarding import OnboardingStore, install_is_configured
 from .routers import (
     admin,
     aftercare as r_aftercare,
+    api_keys as r_api_keys,
     auth as r_auth,
     arbiter as r_arbiter,
     arena as r_arena,
@@ -906,6 +907,7 @@ app.add_middleware(
 )
 
 app.include_router(r_auth.router)
+app.include_router(r_api_keys.router)
 app.include_router(browse.router)
 app.include_router(mode.router)
 app.include_router(queue.router)
