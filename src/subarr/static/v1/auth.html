@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Subarr · Sign in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<link rel="icon" type="image/svg+xml" href="/static/v1/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/v1/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/v1/favicon-16.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="home-hifi/tokens.css">
+
+<style>
+  html, body, #root { height: 100%; }
+  body { margin: 0; background: var(--bg-0); color: var(--fg-0); }
+</style>
+
+<!-- React 18.3.1 production build, self-hosted (no CDN) so subarr renders offline / airgapped. -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="home-hifi/auth.bundle.js" defer></script>
+</body>
+</html>
