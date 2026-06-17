@@ -29,7 +29,10 @@ def parse_cidrs(csv: str | None) -> list[ipaddress._BaseNetwork]:
         try:
             out.append(ipaddress.ip_network(cidr, strict=False))
         except ValueError:
-            log.warning("ignoring invalid CIDR/IP in config: %r", cidr)
+            # Don't echo the raw entry into the log — CodeQL's clear-text-logging
+            # taint flags config strings reaching a log sink. The operator can see
+            # their own env; a generic notice is enough.
+            log.warning("ignoring an invalid CIDR/IP entry in proxy/allowlist config")
     return out
 
 
