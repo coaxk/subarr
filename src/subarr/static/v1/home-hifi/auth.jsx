@@ -96,8 +96,11 @@ export function AuthPage() {
 
   return (
     <form style={card} onSubmit={submit}>
-      <div style={{ fontSize: 'var(--text-h2)', fontWeight: 700, color: 'var(--fg-0)' }}>
-        {isSetup ? 'Welcome to subarr' : 'Sign in'}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+        <img src="/static/v1/favicon.svg" alt="subarr" width="48" height="48" style={{ display: 'block' }} />
+        <div style={{ fontSize: 'var(--text-h2)', fontWeight: 700, color: 'var(--fg-0)' }}>
+          {isSetup ? 'Welcome to subarr' : 'Sign in to subarr'}
+        </div>
       </div>
 
       {isSetup && (
@@ -159,6 +162,47 @@ export function AuthPage() {
       <button className="btn violet" type="submit" disabled={busy} style={{ marginTop: 4 }}>
         {busy ? '…' : isSetup ? 'Create account' : 'Sign in'}
       </button>
+
+      {!isSetup && (
+        <details style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--violet-400)' }}>Forgot your password?</summary>
+          <div style={{ marginTop: 8, lineHeight: 1.6 }}>
+            There's no email reset — subarr is self-hosted, so recovery happens on the box itself.
+            Any one of these gets you back in (none touch the database directly):
+            <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+              <li>
+                <b>CLI reset</b> — set a new password:
+                <br />
+                <code style={{ wordBreak: 'break-all' }}>
+                  docker exec subarr python -m subarr.cli set-password --username admin --password '…'
+                </code>
+                <br />
+                or <code>… reset-auth</code> to clear it and return to first-run setup.
+              </li>
+              <li>
+                <b>Env override</b> — set <code>SUBARR_USER</code> + <code>SUBARR_PASS</code> in your
+                compose and restart; that pair always logs in.
+              </li>
+              <li>
+                <b>Full reset</b> — set <code>SUBARR_AUTH_RESET=1</code> and restart to clear the stored
+                credential and see the setup screen again.
+              </li>
+            </ol>
+            <div style={{ marginTop: 6 }}>
+              Full details in the{' '}
+              <a
+                href="https://github.com/coaxk/subarr#authentication"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--violet-400)' }}
+              >
+                README
+              </a>
+              .
+            </div>
+          </div>
+        </details>
+      )}
     </form>
   );
 }
