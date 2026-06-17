@@ -198,6 +198,16 @@ class Settings:
     # out). Empty is the off-signal, so bare get (not _env_or).
     session_secret: str
 
+    # #260 login brute-force throttle. trusted_proxies: CIDRs whose
+    # X-Forwarded-For we believe (to key the throttle on the real client IP
+    # behind a reverse proxy). login_allowlist: CIDRs exempt from the throttle
+    # entirely ("never block my LAN"). Both empty by default (no XFF trust, no
+    # exemptions). max_attempts/window_s tune the sliding window.
+    trusted_proxies: str
+    login_allowlist: str
+    login_max_attempts: int
+    login_window_s: int
+
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
     # canonical-to-subarr form used everywhere else (relative to media_root).
@@ -293,6 +303,10 @@ def load() -> Settings:
         auth_reset=_env_or("SUBARR_AUTH_RESET", "0").strip().lower() in ("1", "true", "yes", "on"),
         cookie_samesite=_normalize_samesite(_env_or("SUBARR_COOKIE_SAMESITE", "lax")),
         session_secret=os.environ.get("SUBARR_SESSION_SECRET", ""),
+        trusted_proxies=os.environ.get("SUBARR_TRUSTED_PROXIES", ""),
+        login_allowlist=os.environ.get("SUBARR_LOGIN_ALLOWLIST", ""),
+        login_max_attempts=int(_env_or("SUBARR_LOGIN_MAX_ATTEMPTS", "5")),
+        login_window_s=int(_env_or("SUBARR_LOGIN_WINDOW_S", "300")),
         # #136: default 30 days. 0/negative disables arena-run pruning.
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )

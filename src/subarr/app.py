@@ -271,6 +271,17 @@ async def lifespan(app_: FastAPI):
         app_.state.auth_store.clear_credential()
         log.warning("SUBARR_AUTH_RESET set — cleared the stored credential; first-run setup will show.")
 
+    # #260 login brute-force throttle + the trusted-proxy set used to resolve the
+    # real client IP behind a reverse proxy. Parsed once here from env config.
+    from .login_throttle import LoginThrottle, parse_cidrs
+
+    app_.state.trusted_proxies = parse_cidrs(settings.trusted_proxies)
+    app_.state.login_throttle = LoginThrottle(
+        max_attempts=settings.login_max_attempts,
+        window_s=settings.login_window_s,
+        allowlist=parse_cidrs(settings.login_allowlist),
+    )
+
     app_.state.subgen = SubgenClient()
     # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth

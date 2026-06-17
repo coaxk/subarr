@@ -1720,7 +1720,44 @@ function SystemPanel() {
       </SectionCard>
 
       <ApiKeysCard />
+      <LoginSecurityCard />
     </div>
+  );
+}
+
+// ─── Login security (#260) ───────────────────────────────────────
+// Read-only view of the brute-force throttle (configured via env vars).
+function LoginSecurityCard() {
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => {
+    apiFetch('/api/auth/throttle-config')
+      .then((r) => (r.ok ? r.json() : null)).then(setCfg).catch(() => {});
+  }, []);
+  if (!cfg) return null;
+  const list = (a) => (a && a.length ? a.join(', ') : 'none');
+  const row = (label, value, env) => (
+    <tr style={{ borderTop: 'var(--border)' }}>
+      <td style={{ padding: '6px', color: 'var(--fg-2)', whiteSpace: 'nowrap' }}>{label}</td>
+      <td style={{ padding: '6px', fontFamily: 'monospace' }}>{value}</td>
+      <td style={{ padding: '6px', color: 'var(--fg-2)', fontSize: 'var(--text-xs)' }}>{env}</td>
+    </tr>
+  );
+  return (
+    <SectionCard label="Login security">
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+        Failed sign-ins are rate-limited per client IP — after {cfg.max_attempts} failures within{' '}
+        {cfg.window_s}s that IP waits briefly before trying again (never a permanent lockout).
+        Configured via environment variables; shown here read-only.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+        <tbody>
+          {row('Max failed attempts', cfg.max_attempts, 'SUBARR_LOGIN_MAX_ATTEMPTS')}
+          {row('Window (seconds)', cfg.window_s, 'SUBARR_LOGIN_WINDOW_S')}
+          {row('Trusted proxies', list(cfg.trusted_proxies), 'SUBARR_TRUSTED_PROXIES')}
+          {row('Never-throttle allowlist', list(cfg.allowlist), 'SUBARR_LOGIN_ALLOWLIST')}
+        </tbody>
+      </table>
+    </SectionCard>
   );
 }
 
