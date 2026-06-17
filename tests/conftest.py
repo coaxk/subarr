@@ -309,6 +309,7 @@ def _make_integration_bundle(
 
     Each *_handler is a callable httpx.Request -> httpx.Response. Pass None
     to mark that integration as unconfigured (it'll return is_configured() False)."""
+    from subarr.circuit_breaker import CircuitBreaker
     from subarr.coverage_engine import IntegrationBundle
     from subarr.integrations.bazarr import BazarrClient
     from subarr.integrations.radarr import RadarrClient
@@ -317,6 +318,7 @@ def _make_integration_bundle(
 
     def _wrap(cls, handler, base_url, headers=None):
         c = cls.__new__(cls)
+        c._breaker = CircuitBreaker()  # #235: stub bypasses __init__, set it here
         if handler is None:
             # Mark unconfigured. base/url cleared so is_configured() == False.
             c._base_url = ""
