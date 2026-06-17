@@ -247,18 +247,27 @@ class AuthGateMiddleware:
     delegated (SUBARR_AUTH_DISABLED). In first-run setup mode, unauthenticated
     requests are steered to /setup; otherwise to /login (HTML) or 401 (/api/*)."""
 
-    def __init__(self, app, *, settings, store):
+    def __init__(self, app, *, settings, get_store):
         self._app = app
         self._settings = settings
-        self._store = store
+        # Lazy: the AuthStore is built in the lifespan startup, AFTER this
+        # middleware is registered at import. get_store() resolves it per request.
+        self._get_store = get_store
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or self._settings.auth_disabled:
             await self._app(scope, receive, send)
             return
 
+        store = self._get_store()
+        if store is None:
+            # Pre-lifespan (store not built yet) never serves real traffic; fail
+            # open rather than crash on the off chance a request arrives early.
+            await self._app(scope, receive, send)
+            return
+
         path = scope.get("path", "/")
-        setup_mode = needs_setup(self._settings, self._store)
+        setup_mode = needs_setup(self._settings, store)
         if self._bypassed(path, setup_mode):
             await self._app(scope, receive, send)
             return

@@ -192,6 +192,11 @@ class Settings:
     # none. `none` is for embedding subarr in a cross-site dashboard iframe and
     # forces Secure (https), per browser rules.
     cookie_samesite: str
+    # SUBARR_SESSION_SECRET — signs the session cookie. Set it (any long random
+    # string) to keep logins across restarts; empty ⇒ an ephemeral per-boot
+    # secret (sessions reset on restart — you just log in again, never locked
+    # out). Empty is the off-signal, so bare get (not _env_or).
+    session_secret: str
 
     # Filesystem prefix subgen prepends to canonical paths inside its container.
     # /api/coverage uses this to map a Sonarr/Radarr `path` field back to the
@@ -287,6 +292,7 @@ def load() -> Settings:
         auth_disabled=_env_or("SUBARR_AUTH_DISABLED", "0").strip().lower() in ("1", "true", "yes", "on"),
         auth_reset=_env_or("SUBARR_AUTH_RESET", "0").strip().lower() in ("1", "true", "yes", "on"),
         cookie_samesite=_normalize_samesite(_env_or("SUBARR_COOKIE_SAMESITE", "lax")),
+        session_secret=os.environ.get("SUBARR_SESSION_SECRET", ""),
         # #136: default 30 days. 0/negative disables arena-run pruning.
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )

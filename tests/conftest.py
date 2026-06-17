@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import httpx
 import pytest
+
+# #238: the suite exercises app LOGIC, not the auth gate (which has its own
+# dedicated tests in test_auth_core / test_auth_router). Disable the forced-auth
+# gate suite-wide so the ~1000 real-app tests aren't all 401'd. Set at import
+# (before any subarr.app import) so the import-time settings singleton sees it.
+os.environ.setdefault("SUBARR_AUTH_DISABLED", "1")
 
 
 def _make_compose(p: Path) -> None:

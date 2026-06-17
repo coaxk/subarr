@@ -40,15 +40,20 @@ def _auth_is_configured(api_key: str, auth_user: str, auth_pass: str) -> bool:
 
 
 @router.get("/auth-status")
-async def auth_status() -> dict:
-    """Whether any authentication is configured. Backs the dashboard's
-    no-auth warning banner (#238). Intentionally unauthenticated + leaks no
-    secret — it only reports the boolean an attacker could already infer by
-    probing /api/* without a key, and it must be readable precisely in the
-    no-auth case the banner exists for."""
+async def auth_status(request: Request) -> dict:
+    """Whether any authentication is configured. Backs the dashboard's no-auth
+    warning banner (#238-A). Leaks no secret. Under forced auth (#238) this is
+    also True once an admin credential is set OR auth is delegated to a proxy
+    (SUBARR_AUTH_DISABLED) — so the banner doesn't false-nag a properly-secured
+    install."""
     from ..config import settings
 
-    return {"configured": _auth_is_configured(settings.api_key, settings.auth_user, settings.auth_pass)}
+    if settings.auth_disabled:  # delegated to a reverse proxy — not exposure
+        return {"configured": True}
+    store = getattr(request.app.state, "auth_store", None)
+    has_cred = bool(store and store.has_credential())
+    configured = has_cred or _auth_is_configured(settings.api_key, settings.auth_user, settings.auth_pass)
+    return {"configured": configured}
 
 
 @router.post("/restart")

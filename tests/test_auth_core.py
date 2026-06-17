@@ -126,7 +126,7 @@ async def _run_gate(settings, store, scope):
     async def inner(s, r, sd):
         inner_called["v"] = True
 
-    await auth.AuthGateMiddleware(inner, settings=settings, store=store)(scope, receive, send)
+    await auth.AuthGateMiddleware(inner, settings=settings, get_store=lambda: store)(scope, receive, send)
     return inner_called["v"], captured
 
 

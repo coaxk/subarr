@@ -68,6 +68,7 @@ from .onboarding import OnboardingStore
 from .routers import (
     admin,
     aftercare as r_aftercare,
+    auth as r_auth,
     arbiter as r_arbiter,
     arena as r_arena,
     arr_mediainfo as r_arr_mediainfo,
@@ -258,6 +259,17 @@ async def lifespan(app_: FastAPI):
     applied = run_migrations(settings.db_path)
     if applied:
         log.info("schema migrations applied this boot: %s", [m.name for m in applied])
+
+    # #238: auth. Migrations (above) created the auth tables before we open the
+    # store. settings + store live on app.state for the auth router + gate.
+    from .auth_store import AuthStore
+
+    app_.state.settings = settings
+    app_.state.auth_store = AuthStore(settings.db_path)
+    if settings.auth_reset:
+        app_.state.auth_store.clear_credential()
+        log.warning("SUBARR_AUTH_RESET set — cleared the stored credential; first-run setup will show.")
+
     app_.state.subgen = SubgenClient()
     # Probe subgen capabilities once at boot. The result drives:
     #   - whether the header counter shows queue depth
@@ -846,10 +858,23 @@ app = FastAPI(title="subarr", version=__version__, lifespan=lifespan)
 #   - BasicAuth is outermost so a 401 challenge returns before any body
 #     is built or compressed. No-op when SUBARR_USER/SUBARR_PASS unset.
 from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+import secrets as _secrets  # noqa: E402
+from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
+
 from .security_headers import SecurityHeadersMiddleware  # noqa: E402
-from .auth import BasicAuthMiddleware  # noqa: E402
-from .api_security import ApiKeyMiddleware, CsrfOriginMiddleware  # noqa: E402
+from .auth import AuthGateMiddleware  # noqa: E402
+from .api_security import CsrfOriginMiddleware  # noqa: E402
 from .request_crash_capture import RequestCrashCaptureMiddleware  # noqa: E402
+
+# #238: signed session-cookie secret. From SUBARR_SESSION_SECRET (persists logins
+# across restarts) or an ephemeral per-boot value (sessions reset on restart — a
+# re-login, never a lockout). Resolved at import with NO DB access.
+_session_secret = settings.session_secret or _secrets.token_urlsafe(48)
+if not settings.session_secret:
+    log.warning(
+        "SUBARR_SESSION_SECRET unset — using an ephemeral session secret; logins "
+        "reset on restart. Set it to a long random string to persist sessions."
+    )
 
 # #199: innermost — sees only exceptions that escaped route handlers (500s),
 # records the sanitized (type, module:line) into CrashStore, re-raises. The
@@ -862,9 +887,25 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CsrfOriginMiddleware, enabled=settings.csrf_protection)
-app.add_middleware(ApiKeyMiddleware, api_key=settings.api_key)
-app.add_middleware(BasicAuthMiddleware, user=settings.auth_user, password=settings.auth_pass)
+# #238: forced-auth gate. Replaces the optional BasicAuth + ApiKey middlewares —
+# the gate accepts session OR env-basic OR api-key as principals (current_principal).
+# SessionMiddleware is registered LAST so it is OUTERMOST: it populates
+# scope["session"] before the gate reads it.
+app.add_middleware(
+    AuthGateMiddleware,
+    settings=settings,
+    get_store=lambda: getattr(app.state, "auth_store", None),
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    session_cookie="subarr_session",
+    same_site=settings.cookie_samesite,
+    https_only=(settings.cookie_samesite == "none"),
+    max_age=14 * 24 * 3600,
+)
 
+app.include_router(r_auth.router)
 app.include_router(browse.router)
 app.include_router(mode.router)
 app.include_router(queue.router)
