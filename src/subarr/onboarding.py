@@ -85,6 +85,79 @@ def _mask_progress(progress: dict[str, Any]) -> dict[str, Any]:
     return {k: (_mask_secret(v) if _is_secret_key(k) else v) for k, v in progress.items()}
 
 
+# ─── Established-install detection + pre-fill (#262) ─────────────────
+# An install configured via env vars (the common arr-stack pattern) never
+# runs the wizard, so `is_complete` stays False forever. Without this, the
+# `/` redirect drags those established users into a blank first-run wizard
+# after login. We treat "has any integration credential" as the signal that
+# this is NOT a first run, and we pre-fill the wizard from live settings so
+# that when it *does* show (genuine first run with partial env, or an explicit
+# Re-run), the fields reflect current config instead of blanks.
+
+# Wizard-field name → Settings attribute. Mirrors _apply_progress_to_settings
+# in routers/onboarding.py (the inverse direction).
+_PREFILL_FIELDS = (
+    "media_root",
+    "arr_path_prefix",
+    "bazarr_url",
+    "bazarr_api_key",
+    "sonarr_url",
+    "sonarr_api_key",
+    "radarr_url",
+    "radarr_api_key",
+    "tautulli_url",
+    "tautulli_api_key",
+    "subgen_url",
+    "ollama_url",
+    "ollama_model",
+    "plex_url",
+    "plex_token",
+)
+
+# Credentials whose presence proves the install is already set up. URLs are
+# excluded — they carry compose-default values even on a fresh install.
+_CONFIGURED_SIGNALS = (
+    "bazarr_api_key",
+    "sonarr_api_key",
+    "radarr_api_key",
+    "tautulli_api_key",
+    "plex_token",
+)
+
+
+def install_is_configured(settings: Any) -> bool:
+    """True when the install already has integration credentials — i.e. it was
+    configured (typically via env vars) and should NOT be forced through the
+    first-run wizard."""
+    return any(bool(getattr(settings, attr, "")) for attr in _CONFIGURED_SIGNALS)
+
+
+def settings_prefill(settings: Any) -> dict[str, Any]:
+    """Wizard-field values derived from the live Settings, for pre-filling the
+    wizard. Omits empty fields (so blank credentials don't paint over nothing).
+    Returns RAW values — the caller masks secrets before they leave the server."""
+    out: dict[str, Any] = {}
+    for attr in _PREFILL_FIELDS:
+        val = getattr(settings, attr, "")
+        if attr == "media_root" and val:
+            val = str(val)  # may be a Path on the real Settings
+        if val:
+            out[attr] = val
+    return out
+
+
+def apply_prefill(state_dict: dict[str, Any], settings: Any) -> dict[str, Any]:
+    """Merge settings-derived defaults UNDER the stored progress in a state dict
+    (as returned by OnboardingState.to_dict), so the wizard pre-fills from live
+    config. Stored progress (the user's wizard edits) always wins. Prefill
+    secrets are masked the same way to_dict() masks stored progress, so raw
+    credentials never reach the client. Does not mutate the input."""
+    masked_prefill = _mask_progress(settings_prefill(settings))
+    out = dict(state_dict)
+    out["progress"] = {**masked_prefill, **(state_dict.get("progress") or {})}
+    return out
+
+
 @dataclass
 class OnboardingState:
     step: int
