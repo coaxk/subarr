@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import httpx
 import pytest
+
+# #238: the suite exercises app LOGIC, not the auth gate (which has its own
+# dedicated tests in test_auth_core / test_auth_router). Disable the forced-auth
+# gate suite-wide so the ~1000 real-app tests aren't all 401'd. Set at import
+# (before any subarr.app import) so the import-time settings singleton sees it.
+os.environ.setdefault("SUBARR_AUTH_DISABLED", "1")
 
 
 def _make_compose(p: Path) -> None:
@@ -309,6 +316,7 @@ def _make_integration_bundle(
 
     Each *_handler is a callable httpx.Request -> httpx.Response. Pass None
     to mark that integration as unconfigured (it'll return is_configured() False)."""
+    from subarr.circuit_breaker import CircuitBreaker
     from subarr.coverage_engine import IntegrationBundle
     from subarr.integrations.bazarr import BazarrClient
     from subarr.integrations.radarr import RadarrClient
@@ -317,6 +325,7 @@ def _make_integration_bundle(
 
     def _wrap(cls, handler, base_url, headers=None):
         c = cls.__new__(cls)
+        c._breaker = CircuitBreaker()  # #235: stub bypasses __init__, set it here
         if handler is None:
             # Mark unconfigured. base/url cleared so is_configured() == False.
             c._base_url = ""

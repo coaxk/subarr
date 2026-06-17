@@ -47,13 +47,50 @@ class ProbePathsRequest(BaseModel):
     media_root: str
 
 
+# ─── Masked-credential fallback for Test-connection (#262) ──────────
+
+# Service → Settings attribute holding its API key. Plex is handled separately
+# (it authenticates with a token, carried in the `token` field).
+_TEST_CRED_ATTR = {
+    "bazarr": "bazarr_api_key",
+    "sonarr": "sonarr_api_key",
+    "radarr": "radarr_api_key",
+    "tautulli": "tautulli_api_key",
+}
+
+
+def _resolve_masked_credential(service: str, body: "TestRequest", settings: Any) -> None:
+    """The pre-filled wizard shows masked secrets (••••1234). If the user tests a
+    connection without retyping, the masked placeholder would fail the live
+    probe. Substitute the real value from settings for a masked/blank credential
+    so 'Test connection' works on a pre-filled (re-run / env-configured) wizard.
+    A genuinely retyped value is left untouched. Mutates body in place."""
+    from ..onboarding import _is_masked
+
+    svc = service.lower()
+    if svc == "plex":
+        tok = body.token or body.api_key or ""
+        if (not tok or _is_masked(tok)) and getattr(settings, "plex_token", ""):
+            body.token = settings.plex_token
+        return
+    attr = _TEST_CRED_ATTR.get(svc)
+    if attr and (not body.api_key or _is_masked(body.api_key)) and getattr(settings, attr, ""):
+        body.api_key = getattr(settings, attr)
+
+
 # ─── State endpoints ────────────────────────────────────────────────
 
 
 @router.get("/onboarding/state")
 def get_state(request: Request) -> dict[str, Any]:
+    # #262: pre-fill from live settings (env-configured installs, or an explicit
+    # Re-run) so the wizard reflects current config instead of blank fields.
+    # Stored wizard progress wins; secrets are masked inside apply_prefill.
+    from ..config import settings
+    from ..onboarding import apply_prefill
+
     state = request.app.state.onboarding.get()
-    return state.to_dict()
+    return apply_prefill(state.to_dict(), settings)
 
 
 @router.put("/onboarding/state")
@@ -100,6 +137,11 @@ async def test_connection(service: str, body: TestRequest, request: Request) -> 
     wanted" confirmation chip when green.
     """
     svc = service.lower()
+    # #262: a pre-filled wizard shows masked secrets; substitute the real value
+    # from settings when the user tests without retyping, else the probe fails.
+    from ..config import settings as _live_settings
+
+    _resolve_masked_credential(svc, body, _live_settings)
     handlers = {
         "bazarr": _test_bazarr,
         "sonarr": _test_sonarr,

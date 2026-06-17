@@ -62,14 +62,23 @@ class AfterCareStore:
             return cur.rowcount
 
     def record(
-        self, *, canonical_path: str, completed_at: float, evaluation: AftercareEvaluation, source: str | None
+        self,
+        *,
+        canonical_path: str,
+        completed_at: float,
+        evaluation: AftercareEvaluation,
+        source: str | None,
+        preview: str | None = None,
     ) -> None:
+        # `preview` (#216) is an already-sanitized snippet of a representative
+        # cue, shown in the review UI to explain why an EXTERNAL sub is flagged.
+        # NULL for our own (clean) Whisper output.
         with self._lock:
             self._conn.execute(
                 "INSERT INTO aftercare_results "
                 "(canonical_path, completed_at, composite, cue_count, flagged, "
-                " readability_json, signals_json, source, reviewed_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                " readability_json, signals_json, source, preview, reviewed_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
                 (
                     canonical_path,
                     completed_at,
@@ -79,6 +88,7 @@ class AfterCareStore:
                     json.dumps(evaluation.readability) if evaluation.readability else None,
                     json.dumps(evaluation.signals) if evaluation.signals else None,
                     source,
+                    preview,
                     time.time(),
                 ),
             )
@@ -88,10 +98,23 @@ class AfterCareStore:
             row = self._conn.execute(_PENDING_COUNT_SQL).fetchone()
         return int(row[0])
 
-    def list_results(self, *, view: str, limit: int, offset: int) -> list[dict[str, Any]]:
-        sql = _LIST_FLAGGED_SQL if view == "flagged" else _LIST_ALL_SQL
+    def list_results(
+        self, *, view: str, limit: int, offset: int, source: str | None = None
+    ) -> list[dict[str, Any]]:
+        # #216: optional source filter (e.g. 'existing_audit') lets the review
+        # page separate audited external subs from completion-watcher rows.
+        base = _LIST_FLAGGED_SQL if view == "flagged" else _LIST_ALL_SQL
+        if source is not None:
+            # Splice the source predicate before the trailing ORDER BY clause so
+            # the LIMIT/OFFSET params stay last.
+            head, sep, tail = base.partition("ORDER BY")
+            sql = f"{head}AND a.source = ? {sep}{tail}"
+            params: tuple = (source, limit, offset)
+        else:
+            sql = base
+            params = (limit, offset)
         with self._lock:
-            rows = self._conn.execute(sql, (limit, offset)).fetchall()
+            rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def get(self, result_id: int) -> dict[str, Any] | None:
@@ -135,6 +158,7 @@ class AfterCareStore:
             "readability": json.loads(r["readability_json"]) if r["readability_json"] else None,
             "signals": json.loads(r["signals_json"]) if r["signals_json"] else None,
             "source": r["source"],
+            "preview": r["preview"],
             "reviewed_at": r["reviewed_at"],
             "created_at": r["created_at"],
         }

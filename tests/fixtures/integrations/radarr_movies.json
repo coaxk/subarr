@@ -1,0 +1,12 @@
+[
+  {
+    "id": 7,
+    "title": "Example Movie",
+    "year": 2024,
+    "path": "/movies/Example Movie (2024)",
+    "monitored": true,
+    "tags": [],
+    "hasFile": true,
+    "movieFile": { "id": 99, "relativePath": "Example Movie (2024) Bluray-1080p.mkv" }
+  }
+]

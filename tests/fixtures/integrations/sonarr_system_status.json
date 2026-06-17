@@ -1,0 +1,11 @@
+{
+  "appName": "Sonarr",
+  "instanceName": "Sonarr",
+  "version": "4.0.10.2680",
+  "buildTime": "2024-09-01T00:00:00Z",
+  "isDocker": true,
+  "runtimeName": "dotnet",
+  "osName": "ubuntu",
+  "branch": "main",
+  "authentication": "forms"
+}

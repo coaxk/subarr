@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "title": "Example Movie",
+      "radarrId": 7,
+      "missing_subtitles": [{ "name": "English", "code2": "en", "code3": "eng", "forced": false, "hi": false }],
+      "sceneName": "Example.Movie.2024.1080p.BluRay.x264-GROUP",
+      "tags": [],
+      "monitored": "True"
+    }
+  ],
+  "total": 1
+}

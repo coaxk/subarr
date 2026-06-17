@@ -126,6 +126,17 @@ def parse_atom_feed(xml_text: str) -> dict[str, Any] | None:
     return entries[0] if entries else None
 
 
+def parse_vanilla_version(py_source: str) -> str | None:
+    """#223: vanilla McCloudS/subgen ships NO releases/tags, so the Atom feed
+    can't see it. Its version is the ``subgen_version = '<v>'`` constant at the
+    top of subgen.py — pull it from the raw file. Returns None if absent (the
+    constant moved/renamed) so the caller fails soft to 'no release info'."""
+    import re
+
+    m = re.search(r"^subgen_version\s*=\s*['\"]([^'\"]+)['\"]", py_source, re.MULTILINE)
+    return m.group(1) if m else None
+
+
 def missed_releases(entries: list[dict[str, Any]], current_version: str | None) -> list[dict[str, Any]]:
     """The releases an install is missing: every feed entry NEWER than its
     current version (entries are newest-first; we take until we hit the
@@ -167,6 +178,13 @@ DEFAULT_PRODUCTS = {
     "subarr": "coaxk/subarr",
     "subarr-subgen": "coaxk/subarr-subgen",
 }
+
+# #223: vanilla McCloudS/subgen has no releases/tags. When the connected subgen
+# is vanilla (not subarr-subgen), the app swaps the "subarr-subgen" product for
+# this one and routes it through the version-constant path (vanilla_products).
+VANILLA_SUBGEN_PRODUCT = "subgen"
+VANILLA_SUBGEN_REPO = "McCloudS/subgen"
+VANILLA_SUBGEN_RAW_URL = "https://raw.githubusercontent.com/McCloudS/subgen/main/subgen.py"
 
 # Poll cadence. The 24h floor keeps us well below GitHub's anonymous
 # rate limit (60/h shared across all IPs from a NAT — homelab users
@@ -228,6 +246,7 @@ class UpdateChecker:
         products: dict[str, str] | None = None,
         poll_interval_s: int = DEFAULT_POLL_INTERVAL_S,
         current_version_resolver: dict[str, str | None] | None = None,
+        vanilla_products: dict[str, str] | None = None,
     ):
         self._db_path = db_path
         self._products = products or DEFAULT_PRODUCTS
@@ -236,6 +255,10 @@ class UpdateChecker:
         # don't introspect ourselves to keep this module decoupled from
         # SubgenClient + subarr.__version__.
         self._current = current_version_resolver or {}
+        # #223: product → raw subgen.py URL for products that have NO GitHub
+        # releases (vanilla McCloudS/subgen). These use the version-constant
+        # path instead of the Atom feed.
+        self._vanilla_products = vanilla_products or {}
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._client: httpx.AsyncClient | None = None
@@ -340,7 +363,11 @@ class UpdateChecker:
             )
         for product, repo in self._products.items():
             try:
-                await self._poll_one(product, repo)
+                raw_url = self._vanilla_products.get(product)
+                if raw_url:
+                    await self._poll_vanilla(product, repo, raw_url)
+                else:
+                    await self._poll_one(product, repo)
             except Exception as e:
                 log.warning("update poll failed for %s: %s", product, e)
                 self._write_error(product, repo, str(e))
@@ -386,6 +413,37 @@ class UpdateChecker:
             missed=missed,
         )
         log.info("update poll: %s → latest=%s (current=%s)", product, latest_tag, self._current.get(product))
+
+    async def _poll_vanilla(self, product: str, repo: str, raw_url: str) -> None:
+        """#223: version check for a product with NO GitHub releases (vanilla
+        McCloudS/subgen). Reads the `subgen_version` constant from the raw
+        subgen.py on main and compares to the installed version. Notes link to
+        the commit history (there are no release notes). Fail-soft: a moved
+        constant or fetch error → 'no release info', never a crash."""
+        r = await self._client.get(raw_url)
+        r.raise_for_status()
+        latest = parse_vanilla_version(r.text)
+        if not latest:
+            log.debug("vanilla version constant not found for %s (%s)", product, raw_url)
+            self._write_error(product, repo, "no release info")
+            return
+        self._write_state(
+            product=product,
+            repo=repo,
+            current_version=self._current.get(product),
+            latest_version=latest,
+            latest_released_at=None,  # a raw file has no release timestamp
+            release_notes_url=f"https://github.com/{repo}/commits/main",
+            is_breaking=False,  # no release body to scan
+            last_error=None,
+            missed=[],  # no per-release digest for an untagged upstream
+        )
+        log.info(
+            "update poll (vanilla): %s → latest=%s (current=%s)",
+            product,
+            latest,
+            self._current.get(product),
+        )
 
     # ─── DB writes ─────────────────────────────────────────────────
 
