@@ -27,6 +27,15 @@ breaking config changes.
     session-fixation), generic login errors (no user enumeration),
     `secrets.compare_digest` throughout.
 
+### Fixed
+- **Env-configured installs no longer forced into the onboarding wizard (#262).**
+  The root route only sends you to the first-run wizard when the install is
+  genuinely unconfigured. An install set up via env vars (the common arr-stack
+  pattern) lands on the dashboard instead of a blank wizard after login.
+  Relatedly, the wizard now **pre-fills from live settings** (secrets masked) so
+  an explicit "Re-run setup" reflects current config, and "Test connection"
+  falls back to the stored credential when a masked field is left untouched.
+
 ## [1.6.0] - 2026-06-14
 
 Headline: subarr now configures Whisper for your hardware. No migrations; no

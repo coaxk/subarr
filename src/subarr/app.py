@@ -64,7 +64,7 @@ from .probe_walker import ProbeWalker
 from .pending_feeder import PendingQueueFeeder
 from .pending_queue import PendingQueueStore
 from .provenance import ProvenanceStore, SOURCE_SUBGENSCAN
-from .onboarding import OnboardingStore
+from .onboarding import OnboardingStore, install_is_configured
 from .routers import (
     admin,
     aftercare as r_aftercare,
@@ -1057,7 +1057,12 @@ if _STATIC_DIR.is_dir():
         if store is not None:
             try:
                 state = store.get()
-                if not state.is_complete:
+                # #262: only force the wizard on a genuine first run. An install
+                # configured via env vars never completes the wizard, so gating
+                # on is_complete alone dragged established users into a blank
+                # wizard after login. Explicit "Re-run setup" links straight to
+                # /onboarding and so is unaffected by this gate.
+                if not state.is_complete and not install_is_configured(settings):
                     return RedirectResponse(url="/onboarding", status_code=302)
             except Exception as e:
                 log.warning("onboarding state lookup failed at /: %r", e)
