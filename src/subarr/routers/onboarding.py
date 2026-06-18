@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from ..error_detail import safe_error
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -158,7 +159,7 @@ async def test_connection(service: str, body: TestRequest, request: Request) -> 
         return await handler(body)
     except Exception as e:
         log.warning("test_connection %s failed: %s", svc, e)
-        return {"ok": False, "error": str(e), "version": None, "detail": None}
+        return {"ok": False, "error": safe_error(e), "version": None, "detail": None}
 
 
 async def _test_bazarr(body: TestRequest) -> dict[str, Any]:
@@ -387,7 +388,7 @@ async def root_folders(request: Request) -> dict[str, Any]:
                 ],
             }
         except Exception as e:  # noqa: BLE001 — best-effort diagnostics surface
-            out[name] = {"configured": True, "folders": [], "error": str(e)[:200]}
+            out[name] = {"configured": True, "folders": [], "error": safe_error(e)}
     return out
 
 
@@ -522,7 +523,7 @@ def detect_mounts() -> dict[str, Any]:
     except OSError as e:
         return {
             "available": False,
-            "reason": f"could not read {mountinfo_path}: {e}",
+            "reason": f"could not read {mountinfo_path}: {safe_error(e)}",
             "candidates": [],
         }
 
@@ -571,7 +572,7 @@ def probe_paths(body: ProbePathsRequest, request: Request) -> dict[str, Any]:
             if len(samples) >= 5:
                 break
     except PermissionError as e:
-        return {"ok": False, "error": f"permission denied reading {root}: {e}"}
+        return {"ok": False, "error": f"permission denied reading {root}: {safe_error(e)}"}
 
     return {
         "ok": True,
@@ -613,7 +614,7 @@ async def first_walk(request: Request) -> dict[str, Any]:
     except Exception as e:
         # Don't fail the walk if persistence fails — log it, surface it
         # in the response so the wizard can flag.
-        persist_error = str(e)
+        persist_error = safe_error(e)
         log.warning("first-walk: schedule probe_roots persist failed: %s", e)
 
     # 2. Fire the foreground walk for first-paint coverage data.
@@ -624,7 +625,7 @@ async def first_walk(request: Request) -> dict[str, Any]:
             walks.append({"walk_id": w.id, "root": w.root})
         except Exception as e:
             log.warning("first-walk start failed for %s: %s", root, e)
-            walks.append({"root": root, "error": str(e)})
+            walks.append({"root": root, "error": safe_error(e)})
     return {
         "walks": walks,
         "schedule_probe_roots": roots,

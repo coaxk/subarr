@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import shutil
+from ..error_detail import safe_error
 from typing import Any
 
 from fastapi import APIRouter
@@ -96,7 +97,7 @@ async def gpu_status() -> dict[str, Any]:
             )
             legacy = True
         except Exception as e2:
-            return {"online": False, "error": str(e2)}
+            return {"online": False, "error": safe_error(e2)}
 
     first = gpu_csv.strip().splitlines()[0] if gpu_csv.strip() else ""
     if not first:

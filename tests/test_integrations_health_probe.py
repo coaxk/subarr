@@ -49,7 +49,11 @@ async def test_status_failure_marks_offline():
         "bazarr_badges",
     )
     assert out["online"] is False
-    assert "timeout" in out["error"]
+    # #261: the raw exception text must NOT leak to the client; a safe,
+    # constant message is returned instead (real detail goes to the server log).
+    assert out["error"]
+    assert "timeout" not in out["error"]
+    assert "/api/system/status" not in out["error"]
 
 
 @pytest.mark.asyncio

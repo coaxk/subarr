@@ -8,6 +8,13 @@ breaking config changes.
 ## [Unreleased]
 
 ### Security
+- **No internal error detail leaks to API clients (#261).** Endpoints no longer
+  return raw exception text; a shared `safe_error()` maps failures to a constant,
+  leak-free message by type/HTTP-status (e.g. "authentication failed", "could
+  not connect", "the upstream service returned a server error") while the full
+  detail goes only to the server log. Operators still see *why* something failed,
+  without exposing paths/hostnames/stack info. Clears the 19 CodeQL
+  `py/stack-trace-exposure` findings.
 - **Forced authentication (#238).** subarr now requires a login by default,
   matching modern Sonarr/Radarr. A fresh install (or the first launch after
   upgrading from a no-auth version) shows a one-time setup screen to create an

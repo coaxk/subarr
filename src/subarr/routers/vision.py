@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..config import settings
+from ..error_detail import safe_error
 from ..integrations.ollama import OllamaError, _VISION_FAMILIES
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
@@ -147,7 +148,7 @@ async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResp
             async for line in ollama.pull_model(req.name):
                 yield (line + "\n").encode("utf-8")
         except OllamaError as e:
-            err = json.dumps({"error": str(e)})
+            err = json.dumps({"error": safe_error(e)})
             yield (err + "\n").encode("utf-8")
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")

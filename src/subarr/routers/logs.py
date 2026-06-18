@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..docker_client import DockerUnavailable
+from ..error_detail import safe_error
 
 router = APIRouter(prefix="/api", tags=["logs"])
 
@@ -26,7 +27,7 @@ async def logs_events(request: Request, tail: int = Query(200, ge=0, le=5000)) -
                 if await request.is_disconnected():
                     return
         except DockerUnavailable as e:
-            yield f"event: error\ndata: {json.dumps(str(e))}\n\n"
+            yield f"event: error\ndata: {json.dumps(safe_error(e))}\n\n"
         except asyncio.CancelledError:
             return
 

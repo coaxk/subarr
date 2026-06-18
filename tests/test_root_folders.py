@@ -90,7 +90,10 @@ def test_root_folders_endpoint_isolates_per_service_errors(app_with_stub):
     body = app_with_stub.get("/api/onboarding/root-folders").json()
     assert body["radarr"]["configured"] is True
     assert body["radarr"]["folders"] == []
-    assert "arr down" in body["radarr"]["error"]
+    # #261: per-service failure still isolates the error, but the raw exception
+    # text is sanitized out of the response (no leak to the client).
+    assert body["radarr"]["error"]
+    assert "arr down" not in body["radarr"]["error"]
     assert body["sonarr"]["configured"] is False  # the other service unaffected
 
 

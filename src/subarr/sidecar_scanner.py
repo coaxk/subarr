@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+from .error_detail import safe_error
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -145,13 +146,13 @@ def scan(root: Path, loose_threshold: float = 0.85, max_depth: int | None = None
             if max_depth is not None and (len(srt_path.parts) - root_depth) > max_depth:
                 continue
         except OSError as e:
-            result.errors.append(f"{srt_path}: {e}")
+            result.errors.append(f"{srt_path}: {safe_error(e)}")
             continue
         result.total_srt += 1
         try:
             mismatch = _classify_one(srt_path, loose_threshold)
         except OSError as e:
-            result.errors.append(f"{srt_path}: {e}")
+            result.errors.append(f"{srt_path}: {safe_error(e)}")
             continue
         if mismatch is None:
             result.exact_matches += 1
