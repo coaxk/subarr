@@ -7,6 +7,13 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Update nudge no longer fires when you're ahead of the latest release (#275).**
+  A locally-built install (or the window just after a release is tagged but
+  before it publishes) could show "vX is out — you're on vY (N releases behind)"
+  when Y was actually *newer* than X. The checker now compares versions
+  directionally — it only nudges when the running version is strictly older.
+
 ## [2.0.0] - 2026-06-18
 
 **Security hardening + activation.** subarr now requires authentication by default and runs as a non-root user.
