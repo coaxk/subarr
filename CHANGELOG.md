@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Security
+- **Runs as a non-root user now (#237).** The container drops to `PUID`/`PGID`
+  (default 1000:1000) — the entrypoint starts as root only to fix `/data`
+  ownership (so existing installs keep working after upgrade) and grant docker-
+  socket access, then drops privileges before the app starts. `PUID`/`PGID` are
+  now real (previously decorative). The LaBSE QE model cache moved to
+  `/data/.cache/huggingface` so it persists. See the hardened-deployment compose
+  notes for the minimal capability set.
+
 ### Added
 - **Onboarding-funnel telemetry (#202).** Anonymous pings now carry a coarse
   `onboarding_step` + `onboarding_complete` so we can see where first-run drops

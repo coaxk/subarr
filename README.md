@@ -79,17 +79,23 @@ After onboarding you can edit any integration's URL and API key (and the Plex to
 
 ### Hardened deployment (optional)
 
-Subarr's image runs `python -m subarr.app` directly — it doesn't switch users or need any Linux capabilities, so you can drop them all. Verified to boot clean with nothing added back:
+Subarr runs as a **non-root** user (default `1000:1000`, set yours via `PUID`/`PGID`). Its entrypoint starts as root only long enough to fix data-dir ownership and drop privileges, so the app process itself runs unprivileged. That boot step needs a small, fixed set of capabilities — drop everything else:
 
 ```yaml
     cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
     security_opt:
       - no-new-privileges:true
+    environment:
+      PUID: 1000   # match the uid that owns your /data + media
+      PGID: 1000
     deploy:
       resources:
         limits:    { cpus: '1.0', memory: 1G }
         reservations: { cpus: '0.25', memory: 256M }
 ```
+
+The five caps let the entrypoint `chown /data` (so an existing root-owned database stays readable after upgrade) and drop to `PUID/PGID`; the running app then holds **no** capabilities and is non-root — a stronger posture than the old root-with-everything default. The LaBSE QE model now caches under `/data/.cache/huggingface` (on your data volume, so it persists) — if you previously mounted a volume at `/root/.cache`, you can drop it.
 
 The image already ships a `HEALTHCHECK` (hits `/api/health`), so Compose and orchestrators get container health for free — no `healthcheck:` block needed. Add an `SUBARR_API_KEY` (see [Security](#security)) if it's reachable beyond a trusted LAN.
 
