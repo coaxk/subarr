@@ -769,12 +769,21 @@ async def lifespan(app_: FastAPI):
     # subarr.com/stats so users see what we see.
     from .telemetry import TelemetryCollector, make_default_stats_provider
 
+    async def _refresh_subgen_caps() -> None:
+        # #202: re-probe subgen right before a telemetry send so subgen_kind is
+        # current, not the boot/default-URL snapshot. Best-effort (the collector
+        # already wraps this in try/except).
+        subgen = getattr(app_.state, "subgen", None)
+        if subgen is not None:
+            app_.state.subgen_caps = await subgen.probe_capabilities()
+
     app_.state.telemetry = TelemetryCollector(
         db_path=settings.db_path,
         endpoint=settings.telemetry_endpoint,
         subarr_version=__version__,
         stats_provider=make_default_stats_provider(app_.state),
         subgen_caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+        subgen_caps_refresher=_refresh_subgen_caps,
     )
     app_.state.telemetry.start()
 

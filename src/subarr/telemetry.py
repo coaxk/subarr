@@ -89,6 +89,10 @@ class TelemetryPayload:
     install_age_days: float = 0.0
     data_persistent: bool | None = None
     docker_tier: int = 1
+    # #202 activation funnel: coarse furthest onboarding step reached + whether
+    # the wizard was finished. Lets us see WHERE installs drop off.
+    onboarding_step: int | None = None
+    onboarding_complete: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +113,8 @@ class TelemetryPayload:
             "install_age_days": self.install_age_days,
             "data_persistent": self.data_persistent,
             "docker_tier": self.docker_tier,
+            "onboarding_step": self.onboarding_step,
+            "onboarding_complete": self.onboarding_complete,
         }
 
 
@@ -153,6 +159,7 @@ class TelemetryCollector:
         subarr_version: str = "0.0.0",
         stats_provider=None,  # callable() -> dict (subarr-side stats)
         subgen_caps_provider=None,  # callable() -> caps-or-None
+        subgen_caps_refresher=None,  # async callable() — re-probe subgen before a send (#202)
         interval_s: int = PING_INTERVAL_S,
     ):
         self._db_path = db_path
@@ -160,6 +167,7 @@ class TelemetryCollector:
         self._subarr_version = subarr_version
         self._stats_provider = stats_provider or (lambda: {})
         self._subgen_caps_provider = subgen_caps_provider or (lambda: None)
+        self._subgen_caps_refresher = subgen_caps_refresher
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -267,6 +275,8 @@ class TelemetryCollector:
             install_age_days=round(max(0.0, (time.time() - st.created_at) / 86400.0), 1),
             data_persistent=stats.get("data_persistent"),
             docker_tier=int(stats.get("docker_tier") or 1),
+            onboarding_step=stats.get("onboarding_step"),
+            onboarding_complete=bool(stats.get("onboarding_complete")),
         )
 
     async def send_now(self) -> tuple[bool, str | None]:
@@ -280,6 +290,14 @@ class TelemetryCollector:
         state = self.state()
         if not state.opted_in:
             return False, None
+        # #202: refresh subgen reachability right before snapshotting, so
+        # subgen_kind reflects current state rather than the boot/default probe.
+        # Best-effort — a refresh failure must never block the send.
+        if self._subgen_caps_refresher is not None:
+            try:
+                await self._subgen_caps_refresher()
+            except Exception as e:  # noqa: BLE001 — never break a send on a refresh
+                log.debug("telemetry subgen refresh failed (best-effort): %s", e)
         payload = self.build_payload()
         payload_json = json.dumps(payload.to_dict(), separators=(",", ":"))
 
@@ -377,6 +395,22 @@ class TelemetryCollector:
 
 
 # ─── Default stats provider — reads from app.state ─────────────────
+
+
+def _onboarding_step(app_state) -> int | None:
+    """#202: coarse furthest/current onboarding step (0-11). Best-effort."""
+    try:
+        return int(app_state.onboarding.get().step)
+    except Exception:
+        return None
+
+
+def _onboarding_complete(app_state) -> bool:
+    """#202: did the install finish the wizard. Best-effort."""
+    try:
+        return bool(app_state.onboarding.get().is_complete)
+    except Exception:
+        return False
 
 
 def _walks_per_day_30d(app_state) -> float:
@@ -495,6 +529,9 @@ def make_default_stats_provider(app_state) -> Any:
             # #202: persistence verdict cached at boot (None = couldn't tell).
             "data_persistent": getattr(app_state, "data_persistent", None),
             "docker_tier": docker_tier,
+            # #202 activation funnel.
+            "onboarding_step": _onboarding_step(app_state),
+            "onboarding_complete": _onboarding_complete(app_state),
         }
 
     return _provider
