@@ -14,7 +14,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # the base still shipped u1). Patch-don't-suppress, same as subarr-subgen.
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix \
+    && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix passwd util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -33,6 +33,19 @@ COPY src/ ./src/
 # NO torch). The ~1.9GB LaBSE ONNX model is NOT baked; it's pulled into the
 # HF cache on first QE use. Until then the judge stays structural-only.
 RUN pip install --no-cache-dir ".[vad,qe-onnx]"
+
+# #237: non-root runtime. Create a default subarr user/group (1000:1000,
+# overridable at runtime via PUID/PGID by the entrypoint). HF_HOME moves the QE
+# model cache off /root onto the writable data volume — also fixes it persisting
+# across restarts (previously it re-downloaded to ephemeral /root/.cache).
+# No `USER` directive: the entrypoint must start as root to chown /data + the
+# socket-gid grant, then it DROPS to the non-root user before exec.
+ENV HF_HOME=/data/.cache/huggingface
+RUN groupadd -g 1000 subarr \
+    && useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin subarr
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 EXPOSE 9922
 
