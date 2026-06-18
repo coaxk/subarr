@@ -7,6 +7,7 @@ import {
   HostStrip,
   NextRunActivitySplit,
   WelcomeCard,
+  FirstWalkCta,
   UpdateNudgeCard,
   NoAuthWarningCard,
   AfterCarePanel,
@@ -36,6 +37,7 @@ function App() {
           <PageHeader now={now} />
           <NoAuthWarningCard />
           <WelcomeCard />
+          <FirstWalkCta data={live} />
           <UpdateNudgeCard />
           <StagesRow data={live && live.stages} />
           <AfterCarePanel />

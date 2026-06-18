@@ -889,6 +889,64 @@ export function UpdateNudgeCard() {
 // completion, dismissible (localStorage). Walks the user through the
 // first 4 things to do once setup finishes. Prevents the "now what?"
 // abandonment cliff at first-run.
+// ─── First-walk empty state (#202 activation) ────────────────────
+// The dashboard's honest "nothing has happened yet" signal: no stage has a
+// non-zero count and the activity feed is empty. (If Bazarr-wanted already
+// populates, the user has data → no CTA.) Pure + exported for unit testing.
+export function shouldShowFirstWalkCta(data) {
+  if (!data) return false; // not loaded yet — don't flash the CTA
+  const stages = (data.stages || []);
+  const anyStage = stages.some((s) => s && (s.count || 0) > 0);
+  const activity = (data.activity || []);
+  return !anyStage && activity.length === 0;
+}
+
+// Safety net for anyone who lands on an empty dashboard (no-arr, auto-walk
+// error, opted out, established install). One click triggers the same coverage
+// walk the header's Run-now uses.
+export function FirstWalkCta({ data }) {
+  const [running, setRunning] = useState(false);
+  const [msg, setMsg] = useState(null);
+  if (!shouldShowFirstWalkCta(data)) return null;
+  const run = async () => {
+    setRunning(true);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk/run-now', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setMsg('Coverage walk started — results will appear here shortly.');
+    } catch (e) {
+      setMsg(`Couldn't start the walk: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <div style={{
+      background: 'var(--bg-1)', border: 'var(--border)', borderRadius: 'var(--radius-lg)',
+      padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 10,
+    }}>
+      <div style={{ fontSize: 'var(--text-h3)', fontWeight: 700, color: 'var(--fg-0)' }}>
+        No coverage data yet
+      </div>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5, maxWidth: 560 }}>
+        Run your first coverage walk — subarr checks Bazarr/Sonarr/Radarr and ffprobes your
+        library to find which episodes and movies are missing subtitles. This is where subarr
+        starts earning its keep.
+      </div>
+      <div>
+        <button className="btn violet" onClick={run} disabled={running}>
+          {running ? 'Starting…' : 'Run your first walk'}
+        </button>
+      </div>
+      {msg && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>{msg}</div>}
+    </div>
+  );
+}
+
 export function WelcomeCard() {
   const [onboard, setOnboard] = React.useState(null);
   const [pendingCount, setPendingCount] = React.useState(0);

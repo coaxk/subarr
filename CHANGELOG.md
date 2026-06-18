@@ -7,6 +7,13 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Added
+- **Auto-run the first coverage walk on setup completion (#202).** Finishing
+  onboarding now kicks the first walk automatically (when an arr is configured
+  and no walk has run yet), so you land on a populated dashboard instead of an
+  empty one. A new dashboard empty-state ("No coverage data yet — run your first
+  walk") is the safety net for anyone who still lands walk-less.
+
 ### Fixed
 - **Telemetry no longer transmits under tests/CI (#202 follow-up).** The pinger
   POSTs on its first tick and the endpoint default is the real prod URL, so every
