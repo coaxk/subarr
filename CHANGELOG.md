@@ -7,6 +7,25 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-18
+
+**Security hardening + activation.** subarr now requires authentication by default and runs as a non-root user.
+
+### Upgrading
+- **You'll see a one-time login screen.** subarr now requires auth by default —
+  create an admin account on first launch, then a normal login page + session
+  cookie. Behind a reverse proxy that already authenticates? Set
+  `SUBARR_AUTH_DISABLED=1`. Locked out? `SUBARR_AUTH_RESET=1`, env
+  `SUBARR_USER`/`SUBARR_PASS`, or `docker exec subarr python -m subarr.cli reset-auth`.
+  Existing `SUBARR_API_KEY`/`SUBARR_USER` installs are **not** forced into setup.
+- **Hardened-compose users:** the container now runs non-root and its entrypoint
+  fixes `/data` ownership at boot, so add
+  `cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]` alongside your
+  `cap_drop: [ALL]`, and set `PUID`/`PGID` to the uid that owns your `/data` +
+  media (now honoured). See the README hardened-deployment section.
+- Everything else upgrades transparently — existing installs keep working and
+  `/data` is chowned automatically.
+
 ### Added
 - **Pause/resume the schedule from the dashboard (#252).** The "Next scheduled
   run" card gains a Pause/Resume button next to Run now, so you can halt or
