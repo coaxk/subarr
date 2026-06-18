@@ -45,12 +45,13 @@ RUN groupadd -g 1000 subarr \
     && useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin subarr
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Justified suppression below: no static USER because the entrypoint must START
+# as root to chown a pre-existing root-owned /data and grant docker-socket
+# access, then it DROPS to the non-root PUID/PGID via setpriv before exec. The
+# running process is non-root (verified: PID 1 boots as uid=1000 under
+# cap_drop:ALL). The static rule can't observe the runtime privilege drop.
+# See docs/superpowers/specs/2026-06-18-nonroot-container-design.md.
 # nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
-# Justified: no static USER because the entrypoint must START as root to chown a
-# pre-existing root-owned /data and grant docker-socket access, then it DROPS to
-# the non-root PUID/PGID via setpriv before exec. The running process is non-root
-# (verified: PID 1 boots as uid=1000 under cap_drop:ALL). The static rule can't
-# observe the runtime privilege drop. See docs/superpowers/specs/2026-06-18-nonroot-container-design.md.
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 EXPOSE 9922
