@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Added
+- **Pause/resume the schedule from the dashboard (#252).** The "Next scheduled
+  run" card gains a Pause/Resume button next to Run now, so you can halt or
+  restart automation without opening the Rules page (manual + Run now still work
+  while paused).
+
 ### Security
 - **Runs as a non-root user now (#237).** The container drops to `PUID`/`PGID`
   (default 1000:1000) — the entrypoint starts as root only to fix `/data`

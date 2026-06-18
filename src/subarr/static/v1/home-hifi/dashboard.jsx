@@ -589,15 +589,19 @@ function NextRunCard({ data }) {
           the parent row drives sizing, the spacer would create a big
           visual gap between 'last run' and the buttons. */}
       <div style={{ display: 'flex', gap: 8 }}>
-        <NextRunActions />
+        <NextRunActions enabled={enabled} />
       </div>
     </div>
   );
 }
 
-// Shared between the dashboard header and the next-run sidebar.
-function NextRunActions() {
+// Shared between the dashboard header and the next-run sidebar. `enabled` is the
+// current schedule state (from /api/home/dashboard.next_run); pass it so the
+// pause/resume button knows which way to flip. The 5s dashboard poll reflects
+// the new state after the PATCH.
+function NextRunActions({ enabled = true } = {}) {
   const [running, setRunning] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const runNow = useCallback(async () => {
     setRunning(true);
     try {
@@ -611,10 +615,34 @@ function NextRunActions() {
       setRunning(false);
     }
   }, []);
+  // #252: pause/resume the scheduled walk without leaving the dashboard
+  // (previously only on the Rules page). Toggles the schedule's `enabled` flag.
+  const togglePause = useCallback(async () => {
+    setPausing(true);
+    try {
+      const r = await fetch('/api/schedule/coverage_walk', {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !enabled }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Couldn't ${enabled ? 'pause' : 'resume'} the schedule: ${e.message}`);
+    } finally {
+      setPausing(false);
+    }
+  }, [enabled]);
   return (
     <>
       <button className="btn primary" style={{ flex: 1 }} onClick={runNow} disabled={running}>
         {running ? 'Running…' : 'Run now'}
+      </button>
+      <button
+        className="btn"
+        onClick={togglePause}
+        disabled={pausing}
+        title={enabled ? 'Pause the schedule (manual + Run now still work)' : 'Resume the schedule'}>
+        {pausing ? '…' : enabled ? 'Pause' : 'Resume'}
       </button>
       <a href="/rules" className="btn" style={{ textDecoration: 'none' }}>Edit rule</a>
     </>
