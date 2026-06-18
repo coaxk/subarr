@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v1.6-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-957_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v2.0-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-1159_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -15,15 +15,22 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 1.6
+## New in 2.0
 
-- **Guided subgen setup — it configures Whisper for your hardware.** The onboarding wizard (and a new Settings → Subgen tuning panel) detects your GPU, reads its VRAM and compute capability, recommends a Whisper model, and *derives* the right compute type with the reasoning shown. Then it either hands you a ready-to-paste compose block or, on subarr-subgen, applies it live. No more guessing model vs device vs precision. No GPU detected? It walks you through a one-line command and parses the result.
-- **subarr-subgen ships the tuned defaults (r9).** The companion image now bakes the segmentation + anti-hallucination kwargs that used to live in one maintainer's compose, plus a runtime-config endpoint that powers the guided setup's live-apply and an entrypoint that actually uses your GPU. Stock `mccloud/subgen` still works in compat mode.
-- **A heads-up when you have no auth.** A default install has no authentication — anyone who can reach it can drive your library. The dashboard now says so (dismissible), so it's an informed choice, not a silent exposure.
-- **Aftercare explains itself.** Hover a flagged subtitle's score to see exactly which signals pulled it down (looping, hallucination, ad/boilerplate, sync drift) and the readability counts.
-- Plus: log-injection hardening, an honest update nudge for locally-built images, a hardened compose example, and documented Swagger/OpenAPI at `/docs`.
+A security-hardening + activation release. The two headline changes are breaking for some deployments — see [Upgrading](#upgrading-to-20) below.
 
-*Multi-library, arm64 images, and fleet crash telemetry landed in 1.5; Job Aftercare and queue authority in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+- **Authentication is on by default.** subarr's API can drive Sonarr, Bazarr, and subgen, so a default install no longer ships wide open. First launch creates an admin account, then it's a normal login + signed session cookie. Recovery is built in (env override, `SUBARR_AUTH_RESET=1`, or `docker exec subarr python -m subarr.cli reset-auth`), failed logins are rate-limited, and you can mint named **managed API keys** for scripts. Already authenticating at a reverse proxy? `SUBARR_AUTH_DISABLED=1` hands auth back to it. Full detail under [Security → Authentication](#authentication).
+- **Runs as a non-root user.** The container drops to `PUID`/`PGID` (default `1000:1000`); its entrypoint starts as root only long enough to fix `/data` ownership and grant docker-socket access, then drops privileges before the app runs. `PUID`/`PGID` are now real, not decorative. Hardened-compose users need a small `cap_add` set — see [Hardened deployment](#hardened-deployment-optional).
+- **Pause/resume the schedule from the dashboard.** The "Next scheduled run" card gains a Pause/Resume button next to Run now — halt or restart automation without opening Rules.
+- **You land on a populated dashboard.** Finishing onboarding now auto-runs the first coverage walk (when an arr is configured), with a clear empty-state as the safety net for anyone who still lands walk-less.
+
+*Previously: guided subgen setup, aftercare score-explainers, and documented Swagger/OpenAPI at `/docs` in 1.6; multi-library, arm64 images, and fleet crash telemetry in 1.5; Job Aftercare and queue authority in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+
+### Upgrading to 2.0
+
+- **You'll see a one-time login screen.** Create an admin account on first launch after upgrading. Installs that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are **not** forced into setup — those keep working. Locked out? `SUBARR_AUTH_RESET=1`, the env pair, or `docker exec subarr python -m subarr.cli reset-auth`. Behind a reverse proxy that authenticates? `SUBARR_AUTH_DISABLED=1`.
+- **Hardened-compose users:** the container now runs non-root and chowns `/data` at boot, so add `cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]` alongside your `cap_drop: [ALL]` and set `PUID`/`PGID` to the uid that owns `/data` + media. See [Hardened deployment](#hardened-deployment-optional). The LaBSE QE cache moved to `/data/.cache/huggingface` — drop any old `/root/.cache` mount.
+- **Everything else upgrades transparently** — existing installs keep working and `/data` is chowned automatically.
 
 ---
 
@@ -97,7 +104,7 @@ Subarr runs as a **non-root** user (default `1000:1000`, set yours via `PUID`/`P
 
 The five caps let the entrypoint `chown /data` (so an existing root-owned database stays readable after upgrade) and drop to `PUID/PGID`; the running app then holds **no** capabilities and is non-root — a stronger posture than the old root-with-everything default. The LaBSE QE model now caches under `/data/.cache/huggingface` (on your data volume, so it persists) — if you previously mounted a volume at `/root/.cache`, you can drop it.
 
-The image already ships a `HEALTHCHECK` (hits `/api/health`), so Compose and orchestrators get container health for free — no `healthcheck:` block needed. Add an `SUBARR_API_KEY` (see [Security](#security)) if it's reachable beyond a trusted LAN.
+The image already ships a `HEALTHCHECK` (hits `/api/health`), so Compose and orchestrators get container health for free — no `healthcheck:` block needed. The login is on by default (see [Security](#authentication)); add an `SUBARR_API_KEY` only if scripts or other automation need non-browser access.
 
 **Plex (optional).** Set `PLEX_URL` + `PLEX_TOKEN` (and optionally `PLEX_SECTION`) to enable two things: an instant Plex library refresh the moment subarr writes a sub (instead of waiting for Plex's own periodic scan), and the opt-in per-show audio-language read (`PLEX_AUDIO_HINTS=1`). Plex shows in the dashboard + Settings integration health either way, so you can see its status at a glance. Activity/now-playing still comes through Tautulli.
 
@@ -118,7 +125,7 @@ The most-asked question. Quick answer.
 | You have | What to do |
 |---|---|
 | Vanilla `mccloud/subgen` | Keep it. Add subarr next to it. Subarr detects vanilla and runs in compat mode. Coverage, provenance, scheduling, audio-language review all work. You miss calibrated multi-chunk detection and queue cancel, both require our subgen patches. |
-| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 20 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
+| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 22 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
 | No subgen yet | Start with `ghcr.io/coaxk/subarr-subgen`. Everything works on day one. |
 | You run Bazarr only | Subarr adds a coordination layer beside Bazarr. Bazarr keeps doing what it does. Subarr surfaces what is actually missing, schedules the work, and writes results back. |
 
@@ -267,13 +274,13 @@ volumes:
 
 Internally, extra libraries qualify their file keys with a stable `@<id>/` head while the default library keeps today's keys — which is why existing installs upgrade with zero migration. The simple union-mount workaround (binding several host paths under one container root) still works fine if you prefer it.
 
-## Known limitations (v1.5)
+## Known limitations (v2.0)
 
 Transparent before you install.
 
 - Requires `ghcr.io/coaxk/subarr-subgen` for calibrated Layer 3 detection, queue cancel, curated per-language `initial_prompt`s, and the safe-decode preset. Vanilla subgen works in compat mode but you miss these.
 - The default-track swap needs `mkvtoolnix` (`mkvpropedit`) in the runtime image — it ships in `ghcr.io/coaxk/subarr`; detection + the Review UI work regardless, the swap action just needs the binary present.
-- No built-in multi-user auth. Basic-auth env vars exist as a single-admin fallback. Run behind a reverse proxy (Authelia / Caddy / Traefik) for anything serious.
+- Single-admin authentication. subarr ships a real built-in login (forced by default, with sessions, throttling, and managed API keys), but it's one admin account — no per-user accounts, roles, or audit. For multi-user, put it behind a reverse proxy (Authelia / Caddy / Traefik) and set `SUBARR_AUTH_DISABLED=1`.
 - Auto-update is intentionally absent. Update notifications appear in the UI; you run the upgrade.
 - Plex activity signal goes through Tautulli (the bridge). Reading a show's *selected* audio language straight from Plex metadata is an opt-in extra (`PLEX_AUDIO_HINTS=1`), off by default.
 - Multi-episode disc images (a single `.iso` holding a whole season) can't be probed per-episode, so they're surfaced in a distinct "Couldn't analyze" (unsupported) bucket rather than becoming verified gaps or sitting in "Analyzing" forever. Standard per-episode files are unaffected.
@@ -363,20 +370,6 @@ These cross-install loops are the next roadmap step. The reference-free quality 
 
 We picked these names deliberately. Hiding the sender behind something like `analytics.subarr.com` or putting it on the apex would be the opposite of honest. If you want telemetry off, do not allow `telemetry.subarr.com`. If you want it on, allow that one specifically rather than wildcarding the whole zone.
 
-## Authentication
-
-No built-in auth by default. Designed for a reverse proxy (Authelia, Caddy basicauth, Traefik forward-auth). In-product fallback is HTTP Basic via env vars:
-
-```yaml
-environment:
-  SUBARR_USER: youradmin
-  SUBARR_PASS: a-very-long-random-password
-```
-
-When both are set, every non-monitoring request requires Basic credentials. `/api/health` always bypasses for monitoring tools.
-
-Honest limitations of basic auth: one global user, no per-user audit, credentials transmitted on every request. Reverse-proxy auth is the right answer for anything that matters.
-
 ## Updates
 
 Subarr polls GitHub releases once per 24 hours for both `coaxk/subarr` and `coaxk/subarr-subgen`. The subarr-subgen comparison uses patch-stack revision so patch-level updates are detected even when upstream subgen version stays the same.
@@ -403,7 +396,7 @@ The Settings panel shows the current vs latest version per product with release 
 | Backend | Python 3.12 + FastAPI + httpx. Async throughout. |
 | Storage | Single SQLite file, default `/data/subarr.db` (override with `SUBARR_DB_PATH`). Hand-rolled migrations runner. |
 | Frontend | React 18 + esbuild. CDN React. Bundles committed so `pip install` ships a working SPA. |
-| Subgen drive | HTTP. 20 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
+| Subgen drive | HTTP. 22 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
 | Discovery | Read-only Docker API via [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy). |
 | Telemetry receiver | Cloudflare Worker + D1. Open source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). |
 
@@ -417,14 +410,14 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## Roadmap
 
-**v1.4 (this release):**
+**v2.0 (this release):**
 
-- **Job Aftercare** (shipped): post-transcription quality review — every finished job flagged for failures + readability, with per-row flag / language / source / score.
-- **Default-track mismatch fix** (shipped): detect when a file's default audio is not the original language, with a one-click in-place track swap or dismiss.
-- **Queue authority** (shipped): every submission — manual, requeue, coverage, backfill — routes through the throttled, reorderable pending queue; nothing stampedes subgen.
-- **Verified segmentation default** (shipped): the tuned "strongpad" regroup baked into the `subarr-subgen` image.
+- **Authentication on by default** (shipped): first-run admin setup, login + signed sessions, brute-force throttle, managed API keys, and built-in recovery — see [Security](#authentication).
+- **Non-root container** (shipped): drops to `PUID`/`PGID`, entrypoint chowns `/data` then drops privileges.
+- **Schedule pause/resume** (shipped): halt or restart automation from the dashboard.
+- **Setup-completion auto-walk** (shipped): the first coverage walk runs automatically so you land on a populated dashboard.
 
-*Previously: the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
+*Previously: guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
 
 **Later** — still on the list:
 
@@ -434,9 +427,9 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## The subgen patch story
 
-Subarr drives subgen through 20 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
+Subarr drives subgen through 22 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
 
-The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v2026.05.3-r8` current (Blackwell/RTX 50xx CUDA 12.8, gnupg CVE patch, and the verified "strongpad" segmentation baked in as the default), with `latest` and per-version tags.
+The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v2026.05.3-r9` current (Blackwell/RTX 50xx CUDA 12.8, gnupg CVE patch, the verified "strongpad" segmentation baked in as the default, plus the tuned Whisper kwargs, a runtime `/config` endpoint that powers guided setup's live-apply, and a GPU device-guard entrypoint), with `latest` and per-version tags.
 
 You do not need our patched image. See the "I already have subgen" table at the top.
 
@@ -448,7 +441,7 @@ cd subarr
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[dev]
 PYTHONPATH=src uvicorn subarr.app:app --reload --port 9922
-PYTHONPATH=src pytest -q                    # 774 passing
+PYTHONPATH=src pytest -q                    # 1159 passing
 npm install && npm run build:frontend       # SPA bundles
 ```
 
