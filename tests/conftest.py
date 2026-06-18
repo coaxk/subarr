@@ -14,6 +14,10 @@ import pytest
 # gate suite-wide so the ~1000 real-app tests aren't all 401'd. Set at import
 # (before any subarr.app import) so the import-time settings singleton sees it.
 os.environ.setdefault("SUBARR_AUTH_DISABLED", "1")
+# #202: hard-disable telemetry transmission across the suite. The endpoint
+# default is the real prod URL and the pinger POSTs on its first tick, so every
+# TestClient boot was pinging telemetry.subarr.com. Empty = "don't transmit".
+os.environ.setdefault("SUBARR_TELEMETRY_ENDPOINT", "")
 
 
 def _make_compose(p: Path) -> None:

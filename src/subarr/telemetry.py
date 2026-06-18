@@ -171,6 +171,13 @@ class TelemetryCollector:
     # ─── Lifecycle ─────────────────────────────────────────────────
 
     def start(self) -> None:
+        # No endpoint ⇒ telemetry is disabled (opt-out, or the test/CI env that
+        # sets SUBARR_TELEMETRY_ENDPOINT=""). Don't spawn the pinger at all — its
+        # first tick POSTs immediately, which is how the test suite was polluting
+        # the prod endpoint. Manual `send_now()` still works + records locally.
+        if not self._endpoint:
+            log.info("telemetry disabled (no endpoint) — pinger not started")
+            return
         if self._task is not None and not self._task.done():
             return
         self._stop.clear()

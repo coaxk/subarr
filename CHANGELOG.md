@@ -7,6 +7,13 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Telemetry no longer transmits under tests/CI (#202 follow-up).** The pinger
+  POSTs on its first tick and the endpoint default is the real prod URL, so every
+  test that booted the app was pinging telemetry.subarr.com — inflating the
+  public install count with our own dev/CI runs. The test suite now hard-disables
+  the endpoint, and the pinger is a no-op when no endpoint is configured.
+
 ### Security
 - **No internal error detail leaks to API clients (#261).** Endpoints no longer
   return raw exception text; a shared `safe_error()` maps failures to a constant,
