@@ -8,6 +8,11 @@ breaking config changes.
 ## [Unreleased]
 
 ### Added
+- **Onboarding-funnel telemetry (#202).** Anonymous pings now carry a coarse
+  `onboarding_step` + `onboarding_complete` so we can see where first-run drops
+  off (and improve it), and subgen reachability is re-probed right before each
+  send so `subgen_kind` reflects current state rather than the boot snapshot.
+  Still privacy-by-construction — coarse, non-identifying.
 - **Auto-run the first coverage walk on setup completion (#202).** Finishing
   onboarding now kicks the first walk automatically (when an arr is configured
   and no walk has run yet), so you land on a populated dashboard instead of an
