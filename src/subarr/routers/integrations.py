@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..integrations import IntegrationError
+from ..error_detail import safe_error
 
 router = APIRouter(prefix="/api", tags=["integrations"])
 log = logging.getLogger(__name__)
@@ -266,10 +267,10 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
             "version": status.get("version") if isinstance(status, dict) else None,
         }
     except IntegrationError as e:
-        return {"name": name, "online": False, "configured": True, "error": str(e)}
+        return {"name": name, "online": False, "configured": True, "error": safe_error(e)}
     except Exception as e:  # defensive
         log.warning("%s probe unexpected error: %s", name, e)
-        return {"name": name, "online": False, "configured": True, "error": repr(e)}
+        return {"name": name, "online": False, "configured": True, "error": safe_error(e)}
 
 
 @router.get("/integrations/health")

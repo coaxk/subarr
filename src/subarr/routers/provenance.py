@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from ..integrations import IntegrationError
+from ..error_detail import safe_error
 
 router = APIRouter(prefix="/api", tags=["provenance"])
 log = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ async def by_path(path: str, request: Request) -> dict[str, Any]:
         try:
             bazarr_history = await bundle.bazarr.episodes_history(sonarr_episode_id=sonarr_ep_id)
         except IntegrationError as e:
-            bazarr_error = str(e)
+            bazarr_error = safe_error(e)
     elif bundle.bazarr.is_configured():
         # No sonarr id known — surface a hint in the response shape but
         # don't error.

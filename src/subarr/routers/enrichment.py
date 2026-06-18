@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from ..enrichment import enrich_one
 from ..integrations.ollama import OllamaError
+from ..error_detail import safe_error
 from ..subgen_client import SubgenUnavailable
 
 router = APIRouter(prefix="/api/enrichment", tags=["enrichment"])
@@ -58,7 +59,7 @@ async def health(request: Request) -> dict:
     try:
         tags = await ollama.tags()
     except OllamaError as e:
-        return {"online": False, "configured": True, "model": ollama.model, "error": str(e)}
+        return {"online": False, "configured": True, "model": ollama.model, "error": safe_error(e)}
     models = [m.get("name") for m in (tags.get("models") or [])]
     return {
         "online": True,
@@ -83,7 +84,7 @@ async def enrich_lang(req: EnrichOneRequest, request: Request, gate: bool = Quer
             store=request.app.state.enrichment,
         )
     except OllamaError as e:
-        raise HTTPException(503, detail=str(e))
+        raise HTTPException(503, detail=safe_error(e))
     return result.to_dict()
 
 
@@ -120,7 +121,7 @@ async def enrich_lang_bulk(
             )
             results.append(r.to_dict())
         except OllamaError as e:
-            errors.append({"canonical_path": it.canonical_path, "error": str(e)})
+            errors.append({"canonical_path": it.canonical_path, "error": safe_error(e)})
     if free_vram_after:
         await ollama.unload()
     return {"results": results, "errors": errors, "model_unloaded": free_vram_after}

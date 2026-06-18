@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 
 from ..integrations import IntegrationError
+from ..error_detail import safe_error
 
 router = APIRouter(prefix="/api/household", tags=["household"])
 log = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ async def list_users(request: Request) -> dict[str, Any]:
         users = await t.get_users()
     except IntegrationError as e:
         log.warning("get_users failed: %s", e)
-        return {"available": False, "users": [], "error": str(e)}
+        return {"available": False, "users": [], "error": safe_error(e)}
     # Filter to non-system users
     cleaned = [
         {
@@ -59,7 +60,7 @@ async def household_profile(
     try:
         users = await t.get_users()
     except IntegrationError as e:
-        return {"available": False, "members": [], "error": str(e)}
+        return {"available": False, "members": [], "error": safe_error(e)}
     members = []
     for u in users:
         uid = u.get("user_id")

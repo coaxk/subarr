@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..docker_client import DockerUnavailable
+from ..error_detail import safe_error
 from ..integrations import IntegrationError
 
 router = APIRouter(prefix="/api", tags=["admin"])
@@ -62,12 +63,12 @@ async def restart_subgen(request: Request) -> dict:
     try:
         await docker_ops.restart_subgen()
     except DockerUnavailable as e:
-        raise HTTPException(503, detail=str(e))
+        raise HTTPException(503, detail=safe_error(e))
     try:
         info = await docker_ops.container_info()
     except DockerUnavailable as e:
         # restart succeeded; info failed — surface what we know
-        return {"restarted": True, "warning": str(e)}
+        return {"restarted": True, "warning": safe_error(e)}
     return {"restarted": True, "container": info}
 
 
@@ -77,7 +78,7 @@ async def container(request: Request) -> dict:
     try:
         return await docker_ops.container_info()
     except DockerUnavailable as e:
-        raise HTTPException(503, detail=str(e))
+        raise HTTPException(503, detail=safe_error(e))
 
 
 @router.post("/plex/scan")
@@ -90,7 +91,7 @@ async def plex_scan(request: Request) -> dict:
     try:
         return await plex.full_scan()
     except IntegrationError as e:
-        raise HTTPException(502, detail=str(e))
+        raise HTTPException(502, detail=safe_error(e))
 
 
 class PartialScanRequest(BaseModel):
@@ -121,7 +122,7 @@ async def plex_partial_scan(req: PartialScanRequest, request: Request) -> dict:
     try:
         return await plex.partial_scan(p)
     except IntegrationError as e:
-        raise HTTPException(502, detail=str(e))
+        raise HTTPException(502, detail=safe_error(e))
 
 
 @router.get("/plex/sections")
@@ -134,4 +135,4 @@ async def plex_sections(request: Request) -> dict:
     try:
         return {"sections": await plex.sections(refresh=True)}
     except IntegrationError as e:
-        raise HTTPException(502, detail=str(e))
+        raise HTTPException(502, detail=safe_error(e))

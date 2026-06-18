@@ -226,12 +226,11 @@ def test_integrations_health_isolates_one_failure(app_with_stub):
     r = app_with_stub.get("/api/integrations/health")
     by_name = {it["name"]: it for it in r.json()["integrations"]}
     assert by_name["bazarr"]["online"] is False
-    # bazarr's repeated 500s trip its per-client circuit breaker (#235), so the
-    # error is either the raw HTTP 500 or the breaker's "circuit open" backoff —
-    # both mean offline. The point of THIS test is isolation: one failing
-    # integration must not take the others down (each has its own breaker).
-    err = by_name["bazarr"].get("error", "")
-    assert "500" in err or "circuit open" in err
+    # bazarr's repeated 500s trip its per-client circuit breaker (#235). The point
+    # of THIS test is isolation: one failing integration must not take the others
+    # down (each has its own breaker). #261: the offline reason is surfaced but
+    # sanitized — we just assert a reason is present, not its (now leak-free) text.
+    assert by_name["bazarr"].get("error")
     assert by_name["sonarr"]["online"] is True
 
 

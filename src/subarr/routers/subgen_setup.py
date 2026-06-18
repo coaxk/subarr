@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, field_validator
 
 from ..subgen_client import SubgenUnavailable
+from ..error_detail import safe_error
 from ..subgen_config_gen import (
     detection_passthrough_snippet,
     generate_env_additions,
@@ -223,7 +224,7 @@ async def apply(body: ApplyBody, request: Request) -> dict[str, Any]:
             "reason": "subgen_unreachable",
             "detail": (
                 f"subgen did not answer — the change may or may not have applied; "
-                f"re-run detection once subgen is back ({e})"
+                f"re-run detection once subgen is back ({safe_error(e)})"
             ),
         }
     if status == 200 and resp.get("ok"):

@@ -25,6 +25,7 @@ from ..config import settings
 from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..subgen_client import SubgenUnavailable
+from ..error_detail import safe_error
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audio-lang", tags=["audio-lang"])
@@ -142,7 +143,7 @@ async def _propagate_to_sonarr(
     try:
         langs = await sonarr.languages()
     except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"sonarr /language fetch failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"sonarr /language fetch failed: {safe_error(e)}"}
     name = _iso_to_sonarr_name(lang_code)
     target = next(
         (l for l in langs if (l.get("name") or "").lower() == name.lower()),
@@ -157,7 +158,7 @@ async def _propagate_to_sonarr(
             languages=[{"id": target["id"], "name": target["name"]}],
         )
     except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"sonarr PUT failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"sonarr PUT failed: {safe_error(e)}"}
     log.info(
         "sonarr propagation OK: episodeFile=%s language=%s (id=%s) via user verification on %s",
         ep_file_id,
@@ -204,7 +205,7 @@ async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
         try:
             tasks = await bazarr.list_tasks()
         except IntegrationError as e:
-            return {"attempted": False, "detail": f"bazarr task list failed: {e}"}
+            return {"attempted": False, "detail": f"bazarr task list failed: {safe_error(e)}"}
         for t in tasks:
             jid = (t.get("job_id") or "").lower()
             name = (t.get("name") or "").lower()
@@ -217,7 +218,7 @@ async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
     try:
         await bazarr.trigger_task(_bazarr_sync_task_id)
     except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"bazarr trigger failed: {e}"}
+        return {"attempted": True, "ok": False, "detail": f"bazarr trigger failed: {safe_error(e)}"}
     log.info("bazarr sync triggered: task=%s", _bazarr_sync_task_id)
     return {"attempted": True, "ok": True, "task": _bazarr_sync_task_id}
 
@@ -528,7 +529,7 @@ async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[s
     try:
         result = await probe(Path(fs))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, detail=f"probe failed: {e}")
+        raise HTTPException(502, detail=f"probe failed: {safe_error(e)}")
     m = detect_default_track_mismatch(result.audio, original_language)
     if m is None:
         return {"ok": True, "swapped": False, "detail": "already correct"}
@@ -538,7 +539,7 @@ async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[s
     try:
         await swap_default_audio_track(fs, m.native_audio_ordinal, audio_ordinals)
     except TrackSwapError as e:
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail=safe_error(e))
 
     # 4. Re-probe + refresh the cache so the row clears immediately.
     try:
@@ -578,7 +579,7 @@ def _resolve_canonical_to_fs(canonical: str) -> str:
     try:
         target = canonical_to_fs(canonical)
     except (PathOutsideRootError, ValueError) as e:
-        raise HTTPException(400, detail=f"invalid path: {e}")
+        raise HTTPException(400, detail=f"invalid path: {safe_error(e)}")
     if not target.is_file():
         raise HTTPException(404, detail=f"not found: {canonical}")
     return str(target)
@@ -768,5 +769,5 @@ async def whisper_detect(req: WhisperDetectRequest, request: Request) -> dict[st
             chunk_length_s=max(5, min(120, int(req.chunk_length_s))),
         )
     except SubgenUnavailable as e:
-        raise HTTPException(502, detail=f"subgen unavailable: {e}")
+        raise HTTPException(502, detail=f"subgen unavailable: {safe_error(e)}")
     return result
