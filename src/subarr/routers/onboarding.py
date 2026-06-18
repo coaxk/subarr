@@ -109,10 +109,14 @@ async def complete(request: Request) -> dict[str, Any]:
     # Flush progress into running settings, then rebuild the integration
     # clients so the rest of the app talks to the newly configured
     # services without a restart.
-    state = request.app.state.onboarding.complete()
+    store = request.app.state.onboarding
+    was_complete = store.get().is_complete  # #202: only auto-walk on FIRST completion
+    state = store.complete()
     _apply_progress_to_settings(state.progress)
     await _rebuild_runtime_clients(request.app.state)
     log.info("onboarding completed — applied progress + rebuilt clients")
+    if not was_complete:
+        await _maybe_auto_first_walk(request.app.state)
     return state.to_dict()
 
 
@@ -599,17 +603,23 @@ async def first_walk(request: Request) -> dict[str, Any]:
     no fresh data to consult. (See: this was the original-subarr behavior
     that got lost in translation in the v1.0 rebuild.)
     """
-    walker = request.app.state.probe_walker
-    state = request.app.state.onboarding.get()
+    return await _kick_first_walk(request.app.state)
+
+
+async def _kick_first_walk(app_state) -> dict[str, Any]:
+    """Resolve probe_roots, persist them onto the coverage_walk schedule, and
+    start the walks. Shared by the /first-walk endpoint and the #202 auto-kick on
+    setup completion."""
+    walker = app_state.probe_walker
+    state = app_state.onboarding.get()
     roots_raw = state.progress.get("probe_roots") or ["TV", "Movies"]
     roots = [r.strip().strip("/") for r in roots_raw if r and r.strip()]
 
     # 1. Persist roots onto the schedule so ongoing walks ffprobe too.
     persist_error: str | None = None
     try:
-        store = request.app.state.schedule
         # Store as comma-separated string per schedule_store schema.
-        store.update_schedule("coverage_walk", probe_roots=",".join(roots))
+        app_state.schedule.update_schedule("coverage_walk", probe_roots=",".join(roots))
         log.info("first-walk: persisted probe_roots=%s onto coverage_walk schedule", roots)
     except Exception as e:
         # Don't fail the walk if persistence fails — log it, surface it
@@ -632,6 +642,33 @@ async def first_walk(request: Request) -> dict[str, Any]:
         "schedule_persisted": persist_error is None,
         **({"schedule_persist_error": persist_error} if persist_error else {}),
     }
+
+
+# Coverage sources — a walk is only worth auto-kicking when one of these is wired.
+_ARR_SERVICES = ("bazarr", "sonarr", "radarr")
+
+
+async def _maybe_auto_first_walk(app_state) -> None:
+    """#202: on the FIRST setup completion, auto-kick the first walk so the user
+    lands on a populated dashboard instead of an empty one — but only when there
+    is coverage to compute (an arr configured) and no walk has run yet (don't
+    duplicate a manual wizard walk). Best-effort: never raises into /complete."""
+    try:
+        bundle = getattr(app_state, "integrations", None)
+        arr_configured = bool(bundle) and any(
+            getattr(getattr(bundle, name, None), "is_configured", lambda: False)() for name in _ARR_SERVICES
+        )
+        if not arr_configured:
+            log.info("auto-first-walk skipped: no arr configured")
+            return
+        scans = getattr(app_state, "scans", None)
+        if scans is not None and scans.count_since(0.0) > 0:
+            log.info("auto-first-walk skipped: a scan already exists")
+            return
+        result = await _kick_first_walk(app_state)
+        log.info("auto-first-walk kicked on setup completion: roots=%s", result.get("schedule_probe_roots"))
+    except Exception as e:  # noqa: BLE001 — a walk-kick failure must never break completion
+        log.warning("auto-first-walk failed (best-effort): %s", e)
 
 
 # ─── Internal: flush wizard progress to settings ────────────────────
