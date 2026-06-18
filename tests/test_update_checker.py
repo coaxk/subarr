@@ -216,6 +216,27 @@ async def test_strips_v_prefix_for_comparison(db_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_has_update_false_when_current_ahead_of_latest(db_path: Path):
+    """Regression: the running version is NEWER than the latest release the
+    feed knows about (locally-built, or the window right after we tag a
+    release before the cache refreshes). That's 'up to date', never an
+    'update available' nudge — direction matters, not mere inequality."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return _atom_response(req, "v1.6.0")
+
+    c = _checker_with_mock(db_path, handler, current_versions={"subarr": "2.0.0"})
+    await c._poll_all()
+    await c._client.aclose()
+
+    [s] = c.states()
+    assert s.latest_version == "v1.6.0"
+    assert s.current_version == "2.0.0"
+    assert s.has_update is False
+    assert s.missed_releases == []
+
+
+@pytest.mark.asyncio
 async def test_404_records_error_without_crashing(db_path: Path):
     """Private/non-existent repos return 404. Should write a row with
     last_error set, no latest_version, has_update False."""

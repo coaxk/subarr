@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 import defusedxml.ElementTree as ET  # XXE / billion-laughs hardened (B314)
@@ -131,25 +132,58 @@ def parse_vanilla_version(py_source: str) -> str | None:
     can't see it. Its version is the ``subgen_version = '<v>'`` constant at the
     top of subgen.py — pull it from the raw file. Returns None if absent (the
     constant moved/renamed) so the caller fails soft to 'no release info'."""
-    import re
 
     m = re.search(r"^subgen_version\s*=\s*['\"]([^'\"]+)['\"]", py_source, re.MULTILINE)
     return m.group(1) if m else None
 
 
+def _version_key(tag: str | None) -> tuple[int, ...] | None:
+    """The numeric components of a version tag as an int tuple for ordering,
+    or None when the tag has no digits (an opaque tag we can't order).
+    'v2.0.0' → (2, 0, 0); 'v2026.05.3-r9' → (2026, 5, 3, 9)."""
+    if not tag:
+        return None
+    nums = re.findall(r"\d+", tag)
+    return tuple(int(n) for n in nums) if nums else None
+
+
+def compare_versions(a: str | None, b: str | None) -> int | None:
+    """Order two version tags: -1 if a<b, 0 if equal, 1 if a>b, or None when
+    either has no numeric content (incomparable opaque tags). Shorter tuples
+    are zero-padded so '2.0' == '2.0.0'. The 'v' prefix is irrelevant to the
+    numeric key, so 'v2.0.0' == '2.0.0'."""
+    ka, kb = _version_key(a), _version_key(b)
+    if ka is None or kb is None:
+        return None
+    n = max(len(ka), len(kb))
+    ka = ka + (0,) * (n - len(ka))
+    kb = kb + (0,) * (n - len(kb))
+    return (ka > kb) - (ka < kb)
+
+
 def missed_releases(entries: list[dict[str, Any]], current_version: str | None) -> list[dict[str, Any]]:
-    """The releases an install is missing: every feed entry NEWER than its
-    current version (entries are newest-first; we take until we hit the
-    current tag). Current version older than the feed window → the whole
-    feed is missed. Unknown current → [] (never guess). Bodies stripped —
-    only {tag, title, notes_url, released_at} travel to the UI."""
+    """The releases an install is missing: every feed entry strictly NEWER
+    than its current version (entries are newest-first; we stop at the first
+    entry that is the current version or older). Current older than the feed
+    window → the whole feed is missed. Current NEWER than the whole feed
+    (locally-built, or the window just after we tag a release before the
+    cache refreshes) → [] — never "N releases behind". Unknown current → []
+    (never guess). Bodies stripped — only {tag, title, notes_url,
+    released_at} travel to the UI."""
     if not current_version:
         return []
     cur = current_version.lstrip("v")
     out: list[dict[str, Any]] = []
     for e in entries:
-        tag = (e.get("tag") or "").lstrip("v")
-        if tag and tag == cur:
+        tag = e.get("tag") or ""
+        cmp = compare_versions(tag, current_version)
+        if cmp is not None:
+            # Orderable tags: stop once an entry is the current version or
+            # older. Yields [] when current is ahead of the whole feed.
+            if cmp <= 0:
+                break
+        elif tag.lstrip("v") == cur:
+            # Opaque/un-orderable tag: fall back to exact-match stop.
             break
         out.append(
             {
@@ -212,14 +246,19 @@ class UpdateState:
 
     @property
     def has_update(self) -> bool:
-        """True iff we know both current + latest and they differ.
+        """True only when the running version is strictly OLDER than latest.
 
-        Uses string equality — versions are opaque tags like
-        'v1.0.0' or 'v2026.05.3-r1'. We don't try to semver-compare;
-        any mismatch surfaces a notification and the user decides."""
+        Direction matters: a locally-built install (or the window just after
+        we tag a release, before the 24h cache refreshes) can be NEWER than
+        the latest release the feed knows about — that's 'up to date', not an
+        update. We order by numeric version key; for opaque un-orderable tags
+        (no digits) we fall back to 'any difference is news'."""
         if not self.current_version or not self.latest_version:
             return False
-        return self.current_version.lstrip("v") != self.latest_version.lstrip("v")
+        cmp = compare_versions(self.current_version, self.latest_version)
+        if cmp is None:
+            return self.current_version.lstrip("v") != self.latest_version.lstrip("v")
+        return cmp < 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
