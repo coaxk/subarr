@@ -69,6 +69,33 @@ def test_missed_releases_between_current_and_latest(subarr_env):
     assert missed_releases(entries, None) == []
 
 
+def test_missed_releases_empty_when_current_ahead_of_feed(subarr_env):
+    """Regression: a locally-built / just-released-ahead install (current
+    NEWER than every entry in the cached feed) is NOT 'N releases behind'.
+    The dev box showed 'v1.6.0 is out — you're on 2.0.0 (10 releases behind)'
+    because the take-until-current-tag walk never matched and returned the
+    whole feed. Current > newest feed entry must yield []."""
+    from subarr.update_checker import missed_releases, parse_atom_entries
+
+    entries = parse_atom_entries(_FEED)  # newest is v1.5.2
+    assert missed_releases(entries, "2.0.0") == []
+    assert missed_releases(entries, "v2.0.0") == []
+
+
+def test_compare_versions_orders_and_handles_opaque(subarr_env):
+    from subarr.update_checker import compare_versions
+
+    assert compare_versions("1.6.0", "2.0.0") == -1  # older < newer
+    assert compare_versions("2.0.0", "1.6.0") == 1  # newer > older
+    assert compare_versions("v2.0.0", "2.0.0") == 0  # 'v' prefix + equal
+    assert compare_versions("2.0", "2.0.0") == 0  # zero-pad shorter
+    # date-rev subgen tags are still orderable
+    assert compare_versions("v2026.05.3-r9", "v2026.05.3-r10") == -1
+    # no numeric content → incomparable
+    assert compare_versions("latest", "2.0.0") is None
+    assert compare_versions(None, "2.0.0") is None
+
+
 def test_state_roundtrips_missed_releases(subarr_env, tmp_path):
     from subarr.migrate import run_migrations
     from subarr.update_checker import UpdateChecker
