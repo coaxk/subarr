@@ -157,8 +157,17 @@ class ArenaService:
         self._tasks[run.id] = asyncio.create_task(self._run(run), name=f"arena-{run.id}")
 
     async def aclose(self) -> None:
-        for t in list(self._tasks.values()):
+        tasks = list(self._tasks.values())
+        for t in tasks:
             t.cancel()
+        # Await cancellation so a sweep's _run finally (the _inflight decrement +
+        # terminal status write) lands before the store is closed on shutdown,
+        # instead of racing the event loop / SQLite teardown.
+        for t in tasks:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
 
     # ── SSE ────────────────────────────────────────────────────────────────
     def _emit(self, run_id: str, evt: dict) -> None:
@@ -224,7 +233,7 @@ class ArenaService:
                 self._emit(
                     run.id, {"event": "waiting_for_capacity", "data": {"id": run.id, "ahead": processing}}
                 )
-            await asyncio.sleep(CAPACITY_POLL_INTERVAL_S)
+            await asyncio.sleep(self._capacity_poll_interval_s)
 
     async def _run(self, run: ArenaRun) -> None:
         run_id = run.id

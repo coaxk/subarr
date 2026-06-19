@@ -714,6 +714,20 @@ async def test_sweep_waits_for_capacity_then_runs(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aclose_cancels_and_awaits_inflight_sweep(tmp_path):
+    # A sweep parked in waiting_for_capacity (subgen at capacity, N=1) must be
+    # cancelled AND awaited by aclose() — so shutdown is deterministic, not GC-raced.
+    svc, _sub = _cap_svc(tmp_path, processing=[{"path": "/m/x.mkv"}], n=1)
+    run = svc.create("TV/Show/ep.mkv", [ConfigVariant("base", {})])
+    svc.start(run)
+    await asyncio.sleep(0.1)
+    assert svc.get(run.id).status == "waiting_for_capacity"
+    await svc.aclose()
+    assert all(t.done() for t in svc._tasks.values())
+    assert svc.inflight_count() == 0
+
+
+@pytest.mark.asyncio
 async def test_await_capacity_fails_open_after_unreadable_probes(tmp_path):
     # When subgen's /queue raises on every call, the gate must fail OPEN after
     # CAPACITY_PROBE_FAIL_OPEN_AFTER consecutive failures — never stall a sweep

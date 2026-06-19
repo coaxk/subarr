@@ -334,7 +334,13 @@ class SubgenClient:
                             ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
                             runtime_config = bool(caps_block.get("runtime_config"))
                             _ct = caps_block.get("concurrent_transcriptions")
-                            concurrent_transcriptions = _ct if isinstance(_ct, int) and _ct > 0 else None
+                            # bool is an int subclass — exclude it so a misconfig'd
+                            # `true` doesn't silently parse as N=1 and serialize the feed.
+                            concurrent_transcriptions = (
+                                _ct
+                                if isinstance(_ct, int) and not isinstance(_ct, bool) and _ct > 0
+                                else None
+                            )
                 except ValueError:
                     pass
         except httpx.HTTPError:

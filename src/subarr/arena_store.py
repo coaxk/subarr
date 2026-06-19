@@ -48,7 +48,7 @@ class ArenaRun:
     media_path: str
     variants: list[dict[str, Any]]  # [{label, kwargs}]
     source_language: str | None = None
-    status: str = "pending"  # pending | queued | running | done | error
+    status: str = "pending"  # pending | queued | waiting_for_capacity | running | done | error
     source_text: str | None = None
     outcomes: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None  # serialized TournamentResult
