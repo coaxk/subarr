@@ -630,3 +630,69 @@ def test_delete_removes_run(store):
     assert svc.delete(run.id) is True
     assert svc.get(run.id) is None
     assert svc.delete("nope") is False
+
+
+# ── capacity gate (Task 3) ───────────────────────────────────────────────────
+
+
+class _FakeSubgen:
+    def __init__(self, processing):
+        self._processing = processing
+
+    async def queue(self):
+        return {
+            "queued": [],
+            "processing": self._processing,
+            "queued_count": 0,
+            "processing_count": len(self._processing),
+        }
+
+
+class _NoopRunner:
+    async def preflight(self): ...
+
+    async def prepare(self, p):
+        return []
+
+    async def cleanup(self): ...
+
+
+def _cap_svc(tmp_path, *, processing, n, runner=None):
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+    sub = _FakeSubgen(processing)
+    svc = ArenaService(
+        s,
+        build_runner=runner or (lambda run: _NoopRunner()),
+        subgen_provider=lambda: sub,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": n})(),
+    )
+    return svc, sub
+
+
+def test_inflight_count_starts_zero(tmp_path):
+    svc, _ = _cap_svc(tmp_path, processing=[], n=1)
+    assert svc.inflight_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_sweep_waits_for_capacity_then_runs(tmp_path):
+    svc, sub = _cap_svc(tmp_path, processing=[{"path": "/m/x.mkv"}], n=1)
+    run = svc.create("TV/Show/ep.mkv", [ConfigVariant("base", {})])
+    events = []
+
+    async def collect():
+        async for evt in svc.subscribe(run.id):
+            events.append(evt["event"])
+            if evt["event"] in ("done", "error"):
+                return
+
+    # Subscribe before starting so we catch all events including waiting_for_capacity
+    consumer = asyncio.create_task(collect())
+    await asyncio.sleep(0)  # let subscriber register
+    svc.start(run)
+    await asyncio.sleep(0.2)
+    assert svc.get(run.id).status == "waiting_for_capacity"
+    sub._processing = []
+    await asyncio.wait_for(consumer, timeout=5)
+    assert "waiting_for_capacity" in events
