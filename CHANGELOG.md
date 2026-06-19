@@ -7,12 +7,38 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-19
+
+**Tuning-Lab GPU coordination + dogfood fixes.** The arena now respects your subgen concurrency limit, plus a batch of fixes from real-world use.
+
+### Added
+- **The Tuning-Lab arena respects your subgen GPU-concurrency limit (#279).** The
+  arena drives subgen's `/asr` endpoint directly — outside subgen's worker pool —
+  so it used to ignore `CONCURRENT_TRANSCRIPTIONS` and could fight queue jobs for
+  the GPU. subarr now reads subgen's live limit and gates both the queue feeder
+  and the arena on one budget (`subgen processing + arena in-flight < N`). A sweep
+  launched while the GPU is busy waits, showing **"Waiting for subgen capacity"**
+  on the Tuning Lab card, and the Queue page shows a **"Tuning Lab sweep running"**
+  indicator so you can see the contention. Gating is dormant on older subgen and
+  activates automatically once subgen reports its limit (subarr-subgen r10+).
+
 ### Fixed
 - **Update nudge no longer fires when you're ahead of the latest release (#275).**
   A locally-built install (or the window just after a release is tagged but
   before it publishes) could show "vX is out — you're on vY (N releases behind)"
   when Y was actually *newer* than X. The checker now compares versions
   directionally — it only nudges when the running version is strictly older.
+- **The arena no longer fails on 3-letter language tags (#278).** Arr/ffprobe tag
+  audio in 3-letter ISO 639-2 (`ger`/`fre`/`jpn`); Whisper's `/asr` only accepts
+  2-letter ISO 639-1 (`de`/`fr`/`ja`). The arena now normalizes the source
+  language, so foreign-language sweeps stop erroring with "'ger' is not a valid
+  language code". Un-mappable tags fall back to auto-detect.
+- **"Whisper anyway" in the Gaps arbiter now actually queues the job (#277).** The
+  button silently closed the dialog without queuing; it now submits the
+  transcription and confirms.
+- **Batch language overrides normalized to ISO 639-1 (#280).** `forceLanguage` and
+  `audio_language_override` are normalized to 2-letter at the subgen wire boundary,
+  matching the `/asr` path and removing any ambiguity for subgen.
 
 ## [2.0.0] - 2026-06-18
 
