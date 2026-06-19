@@ -247,7 +247,12 @@ class SubgenClient:
             raise SubgenUnavailable(f"subgen /status failed: {e}") from e
         if r.status_code != 200:
             raise SubgenUnavailable(f"subgen /status status {r.status_code}")
-        return r.json()
+        # Fix D (#288): wrap JSONDecodeError so an HTML proxy page on a 200
+        # raises SubgenUnavailable rather than a raw ValueError.
+        try:
+            return r.json()
+        except ValueError as e:
+            raise SubgenUnavailable(f"subgen /status returned non-json: {e}") from e
 
     async def probe_capabilities(self) -> SubgenCapabilities:
         """One-shot startup probe: figure out what this subgen build can do.
@@ -535,6 +540,11 @@ class SubgenClient:
             r = await self._client.post("/asr", params=params, files=files, timeout=asr_timeout)
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /asr failed: {e}") from e
+        # Fix C (#288): a non-JSON error body (proxy 5xx, text/plain HTML) must
+        # raise, not be silently returned as subtitle text. Check status before
+        # the content-type branch so any 4xx/5xx raises regardless of body type.
+        if r.status_code >= 400:
+            raise SubgenUnavailable(f"subgen /asr {r.status_code}: {r.text[:200]}")
         # Success streams text/plain (the subtitle); errors return a JSON dict.
         if "application/json" in r.headers.get("content-type", ""):
             try:
