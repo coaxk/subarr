@@ -172,6 +172,7 @@ class TelemetryCollector:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._client: httpx.AsyncClient | None = None
+        self._health = None  # wired by app.py lifespan (#289)
         # Ensure the row exists on init so /api/telemetry/state never
         # returns "not initialised" before the first tick.
         self._ensure_row()
@@ -380,7 +381,13 @@ class TelemetryCollector:
         # users; their daily ticks distribute naturally across the day).
         try:
             await self.send_now()
+            _h = getattr(self, "_health", None)  # #289: record the boot send too
+            if _h:
+                _h.record_success("telemetry", expected_interval_s=self._interval_s)
         except Exception as e:
+            _h = getattr(self, "_health", None)
+            if _h:
+                _h.record_failure("telemetry", e, expected_interval_s=self._interval_s)
             log.exception("initial telemetry send failed: %s", e)
         while not self._stop.is_set():
             try:
@@ -390,7 +397,13 @@ class TelemetryCollector:
                 pass
             try:
                 await self.send_now()
+                _h = getattr(self, "_health", None)  # #289 supervision hook
+                if _h:
+                    _h.record_success("telemetry", expected_interval_s=self._interval_s)
             except Exception as e:
+                _h = getattr(self, "_health", None)
+                if _h:
+                    _h.record_failure("telemetry", e, expected_interval_s=self._interval_s)
                 log.exception("telemetry tick failed: %s", e)
 
 

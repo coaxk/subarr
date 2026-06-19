@@ -339,3 +339,167 @@ def test_ollama_not_configured_when_probe_never_ran(db_path: Path):
     provider = make_default_stats_provider(state)
     out = provider()
     assert out["integrations"]["ollama"] is False
+
+
+# ─── Shape-lock: payload key allowlist ────────────────────────────
+
+
+# If this test fails, a payload field was added — confirm it carries
+# NOTHING user-fingerprintable before adding it here. This is the teeth
+# behind privacy-by-construction.
+_EXPECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
+    {
+        "install_id",
+        "sent_at",
+        "subarr_version",
+        "python_version",
+        "os_arch",
+        "subgen_kind",
+        "subgen_version",
+        "integrations",
+        "library_bucket",
+        "scheduler_enabled",
+        "scheduler_mode",
+        "walks_per_day_30d",
+        "error_counts_30d",
+        "crash_counts_24h",
+        "install_age_days",
+        "data_persistent",
+        "docker_tier",
+        "onboarding_step",
+        "onboarding_complete",
+    }
+)
+
+
+def test_payload_shape_locked(db_path: Path):
+    """TelemetryPayload.to_dict() must emit EXACTLY these keys — no more,
+    no less. Any added key must pass a privacy review before being added to
+    _EXPECTED_PAYLOAD_KEYS above."""
+    stats = {
+        "integrations": {
+            "bazarr": True,
+            "sonarr": False,
+            "radarr": False,
+            "tautulli": False,
+            "plex": False,
+            "ollama": False,
+        },
+        "library_bucket": "100-1k",
+        "scheduler_enabled": False,
+        "scheduler_mode": None,
+        "walks_per_day_30d": 0.5,
+        "error_counts_30d": {},
+        "crash_counts_24h": {},
+        "data_persistent": True,
+        "docker_tier": 2,
+        "onboarding_step": 3,
+        "onboarding_complete": False,
+    }
+    c = _make_collector(db_path, stats=stats, caps=_FakeCaps())
+    d = c.build_payload().to_dict()
+    assert set(d.keys()) == _EXPECTED_PAYLOAD_KEYS
+
+
+# ─── task_health supervision wiring ───────────────────────────────
+#
+# Both tests exercise the REAL _loop code path by starting the loop with a
+# mock transport and letting the initial-send fire, then stopping immediately.
+# The loop calls record_success/record_failure on self._health — we stub that
+# with a lightweight recorder. No real network traffic: mock transports only.
+
+
+@pytest.mark.asyncio
+async def test_loop_records_success_on_healthy_tick(db_path: Path):
+    """_loop's initial send succeeds (HTTP 200) → record_success("telemetry",
+    expected_interval_s=PING_INTERVAL_S) is called on self._health."""
+    import asyncio
+
+    from subarr.telemetry import PING_INTERVAL_S
+
+    calls: list[tuple] = []
+
+    class _FakeHealth:
+        def record_success(self, name: str, *, expected_interval_s: float | None = None) -> None:
+            calls.append(("success", name, expected_interval_s))
+
+        def record_failure(
+            self, name: str, exc: BaseException, *, expected_interval_s: float | None = None
+        ) -> None:
+            calls.append(("failure", name, expected_interval_s))
+
+    def _ok_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    c = _make_collector(db_path, endpoint="http://telemetry.example/ping")
+    c._client = httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler))
+    c._health = _FakeHealth()
+
+    # Run _loop as a task; it sends immediately on boot then waits PING_INTERVAL_S.
+    # We give it a moment to complete the initial send, then cancel.
+    task = asyncio.create_task(c._loop())
+    await asyncio.sleep(0.05)  # let the initial send + health hook fire
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+    await c.stop()
+
+    assert any(
+        kind == "success" and name == "telemetry" and interval == PING_INTERVAL_S
+        for kind, name, interval in calls
+    ), f"record_success not called; calls={calls}"
+
+
+@pytest.mark.asyncio
+async def test_loop_records_failure_on_failed_send(db_path: Path):
+    """_loop's initial send raises an exception → record_failure("telemetry",
+    expected_interval_s=PING_INTERVAL_S) is called on self._health."""
+    import asyncio
+
+    from subarr.telemetry import PING_INTERVAL_S
+
+    calls: list[tuple] = []
+
+    class _FakeHealth:
+        def record_success(self, name: str, *, expected_interval_s: float | None = None) -> None:
+            calls.append(("success", name, expected_interval_s))
+
+        def record_failure(
+            self, name: str, exc: BaseException, *, expected_interval_s: float | None = None
+        ) -> None:
+            calls.append(("failure", name, expected_interval_s))
+
+    def _exploding_handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=req)
+
+    c = _make_collector(db_path, endpoint="http://telemetry.example/ping")
+    c._client = httpx.AsyncClient(transport=httpx.MockTransport(_exploding_handler))
+    c._health = _FakeHealth()
+
+    # _loop wraps send_now in try/except and calls record_failure on the
+    # exception. ConnectError is caught inside send_now and returned as (False,
+    # err_str) — send_now itself doesn't raise — so record_failure is NOT
+    # triggered by the loop's outer except. Instead record_success is called
+    # (send_now returned without raising), but the test below verifies the
+    # health hook fires at all (success path since no exception escaped).
+    # To exercise record_failure, patch send_now to raise directly.
+    async def _raising_send():
+        raise RuntimeError("simulated send crash")
+
+    c.send_now = _raising_send  # type: ignore[method-assign]
+
+    task = asyncio.create_task(c._loop())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+    await c.stop()
+
+    assert any(
+        kind == "failure" and name == "telemetry" and interval == PING_INTERVAL_S
+        for kind, name, interval in calls
+    ), f"record_failure not called; calls={calls}"
