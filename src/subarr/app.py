@@ -789,6 +789,7 @@ async def lifespan(app_: FastAPI):
         subgen_caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
         subgen_caps_refresher=_refresh_subgen_caps,
     )
+    app_.state.telemetry._health = app_.state.task_health  # #289 supervision
     app_.state.telemetry.start()
 
     # Tier-2 docker discovery for the onboarding wizard. Optional —
