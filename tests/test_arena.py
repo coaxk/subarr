@@ -252,6 +252,60 @@ async def test_asr_runner_requests_vanilla_base_when_supported(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_asr_runner_maps_three_letter_lang_to_whisper_iso(tmp_path):
+    """Arr/ffprobe tags are 3-letter ISO 639-2/B ('ger'); subgen /asr only
+    accepts 2-letter ISO 639-1 ('de') and hard-errors on anything else.
+    Regression (live dogfood): source_language='ger' must reach /asr as 'de',
+    not the raw 'ger' that failed the whole sweep."""
+    c0 = tmp_path / "c0.wav"
+    c0.write_bytes(b"RIFF")
+    seen = []
+
+    def handler(req):
+        seen.append(dict(req.url.params))
+        return httpx.Response(
+            200, text="1\n00:00:00,000 --> 00:00:01,000\nx\n", headers={"content-type": "text/plain"}
+        )
+
+    runner = AsrRunner(
+        _client(handler),
+        capabilities=_caps(True),
+        source_language="ger",
+        to_fs_path=lambda p: p,
+        sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}],
+    )
+    await runner.prepare("TV/Show/ep.mkv")
+    await runner.run(0, task="transcribe", kwargs={})
+    assert seen[-1].get("language") == "de"
+
+
+@pytest.mark.asyncio
+async def test_asr_runner_omits_unmappable_lang_for_autodetect(tmp_path):
+    """An un-mappable tag ('und') must NOT be forwarded — omit the param so
+    Whisper auto-detects, rather than erroring the sweep on an invalid code."""
+    c0 = tmp_path / "c0.wav"
+    c0.write_bytes(b"RIFF")
+    seen = []
+
+    def handler(req):
+        seen.append(dict(req.url.params))
+        return httpx.Response(
+            200, text="1\n00:00:00,000 --> 00:00:01,000\nx\n", headers={"content-type": "text/plain"}
+        )
+
+    runner = AsrRunner(
+        _client(handler),
+        capabilities=_caps(True),
+        source_language="und",
+        to_fs_path=lambda p: p,
+        sampler=lambda fs: [{"path": str(c0), "kind": "speech", "ranges": []}],
+    )
+    await runner.prepare("TV/Show/ep.mkv")
+    await runner.run(0, task="transcribe", kwargs={})
+    assert "language" not in seen[-1]
+
+
+@pytest.mark.asyncio
 async def test_asr_returns_detected_language_when_requested(tmp_path):
     c0 = tmp_path / "c.wav"
     c0.write_bytes(b"RIFF")

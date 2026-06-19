@@ -28,9 +28,34 @@ import asyncio
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
+from .langs import normalize_lang
 from .paths import canonical_to_fs, canonical_to_subgen_batch
 from .subtitle_readability import parse_srt
 from .tournament_harness import judge_candidates
+
+# Whisper's accepted language codes (2-letter ISO 639-1 + a few specials),
+# the exact set subgen /asr validates against. Arr/ffprobe tags are 3-letter
+# ISO 639-2/B ('ger', 'fre'), which /asr hard-rejects — so we normalize to
+# this set and, for anything that doesn't land in it, send no language at all
+# (Whisper auto-detects) rather than failing the whole sweep on a bad code.
+_WHISPER_LANGS = frozenset(
+    "af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo "
+    "fr gl gu ha haw he hi hr ht hu hy id is it ja jw ka kk km kn ko la lb ln lo "
+    "lt lv mg mi mk ml mn mr ms mt my ne nl nn no oc pa pl ps pt ro ru sa sd si "
+    "sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz vi yi yo zh yue".split()
+)
+
+
+def to_whisper_lang(code: str | None) -> str | None:
+    """Coerce an arr/ffprobe language tag to the code subgen /asr accepts.
+
+    Normalizes to ISO 639-1 (e.g. 'ger' → 'de') and returns it only when it
+    lands in Whisper's accepted set; otherwise None, so the caller omits the
+    param and Whisper auto-detects instead of erroring on an invalid code."""
+    if not code:
+        return None
+    norm = normalize_lang(code)
+    return norm if norm in _WHISPER_LANGS else None
 
 
 class ArenaUnsupported(RuntimeError):
@@ -230,7 +255,11 @@ class AsrRunner:
     ):
         self._subgen = subgen
         self._caps = capabilities
-        self._source_language = source_language
+        # Normalize the source language to Whisper's accepted code set up front
+        # (arr tags are 3-letter ISO 639-2/B like 'ger'; /asr needs 'de'). An
+        # un-mappable tag becomes None → Whisper auto-detects rather than the
+        # whole sweep erroring on an invalid code.
+        self._source_language = to_whisper_lang(source_language)
         self._to_fs_path = to_fs_path
         self._to_subgen = to_subgen
         self._sampler = sampler
