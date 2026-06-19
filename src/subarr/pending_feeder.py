@@ -189,10 +189,11 @@ class PendingQueueFeeder:
 
         caps = self._caps()
         n = getattr(caps, "concurrent_transcriptions", None) if caps else None
-        processing = _processing_count(q)
 
         while effective < target and subgen_capacity_free(
-            processing_count=processing + submitted, arena_in_flight=self._arena_inflight(), n=n
+            processing_count=_processing_count(q) + len(self._inflight),
+            arena_in_flight=self._arena_inflight(),
+            n=n,
         ):
             jobs = self._store.next_pending(1)
             if not jobs:
