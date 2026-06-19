@@ -583,6 +583,29 @@ function BackfillButton({ onDone }) {
   );
 }
 
+// ─── Arena slot indicator ─────────────────────────────────────────
+// Exported helper — returns the label string when a sweep is in-flight,
+// or null when none. Tests assert on this directly (Node env, no rendering).
+export function arenaSlotText(arenaActive) {
+  if (!arenaActive) return null;
+  return `Tuning Lab sweep running · using ${arenaActive} GPU slot${arenaActive === 1 ? '' : 's'}`;
+}
+
+export function ArenaSlotIndicator({ arenaActive }) {
+  const text = arenaSlotText(arenaActive);
+  if (!text) return null;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+      background: 'var(--bg-1)', border: '1px solid var(--bg-3)',
+      borderRadius: 'var(--radius-md)', color: 'var(--fg-2)', fontSize: 'var(--text-sm)',
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--violet-500)', flex: 'none' }} />
+      {text}
+    </div>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────
 export function QueuePage() {
   const { data, loading, error, refetch } = useLiveQueue();
@@ -786,6 +809,9 @@ export function QueuePage() {
           <button className="btn" onClick={() => refetch()}>Refresh</button>
         </div>
       </div>
+
+      {/* Arena sweep GPU slot indicator — shown when Tuning Lab is running */}
+      <ArenaSlotIndicator arenaActive={data?.arena_active || 0} />
 
       {/* Submit manual scan */}
       <div className="panel" style={{ padding: '16px 18px' }}>
