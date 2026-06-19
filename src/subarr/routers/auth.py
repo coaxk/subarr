@@ -8,22 +8,26 @@ the stored credential OR the env override (recovery). On success the session is
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import hash_password, needs_setup, verify_login
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+log = logging.getLogger(__name__)
+
 _MIN_PASSWORD = 8
+_MAX_PASSWORD = 1024
 
 
 class Credentials(BaseModel):
     username: str
-    password: str
+    password: str = Field(..., max_length=_MAX_PASSWORD)
 
 
 def _store(request: Request):
@@ -61,6 +65,12 @@ async def state(request: Request) -> dict[str, Any]:
 @router.post("/setup", status_code=201)
 async def setup(creds: Credentials, request: Request) -> dict[str, Any]:
     store, settings = _store(request), _settings(request)
+    client_ip = request.client.host if request.client else "unknown"
+    log.warning(
+        "first-run admin account setup invoked from %s -- if you did not initiate this, "
+        "an attacker may have raced you; reset with SUBARR_AUTH_RESET",
+        client_ip,
+    )
     if not needs_setup(settings, store):
         raise HTTPException(409, detail="already configured")
     username = creds.username.strip()
