@@ -389,6 +389,8 @@ async def lifespan(app_: FastAPI):
         lang_fallback=lambda media_path: _arena_fallback_lang(app_, media_path),
         # Audio-track languages → 'multitrack' advisory (original + dub etc.).
         track_info=lambda media_path: _arena_audio_tracks(app_, media_path),
+        subgen_provider=lambda: app_.state.subgen,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
     )
     app_.state.docker = DockerOps()
     app_.state.integrations = IntegrationBundle()
@@ -459,6 +461,8 @@ async def lifespan(app_: FastAPI):
         submit_job=_feeder_submit,
         target_depth_provider=lambda: app_.state.schedule.get_rules().queue_target_depth,
         paused_provider=lambda: app_.state.schedule.get_rules().queue_paused,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+        arena_inflight_provider=lambda: app_.state.arena.inflight_count(),
     )
     app_.state.queue_feeder._health = app_.state.task_health  # #157 supervision
     app_.state.queue_feeder.start()
