@@ -623,6 +623,20 @@ def test_reconcile_marks_interrupted_runs_errored(store):
     assert after.status == "error" and "interrupted" in after.error
 
 
+def test_reconcile_marks_waiting_for_capacity_runs_errored(store):
+    # A run that crashed while waiting_for_capacity was not included in the
+    # reconcile SQL (only pending/queued/running were covered). Such a run would
+    # stay frozen in the UI polling waiting_for_capacity indefinitely.
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    run.status = "waiting_for_capacity"
+    store.save(run)
+    n = store.reconcile_interrupted()
+    assert n == 1
+    after = svc.get(run.id)
+    assert after.status == "error" and "interrupted" in after.error
+
+
 def test_delete_removes_run(store):
     svc = _service(store, [])
     run = svc.create("/m.mkv", [ConfigVariant("a", {})])

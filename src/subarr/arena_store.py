@@ -213,7 +213,7 @@ class ArenaStore:
         with self._lock:
             cur = self._conn.execute(
                 "UPDATE arena_runs SET status='error', error='interrupted by restart', updated_at=? "
-                "WHERE status IN ('pending', 'queued', 'running')",
+                "WHERE status IN ('pending', 'queued', 'running', 'waiting_for_capacity')",
                 (time.time(),),
             )
             return cur.rowcount or 0
