@@ -86,6 +86,7 @@ class ArenaService:
         track_info=None,
         subgen_provider=None,
         caps_provider=None,
+        capacity_poll_interval_s: float = CAPACITY_POLL_INTERVAL_S,
     ):
         self._store = store
         self._build_runner = build_runner
@@ -107,6 +108,7 @@ class ArenaService:
         # provider is absent or yields None, the gate is disabled (dormant-safe).
         self._subgen_provider = subgen_provider
         self._caps_provider = caps_provider
+        self._capacity_poll_interval_s = capacity_poll_interval_s
         self._inflight = 0  # arena /asr transcriptions currently running (0/1)
 
     # ── store (persisted) ────────────────────────────────────────────────────
@@ -208,7 +210,7 @@ class ArenaService:
                 fails += 1
                 if fails >= CAPACITY_PROBE_FAIL_OPEN_AFTER:
                     return
-                await asyncio.sleep(CAPACITY_POLL_INTERVAL_S)
+                await asyncio.sleep(self._capacity_poll_interval_s)
                 continue
             processing = q.get("processing_count")
             if not isinstance(processing, int):

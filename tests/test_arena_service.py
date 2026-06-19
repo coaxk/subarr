@@ -671,7 +671,7 @@ class _NoopRunner:
     async def cleanup(self): ...
 
 
-def _cap_svc(tmp_path, *, processing, n, runner=None):
+def _cap_svc(tmp_path, *, processing, n, runner=None, capacity_poll_interval_s=0.02):
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
     sub = _FakeSubgen(processing)
@@ -680,6 +680,7 @@ def _cap_svc(tmp_path, *, processing, n, runner=None):
         build_runner=runner or (lambda run: _NoopRunner()),
         subgen_provider=lambda: sub,
         caps_provider=lambda: type("C", (), {"concurrent_transcriptions": n})(),
+        capacity_poll_interval_s=capacity_poll_interval_s,
     )
     return svc, sub
 
