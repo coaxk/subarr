@@ -134,8 +134,11 @@ class RadarrClient(IntegrationClient):
 
         results = await asyncio.gather(*(_one(mid) for mid in ids))
         out: list[dict[str, Any]] = []
-        for chunk in results:
+        # gather preserves order → zip each chunk back to the movieId it was
+        # fetched for and stamp it on every file row. (Was a no-op: setdefault
+        # with the row's own possibly-absent movieId left it None on the fan-out.)
+        for mid, chunk in zip(ids, results):
             for r in chunk:
-                r.setdefault("movieId", r.get("movieId"))
-                out.extend([r])
+                r.setdefault("movieId", mid)
+                out.append(r)
         return out

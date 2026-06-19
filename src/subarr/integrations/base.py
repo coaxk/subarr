@@ -41,7 +41,7 @@ class IntegrationClient:
         # #235: per-integration breaker. A downed/flapping upstream OPENs it and
         # we short-circuit further calls for a cooldown instead of eating slow
         # timeouts every poll cycle. Caller can inject a tuned breaker.
-        self._breaker = breaker or CircuitBreaker()
+        self._breaker = breaker or CircuitBreaker(name=self.name)
 
     def is_configured(self) -> bool:
         return self._configured
