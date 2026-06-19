@@ -126,6 +126,12 @@ class SubgenCapabilities:
     # tags — the patch_rev scheme (v4.x) can never match a date-style tag.
     # None on older builds → the update checker won't claim an update.
     release_tag: str | None = None
+    # r10 capability (#202 follow-up): subgen's live CONCURRENT_TRANSCRIPTIONS
+    # value — the number of transcriptions its worker pool runs at once. subarr
+    # uses it as the GPU-concurrency budget that both the feeder and the arena
+    # gate on (see subgen_capacity). None on older subgen that doesn't publish
+    # it → the gate stays disabled (dormant-safe).
+    concurrent_transcriptions: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +153,7 @@ class SubgenCapabilities:
             "runtime_config": self.runtime_config,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
             "release_tag": self.release_tag,
+            "concurrent_transcriptions": self.concurrent_transcriptions,
         }
 
     @classmethod
@@ -294,6 +301,7 @@ class SubgenClient:
         asr_detected_language = False
         ignore_forced_subtitles = False
         runtime_config = False
+        concurrent_transcriptions: int | None = None
         patch_rev: str | None = None
         release_tag: str | None = None
         try:
@@ -325,6 +333,8 @@ class SubgenClient:
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
                             ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
                             runtime_config = bool(caps_block.get("runtime_config"))
+                            _ct = caps_block.get("concurrent_transcriptions")
+                            concurrent_transcriptions = _ct if isinstance(_ct, int) and _ct > 0 else None
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -351,6 +361,7 @@ class SubgenClient:
             asr_detected_language=asr_detected_language,
             ignore_forced_subtitles=ignore_forced_subtitles,
             runtime_config=runtime_config,
+            concurrent_transcriptions=concurrent_transcriptions,
             subarr_subgen_patch_rev=patch_rev,
             release_tag=release_tag,
         )
