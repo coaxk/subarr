@@ -239,3 +239,42 @@ async def test_stop_wakes_loop_without_waiting_out_interval(store):
     feeder.start()
     await asyncio.sleep(0.05)
     await asyncio.wait_for(feeder.stop(), timeout=1.0)
+
+
+# ── GPU-concurrency gate (arena-aware capacity) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_feeder_holds_when_arena_consumes_the_only_slot(store):
+    # concurrent_transcriptions=1 and arena has 1 in-flight → no GPU slots left.
+    store.enqueue("TV/a.mkv", source="gaps")
+    rec = SubmitRecorder()
+    feeder = PendingQueueFeeder(
+        store=store,
+        subgen_provider=lambda: FakeSubgen(),
+        submit_job=rec,
+        target_depth_provider=lambda: 2,
+        paused_provider=lambda: False,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": 1})(),
+        arena_inflight_provider=lambda: 1,
+    )
+    n = await feeder.tick()
+    assert n == 0 and rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_feeder_unaffected_when_n_none(store):
+    # concurrent_transcriptions=None disables the gate entirely.
+    store.enqueue("TV/a.mkv", source="gaps")
+    rec = SubmitRecorder()
+    feeder = PendingQueueFeeder(
+        store=store,
+        subgen_provider=lambda: FakeSubgen(),
+        submit_job=rec,
+        target_depth_provider=lambda: 2,
+        paused_provider=lambda: False,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": None})(),
+        arena_inflight_provider=lambda: 5,
+    )
+    n = await feeder.tick()
+    assert n == 1 and len(rec.calls) == 1
