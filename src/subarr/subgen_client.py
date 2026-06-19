@@ -440,11 +440,20 @@ class SubgenClient:
         """
         if task is not None and task not in ("transcribe", "translate"):
             raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
+        # Normalize 3-letter arr/ffprobe tags (ISO 639-2/B 'fre', /T 'fra') to
+        # the 2-letter ISO 639-1 ('fr') subgen's Whisper layer wants, at the wire
+        # boundary. subgen /batch parses 3-letter leniently, but normalizing here
+        # makes it unambiguous and matches the strict /asr path. normalize_lang
+        # passes unknown codes through unchanged, so nothing is dropped.
+        from .langs import normalize_lang
+
         params: dict[str, Any] = {"directory": directory, "reverse": str(reverse).lower()}
         if force_language:
-            params["forceLanguage"] = force_language
+            params["forceLanguage"] = normalize_lang(force_language) or force_language
         if audio_language_override:
-            params["audio_language_override"] = audio_language_override
+            params["audio_language_override"] = (
+                normalize_lang(audio_language_override) or audio_language_override
+            )
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
         if task:

@@ -36,3 +36,19 @@ async def test_probe_concurrent_transcriptions_absent_is_none():
 
     caps = await _client(handler).probe_capabilities()
     assert caps.concurrent_transcriptions is None
+
+
+@pytest.mark.asyncio
+async def test_batch_normalizes_language_params_to_iso6391():
+    """Arr tags are 3-letter ISO 639-2 ('fre'/'fra'/'ger'); normalize them to
+    Whisper's 2-letter ISO 639-1 at the send boundary so subgen never has to
+    guess (matches the strict /asr path). Unknown codes pass through unchanged."""
+    seen: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.update(dict(req.url.params))
+        return httpx.Response(200, json={})
+
+    await _client(handler).batch("/media/library/x", audio_language_override="fre", force_language="ger")
+    assert seen.get("audio_language_override") == "fr"
+    assert seen.get("forceLanguage") == "de"
