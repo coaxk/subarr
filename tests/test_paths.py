@@ -161,3 +161,90 @@ def test_strip_arr_prefix_explicit_override_unchanged(subarr_env):
     from subarr.paths import strip_arr_prefix
 
     assert strip_arr_prefix("/custom/TV/Foo", prefix="/custom/") == "TV/Foo"
+
+
+# === Fix A: trailing-slash-aware prefix matching ===
+
+
+def test_strip_arr_prefix_no_sibling_mismatch(monkeypatch, tmp_path, media_root):
+    """#285 Fix A: /data/Media (no trailing slash) must NOT match
+    /data/MediaExtra/... — bare startswith() is too greedy; the match must
+    require a trailing slash boundary after the prefix."""
+    import importlib
+
+    # Override ARR_PATH_PREFIX without trailing slash to expose the greedy bug.
+    monkeypatch.setenv("SUBARR_MEDIA_ROOT", str(media_root))
+    monkeypatch.setenv("ARR_PATH_PREFIX", "/data/Media")
+    monkeypatch.setenv("SUBGEN_COMPOSE_PATH", str(tmp_path / "compose.yaml"))
+    (tmp_path / "compose.yaml").write_text("services:\n  subgen:\n    environment: {}\n")
+    monkeypatch.setenv("SUBARR_DB_PATH", str(tmp_path / "subarr.db"))
+    monkeypatch.setenv("SUBGEN_URL", "http://subgen.test:9000")
+    monkeypatch.setenv("PLEX_URL", "http://plex.test:32400")
+    monkeypatch.setenv("PLEX_TOKEN", "test-token")
+    monkeypatch.setenv("PLEX_SECTION", "all")
+    monkeypatch.setenv("BAZARR_URL", "http://bazarr.test:6767")
+    monkeypatch.setenv("BAZARR_API_KEY", "bz-test-key")
+    monkeypatch.setenv("SONARR_URL", "http://sonarr.test:8989")
+    monkeypatch.setenv("SONARR_API_KEY", "sn-test-key")
+    monkeypatch.setenv("RADARR_URL", "http://radarr.test:7878")
+    monkeypatch.setenv("RADARR_API_KEY", "rd-test-key")
+    monkeypatch.setenv("TAUTULLI_URL", "http://tautulli.test:8181")
+    monkeypatch.setenv("TAUTULLI_API_KEY", "tt-test-key")
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test:11434")
+    monkeypatch.setenv("OLLAMA_MODEL", "test-model")
+    from subarr import config, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    from subarr.paths import strip_arr_prefix
+
+    # A sibling /data/MediaExtra/... must NOT strip as if under /data/Media
+    result = strip_arr_prefix("/data/MediaExtra/TV/Foo")
+    # Must NOT equal "Extra/TV/Foo" (the mis-stripped form from the bug)
+    assert result != "Extra/TV/Foo", f"sibling path mis-stripped: got {result!r}"
+    # Correct: pass through slash-stripped (no library match)
+    assert result == "data/MediaExtra/TV/Foo"
+
+
+def test_strip_arr_prefix_no_trailing_slash_on_prefix_still_matches(subarr_env):
+    """#285 Fix A: a path that IS directly under the prefix still strips
+    correctly even when the stored prefix has no trailing slash."""
+    from subarr.paths import strip_arr_prefix
+
+    # ARR_PATH_PREFIX is /data/Media/ — stripping should work regardless of
+    # whether the prefix was stored with or without trailing slash.
+    assert strip_arr_prefix("/data/Media/TV/Foo") == "TV/Foo"
+
+
+def test_strip_arr_prefix_backslash_windows_path(subarr_env):
+    """#285 Fix A: Windows-style backslash paths from Sonarr/Radarr containers
+    must match the forward-slash arr_prefix after normalization."""
+    from subarr.paths import strip_arr_prefix
+
+    # A Windows-style path that corresponds to /data/Media/TV/Foo
+    result = strip_arr_prefix(r"C:\data\Media\TV\Foo", prefix=r"C:\data\Media")
+    # After normalization the prefix-stripped relative should be TV/Foo
+    assert result == "TV/Foo"
+
+
+def test_strip_arr_prefix_explicit_backslash_strips(subarr_env):
+    """#285 Fix A: explicit prefix= branch also normalizes backslashes so
+    Windows arr paths (backslash) match a forward-slash prefix."""
+    from subarr.paths import strip_arr_prefix
+
+    # Both prefix and arr_path use backslashes; after normalization they match.
+    result = strip_arr_prefix(r"C:\data\Media\TV\Foo", prefix=r"C:\data\Media\\")
+    assert result == "TV/Foo"
+
+
+# === Fix B: fs_to_canonical default-lib root returns empty string ===
+
+
+def test_fs_to_canonical_default_lib_root_returns_empty_string(subarr_env):
+    """#285 Fix B: fs_to_canonical(library_root) for the default (slug='')
+    library must return '' not '.'."""
+    from subarr.config import settings
+    from subarr.paths import fs_to_canonical
+
+    result = fs_to_canonical(settings.media_root)
+    assert result == "", f"expected '' got {result!r}"

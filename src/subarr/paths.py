@@ -92,7 +92,9 @@ def fs_to_canonical(p: Path) -> str:
     rel_posix = rel.as_posix()
     if lib.slug:
         return f"@{lib.slug}/{rel_posix}" if rel_posix != "." else f"@{lib.slug}/"
-    return rel_posix
+    # Fix B (#285): when the path IS the default library root, rel_posix is "."
+    # which is not a valid canonical. Return "" (empty = library root).
+    return "" if rel_posix == "." else rel_posix
 
 
 def canonical_to_subgen_batch(canonical: str) -> str:
@@ -173,20 +175,35 @@ def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | N
         return arr_path
 
     if prefix is not None:
-        s = arr_path
-        if prefix and s.startswith(prefix):
-            s = s[len(prefix) :]
+        # Fix A (#285): normalize backslashes so Windows arr paths match
+        # forward-slash prefixes.
+        s = arr_path.replace("\\", "/")
+        p = (prefix or "").replace("\\", "/")
+        if p:
+            # Trailing-slash-aware: only match at a slash boundary so
+            # /data/Media does not mis-strip /data/MediaExtra/...
+            p_norm = p.rstrip("/")
+            if s == p_norm or s.startswith(p_norm + "/"):
+                s = s[len(p_norm) :]
         return s.strip("/")
 
+    # Fix A (#285): normalize backslashes once, then compare against
+    # forward-slash arr_prefix values.
+    arr_path_norm = arr_path.replace("\\", "/")
     best: Library | None = None
     best_len = -1
     for lib in settings.libraries:
-        ap = lib.arr_prefix
-        if ap and arr_path.startswith(ap) and len(ap) > best_len:
-            best, best_len = lib, len(ap)
+        ap = lib.arr_prefix.replace("\\", "/") if lib.arr_prefix else ""
+        ap_norm = ap.rstrip("/")
+        if (
+            ap_norm
+            and (arr_path_norm == ap_norm or arr_path_norm.startswith(ap_norm + "/"))
+            and len(ap_norm) > best_len
+        ):
+            best, best_len = lib, len(ap_norm)
     if best is None:
-        return arr_path.strip("/")
-    rel = arr_path[best_len:].strip("/")
+        return arr_path_norm.strip("/")
+    rel = arr_path_norm[best_len:].strip("/")
     if best.slug:
         return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
     return rel
