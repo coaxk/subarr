@@ -80,13 +80,18 @@ function Hint({ children }) {
   return <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>{children}</div>;
 }
 
+// Exported so tests can assert on the status vocabulary without rendering.
+export const STATUS_MAP = {
+  pending: { kind: 'idle', text: 'Pending' },
+  queued: { kind: 'idle', text: 'Queued' },
+  running: { kind: 'busy', text: 'Running' },
+  done: { kind: 'ok', text: 'Done' },
+  error: { kind: 'err', text: 'Error' },
+  waiting_for_capacity: { kind: 'idle', text: 'Waiting for subgen capacity' },
+};
+
 function StatusPill({ status }) {
-  const map = {
-    pending: { kind: 'idle', text: 'Pending' }, queued: { kind: 'idle', text: 'Queued' },
-    running: { kind: 'busy', text: 'Running' },
-    done: { kind: 'ok', text: 'Done' }, error: { kind: 'err', text: 'Error' },
-  };
-  const s = map[status] || map.pending;
+  const s = STATUS_MAP[status] || STATUS_MAP.pending;
   return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}><StatusDot kind={s.kind} pulse={status === 'running'} />{s.text}</span>;
 }
 
@@ -851,7 +856,7 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {runs.map((r) => {
           const open = expandedId === r.id;
-          const active = r.status === 'running' || r.status === 'pending' || r.status === 'queued';
+          const active = r.status === 'running' || r.status === 'pending' || r.status === 'queued' || r.status === 'waiting_for_capacity';
           return (
             <div key={r.id} style={{ border: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-2)' }}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -934,6 +939,12 @@ function SweepList({ runs, detail, expandedId, onToggle, onDelete, loaded }) {
                   <Glyph char={ICONS.close || '×'} size={13} />
                 </button>
               </div>
+              {r.status === 'waiting_for_capacity' && (
+                <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)', padding: '6px 14px 8px' }}>
+                  Waiting for subgen to free a slot — your subgen runs a limited number of
+                  transcriptions at once. This starts automatically when one finishes.
+                </div>
+              )}
               {open && <div style={{ padding: '0 14px 12px' }}><SweepDetail run={detail[r.id]} /></div>}
             </div>
           );
@@ -1206,7 +1217,7 @@ export function ArenaPage() {
   // Poll while anything is pending/running (house usePoller pattern); also
   // refresh the open sweep's detail so its table fills in live.
   useEffect(() => {
-    const active = runs.some((r) => r.status === 'pending' || r.status === 'running' || r.status === 'queued');
+    const active = runs.some((r) => r.status === 'pending' || r.status === 'running' || r.status === 'queued' || r.status === 'waiting_for_capacity');
     if (!active) return;
     const t = setInterval(() => { loadRuns(); if (expandedId) loadDetail(expandedId); }, 2500);
     return () => clearInterval(t);
@@ -1250,7 +1261,7 @@ export function ArenaPage() {
       </div>
       <WhatThisIs />
       <KnobReference />
-      <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued').length} />
+      <SweepForm onRun={onRun} gate={gate} activeCount={runs.filter((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued' || r.status === 'waiting_for_capacity').length} />
       {notice && <div style={gateNoticeStyle}>{notice}</div>}
       <ByLanguagePanel data={byLang} />
       <GlobalLeaderboardPanel data={leaderboard} minLanguages={lbMin} />
