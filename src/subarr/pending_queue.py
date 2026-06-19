@@ -277,6 +277,36 @@ class PendingQueueStore:
             )
             return cur.rowcount > 0
 
+    def repend_orphaned_submitted(self, live_subgen_paths: set[str]) -> int:
+        """#287: re-pend SUBMITTED jobs that subgen no longer knows about.
+
+        For each row with status=SUBMITTED whose subgen-space path
+        (`canonical_to_subgen_batch(canonical_path)`) is NOT in
+        `live_subgen_paths`, flip it back to STATUS_PENDING and clear
+        `submitted_at` so the feeder treats it as a fresh job.
+
+        Call this once at boot (after a successful /queue read) to recover
+        jobs that were SUBMITTED when subgen was restarted and lost its queue.
+        Returns the number of rows re-pended.
+        """
+        from .paths import canonical_to_subgen_batch
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, canonical_path FROM pending_queue WHERE status = ?",
+                (STATUS_SUBMITTED,),
+            ).fetchall()
+            count = 0
+            for job_id, canonical_path in rows:
+                sg_path = canonical_to_subgen_batch(canonical_path)
+                if sg_path not in live_subgen_paths:
+                    self._conn.execute(
+                        "UPDATE pending_queue SET status = ?, submitted_at = NULL WHERE id = ?",
+                        (STATUS_PENDING, job_id),
+                    )
+                    count += 1
+            return count
+
     def clear(self, status: str | None = None) -> int:
         with self._lock:
             if status is None:

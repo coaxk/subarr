@@ -313,3 +313,119 @@ async def test_inflight_counted_in_capacity_gate_across_ticks(store):
     n2 = await feeder.tick()
     assert n2 == 0, f"expected 0 submitted second tick (gate should block), got {n2}"
     assert len(rec.calls) == 1  # only the first job was ever submitted
+
+
+# ── boot reconciliation of orphaned SUBMITTED rows (#287) ───────────
+
+
+@pytest.mark.asyncio
+async def test_reconcile_repends_submitted_not_in_subgen(store):
+    """A SUBMITTED job whose sg_path is absent from subgen's /queue is
+    re-pended on the first successful reconcile tick so it gets re-fed."""
+    job = store.enqueue("TV/lost.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    # subgen's queue is empty — it lost the job after a restart
+    subgen = FakeSubgen(queued=[], processing=[])
+    rec = SubmitRecorder()
+    feeder = _feeder(store, subgen, rec, target=2)
+
+    # First tick triggers the one-shot reconcile, then normal feeding
+    await feeder.tick()
+
+    refreshed = store.get(job.id)
+    # The job was re-pended by reconcile, then immediately re-submitted by the feeder
+    assert refreshed.status == STATUS_SUBMITTED
+    assert rec.calls == ["TV/lost.mkv"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keeps_submitted_still_in_subgen(store):
+    """A SUBMITTED job whose sg_path IS in subgen's /queue stays SUBMITTED
+    — it hasn't been lost, just not yet completed."""
+    from subarr.paths import canonical_to_subgen_batch
+
+    job = store.enqueue("TV/safe.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    sg_path = canonical_to_subgen_batch("TV/safe.mkv")
+    # subgen still has the job
+    subgen = FakeSubgen(queued=[{"path": sg_path}])
+    rec = SubmitRecorder()
+    feeder = _feeder(store, subgen, rec, target=2)
+
+    await feeder.tick()
+
+    # job stays SUBMITTED (adopted), nothing re-submitted via submit_job
+    assert store.get(job.id).status == STATUS_SUBMITTED
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skipped_when_subgen_unreachable(store):
+    """If subgen.queue() raises on the first tick, no reconcile happens
+    (don't re-pend everything when subgen is just momentarily down)."""
+    job = store.enqueue("TV/a.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    subgen = FakeSubgen(raise_exc=SubgenUnavailable("down"))
+    rec = SubmitRecorder()
+    feeder = _feeder(store, subgen, rec, target=2)
+
+    n = await feeder.tick()
+
+    assert n == 0
+    # The job must remain SUBMITTED — we didn't get a live view so we can't
+    # know subgen dropped it
+    assert store.get(job.id).status == STATUS_SUBMITTED
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_runs_once_per_process_start(store):
+    """The one-shot reconcile flag means it only fires once, even across
+    multiple ticks. Subsequent ticks don't repeat the reconcile logic."""
+    job = store.enqueue("TV/a.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    # subgen starts empty (lost the job), then on 2nd tick also empty
+    subgen = FakeSubgen(queued=[], processing=[])
+    rec = SubmitRecorder()
+    feeder = _feeder(store, subgen, rec, target=2)
+
+    # tick 1: reconcile fires, re-pends + re-submits
+    await feeder.tick()
+    assert rec.calls == ["TV/a.mkv"]
+    first_call_count = len(rec.calls)
+
+    # tick 2: reconcile must NOT fire again (one-shot)
+    await feeder.tick()
+    # No additional reconcile-triggered re-feed (any new calls would be
+    # normal feeder feeding, which would only happen if there were more pending)
+    assert len(rec.calls) == first_call_count
+
+
+@pytest.mark.asyncio
+async def test_reconcile_retries_if_subgen_was_down_first(store):
+    """If subgen.queue() fails on tick 1, the reconcile flag is NOT set, so
+    tick 2 (with a reachable subgen) successfully reconciles."""
+    job = store.enqueue("TV/b.mkv", source="gaps")
+    store.mark_submitted(job.id)
+
+    call_count = {"n": 0}
+
+    class FlakeySubgen:
+        async def queue(self):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise SubgenUnavailable("down on first call")
+            # Second call succeeds with empty queue (job was lost)
+            return {"queued": [], "processing": [], "queued_count": 0, "processing_count": 0}
+
+    rec = SubmitRecorder()
+    feeder = _feeder(store, FlakeySubgen(), rec, target=2)
+
+    # tick 1: subgen down → soft skip, reconcile not performed
+    n1 = await feeder.tick()
+    assert n1 == 0
+    assert store.get(job.id).status == STATUS_SUBMITTED  # untouched
+
+    # tick 2: subgen reachable → reconcile fires, re-pends + re-submits
+    await feeder.tick()
+    assert rec.calls == ["TV/b.mkv"]
