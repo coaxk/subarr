@@ -12,18 +12,19 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import hash_password, needs_setup, verify_login
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _MIN_PASSWORD = 8
+_MAX_PASSWORD = 1024
 
 
 class Credentials(BaseModel):
     username: str
-    password: str
+    password: str = Field(..., max_length=_MAX_PASSWORD)
 
 
 def _store(request: Request):
