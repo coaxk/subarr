@@ -212,6 +212,14 @@ def current_principal(scope, *, settings, store=None) -> str | None:
     return None
 
 
+# #292: pre-computed dummy hash used to equalize verify_login timing on the
+# unhappy path (unknown username / no stored credential). Both the known-user
+# and unknown-user branches call verify_password, so an attacker cannot
+# distinguish "no such user" (~µs) from "wrong password" (~400ms PBKDF2).
+# Generated once at import time; the result is always discarded.
+_DUMMY_HASH, _DUMMY_SALT, _DUMMY_ITERS = hash_password("dummy-timing-equalizer")
+
+
 def verify_login(username: str, password: str, *, store, settings) -> bool:
     """True if the pair matches the **env override** (`SUBARR_USER`/`PASS` —
     the always-on recovery credential) or the **stored** credential. Constant-
@@ -224,6 +232,10 @@ def verify_login(username: str, password: str, *, store, settings) -> bool:
     cred = store.get_credential()
     if cred and secrets.compare_digest(username, cred["username"]):
         return verify_password(password, cred["password_hash"], cred["salt"], cred["iterations"])
+    # Unknown username or no stored credential: run a dummy PBKDF2 verify so
+    # the response time matches the known-user+wrong-password path, preventing
+    # username enumeration via timing side-channel. The result is always False.
+    verify_password(password, _DUMMY_HASH, _DUMMY_SALT, _DUMMY_ITERS)
     return False
 
 
