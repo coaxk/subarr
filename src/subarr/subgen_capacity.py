@@ -9,6 +9,15 @@ feeder and the arena — consult this before committing work.
 N is read live from subgen (capabilities.concurrent_transcriptions); when it is
 unknown (old subgen, or subgen unreachable) the gate is disabled so behaviour is
 exactly as before — no regression, no false stalls.
+
+SOFT GATE (known limitation): the feeder and the arena each read subgen's state
+and decide independently, with no shared lock spanning check-then-commit. A brief
+overshoot to N+1 is possible when both commit in the same window (e.g. the feeder
+submits a /batch job the same tick an arena sweep starts). It self-corrects on the
+next feeder tick (which then sees the higher processing count). A hard, race-free
+guarantee would require enforcement INSIDE subgen (/asr sharing the worker pool's
+semaphore) — deliberately out of scope; this external gate trades a rare,
+self-healing N+1 for zero subgen changes.
 """
 
 from __future__ import annotations

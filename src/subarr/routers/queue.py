@@ -302,6 +302,10 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
                 }
             )
 
+    # Count of arena sweeps actively transcribing (running /asr) — NOT sweeps
+    # parked in waiting_for_capacity (those hold no GPU slot, so the "using a
+    # slot" indicator stays silent until they actually start). A waiting sweep is
+    # surfaced on its own Tuning-Lab card, not here.
     arena = getattr(request.app.state, "arena", None)
     arena_active = arena.inflight_count() if arena is not None else 0
 

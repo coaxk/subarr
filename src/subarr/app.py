@@ -825,6 +825,10 @@ async def lifespan(app_: FastAPI):
             await app_.state.audio_audit.aclose()
         except (AttributeError, Exception):
             pass
+        try:
+            await app_.state.arena.aclose()  # cancel + await in-flight sweeps before store close
+        except (AttributeError, Exception):
+            pass
         await app_.state.scheduler.stop()
         try:
             app_.state.coverage_cache_task.cancel()
@@ -862,6 +866,10 @@ async def lifespan(app_: FastAPI):
             pass
         app_.state.pending.close()
         app_.state.onboarding.close()
+        try:
+            app_.state.arena_store.close()
+        except (AttributeError, Exception):
+            pass
         try:
             app_.state.aftercare.close()  # #156
         except (AttributeError, Exception):
