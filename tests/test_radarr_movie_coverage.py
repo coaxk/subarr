@@ -9,6 +9,7 @@ English coverage, running the SAME funnel as the wanted path.
 from __future__ import annotations
 
 import asyncio
+import pytest
 
 
 def _movie(rid, title):
@@ -125,3 +126,26 @@ def test_skips_movies_without_a_file(subarr_env):
     m["movieFile"] = {}
     out = _run([m], [], {})
     assert out == []
+
+
+@pytest.mark.asyncio
+async def test_all_movie_files_stamps_movieid_from_fanout(subarr_env):
+    """#290: the /moviefile fan-out must stamp the movieId it fetched each chunk
+    for. Radarr file rows can omit movieId; the old setdefault(movieId, row's-own)
+    left it None. Now it's zipped back from the fetched id."""
+    from subarr.integrations.radarr import RadarrClient
+
+    c = RadarrClient()
+
+    async def _movies():
+        return [{"id": 11, "hasFile": True}, {"id": 22, "hasFile": True}]
+
+    async def _files(mid):
+        return [{"path": f"/m/{mid}.mkv"}]  # rows WITHOUT movieId
+
+    c.movies = _movies
+    c.movie_files_for_movie = _files
+    out = await c.all_movie_files_with_mediainfo()
+    by_path = {r["path"]: r for r in out}
+    assert by_path["/m/11.mkv"]["movieId"] == 11
+    assert by_path["/m/22.mkv"]["movieId"] == 22

@@ -19,8 +19,11 @@ flap, so it must not trip the breaker.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
+
+log = logging.getLogger(__name__)
 
 CLOSED = "closed"
 OPEN = "open"
@@ -31,10 +34,12 @@ class CircuitBreaker:
     def __init__(
         self,
         *,
+        name: str = "integration",
         fail_threshold: int = 5,
         cooldown_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ):
+        self._name = name or "integration"
         self._fail_threshold = max(1, fail_threshold)
         self._cooldown_s = cooldown_s
         self._clock = clock
@@ -60,6 +65,8 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """A reachable response. Clears failures; a successful probe closes."""
+        if self._state != CLOSED:
+            log.warning("circuit breaker recovered for %s — back to CLOSED", self._name)
         self._consecutive_failures = 0
         self._opened_at = None
         self._state = CLOSED
@@ -75,5 +82,12 @@ class CircuitBreaker:
             self._open()
 
     def _open(self) -> None:
+        if self._state != OPEN:
+            log.warning(
+                "circuit breaker OPEN for %s after %d consecutive failures — backing off %ss",
+                self._name,
+                self._consecutive_failures,
+                self._cooldown_s,
+            )
         self._state = OPEN
         self._opened_at = self._clock()
