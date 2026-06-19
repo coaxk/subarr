@@ -1293,7 +1293,7 @@ function BatchReviewModal() {
 // v1.1-F Arbiter dialog: before queueing Whisper, ask Bazarr's providers
 // what human subs are available. Triggered by row "Bazarr?" button →
 // CustomEvent('open-arbiter') from CoverageRow.
-function ArbiterModal() {
+export function ArbiterModal() {
   const [row, setRow] = useState(null);
   const [candidates, setCandidates] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1345,6 +1345,15 @@ function ArbiterModal() {
       alert(`Bazarr is downloading: ${c.provider} (score ${c.score})`);
       close();
     } catch (e) { alert(`Accept failed: ${e.message}`); }
+    finally { setActing(false); }
+  };
+  const whisperAnyway = async () => {
+    setActing(true);
+    try {
+      await queueRow(row);
+      alert(`Queued for transcription: ${row.title}${row.ep ? ` · ${row.ep}` : ''}`);
+      close();
+    } catch (e) { alert(`Queue failed: ${e.message}`); }
     finally { setActing(false); }
   };
   const tierColor = { excellent: '#22d3a1', decent: '#facc15', weak: '#ef4444' };
@@ -1433,8 +1442,8 @@ function ArbiterModal() {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 'auto' }}>
           <button className="btn ghost" onClick={close} disabled={acting}>cancel</button>
-          <button className="btn" onClick={close}
-            title="Skip arbiter, queue Whisper via the regular queue button">
+          <button className="btn" onClick={whisperAnyway} disabled={acting}
+            title="Queue this episode for Whisper transcription now">
             Whisper anyway →
           </button>
         </div>
@@ -2139,7 +2148,7 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   );
 }
 
-async function queueRow(row) {
+export async function queueRow(row) {
   const body = row._sonarr_episode_id
     ? { sonarr_episode_id: row._sonarr_episode_id }
     : { canonical_path: row._canonical_path };
