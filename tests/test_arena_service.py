@@ -623,6 +623,20 @@ def test_reconcile_marks_interrupted_runs_errored(store):
     assert after.status == "error" and "interrupted" in after.error
 
 
+def test_reconcile_marks_waiting_for_capacity_runs_errored(store):
+    # A run that crashed while waiting_for_capacity was not included in the
+    # reconcile SQL (only pending/queued/running were covered). Such a run would
+    # stay frozen in the UI polling waiting_for_capacity indefinitely.
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    run.status = "waiting_for_capacity"
+    store.save(run)
+    n = store.reconcile_interrupted()
+    assert n == 1
+    after = svc.get(run.id)
+    assert after.status == "error" and "interrupted" in after.error
+
+
 def test_delete_removes_run(store):
     svc = _service(store, [])
     run = svc.create("/m.mkv", [ConfigVariant("a", {})])
@@ -630,3 +644,149 @@ def test_delete_removes_run(store):
     assert svc.delete(run.id) is True
     assert svc.get(run.id) is None
     assert svc.delete("nope") is False
+
+
+# ── capacity gate (Task 3) ───────────────────────────────────────────────────
+
+
+class _FakeSubgen:
+    def __init__(self, processing):
+        self._processing = processing
+
+    async def queue(self):
+        return {
+            "queued": [],
+            "processing": self._processing,
+            "queued_count": 0,
+            "processing_count": len(self._processing),
+        }
+
+
+class _NoopRunner:
+    async def preflight(self): ...
+
+    async def prepare(self, p):
+        return []
+
+    async def cleanup(self): ...
+
+
+def _cap_svc(tmp_path, *, processing, n, runner=None, capacity_poll_interval_s=0.02):
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+    sub = _FakeSubgen(processing)
+    svc = ArenaService(
+        s,
+        build_runner=runner or (lambda run: _NoopRunner()),
+        subgen_provider=lambda: sub,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": n})(),
+        capacity_poll_interval_s=capacity_poll_interval_s,
+    )
+    return svc, sub
+
+
+def test_inflight_count_starts_zero(tmp_path):
+    svc, _ = _cap_svc(tmp_path, processing=[], n=1)
+    assert svc.inflight_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_sweep_waits_for_capacity_then_runs(tmp_path):
+    svc, sub = _cap_svc(tmp_path, processing=[{"path": "/m/x.mkv"}], n=1)
+    run = svc.create("TV/Show/ep.mkv", [ConfigVariant("base", {})])
+    events = []
+
+    async def collect():
+        async for evt in svc.subscribe(run.id):
+            events.append(evt["event"])
+            if evt["event"] in ("done", "error"):
+                return
+
+    # Subscribe before starting so we catch all events including waiting_for_capacity
+    consumer = asyncio.create_task(collect())
+    await asyncio.sleep(0)  # let subscriber register
+    svc.start(run)
+    await asyncio.sleep(0.2)
+    assert svc.get(run.id).status == "waiting_for_capacity"
+    sub._processing = []
+    await asyncio.wait_for(consumer, timeout=5)
+    assert "waiting_for_capacity" in events
+
+
+@pytest.mark.asyncio
+async def test_await_capacity_fails_open_after_unreadable_probes(tmp_path):
+    # When subgen's /queue raises on every call, the gate must fail OPEN after
+    # CAPACITY_PROBE_FAIL_OPEN_AFTER consecutive failures — never stall a sweep
+    # forever due to a flaky /queue endpoint.
+    from subarr.arena_service import CAPACITY_PROBE_FAIL_OPEN_AFTER
+
+    class AlwaysRaisingSubgen:
+        async def queue(self):
+            raise RuntimeError("subgen unreachable")
+
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+    svc = ArenaService(
+        s,
+        build_runner=lambda run: _NoopRunner(),
+        subgen_provider=lambda: AlwaysRaisingSubgen(),
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": 1})(),
+        capacity_poll_interval_s=0.01,
+    )
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    svc.start(run)
+    # After CAPACITY_PROBE_FAIL_OPEN_AFTER failed probes the gate gives up and the
+    # sweep proceeds. _NoopRunner returns [] clips → run completes as "done".
+    task = svc._tasks[run.id]
+    await asyncio.wait_for(task, timeout=CAPACITY_PROBE_FAIL_OPEN_AFTER * 0.01 * 10 + 2)
+    final = svc.get(run.id)
+    assert final.status in ("done", "error", "running"), (
+        f"run stuck in {final.status!r} — fail-open gate did not fire"
+    )
+    assert final.status != "waiting_for_capacity"
+
+
+@pytest.mark.asyncio
+async def test_n2_allows_one_concurrent_then_blocks(tmp_path):
+    # N=2: with 1 job already processing, a second sweep should NOT wait
+    # (1 < 2 → capacity free). With 2 processing it SHOULD wait.
+    class MutableSubgen:
+        def __init__(self):
+            self._count = 1
+
+        async def queue(self):
+            items = [{"path": f"/x/{i}.mkv"} for i in range(self._count)]
+            return {
+                "queued": [],
+                "processing": items,
+                "queued_count": 0,
+                "processing_count": self._count,
+            }
+
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+    sub = MutableSubgen()
+    svc = ArenaService(
+        s,
+        build_runner=lambda run: _NoopRunner(),
+        subgen_provider=lambda: sub,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": 2})(),
+        capacity_poll_interval_s=0.02,
+    )
+    # processing_count=1, N=2 → capacity free → sweep proceeds without waiting
+    run1 = svc.create("/a.mkv", [ConfigVariant("x", {})])
+    svc.start(run1)
+    await asyncio.wait_for(svc._tasks[run1.id], timeout=3)
+    assert svc.get(run1.id).status in ("done", "error")
+    assert svc.get(run1.id).status != "waiting_for_capacity"
+
+    # processing_count=2, N=2 → at capacity → sweep waits
+    sub._count = 2
+    run2 = svc.create("/b.mkv", [ConfigVariant("x", {})])
+    svc.start(run2)
+    await asyncio.sleep(0.1)  # let a few polls land
+    assert svc.get(run2.id).status == "waiting_for_capacity"
+    # free a slot so the run can finish
+    sub._count = 0
+    await asyncio.wait_for(svc._tasks[run2.id], timeout=3)
+    assert svc.get(run2.id).status in ("done", "error")

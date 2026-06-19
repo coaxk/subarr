@@ -6,6 +6,23 @@ import httpx
 import pytest
 
 
+def test_queue_response_includes_arena_active(app_with_stub):
+    """GET /api/queue must include arena_active reflecting in-flight sweep count."""
+    # Monkey-patch the arena on app state to report one in-flight sweep.
+    app_with_stub.app.state.arena.inflight_count = lambda: 1
+    r = app_with_stub.get("/api/queue")
+    assert r.status_code == 200
+    assert r.json()["arena_active"] == 1
+
+
+def test_queue_arena_active_zero_when_idle(app_with_stub):
+    """arena_active defaults to 0 when no sweeps are running."""
+    app_with_stub.app.state.arena.inflight_count = lambda: 0
+    r = app_with_stub.get("/api/queue")
+    assert r.status_code == 200
+    assert r.json()["arena_active"] == 0
+
+
 def test_queue_idle_default(app_with_stub):
     r = app_with_stub.get("/api/queue")
     assert r.status_code == 200

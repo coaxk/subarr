@@ -302,11 +302,15 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
                 }
             )
 
+    arena = getattr(request.app.state, "arena", None)
+    arena_active = arena.inflight_count() if arena is not None else 0
+
     return {
         **live,
         "history": history,
         "history_counts": counts,
         "history_window_s": history_window_s,
+        "arena_active": arena_active,
     }
 
 

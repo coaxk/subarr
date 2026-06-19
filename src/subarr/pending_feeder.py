@@ -61,6 +61,11 @@ def _effective_depth(q: dict) -> int:
     return len(q.get("queued") or []) + len(q.get("processing") or [])
 
 
+def _processing_count(q: dict) -> int:
+    p = q.get("processing_count")
+    return p if isinstance(p, int) else len(q.get("processing") or [])
+
+
 class PendingQueueFeeder:
     def __init__(
         self,
@@ -70,6 +75,8 @@ class PendingQueueFeeder:
         submit_job,
         target_depth_provider=lambda: DEFAULT_TARGET_DEPTH,
         paused_provider=lambda: False,
+        caps_provider=lambda: None,
+        arena_inflight_provider=lambda: 0,
         interval_s: float = FEEDER_INTERVAL_S,
     ):
         self._store = store
@@ -77,6 +84,8 @@ class PendingQueueFeeder:
         self._submit_job = submit_job  # async (job) -> None; raises on failure
         self._target_depth = target_depth_provider
         self._paused = paused_provider
+        self._caps = caps_provider
+        self._arena_inflight = arena_inflight_provider
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -176,7 +185,16 @@ class PendingQueueFeeder:
         target = max(0, int(self._target_depth()))
         submitted = 0
 
-        while effective < target:
+        from .subgen_capacity import subgen_capacity_free
+
+        caps = self._caps()
+        n = getattr(caps, "concurrent_transcriptions", None) if caps else None
+
+        while effective < target and subgen_capacity_free(
+            processing_count=_processing_count(q) + len(self._inflight),
+            arena_in_flight=self._arena_inflight(),
+            n=n,
+        ):
             jobs = self._store.next_pending(1)
             if not jobs:
                 break

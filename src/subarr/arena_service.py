@@ -27,6 +27,13 @@ from .arena_store import ArenaRun, ArenaStore  # re-exported for stable imports
 
 __all__ = ["ArenaRun", "ArenaStore", "ArenaService", "resolve_source_language"]
 
+# How long to wait between capacity probes while a GPU slot is unavailable.
+# 1 s is fine for production (no burst penalty) and keeps tests responsive.
+CAPACITY_POLL_INTERVAL_S = 1.0
+# After this many consecutive unreadable-subgen probes, proceed anyway rather
+# than stalling a sweep forever on a flaky /queue (fail open).
+CAPACITY_PROBE_FAIL_OPEN_AFTER = 3
+
 
 def resolve_source_language(detect, tag, submit, multitrack=False):
     """Decide a sweep's source language from the Whisper per-chunk distribution,
@@ -77,6 +84,9 @@ class ArenaService:
         max_concurrent: int = 1,
         lang_fallback=None,
         track_info=None,
+        subgen_provider=None,
+        caps_provider=None,
+        capacity_poll_interval_s: float = CAPACITY_POLL_INTERVAL_S,
     ):
         self._store = store
         self._build_runner = build_runner
@@ -94,6 +104,12 @@ class ArenaService:
         # subarr-next + cascade-failed). Submits queue; only `max_concurrent`
         # process at once.
         self._sema = asyncio.Semaphore(max_concurrent)
+        # GPU-concurrency gate (see subgen_capacity). Both optional: when either
+        # provider is absent or yields None, the gate is disabled (dormant-safe).
+        self._subgen_provider = subgen_provider
+        self._caps_provider = caps_provider
+        self._capacity_poll_interval_s = capacity_poll_interval_s
+        self._inflight = 0  # arena /asr transcriptions currently running (0/1)
 
     # ── store (persisted) ────────────────────────────────────────────────────
     def create(
@@ -131,6 +147,11 @@ class ArenaService:
     def delete(self, run_id: str) -> bool:
         return self._store.delete(run_id)
 
+    def inflight_count(self) -> int:
+        """Arena /asr transcriptions currently running — the feeder counts this
+        toward subgen's GPU load (the arena bypasses subgen's worker pool)."""
+        return self._inflight
+
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self, run: ArenaRun) -> None:
         self._tasks[run.id] = asyncio.create_task(self._run(run), name=f"arena-{run.id}")
@@ -163,6 +184,48 @@ class ArenaService:
                 if not subs:
                     self._subscribers.pop(run_id, None)
 
+    async def _await_capacity(self, run: ArenaRun) -> None:
+        """Block until subgen has a free GPU slot, surfacing a waiting state.
+
+        Disabled (returns immediately) when no subgen/caps provider is wired or
+        N is unknown. Waits indefinitely while subgen is genuinely at capacity,
+        but fails OPEN after CAPACITY_PROBE_FAIL_OPEN_AFTER consecutive unreadable
+        probes so a flaky /queue never hangs a sweep."""
+        if self._subgen_provider is None or self._caps_provider is None:
+            return
+        from .subgen_capacity import subgen_capacity_free
+
+        emitted = False
+        fails = 0
+        while True:
+            caps = self._caps_provider()
+            n = getattr(caps, "concurrent_transcriptions", None) if caps else None
+            if n is None:
+                return
+            subgen = self._subgen_provider()
+            try:
+                q = await subgen.queue()
+                fails = 0
+            except Exception:  # noqa: BLE001
+                fails += 1
+                if fails >= CAPACITY_PROBE_FAIL_OPEN_AFTER:
+                    return
+                await asyncio.sleep(self._capacity_poll_interval_s)
+                continue
+            processing = q.get("processing_count")
+            if not isinstance(processing, int):
+                processing = len(q.get("processing") or [])
+            if subgen_capacity_free(processing_count=processing, arena_in_flight=self._inflight, n=n):
+                return
+            if not emitted:
+                emitted = True
+                run.status = "waiting_for_capacity"
+                self._store.save(run)
+                self._emit(
+                    run.id, {"event": "waiting_for_capacity", "data": {"id": run.id, "ahead": processing}}
+                )
+            await asyncio.sleep(CAPACITY_POLL_INTERVAL_S)
+
     async def _run(self, run: ArenaRun) -> None:
         run_id = run.id
         # Queued until a slot frees — keeps concurrent submits from running
@@ -173,16 +236,21 @@ class ArenaService:
         self._emit(run_id, {"event": "queued", "data": {"id": run.id}})
         try:
             async with self._sema:
+                await self._await_capacity(run)
                 run.status = "running"
                 self._store.save(run)
-                self._emit(
-                    run_id,
-                    {
-                        "event": "start",
-                        "data": {"id": run.id, "variants": [v["label"] for v in run.variants]},
-                    },
-                )
-                await self._execute(run)
+                self._inflight += 1
+                try:
+                    self._emit(
+                        run_id,
+                        {
+                            "event": "start",
+                            "data": {"id": run.id, "variants": [v["label"] for v in run.variants]},
+                        },
+                    )
+                    await self._execute(run)
+                finally:
+                    self._inflight -= 1
         except asyncio.CancelledError:
             run.status = "error"
             run.error = "cancelled"
