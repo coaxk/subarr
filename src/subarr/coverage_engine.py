@@ -1322,7 +1322,7 @@ async def build_coverage(
         plex_audio_hints = await _fetch_plex_audio_hints(bundle.plex, ep_titles, sources)
 
     sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
-    radarr_by_title = {m.get("title", "").strip().lower(): m for m in radarr_movies if isinstance(m, dict)}
+    radarr_by_id = {m["id"]: m for m in radarr_movies if isinstance(m, dict) and "id" in m}
     tt_signals = _tautulli_signals(history) if history else {}
 
     # Probe-cache index: { series_canonical_prefix → [(file_canonical, ProbeResult)] }
@@ -1406,18 +1406,22 @@ async def build_coverage(
     sonarr_eps_by_id: dict[int, dict] = {}
     ep_file_paths: dict[int, str] = {}
     if wanted_series_ids and bundle.sonarr.is_configured():
+        # #286: cap the per-series fan-out so a large library doesn't fire
+        # hundreds of simultaneous Sonarr requests (thundering herd).
+        _arr_files_sem = asyncio.Semaphore(8)
 
         async def _fetch_series_files(sid: int):
-            try:
-                eps, files = await asyncio.gather(
-                    bundle.sonarr.episodes(sid),
-                    bundle.sonarr.episode_files_for_series(sid),
-                    return_exceptions=False,
-                )
-                return sid, eps, files
-            except IntegrationError as e:
-                log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
-                return sid, [], []
+            async with _arr_files_sem:
+                try:
+                    eps, files = await asyncio.gather(
+                        bundle.sonarr.episodes(sid),
+                        bundle.sonarr.episode_files_for_series(sid),
+                        return_exceptions=False,
+                    )
+                    return sid, eps, files
+                except IntegrationError as e:
+                    log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
+                    return sid, [], []
 
         results = await asyncio.gather(*[_fetch_series_files(sid) for sid in wanted_series_ids])
         for sid, eps, files in results:
@@ -1503,11 +1507,12 @@ async def build_coverage(
         )
         items.append(item)
 
-    # Movies (Bazarr → Radarr enrichment via title — Bazarr doesn't expose
-    # radarrId in the wanted payload the same way it does sonarrSeriesId).
+    # Movies (Bazarr → Radarr enrichment via radarrId — Bazarr's wanted-movie
+    # rows carry a radarrId field; use it directly to avoid title-collision
+    # (last-writer-wins on same-titled remakes / reboots).
     for w in bz_movs:
         title = w.get("title") or w.get("movieTitle") or ""
-        m = radarr_by_title.get(title.strip().lower(), {})
+        m = radarr_by_id.get(w.get("radarrId"), {})
         canonical = strip_arr_prefix(m.get("path"))
         # Resolve the actual movie FILE (not just the folder) so an unprobed
         # movie can be eager-probed — _attach_probe_movie only fills this in
@@ -1700,17 +1705,20 @@ async def _add_bazarr_blind_synthetic_rows(
         s["id"] for s in foreign_series if s.get("id") and s["id"] not in already_fetched_series_ids
     ]
     if foreign_sids_to_fetch:
+        # #286: cap the fan-out (same thundering-herd guard as the wanted path).
+        _arr_files_sem = asyncio.Semaphore(8)
 
         async def _fetch(sid: int):
-            try:
-                eps, files = await asyncio.gather(
-                    bundle.sonarr.episodes(sid),
-                    bundle.sonarr.episode_files_for_series(sid),
-                )
-                return sid, eps, files
-            except IntegrationError as e:
-                log.debug("bazarr-blind sonarr fetch failed for %s: %s", sid, e)
-                return sid, [], []
+            async with _arr_files_sem:
+                try:
+                    eps, files = await asyncio.gather(
+                        bundle.sonarr.episodes(sid),
+                        bundle.sonarr.episode_files_for_series(sid),
+                    )
+                    return sid, eps, files
+                except IntegrationError as e:
+                    log.debug("bazarr-blind sonarr fetch failed for %s: %s", sid, e)
+                    return sid, [], []
 
         for sid, eps, files in await asyncio.gather(*[_fetch(sid) for sid in foreign_sids_to_fetch]):
             for ep in eps:
