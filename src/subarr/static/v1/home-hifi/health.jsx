@@ -3,6 +3,11 @@
 // quietly stops succeeding (the #79 class: catch-log-warning-and-keep-looping)
 // shows up here red, with its captured traceback, instead of freezing in
 // silence. The header pill links here when anything goes unhealthy.
+//
+// #291 Slice B: database maintenance section — on-demand full integrity check
+// and VACUUM INTO backup. Red-pill callout when the db-integrity task is red.
+
+import { apiFetch } from './api.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -153,6 +158,140 @@ function TaskRow({ t, version, onRun }) {
   );
 }
 
+// #291 Slice B — db maintenance: full integrity check + VACUUM INTO backup.
+// Advisory only; no writes are blocked regardless of check result.
+function DbMaintenance({ dbIntegrityUnhealthy }) {
+  const [integrityState, setIntegrityState] = useState(null); // null | 'running' | {ok, findings}
+  const [backupState, setBackupState]       = useState(null); // null | 'running' | {path,size_bytes,created_at,pruned} | {error}
+
+  const runIntegrityCheck = useCallback(() => {
+    setIntegrityState('running');
+    apiFetch('/api/admin/db/integrity-check', { method: 'POST' })
+      .then((r) => r.ok ? r.json() : r.json().then((d) => Promise.reject(d.detail || `HTTP ${r.status}`)))
+      .then((d) => setIntegrityState(d))
+      .catch((e) => setIntegrityState({ ok: false, findings: [String(e)] }));
+  }, []);
+
+  const runBackup = useCallback(() => {
+    setBackupState('running');
+    apiFetch('/api/admin/db/backup', { method: 'POST' })
+      .then((r) => r.ok ? r.json() : r.json().then((d) => Promise.reject(d.detail || `HTTP ${r.status}`)))
+      .then((d) => setBackupState(d))
+      .catch((e) => setBackupState({ error: String(e) }));
+  }, []);
+
+  const integrityDone   = integrityState && integrityState !== 'running';
+  const integrityOk     = integrityDone && integrityState.ok;
+  const integrityBad    = integrityDone && !integrityState.ok;
+
+  const backupDone      = backupState && backupState !== 'running';
+  const backupOk        = backupDone && !backupState.error;
+  const backupErr       = backupDone && !!backupState.error;
+
+  const fmtBytes = (n) => n < 1024 * 1024
+    ? `${(n / 1024).toFixed(1)} KB`
+    : `${(n / (1024 * 1024)).toFixed(2)} MB`;
+
+  return (
+    <section style={cardStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span className="label">Database maintenance</span>
+      </div>
+
+      {/* Red-pill callout when db-integrity task is unhealthy */}
+      {dbIntegrityUnhealthy && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+          background: 'rgba(239,68,68,0.08)', border: '1px solid var(--error-500, #ef4444)',
+          borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: 14,
+        }}>
+          <span style={{ color: 'var(--error-400, #f87171)', fontSize: 18, flex: 'none', lineHeight: 1 }}>⚠</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, color: 'var(--error-300, #fca5a5)', fontSize: 'var(--text-sm)' }}>
+              Database integrity issue detected
+            </div>
+            <div style={{ marginTop: 3, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+              Back up your data before making changes. Run a full integrity check to see what was found.
+            </div>
+            <button onClick={runBackup} disabled={backupState === 'running'}
+              className="btn" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+              {backupState === 'running' ? 'Backing up…' : 'Back up now'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+        {/* Integrity check */}
+        <div style={{ flex: '1 1 260px', background: 'var(--bg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+          <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 4 }}>Full integrity check</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginBottom: 10 }}>
+            PRAGMA integrity_check — verifies index↔table consistency. Slower than the boot check; safe on a live database.
+          </div>
+          <button onClick={runIntegrityCheck} disabled={integrityState === 'running'}
+            className="btn" style={{ fontSize: 'var(--text-xs)' }}>
+            {integrityState === 'running' ? 'Checking…' : 'Run full integrity check'}
+          </button>
+          {integrityDone && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flex: 'none',
+                  background: integrityOk ? 'var(--success-500, #22c55e)' : 'var(--error-500, #ef4444)' }} />
+                <span style={{ color: integrityOk ? 'var(--success-400, #4ade80)' : 'var(--error-400, #f87171)', fontWeight: 600 }}>
+                  {integrityOk ? 'No issues found' : 'Issues detected'}
+                </span>
+              </div>
+              {integrityBad && (
+                <pre style={{ marginTop: 6, padding: '6px 8px', background: '#0d0d10', borderRadius: 'var(--radius-sm)',
+                  fontSize: 11, fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all', color: 'var(--error-300, #fca5a5)', maxHeight: 180, overflow: 'auto' }}>
+                  {(integrityState.findings || []).join('\n')}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Backup */}
+        <div style={{ flex: '1 1 260px', background: 'var(--bg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+          <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 4 }}>Back up database</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginBottom: 10 }}>
+            VACUUM INTO — writes a clean, consistent copy of the database. Safe while running. Keeps the 5 most recent backups in /data/backups/.
+          </div>
+          <button onClick={runBackup} disabled={backupState === 'running'}
+            className="btn" style={{ fontSize: 'var(--text-xs)' }}>
+            {backupState === 'running' ? 'Backing up…' : 'Back up database now'}
+          </button>
+          {backupDone && (
+            <div style={{ marginTop: 10, fontSize: 'var(--text-xs)' }}>
+              {backupOk ? (
+                <div>
+                  <div style={{ color: 'var(--success-400, #4ade80)', fontWeight: 600, marginBottom: 4 }}>Backup complete</div>
+                  <div style={{ color: 'var(--fg-2)', wordBreak: 'break-all' }}>{backupState.path}</div>
+                  <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>{fmtBytes(backupState.size_bytes)}</div>
+                  {backupState.pruned && backupState.pruned.length > 0 && (
+                    <div style={{ color: 'var(--fg-3)', marginTop: 4 }}>
+                      Pruned: {backupState.pruned.join(', ')}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ color: 'var(--error-400, #f87171)' }}>
+                  Backup failed: {backupState.error}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>
+        Backups are advisory. The integrity check does not block writes — it is a read-only diagnostic.
+      </div>
+    </section>
+  );
+}
+
 export function HealthPage() {
   const [tasks, setTasks] = useState(null);
   const [version, setVersion] = useState(null);
@@ -173,6 +312,7 @@ export function HealthPage() {
       .catch(() => {}), [load]);
 
   const unhealthy = (tasks || []).filter((t) => t.is_unhealthy).length;
+  const dbIntegrityUnhealthy = (tasks || []).some((t) => t.task_name === 'db-integrity' && t.is_unhealthy);
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -213,6 +353,8 @@ export function HealthPage() {
           A task is flagged unhealthy after 3 failed cycles in a row, or when it hasn't succeeded in 3x its normal interval. Click a failing task to see its last error.
         </div>
       </section>
+
+      <DbMaintenance dbIntegrityUnhealthy={dbIntegrityUnhealthy} />
     </main>
   );
 }
