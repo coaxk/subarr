@@ -133,39 +133,30 @@ def _plex_handler(req: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.subgen(handler=_plex_handler)
-def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
+def test_plex_scan_calls_correct_url(app_with_stub):
     """v1.1.1 refactor: /api/plex/scan now delegates to PlexClient.full_scan().
-    We swap in a configured client for the duration of the test and intercept
-    the httpx.AsyncClient that PlexClient instantiates per call."""
+    #290: PlexClient now holds a persistent httpx client, so we inject a
+    MockTransport directly into plex._client rather than patching the
+    httpx.AsyncClient class globally."""
     from subarr.integrations.plex import PlexClient
+
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        return httpx.Response(200, content=b"")
 
     # Inject a configured Plex client into app state (conftest stub leaves
     # it unconfigured by default so other tests get 503 properly).
     plex = PlexClient(base_url="http://plex.test:32400", token="test-token", default_section="all")
+    # Swap the persistent client's transport to the mock — no global patching.
+    plex._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
     app_with_stub.app.state.integrations.plex = plex
 
-    calls = []
-    _RealAsyncClient = httpx.AsyncClient
-
-    class _FakeAsyncClient:
-        def __init__(self, *a, **kw):
-            self._kw = kw
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return None
-
-        async def get(self, url, params=None):
-            calls.append((url, dict(params or {})))
-            return httpx.Response(200, content=b"")
-
-    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
-    try:
-        r = app_with_stub.post("/api/plex/scan")
-    finally:
-        monkeypatch.setattr("httpx.AsyncClient", _RealAsyncClient)
+    r = app_with_stub.post("/api/plex/scan")
 
     assert r.status_code == 200
     body = r.json()
@@ -173,9 +164,9 @@ def test_plex_scan_calls_correct_url(app_with_stub, monkeypatch):
     assert body["section"] == "all"
     assert body["scope"] == "full"
     assert len(calls) == 1
-    url, params = calls[0]
-    assert url.endswith("/library/sections/all/refresh")
-    assert params == {"X-Plex-Token": "test-token"}
+    req = calls[0]
+    assert req.url.path == "/library/sections/all/refresh"
+    assert req.url.params["X-Plex-Token"] == "test-token"
 
 
 def test_plex_scan_503_when_token_missing(app_with_stub):

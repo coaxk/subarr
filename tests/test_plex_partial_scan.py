@@ -1,9 +1,14 @@
-"""Tests for the Plex partial-scan client (v1.1.1).
+"""Tests for the Plex partial-scan client (v1.1.1 + #290 pool/breaker).
 
-Covers the three things that determine whether the Apple-TV loop closes:
+Covers:
 1. Path translation when subarr + Plex see different mount paths.
 2. Section auto-discovery (longest-prefix match on Plex Location.path).
 3. Partial-scan request shape (correct URL + path query parameter).
+4. (#290) Persistent client — same object across calls (no per-call client).
+5. (#290) Circuit breaker opens after consecutive 5xx; next call is
+   short-circuited (transport NOT hit again).
+6. (#290) 4xx does NOT open the breaker (record_success path).
+7. (#290) aclose() really closes the underlying client.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 import pytest
 import httpx
 
+from subarr.circuit_breaker import CircuitBreaker
 from subarr.integrations import IntegrationError
 from subarr.integrations.plex import PlexClient
 
@@ -27,50 +33,28 @@ SECTIONS_XML = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _client(handler) -> PlexClient:
-    """Build a PlexClient with an httpx mock transport pinned to handler.
+def _client(handler, breaker=None) -> PlexClient:
+    """Build a PlexClient whose internal httpx client uses a MockTransport.
 
-    PlexClient creates its own AsyncClient per request, so we monkey-patch
-    httpx.AsyncClient via a factory below."""
-    return PlexClient(
+    #290: PlexClient now holds a persistent self._client. We build the real
+    PlexClient then swap its _client with a mocked one — the same pattern
+    used by test_integration_breaker.py for IntegrationClient."""
+    c = PlexClient(
         base_url="http://plex.test:32400",
         token="testtoken",
         default_section="all",
         path_prefix="/data/Media",
         media_root="/media/library",
+        breaker=breaker,
     )
+    c._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
+    return c
 
 
-@pytest.fixture
-def patched_httpx(monkeypatch):
-    """Patches httpx.AsyncClient so PlexClient sees a MockTransport routed
-    to whatever request handler the test sets via the returned setter."""
-    state = {"handler": None}
-    # Capture the REAL AsyncClient before we patch the name, so the stub
-    # can instantiate one without triggering infinite recursion.
-    _RealAsyncClient = httpx.AsyncClient
-
-    class _StubAsyncClient:
-        def __init__(self, *a, **kw):
-            self._real = _RealAsyncClient(
-                transport=httpx.MockTransport(state["handler"]),
-                timeout=kw.get("timeout", 5.0),
-            )
-
-        async def __aenter__(self):
-            return self._real
-
-        async def __aexit__(self, *a):
-            await self._real.aclose()
-
-        async def get(self, *a, **kw):
-            return await self._real.get(*a, **kw)
-
-        async def aclose(self):
-            await self._real.aclose()
-
-    monkeypatch.setattr("httpx.AsyncClient", _StubAsyncClient)
-    return state
+# ── path-translation tests (no HTTP, no async) ───────────────────────────────
 
 
 def test_translate_path_when_prefix_differs():
@@ -108,8 +92,17 @@ def test_translate_path_passthrough_when_no_root_match():
     assert c.translate_path("/somewhere/else/file.srt") == "/somewhere/else/file.srt"
 
 
+def test_is_configured_requires_url_and_token():
+    assert PlexClient("", "t", "all").is_configured() is False
+    assert PlexClient("http://p:32400", "", "all").is_configured() is False
+    assert PlexClient("http://p:32400", "t", "all").is_configured() is True
+
+
+# ── scan / section-discovery tests ───────────────────────────────────────────
+
+
 @pytest.mark.asyncio
-async def test_partial_scan_discovers_section_and_fires(patched_httpx):
+async def test_partial_scan_discovers_section_and_fires():
     """Happy path: PLEX_SECTION='all' so the client lists sections, matches
     the file path against Location entries, and fires a refresh against the
     matching numeric section id with ?path=<dir>."""
@@ -123,7 +116,6 @@ async def test_partial_scan_discovers_section_and_fires(patched_httpx):
             return httpx.Response(200, text="")
         return httpx.Response(404)
 
-    patched_httpx["handler"] = handler
     c = _client(handler)
     result = await c.partial_scan("/media/library/TV/Foo/S01E01.srt")
 
@@ -141,7 +133,7 @@ async def test_partial_scan_discovers_section_and_fires(patched_httpx):
 
 
 @pytest.mark.asyncio
-async def test_partial_scan_uses_numeric_section_without_discovery(patched_httpx):
+async def test_partial_scan_uses_numeric_section_without_discovery():
     """If PLEX_SECTION is numeric, skip section listing — just fire."""
     captured = []
 
@@ -152,7 +144,6 @@ async def test_partial_scan_uses_numeric_section_without_discovery(patched_httpx
             return httpx.Response(500, text="should not be called")
         return httpx.Response(200, text="")
 
-    patched_httpx["handler"] = handler
     c = PlexClient(
         base_url="http://plex.test:32400",
         token="t",
@@ -160,21 +151,22 @@ async def test_partial_scan_uses_numeric_section_without_discovery(patched_httpx
         path_prefix="/data/Media",
         media_root="/media/library",
     )
+    c._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
     result = await c.partial_scan("/media/library/TV/X.srt")
     assert result["section"] == "7"
     assert all(r.url.path != "/library/sections" for r in captured)
 
 
 @pytest.mark.asyncio
-async def test_partial_scan_raises_when_no_section_matches(patched_httpx):
-    """Path outside every Plex Location → IntegrationError, not silent no-op.
-    Caller (completion_watcher) catches + logs; we don't want to drop the
-    failure on the floor inside the client."""
+async def test_partial_scan_raises_when_no_section_matches():
+    """Path outside every Plex Location → IntegrationError, not silent no-op."""
 
     def handler(req):
         return httpx.Response(200, text=SECTIONS_XML)
 
-    patched_httpx["handler"] = handler
     c = PlexClient(
         base_url="http://plex.test:32400",
         token="t",
@@ -182,11 +174,125 @@ async def test_partial_scan_raises_when_no_section_matches(patched_httpx):
         path_prefix="/data/Media",
         media_root="/media/library",
     )
+    c._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
     with pytest.raises(IntegrationError, match="no section matched"):
         await c.partial_scan("/media/library/Music/x.srt")
 
 
-def test_is_configured_requires_url_and_token():
-    assert PlexClient("", "t", "all").is_configured() is False
-    assert PlexClient("http://p:32400", "", "all").is_configured() is False
-    assert PlexClient("http://p:32400", "t", "all").is_configured() is True
+# ── #290: pooling + breaker tests ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_persistent_client_same_object_across_calls():
+    """#290: _client must be the SAME object across multiple calls — no per-call
+    client construction (which would defeat connection pooling)."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if req.url.path == "/library/sections":
+            return httpx.Response(200, text=SECTIONS_XML)
+        return httpx.Response(200, text="")
+
+    c = _client(handler)
+    client_before = c._client
+
+    await c.partial_scan("/media/library/TV/Foo/S01E01.srt")
+    # Flush the section cache so the second call re-hits the transport.
+    c._sections = None
+    await c.partial_scan("/media/library/TV/Foo/S01E02.srt")
+
+    assert c._client is client_before, "_client was replaced between calls — pooling broken"
+    assert calls["n"] >= 2  # at least two real requests went through
+
+
+@pytest.mark.asyncio
+async def test_breaker_opens_on_5xx_and_short_circuits():
+    """#290: after fail_threshold consecutive 5xx the breaker opens and the
+    next call raises 'circuit open' WITHOUT touching the transport."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503, text="down")
+
+    cb = CircuitBreaker(name="plex", fail_threshold=3, cooldown_s=60, clock=lambda: 0.0)
+    c = _client(handler, breaker=cb)
+
+    # Drive three 5xx to trip the breaker.
+    for _ in range(3):
+        with pytest.raises(IntegrationError):
+            await c._request("/library/sections", {"X-Plex-Token": "t"})
+
+    assert cb.state == "open"
+    n_after_trip = calls["n"]
+
+    # Next call must be short-circuited — transport NOT hit.
+    with pytest.raises(IntegrationError, match="circuit open"):
+        await c._request("/library/sections", {"X-Plex-Token": "t"})
+
+    assert calls["n"] == n_after_trip, "transport was hit after breaker opened — short-circuit broken"
+
+
+@pytest.mark.asyncio
+async def test_transport_error_trips_breaker():
+    """#290: a transport-level error (ConnectError) also counts as a failure."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("refused")
+
+    cb = CircuitBreaker(name="plex", fail_threshold=2, cooldown_s=60, clock=lambda: 0.0)
+    c = _client(handler, breaker=cb)
+
+    for _ in range(2):
+        with pytest.raises(IntegrationError):
+            await c._request("/identity", {"X-Plex-Token": "t"})
+
+    assert cb.state == "open"
+    n_after = calls["n"]
+
+    with pytest.raises(IntegrationError, match="circuit open"):
+        await c._request("/identity", {"X-Plex-Token": "t"})
+
+    assert calls["n"] == n_after
+
+
+@pytest.mark.asyncio
+async def test_4xx_does_not_open_breaker():
+    """#290: 4xx means Plex is reachable (bad auth/request) — must NOT trip
+    the breaker even after many consecutive 4xx responses."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(401, text="Unauthorized")
+
+    cb = CircuitBreaker(name="plex", fail_threshold=3, cooldown_s=60, clock=lambda: 0.0)
+    c = _client(handler, breaker=cb)
+
+    # Fire five 401s — well over the threshold.
+    for _ in range(5):
+        with pytest.raises(IntegrationError):
+            await c._request("/library/sections", {"X-Plex-Token": "bad"})
+
+    assert cb.state == "closed", "401s must not open the circuit breaker"
+    assert calls["n"] == 5  # every call reached the transport
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_underlying_client():
+    """#290: aclose() must delegate to the httpx client so the connection pool
+    is actually released (not a no-op as the old stateless implementation was)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="")
+
+    c = _client(handler)
+    assert not c._client.is_closed, "client should be open before aclose()"
+    await c.aclose()
+    assert c._client.is_closed, "client must be closed after aclose()"
