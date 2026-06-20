@@ -449,7 +449,7 @@ export function ReviewPage() {
   }, [fetchPending]);
 
   // Filter + group by series.
-  const { groups, totalCounts } = useMemo(() => {
+  const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
     const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0 };
     for (const it of allItems) {
@@ -473,6 +473,7 @@ export function ReviewPage() {
         byTitle.set(t, {
           title: t,
           original_language: it.original_language,
+          media_type: it.media_type,
           items: [],
         });
       }
@@ -489,7 +490,11 @@ export function ReviewPage() {
     const groups = Array.from(byTitle.values()).sort((a, b) =>
       a.title.localeCompare(b.title)
     );
-    return { groups, totalCounts: counts };
+    // Split into TV Shows vs Movies (mirrors Coverage). media_type 'movie' →
+    // Movies; everything else (episode / show / unknown) → TV Shows.
+    const tvGroups = groups.filter((g) => g.media_type !== 'movie');
+    const movieGroups = groups.filter((g) => g.media_type === 'movie');
+    return { groups, tvGroups, movieGroups, totalCounts: counts };
   }, [data, filter, search]);
 
   // Bulk action — fires one POST per file. Each one runs the full
@@ -727,21 +732,41 @@ export function ReviewPage() {
                 : `No items match the "${filter}" filter${search ? ' or your search' : ''}.`}
             </div>
           )}
-          {groups.map((g) => (
-            <SeriesGroup
-              key={g.title}
-              series={g}
-              expanded={expandedSeries.has(g.title)}
-              onToggleExpand={() => toggleExpand(g.title)}
-              epSelection={epSelection}
-              onToggleSelectAll={toggleSelectAll}
-              onToggleEp={toggleEp}
-              onOpenEp={openReview}
-              busyPath={busyPath}
-              onSwap={swapTrack}
-              onDismiss={dismissTrack}
-            />
-          ))}
+          {[
+            { label: 'TV Shows', noun: 'series', plural: 'series', list: tvGroups },
+            { label: 'Movies', noun: 'movie', plural: 'movies', list: movieGroups },
+          ].map((section) =>
+            section.list.length === 0 ? null : (
+              <div key={section.label}>
+                {/* Category header — mirrors Coverage's TV Shows / Movies split. */}
+                <div style={{
+                  display: 'flex', alignItems: 'baseline', gap: 8,
+                  margin: '14px 2px 4px', fontSize: 'var(--text-xs)', fontWeight: 700,
+                  letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-2)',
+                }}>
+                  {section.label}
+                  <span style={{ color: 'var(--fg-3)', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+                    {section.list.length} {section.list.length === 1 ? section.noun : section.plural}
+                  </span>
+                </div>
+                {section.list.map((g) => (
+                  <SeriesGroup
+                    key={g.title}
+                    series={g}
+                    expanded={expandedSeries.has(g.title)}
+                    onToggleExpand={() => toggleExpand(g.title)}
+                    epSelection={epSelection}
+                    onToggleSelectAll={toggleSelectAll}
+                    onToggleEp={toggleEp}
+                    onOpenEp={openReview}
+                    busyPath={busyPath}
+                    onSwap={swapTrack}
+                    onDismiss={dismissTrack}
+                  />
+                ))}
+              </div>
+            )
+          )}
         </div>
       </div>
 

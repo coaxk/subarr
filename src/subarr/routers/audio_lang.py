@@ -709,6 +709,9 @@ async def pending_review(request: Request) -> dict[str, Any]:
                 "audio_langs": it.get("audio_langs"),
                 "flag": flag,
                 "notes": it.get("audio_label_notes"),
+                # media_type ('movie' | 'episode'/'show') lets the Review UI
+                # split the list into TV Shows vs Movies, mirroring Coverage.
+                "media_type": it.get("media_type"),
                 **extra,
             }
         )
