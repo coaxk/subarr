@@ -100,6 +100,19 @@ class ProvenanceStore:
         subgen_version: str | None = None,
     ) -> int:
         with self._lock:
+            # #287: dedup OPEN rows. A re-search of a still-in-flight path
+            # (completed_at IS NULL) must reuse the open ledger row — two open
+            # rows would both poll to completion and fire _run_aftercare twice
+            # for one transcription. Single-process safe under self._lock; a
+            # DB-level partial-UNIQUE backstop is the separate multi-process nit.
+            existing = self._conn.execute(
+                "SELECT id FROM subs_generated "
+                "WHERE canonical_path = ? AND completed_at IS NULL "
+                "ORDER BY id LIMIT 1",
+                (canonical_path,),
+            ).fetchone()
+            if existing is not None:
+                return existing[0]
             cur = self._conn.execute(
                 "INSERT INTO subs_generated "
                 "(canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
@@ -133,8 +146,11 @@ class ProvenanceStore:
     def mark_completed(self, ledger_id: int, when: float | None = None) -> None:
         ts = when if when is not None else time.time()
         with self._lock:
+            # #287: stamp the FIRST completion only — a later re-poll of the
+            # same path must not overwrite the original completed_at (mirrors
+            # complete_by_canonical's `completed_at IS NULL` idempotency).
             self._conn.execute(
-                "UPDATE subs_generated SET completed_at = ? WHERE id = ?",
+                "UPDATE subs_generated SET completed_at = ? WHERE id = ? AND completed_at IS NULL",
                 (ts, ledger_id),
             )
 
