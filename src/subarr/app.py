@@ -639,6 +639,12 @@ async def lifespan(app_: FastAPI):
         )
     )
 
+    # Event-loop stall detector — logs a WARNING when synchronous work blocks
+    # the loop (the class of bug that freezes every concurrent request at once).
+    from .loop_lag import monitor_event_loop_lag
+
+    app_.state.loop_lag_task = asyncio.create_task(monitor_event_loop_lag())
+
     # Update notification poller — once-per-24h GitHub release check
     # cached to update_checks table. Backs /api/updates which the UI
     # consumes for the header pill + Home tile + Settings panel.
@@ -854,6 +860,11 @@ async def lifespan(app_: FastAPI):
         try:
             app_.state.dashboard_cache_task.cancel()
             await app_.state.dashboard_cache_task
+        except (asyncio.CancelledError, AttributeError):
+            pass
+        try:
+            app_.state.loop_lag_task.cancel()
+            await app_.state.loop_lag_task
         except (asyncio.CancelledError, AttributeError):
             pass
         await app_.state.watcher.stop()

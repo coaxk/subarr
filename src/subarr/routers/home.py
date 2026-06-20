@@ -87,17 +87,23 @@ async def _stages_block(state) -> list[dict[str, Any]]:
     # Use probe_store as the proxy for "files we've seen" — probed and/or
     # unprobed both end up there once a probe walk has touched them.
     try:
-        all_entries = state.probe_store.all_entries()
-        discovered_count = len(all_entries)
-        # Most-recent by probed_at as a "top" example.
-        top, top_meta = "", ""
-        if all_entries:
-            entry = max(all_entries, key=lambda e: getattr(e, "probed_at", 0) or 0)
-            top = "/" + entry.canonical_path
-            top_meta = _format_size_meta(
-                getattr(entry, "size", 0),
-                getattr(entry, "duration_s", None),
+
+        def _discovered_sync() -> tuple[int, str, str]:
+            # probe_store.all_entries() loads the FULL probe table (4700+ rows,
+            # ~1.2s) — far too heavy to run on the event loop, where it froze
+            # every concurrent request during the 30s dashboard refresh. Keep
+            # the existing data shape but run it off the loop via to_thread.
+            entries = state.probe_store.all_entries()
+            if not entries:
+                return 0, "", ""
+            newest = max(entries, key=lambda e: getattr(e, "probed_at", 0) or 0)
+            return (
+                len(entries),
+                "/" + newest.canonical_path,
+                _format_size_meta(getattr(newest, "size", 0), getattr(newest, "duration_s", None)),
             )
+
+        discovered_count, top, top_meta = await asyncio.to_thread(_discovered_sync)
     except Exception as e:
         log.debug("stages: discovered probe error: %s", e)
         discovered_count = 0
