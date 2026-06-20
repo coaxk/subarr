@@ -97,6 +97,11 @@ class PendingQueueFeeder:
         # → monotonic submit time. Counted toward effective depth so we don't
         # re-fill a slot subgen hasn't reported yet (the over-feed race).
         self._inflight: dict[str, float] = {}
+        # #287: one-shot reconcile on first successful subgen /queue read.
+        # Stays False until a /queue read succeeds; set to True after the first
+        # reconcile runs. Reset to False on start() so a process restart always
+        # re-reconciles once.
+        self._reconciled: bool = False
 
     @property
     def _subgen(self):
@@ -108,6 +113,7 @@ class PendingQueueFeeder:
         if self._task is not None and not self._task.done():
             return
         self._stop.clear()
+        self._reconciled = False  # #287: re-reconcile on every process start
         self._task = asyncio.create_task(self._loop(), name="subarr-queue-feeder")
 
     def kick(self) -> None:
@@ -172,6 +178,23 @@ class PendingQueueFeeder:
             return 0
 
         subgen_paths = _subgen_paths(q)
+
+        # #287: one-shot boot reconcile. On the first tick where subgen's /queue
+        # is readable, re-pend any SUBMITTED rows that subgen no longer knows
+        # about (subgen was restarted and lost its queue). Runs BEFORE normal
+        # feeding so re-pended jobs are immediately eligible this same tick.
+        # The flag is only set after a successful /queue read so a momentarily
+        # unreachable subgen does NOT trigger a spurious re-pend.
+        if not self._reconciled:
+            n_repended = self._store.repend_orphaned_submitted(subgen_paths)
+            if n_repended:
+                log.info(
+                    "queue-feeder boot reconcile: re-pended %d orphaned SUBMITTED job(s) "
+                    "(subgen queue was empty for them after restart)",
+                    n_repended,
+                )
+            self._reconciled = True
+
         now = time.monotonic()
         # Release in-flight reservations that have surfaced in subgen's queue
         # (handed off to _effective_depth) or aged past the grace window.
