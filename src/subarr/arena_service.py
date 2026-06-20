@@ -110,6 +110,11 @@ class ArenaService:
         self._caps_provider = caps_provider
         self._capacity_poll_interval_s = capacity_poll_interval_s
         self._inflight = 0  # arena /asr transcriptions currently running (0/1)
+        # run_ids that have been explicitly deleted while their task was still
+        # live. _persist() checks this set so a late on_clip/on_step/terminal
+        # save does NOT resurrect the row. Entries are discarded in _run's
+        # finally block once the task fully unwinds.
+        self._deleted: set[str] = set()
 
     # ── store (persisted) ────────────────────────────────────────────────────
     def create(
@@ -145,7 +150,28 @@ class ArenaService:
         return self._store.aggregate_global_leaderboard(min_languages=min_languages)
 
     def delete(self, run_id: str) -> bool:
+        # Mark deleted BEFORE cancelling so any CancelledError handler that
+        # runs synchronously on the next event-loop tick calls _persist() and
+        # sees the guard before attempting a write.
+        self._deleted.add(run_id)
+        t = self._tasks.get(run_id)
+        if t is not None:
+            t.cancel()
         return self._store.delete(run_id)
+
+    # ── internal save helper ─────────────────────────────────────────────────
+    def _persist(self, run: ArenaRun) -> None:
+        """Write-through to the store unless this run has been deleted.
+
+        Every state-transition save inside the run lifecycle goes through here
+        so that deleting a run while its task is live is a true stop: the row
+        is removed by delete() and _persist() is a no-op from that point on,
+        preventing resurrection via CancelledError handlers, on_clip callbacks,
+        or any other in-flight save.
+        """
+        if run.id in self._deleted:
+            return
+        self._store.save(run)
 
     def inflight_count(self) -> int:
         """Arena /asr transcriptions currently running — the feeder counts this
@@ -229,7 +255,7 @@ class ArenaService:
             if not emitted:
                 emitted = True
                 run.status = "waiting_for_capacity"
-                self._store.save(run)
+                self._persist(run)
                 self._emit(
                     run.id, {"event": "waiting_for_capacity", "data": {"id": run.id, "ahead": processing}}
                 )
@@ -241,13 +267,13 @@ class ArenaService:
         # their heavy QE work in parallel and saturating the box.
         run.status = "queued"
         run.outcomes = {"clips": [], "done": 0, "total": 0}  # progress scaffold
-        self._store.save(run)
+        self._persist(run)
         self._emit(run_id, {"event": "queued", "data": {"id": run.id}})
         try:
             async with self._sema:
                 await self._await_capacity(run)
                 run.status = "running"
-                self._store.save(run)
+                self._persist(run)
                 self._inflight += 1
                 try:
                     self._emit(
@@ -263,13 +289,18 @@ class ArenaService:
         except asyncio.CancelledError:
             run.status = "error"
             run.error = "cancelled"
-            self._store.save(run)
+            self._persist(run)
             raise
         except Exception as e:
             run.status = "error"
             run.error = str(e)
-            self._store.save(run)
+            self._persist(run)
             self._emit(run_id, {"event": "error", "data": {"error": str(e)}})
+        finally:
+            # Clean up regardless of outcome: discard from _deleted (so the set
+            # doesn't grow unbounded) and remove from _tasks.
+            self._deleted.discard(run_id)
+            self._tasks.pop(run_id, None)
 
     async def _execute(self, run: ArenaRun) -> None:
         run_id = run.id
@@ -284,12 +315,12 @@ class ArenaService:
             for j in range(idx):
                 per_clip["clips"][j]["status"] = "done"
             per_clip["clips"][idx] = {"kind": kind, "status": "running"}
-            self._store.save(run)
+            self._persist(run)
             self._emit(run_id, {"event": "clip", "data": {"idx": idx, "kind": kind, "total": total}})
 
         def on_step() -> None:
             per_clip["done"] += 1
-            self._store.save(run)
+            self._persist(run)
             self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
 
         result = await run_arena(run.media_path, variants, runner=runner, on_clip=on_clip, on_step=on_step)
@@ -347,5 +378,5 @@ class ArenaService:
         serialized["audio_track_languages"] = track_langs
         run.result = serialized
         run.status = "done"
-        self._store.save(run)
+        self._persist(run)
         self._emit(run_id, {"event": "done", "data": run.to_dict()})

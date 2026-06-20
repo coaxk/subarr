@@ -804,3 +804,121 @@ async def test_n2_allows_one_concurrent_then_blocks(tmp_path):
     sub._count = 0
     await asyncio.wait_for(svc._tasks[run2.id], timeout=3)
     assert svc.get(run2.id).status in ("done", "error")
+
+
+# ── delete + cancel (issue #283) ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_waiting_sweep_cancels_task_and_no_resurrection(tmp_path):
+    # Delete a WAITING sweep (subgen at capacity, task parked in _await_capacity):
+    # the task must be cancelled AND the run must NOT reappear in the store once
+    # capacity is freed and the task unwinds.
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+    sub = _FakeSubgen([{"path": "/m/x.mkv"}])  # at capacity
+    svc = ArenaService(
+        s,
+        build_runner=lambda run: _NoopRunner(),
+        subgen_provider=lambda: sub,
+        caps_provider=lambda: type("C", (), {"concurrent_transcriptions": 1})(),
+        capacity_poll_interval_s=0.02,
+    )
+    run = svc.create("/ep.mkv", [ConfigVariant("base", {})])
+    svc.start(run)
+    # Wait until the run is parked waiting_for_capacity
+    for _ in range(50):
+        if svc.get(run.id).status == "waiting_for_capacity":
+            break
+        await asyncio.sleep(0.02)
+    assert svc.get(run.id).status == "waiting_for_capacity"
+
+    # Delete it (fire-and-forget cancel)
+    result = svc.delete(run.id)
+    assert result is True
+    assert svc.get(run.id) is None  # immediately gone from store
+
+    # Free capacity — the task will wake up but must NOT resurrect the row
+    sub._processing = []
+    task = svc._tasks.get(run.id)
+    if task is not None:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    await asyncio.sleep(0.1)  # let any stray callbacks drain
+    assert svc.get(run.id) is None  # must still be gone — no resurrection
+
+
+@pytest.mark.asyncio
+async def test_delete_persists_noop_for_deleted_run(store):
+    # After delete(run_id), any subsequent _persist call for that run_id
+    # must be a no-op — the row must stay deleted.
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    assert svc.delete(run.id) is True
+    assert svc.get(run.id) is None
+
+    # Directly invoke _persist — simulates what a late on_clip/on_step would do
+    svc._persist(run)
+    assert svc.get(run.id) is None  # row must NOT be resurrected
+
+
+@pytest.mark.asyncio
+async def test_delete_no_live_task_still_deletes_row(store):
+    # delete() on a run that never had a live task (or whose task already
+    # finished) must still remove the persisted row — back-compat.
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    assert run.id not in svc._tasks  # no task started
+    assert svc.delete(run.id) is True
+    assert svc.get(run.id) is None
+
+
+@pytest.mark.asyncio
+async def test_inflight_returns_to_zero_after_delete(tmp_path):
+    # Delete a RUNNING sweep (past _await_capacity, inside _execute) must still
+    # correctly decrement _inflight back to 0.
+    s = ArenaStore(tmp_path / "arena.db")
+    s._conn.executescript(_ARENA_SQL)
+
+    execute_started = asyncio.Event()
+    delete_done = asyncio.Event()
+
+    class BlockingRunner:
+        def __init__(self, run):
+            pass
+
+        async def preflight(self):
+            pass
+
+        async def prepare(self, media_path):
+            execute_started.set()
+            await delete_done.wait()  # hold inside _execute
+            return []
+
+        async def cleanup(self):
+            pass
+
+    svc = ArenaService(s, build_runner=lambda run: BlockingRunner(run))
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    svc.start(run)
+
+    # Wait until the task is inside _execute (inflight incremented)
+    await asyncio.wait_for(execute_started.wait(), timeout=3)
+    assert svc.inflight_count() == 1
+
+    # Delete it — cancel is fire-and-forget
+    svc.delete(run.id)
+    delete_done.set()  # unblock prepare so the task can unwind
+
+    task = svc._tasks.get(run.id)
+    if task is not None:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    await asyncio.sleep(0.1)
+    assert svc.inflight_count() == 0
