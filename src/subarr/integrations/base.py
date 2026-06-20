@@ -97,10 +97,13 @@ class IntegrationClient:
         self._record(r.status_code)
         if r.status_code >= 400:
             raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
+        text = r.text
+        if not text.strip():
+            return None  # legitimate empty body (e.g. 204) — no content
         try:
             return r.json()
-        except ValueError:
-            return None
+        except ValueError as e:
+            raise IntegrationError(f"{self.name} {path}: non-json response") from e
 
     async def _put(self, path: str, params: dict | None = None, json_body: dict | None = None) -> Any:
         """PUT — used by v1.1.1 audio-lang propagation to Sonarr's
@@ -116,7 +119,10 @@ class IntegrationClient:
         self._record(r.status_code)
         if r.status_code >= 400:
             raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
+        text = r.text
+        if not text.strip():
+            return None  # legitimate empty body (e.g. 204) — no content
         try:
             return r.json()
-        except ValueError:
-            return None
+        except ValueError as e:
+            raise IntegrationError(f"{self.name} {path}: non-json response") from e

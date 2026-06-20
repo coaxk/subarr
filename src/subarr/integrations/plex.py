@@ -26,6 +26,10 @@ Plex endpoint shape:
 We discover the right section id at runtime by listing /library/sections
 and matching the path against each section's <Location> entries. Cached
 per-process; if Plex sections change subarr restart picks them up.
+
+#290: PlexClient now holds a PERSISTENT httpx.AsyncClient (connection
+pooling — no fresh TCP/TLS per call) and a CircuitBreaker (short-circuit
+on dead/flapping Plex instead of eating many serial 10 s timeouts).
 """
 
 from __future__ import annotations
@@ -41,14 +45,19 @@ import defusedxml.ElementTree as ET  # noqa: N814
 
 import httpx
 
+from ..circuit_breaker import CircuitBreaker
 from . import IntegrationError
+from .base import _DEFAULT_TIMEOUT
 
 log = logging.getLogger(__name__)
 
 
 class PlexClient:
     """Minimal Plex client. Not modelled on IntegrationClient because Plex
-    returns XML (not JSON) and uses query-string auth rather than headers."""
+    returns XML (not JSON) and uses query-string auth rather than headers.
+
+    #290: holds a persistent httpx.AsyncClient for connection pooling and a
+    CircuitBreaker to short-circuit calls when Plex is down/flapping."""
 
     name = "plex"
 
@@ -59,6 +68,7 @@ class PlexClient:
         default_section: str = "all",
         path_prefix: str = "",
         media_root: str = "",
+        breaker: CircuitBreaker | None = None,
     ):
         self._base_url = (base_url or "").rstrip("/")
         self._token = token or ""
@@ -69,6 +79,16 @@ class PlexClient:
         # path to identical container paths.
         self._path_prefix = (path_prefix or "").rstrip("/")
         self._media_root = (media_root or "").rstrip("/")
+        # #290: persistent client — one TCP/TLS connection pool per process
+        # instead of a fresh handshake on every Plex call.
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=_DEFAULT_TIMEOUT,
+        )
+        # #290: per-instance breaker. 5xx + transport errors trip it; a 4xx
+        # means Plex is reachable (auth/bad-request) and must NOT open the
+        # circuit. Caller can inject a tuned breaker (e.g. in tests).
+        self._breaker = breaker or CircuitBreaker(name=self.name)
         # Discovered section list — list[dict(id, paths=[str,...])].
         # Lazily fetched on first partial_scan(); refreshed only on restart.
         self._sections: list[dict] | None = None
@@ -93,22 +113,49 @@ class PlexClient:
         # Unknown root — return as-is and let Plex's section matcher decide.
         return subarr_path
 
+    # ── #290: central transport helper ───────────────────────────────────────
+
+    async def _request(self, path: str, params: dict) -> httpx.Response:
+        """GET a Plex endpoint via the persistent client, with circuit-breaker
+        guard. All four call sites funnel through here so breaker policy is
+        applied uniformly.
+
+        Policy (mirrors IntegrationClient):
+        - 5xx + transport errors → record_failure (may open the breaker).
+        - <500 HTTP (incl. 4xx) → record_success (upstream is reachable).
+        - 4xx raises IntegrationError but does NOT open the breaker.
+        """
+        if not self._breaker.allow():
+            raise IntegrationError(f"{self.name}: circuit open — Plex failing, backing off")
+        try:
+            r = await self._client.get(path, params=params)
+        except httpx.HTTPError as e:
+            self._breaker.record_failure()
+            raise IntegrationError(f"{self.name} {path}: {e}") from e
+        if r.status_code >= 500:
+            self._breaker.record_failure()
+        else:
+            self._breaker.record_success()
+        if r.status_code >= 400:
+            raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
+        return r
+
+    # ── XML helper (used by status + audio-hint paths) ────────────────────────
+
+    async def _get_xml(self, path: str, extra_params: dict | None = None):
+        """GET a Plex endpoint and return the parsed XML root."""
+        r = await self._request(path, {"X-Plex-Token": self._token, **(extra_params or {})})
+        try:
+            return ET.fromstring(r.text)
+        except ET.ParseError as e:
+            raise IntegrationError(f"plex {path}: bad XML ({e})") from e
+
+    # ── Section discovery ─────────────────────────────────────────────────────
+
     async def _list_sections(self) -> list[dict]:
         """Fetch + parse /library/sections. Returns list of
         {'id': str, 'title': str, 'paths': [str,...]}."""
-        url = f"{self._base_url}/library/sections"
-        params = {"X-Plex-Token": self._token}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params=params)
-        except httpx.HTTPError as e:
-            raise IntegrationError(f"plex sections: {e}") from e
-        if r.status_code >= 400:
-            raise IntegrationError(f"plex sections HTTP {r.status_code}: {r.text[:200]}")
-        try:
-            root = ET.fromstring(r.text)
-        except ET.ParseError as e:
-            raise IntegrationError(f"plex sections: bad XML ({e})") from e
+        root = await self._get_xml("/library/sections")
         out = []
         for directory in root.iter("Directory"):
             sid = directory.get("key")
@@ -152,21 +199,18 @@ class PlexClient:
                         best_len = len(loc_str)
         return best
 
+    # ── Public scan methods ───────────────────────────────────────────────────
+
     async def full_scan(self, section_id: Optional[str] = None) -> dict:
         """Trigger a full scan against the configured (or supplied) section.
         Used by /api/plex/scan as the public 'rescan everything' button."""
         if not self.is_configured():
             raise IntegrationError("plex not configured")
         sid = section_id or self._default_section
-        url = f"{self._base_url}/library/sections/{sid}/refresh"
-        params = {"X-Plex-Token": self._token}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params=params)
-        except httpx.HTTPError as e:
-            raise IntegrationError(f"plex full_scan: {e}") from e
-        if r.status_code >= 400:
-            raise IntegrationError(f"plex full_scan HTTP {r.status_code}: {r.text[:200]}")
+        r = await self._request(
+            f"/library/sections/{sid}/refresh",
+            {"X-Plex-Token": self._token},
+        )
         return {"triggered": True, "section": sid, "scope": "full", "plex_status": r.status_code}
 
     async def partial_scan(self, subarr_file_path: str) -> dict:
@@ -196,15 +240,10 @@ class PlexClient:
                 f"plex partial_scan: no section matched path {scan_dir!r}; "
                 f"set PLEX_SECTION to the numeric id or check PLEX_PATH_PREFIX"
             )
-        url = f"{self._base_url}/library/sections/{sid}/refresh"
-        params = {"X-Plex-Token": self._token, "path": scan_dir}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params=params)
-        except httpx.HTTPError as e:
-            raise IntegrationError(f"plex partial_scan: {e}") from e
-        if r.status_code >= 400:
-            raise IntegrationError(f"plex partial_scan HTTP {r.status_code}: {r.text[:200]}")
+        r = await self._request(
+            f"/library/sections/{sid}/refresh",
+            {"X-Plex-Token": self._token, "path": scan_dir},
+        )
         log.info("plex partial_scan: section=%s path=%s", sid, scan_dir)
         return {
             "triggered": True,
@@ -224,22 +263,7 @@ class PlexClient:
             "machine_id": root.get("machineIdentifier"),
         }
 
-    # ── #12: per-show selected audio language ───────────────────────────
-
-    async def _get_xml(self, path: str, extra_params: dict | None = None):
-        """GET a Plex endpoint and return the parsed XML root."""
-        params = {"X-Plex-Token": self._token, **(extra_params or {})}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(f"{self._base_url}{path}", params=params)
-        except httpx.HTTPError as e:
-            raise IntegrationError(f"plex {path}: {e}") from e
-        if r.status_code >= 400:
-            raise IntegrationError(f"plex {path} HTTP {r.status_code}")
-        try:
-            return ET.fromstring(r.text)
-        except ET.ParseError as e:
-            raise IntegrationError(f"plex {path}: bad XML ({e})") from e
+    # ── #12: per-show selected audio language ───────────────────────────────
 
     async def _ensure_show_index(self) -> None:
         """Build title_lc → show ratingKey across all show-type sections.
@@ -311,5 +335,5 @@ class PlexClient:
         return {tl: self._audio_hint_cache[tl] for tl in wanted if self._audio_hint_cache.get(tl)}
 
     async def aclose(self) -> None:
-        # Stateless — each call opens its own client. Nothing to close.
-        return None
+        """#290: close the persistent httpx client (releases the connection pool)."""
+        await self._client.aclose()
