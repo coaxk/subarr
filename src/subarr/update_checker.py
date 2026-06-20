@@ -362,18 +362,18 @@ class UpdateChecker:
         after the box switched to the subarr-subgen fork, or vice versa)
         would render on the Updates page forever. Pruning to the live product
         set keeps the page honest. Returns the count of orphan rows removed."""
-        keep = tuple(self._products.keys())
-        if not keep:
-            return 0
-        placeholders = ",".join("?" * len(keep))
+        keep = set(self._products.keys())
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
         conn.execute("PRAGMA journal_mode=WAL")
         try:
-            cur = conn.execute(
-                f"DELETE FROM update_checks WHERE product NOT IN ({placeholders})",
-                keep,
-            )
-            return cur.rowcount or 0
+            # Resolve orphans in Python and delete each by exact product = ? —
+            # fully parameterized, no dynamic IN-clause SQL. The tracked set is
+            # tiny (2-3 products), so the per-row deletes are negligible.
+            rows = conn.execute("SELECT DISTINCT product FROM update_checks").fetchall()
+            orphans = [r[0] for r in rows if r[0] not in keep]
+            for product in orphans:
+                conn.execute("DELETE FROM update_checks WHERE product = ?", (product,))
+            return len(orphans)
         finally:
             conn.close()
 
