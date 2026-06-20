@@ -24,7 +24,9 @@ TASK_NAME = "db-integrity"
 
 # Re-checked at most daily by the caller's discretion; the boot check is the
 # one that matters (covers unclean shutdowns, the main corruption window).
-EXPECTED_INTERVAL_S = 7 * 86400.0
+# #291: daily, not weekly — an always-on container's pill shouldn't read
+# "stale" for a week between boots.
+EXPECTED_INTERVAL_S = 1 * 86400.0
 
 
 class DatabaseCorruptionError(Exception):

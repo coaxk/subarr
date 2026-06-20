@@ -70,7 +70,12 @@ class MigrationRunner:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "PRAGMA busy_timeout=5000"
+            )  # #291: a concurrent migrator (dev --reload) WAITS for the lock instead of erroring "database is locked"
+            conn.execute(
+                "PRAGMA journal_mode=WAL"
+            )  # #291 NIT: we rely on WAL's default synchronous=NORMAL — do NOT set synchronous=OFF (permits corruption on power loss)
             conn.execute("PRAGMA foreign_keys=ON")
             self._ensure_version_table(conn)
             applied_now: list[Migration] = []
@@ -202,10 +207,21 @@ class MigrationRunner:
                         )
                         continue
                     raise
-            conn.execute(
-                "INSERT INTO schema_versions (version, name, applied_at) VALUES (?, ?, ?)",
-                (m.version, m.name, time.time()),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO schema_versions (version, name, applied_at) VALUES (?, ?, ?)",
+                    (m.version, m.name, time.time()),
+                )
+            except sqlite3.IntegrityError:
+                # #291: a concurrent migrator (two processes booting together,
+                # e.g. dev --reload) recorded this version between our
+                # applied-versions read and now. The migration body is
+                # idempotent (CREATE IF NOT EXISTS / ADD COLUMN duplicate-guard),
+                # so roll back our duplicate work and treat it as applied — no
+                # crash, no corruption.
+                conn.execute("ROLLBACK")
+                log.info("migration %s already recorded by a concurrent process; skipping", m.name)
+                return
             conn.execute("COMMIT")
         except Exception:
             try:

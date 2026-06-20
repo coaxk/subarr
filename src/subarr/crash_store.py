@@ -65,7 +65,10 @@ class CrashStore:
         self._lock = threading.Lock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self._path), isolation_level=None)
+        # #291: WAL is persistent but re-issue so this store is boot-order-independent.
+        conn = sqlite3.connect(str(self._path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
     def record(self, exc: BaseException, when: float | None = None) -> None:
         """Best-effort insert; never raises (a crash recorder that crashes

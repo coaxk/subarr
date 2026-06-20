@@ -209,6 +209,7 @@ class TelemetryCollector:
 
     def state(self) -> TelemetryState:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             row = conn.execute(
                 "SELECT install_id, opted_in, last_ping_at, "
@@ -231,6 +232,7 @@ class TelemetryCollector:
 
     def set_opt_in(self, opted_in: bool) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             conn.execute(
                 "UPDATE telemetry_state SET opted_in = ? WHERE id = 1",
@@ -333,6 +335,7 @@ class TelemetryCollector:
 
     def _ensure_row(self) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             existing = conn.execute("SELECT 1 FROM telemetry_state WHERE id = 1").fetchone()
             if not existing:
@@ -347,6 +350,7 @@ class TelemetryCollector:
 
     def _record_attempt(self, payload_json: str, error: str | None, transmit: bool) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             # #11: stamp last_error_at when error is set; clear it on
             # successful sends so the panel can show "healthy now" the
