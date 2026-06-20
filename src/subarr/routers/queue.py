@@ -245,12 +245,18 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     live["processing_count"] = len(live["processing"])
     live["queued_count"] = len(live["queued"])
 
-    progress_map = await docker_ops.recent_progress(tail=80)
-    if progress_map and isinstance(live.get("processing"), list):
-        for task in live["processing"]:
-            prog = match_progress(task.get("path", ""), progress_map)
-            if prog is not None:
-                task["progress"] = prog
+    # Only pull subgen's progress logs when something is actually transcribing.
+    # recent_progress() is a docker logs read (slow over the socket proxy) — with
+    # nothing processing there's no progress to merge, so skip the cost. This is
+    # the common idle case; fetching it unconditionally made every /api/queue
+    # poll pay ~2s for nothing (dogfood 2026-06-20).
+    if live["processing"]:
+        progress_map = await docker_ops.recent_progress(tail=80)
+        if progress_map:
+            for task in live["processing"]:
+                prog = match_progress(task.get("path", ""), progress_map)
+                if prog is not None:
+                    task["progress"] = prog
 
     # HISTORY (subarr scan_store). Flatten scans → per-path rows so each
     # row in the UI is a single submission outcome, not a scan-with-N-paths.

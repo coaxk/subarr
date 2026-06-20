@@ -59,6 +59,38 @@ def test_queue_busy(app_with_stub):
     assert body["processing"][0]["type"] == "transcribe"
 
 
+def test_queue_idle_skips_docker_progress_read(app_with_stub):
+    """Perf (dogfood 2026-06-20): with nothing processing, /api/queue must NOT
+    do the slow docker logs read (recent_progress) — there's no progress to
+    merge into an empty list, and the read was costing ~2s per poll when idle."""
+    calls = []
+
+    async def _spy(*a, **k):
+        calls.append((a, k))
+        return {}
+
+    app_with_stub.app.state.docker.recent_progress = _spy
+    r = app_with_stub.get("/api/queue")
+    assert r.status_code == 200
+    assert r.json()["processing"] == []
+    assert calls == []  # docker logs read skipped when idle
+
+
+@pytest.mark.subgen(handler=_busy_handler)
+def test_queue_busy_still_reads_progress(app_with_stub):
+    """When something IS processing, recent_progress is fetched to merge live %."""
+    calls = []
+
+    async def _spy(*a, **k):
+        calls.append((a, k))
+        return {}
+
+    app_with_stub.app.state.docker.recent_progress = _spy
+    r = app_with_stub.get("/api/queue")
+    assert r.status_code == 200
+    assert len(calls) == 1  # fetched once because a job is processing
+
+
 def _arena_mixed_handler(req: httpx.Request) -> httpx.Response:
     # subgen /queue with one real library job (/media/...) and one tuning-lab
     # arena sweep, which runs via /asr UPLOAD mode → a subgen temp upload path
