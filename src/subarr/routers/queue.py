@@ -20,6 +20,7 @@ Per-row actions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -274,39 +275,49 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
     for t in live.get("queued", []) or []:
         if isinstance(t, dict) and t.get("path"):
             live_paths.add(os.path.basename(t["path"]))
-    for scan in scans:
-        for r in scan.results:
-            basename = os.path.basename(r.path)
-            # Skip history row if this path is currently live in subgen —
-            # it's already shown in the processing/queued section. This
-            # covers BOTH a running scan_store row AND a just-submitted OK
-            # row ("subgen queued 1"): without OK here, a freshly-queued
-            # file showed in the live Queued section AND again in
-            # Recently-done. Skipped/error/orphaned rows are kept so real
-            # outcomes still surface even if a newer submission is live.
-            if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
-                continue
-            outcome = _path_outcome_chip(
-                r.status,
-                r.subgen_body,
-                r.error,
-                canonical_path=r.path,
-            )
-            cat = outcome["category"]
-            if cat in counts:
-                counts[cat] += 1
-            history.append(
-                {
-                    "scan_id": scan.id,
-                    "created_at": scan.created_at,
-                    "scan_status": scan.status,
-                    "path": r.path,
-                    "outcome": outcome,
-                    "started_at": r.started_at,
-                    "finished_at": r.finished_at,
-                    "subgen_status_code": r.subgen_status_code,
-                }
-            )
+
+    # _path_outcome_chip → _infer_skip_reason does a SYNCHRONOUS filesystem
+    # iterdir() + per-sibling stat for every SKIPPED row (checking for an
+    # existing sidecar on disk). Over a NAS/network mount that's ~1.5s, and
+    # /api/queue is polled constantly — running it on the event loop froze
+    # every concurrent request mid-walk. It's pure filesystem I/O (releases the
+    # GIL), so run the whole history build off-loop in a worker thread.
+    def _build_history() -> None:
+        for scan in scans:
+            for r in scan.results:
+                basename = os.path.basename(r.path)
+                # Skip history row if this path is currently live in subgen —
+                # it's already shown in the processing/queued section. This
+                # covers BOTH a running scan_store row AND a just-submitted OK
+                # row ("subgen queued 1"): without OK here, a freshly-queued
+                # file showed in the live Queued section AND again in
+                # Recently-done. Skipped/error/orphaned rows are kept so real
+                # outcomes still surface even if a newer submission is live.
+                if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
+                    continue
+                outcome = _path_outcome_chip(
+                    r.status,
+                    r.subgen_body,
+                    r.error,
+                    canonical_path=r.path,
+                )
+                cat = outcome["category"]
+                if cat in counts:
+                    counts[cat] += 1
+                history.append(
+                    {
+                        "scan_id": scan.id,
+                        "created_at": scan.created_at,
+                        "scan_status": scan.status,
+                        "path": r.path,
+                        "outcome": outcome,
+                        "started_at": r.started_at,
+                        "finished_at": r.finished_at,
+                        "subgen_status_code": r.subgen_status_code,
+                    }
+                )
+
+    await asyncio.to_thread(_build_history)
 
     # Count of arena sweeps actively transcribing (running /asr) — NOT sweeps
     # parked in waiting_for_capacity (those hold no GPU slot, so the "using a
