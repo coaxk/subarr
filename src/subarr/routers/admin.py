@@ -1,8 +1,10 @@
-"""Admin endpoints: container restart, Plex library refresh."""
+"""Admin endpoints: container restart, Plex library refresh, db maintenance."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -136,3 +138,51 @@ async def plex_sections(request: Request) -> dict:
         return {"sections": await plex.sections(refresh=True)}
     except IntegrationError as e:
         raise HTTPException(502, detail=safe_error(e))
+
+
+# ─── #291 Slice B — on-demand db maintenance ─────────────────────────────────
+
+
+@router.post("/admin/db/integrity-check")
+async def db_integrity_check(request: Request) -> dict:
+    """Full PRAGMA integrity_check (index↔table cross-check).
+
+    Heavier than the boot-time quick_check — can take seconds on a large
+    database, so it runs in a thread. Returns ok=True and findings=['ok']
+    when healthy; ok=False + findings list when corruption is detected.
+    Advisory only; no writes are blocked.
+    """
+    from ..config import settings
+    from ..db_integrity import deep_integrity_check
+
+    ok, findings = await asyncio.to_thread(deep_integrity_check, settings.db_path)
+    return {"ok": ok, "findings": findings}
+
+
+@router.post("/admin/db/backup")
+async def db_backup(request: Request) -> dict:
+    """VACUUM INTO a timestamped clean copy of the database.
+
+    VACUUM INTO writes all live pages to a new file atomically — safe
+    while the database is open. The backup is a fully defragmented, valid
+    SQLite file. Backups land in <db_path.parent>/backups/ (typically
+    /data/backups/); the 5 most recent are kept, older ones are pruned.
+    Returns path, size_bytes, created_at, and a list of pruned filenames.
+    """
+    from pathlib import Path
+
+    from ..config import settings
+    from ..db_integrity import vacuum_backup
+
+    backups_dir = Path(settings.db_path).parent / "backups"
+    try:
+        result = await asyncio.to_thread(
+            vacuum_backup,
+            settings.db_path,
+            backups_dir,
+            when=time.time(),
+        )
+    except Exception as e:
+        log.error("db backup failed: %s", e)
+        raise HTTPException(500, detail=safe_error(e))
+    return result
