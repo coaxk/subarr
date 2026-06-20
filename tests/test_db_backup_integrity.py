@@ -137,12 +137,16 @@ def test_vacuum_backup_schema_versions_present(tmp_path):
     from subarr.db_integrity import vacuum_backup
 
     db = _migrated_db(tmp_path)
-    src_rows = sqlite3.connect(str(db)).execute("SELECT version FROM schema_versions ORDER BY version").fetchall()
+    src_rows = (
+        sqlite3.connect(str(db)).execute("SELECT version FROM schema_versions ORDER BY version").fetchall()
+    )
 
     backups_dir = tmp_path / "backups"
     result = vacuum_backup(db, backups_dir, when=time.time())
 
     bk_rows = (
-        sqlite3.connect(result["path"]).execute("SELECT version FROM schema_versions ORDER BY version").fetchall()
+        sqlite3.connect(result["path"])
+        .execute("SELECT version FROM schema_versions ORDER BY version")
+        .fetchall()
     )
     assert bk_rows == src_rows
