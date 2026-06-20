@@ -462,6 +462,12 @@ async def background_refresh_loop(
     the user's probe_roots config.
     """
     get_bundle = bundle_provider or (lambda: bundle)
+    # The health staleness threshold must cover the SLEEP *plus* the refresh
+    # build time: refresh() takes 60-90s on large libraries, so successes land
+    # interval_s + build_time apart. A flat interval_s threshold marks the pill
+    # stale for the duration of every refresh (false alarm). 2x interval_s
+    # tolerates a full slow cycle; only a genuinely stuck loop trips it.
+    health_interval_s = interval_s * 2
     # Initial refresh on boot if nothing cached yet — fills the snapshot
     # so the first /api/coverage request after a fresh deploy doesn't
     # block for 90s.
@@ -488,10 +494,10 @@ async def background_refresh_loop(
                 caps_provider=caps_provider,
             )
             if health:
-                health.record_success("coverage-cache", expected_interval_s=interval_s)
+                health.record_success("coverage-cache", expected_interval_s=health_interval_s)
         except asyncio.CancelledError:
             raise
         except Exception as e:
             if health:
-                health.record_failure("coverage-cache", e, expected_interval_s=interval_s)
+                health.record_failure("coverage-cache", e, expected_interval_s=health_interval_s)
             log.warning("coverage cache: background refresh failed: %s", e)

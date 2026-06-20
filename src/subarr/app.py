@@ -342,7 +342,10 @@ async def lifespan(app_: FastAPI):
     # (as "never run yet"), not only after their first cycle. Each loop's first
     # record_success/failure carries its real cadence and corrects these.
     for _tname, _tiv in (
-        ("coverage-cache", 300),
+        (
+            "coverage-cache",
+            600,
+        ),  # 2x refresh interval — covers sleep + 60-90s build (see background_refresh_loop)
         ("dashboard-cache", 30),
         ("scheduler", 60),
         ("completion-watcher", 30),
