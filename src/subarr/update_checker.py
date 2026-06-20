@@ -354,6 +354,29 @@ class UpdateChecker:
             for r in rows
         ]
 
+    def _prune_untracked(self) -> int:
+        """Drop persisted state for products we no longer track.
+
+        states() returns every row in update_checks, so a product tracked
+        under a previous config (e.g. the vanilla 'subgen' row left behind
+        after the box switched to the subarr-subgen fork, or vice versa)
+        would render on the Updates page forever. Pruning to the live product
+        set keeps the page honest. Returns the count of orphan rows removed."""
+        keep = set(self._products.keys())
+        conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            # Resolve orphans in Python and delete each by exact product = ? —
+            # fully parameterized, no dynamic IN-clause SQL. The tracked set is
+            # tiny (2-3 products), so the per-row deletes are negligible.
+            rows = conn.execute("SELECT DISTINCT product FROM update_checks").fetchall()
+            orphans = [r[0] for r in rows if r[0] not in keep]
+            for product in orphans:
+                conn.execute("DELETE FROM update_checks WHERE product = ?", (product,))
+            return len(orphans)
+        finally:
+            conn.close()
+
     async def refresh_now(self) -> list[UpdateState]:
         """Force a poll across all products (admin endpoint)."""
         await self._poll_all()
@@ -392,6 +415,7 @@ class UpdateChecker:
                 log.exception("update poll tick failed: %s", e)
 
     async def _poll_all(self) -> None:
+        self._prune_untracked()  # drop orphan rows for products no longer tracked
         if self._client is None:
             self._client = httpx.AsyncClient(
                 # github.com (the web host), NOT api.github.com — the Atom
