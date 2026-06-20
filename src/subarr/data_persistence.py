@@ -19,11 +19,70 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 TASK_NAME = "data-persistence"
+
+# Filesystem types where WAL mode is a known corruption vector.
+_NETWORK_FS_TYPES = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.glusterfs", "fuse.rclone"}
+
+
+def mount_fstype_for(target_path: str, mountinfo_text: str) -> str | None:
+    """Pure helper: parse /proc/self/mountinfo and return the fstype for the
+    mount entry whose mount-point is the longest prefix of target_path.
+
+    mountinfo line format (space-separated fields):
+        <mount-id> <parent-id> <major:minor> <root> <mount-point> <mount-options>
+        [optional-fields] ' - ' <fstype> <source> <super-options>
+
+    Returns the fstype string, or None if no matching entry is found.
+    """
+    best_prefix = ""
+    best_fstype: str | None = None
+    for line in mountinfo_text.splitlines():
+        # Split on the ' - ' separator that divides per-mount fields from fs info.
+        parts = line.split(" - ", 1)
+        if len(parts) != 2:
+            continue
+        left, right = parts
+        left_fields = left.split()
+        if len(left_fields) < 5:
+            continue
+        mount_point = left_fields[4]
+        # Normalise: ensure mount_point ends with / so startswith works cleanly.
+        mp = mount_point if mount_point.endswith("/") else mount_point + "/"
+        tp = target_path if target_path.endswith("/") else target_path + "/"
+        if tp.startswith(mp) and len(mp) > len(best_prefix):
+            fstype = right.split()[0] if right.split() else None
+            if fstype:
+                best_prefix = mp
+                best_fstype = fstype
+    return best_fstype
+
+
+def data_dir_network_fs(db_path: Path) -> str | None:
+    """Return the fstype if db_path's parent is on a network filesystem known
+    to be unsafe for WAL mode, else None.
+
+    Container-gated (like data_dir_is_ephemeral): returns None when not inside
+    a Docker container, not on Linux, or on any error — never warns on dev hosts.
+    """
+    try:
+        if not os.path.exists("/.dockerenv"):
+            return None
+        if sys.platform != "linux":
+            return None
+        data_dir = str(Path(db_path).parent)
+        mountinfo_text = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        fstype = mount_fstype_for(data_dir, mountinfo_text)
+        if fstype in _NETWORK_FS_TYPES:
+            return fstype
+        return None
+    except Exception:
+        return None
 
 
 def data_dir_is_ephemeral(db_path: Path) -> bool | None:

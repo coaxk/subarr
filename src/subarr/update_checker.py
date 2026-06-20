@@ -328,6 +328,7 @@ class UpdateChecker:
     def states(self) -> list[UpdateState]:
         """All cached product states, sorted by product name."""
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             rows = conn.execute(
                 "SELECT product, repo, current_version, latest_version, "
@@ -500,6 +501,7 @@ class UpdateChecker:
         missed: list[dict[str, Any]] | None = None,
     ) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             conn.execute(
                 "INSERT INTO update_checks "
@@ -536,6 +538,7 @@ class UpdateChecker:
     def _write_error(self, product: str, repo: str, error: str) -> None:
         """Update last_error WITHOUT clearing prior successful poll data."""
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
         try:
             existing = conn.execute(
                 "SELECT 1 FROM update_checks WHERE product = ?",
