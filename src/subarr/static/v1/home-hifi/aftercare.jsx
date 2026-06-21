@@ -325,6 +325,7 @@ export function AftercarePage() {
   const [busy, setBusy] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [audit, setAudit] = useState({ running: false, done: 0, total: 0 }); // #216 audit progress
+  const [ackingAll, setAckingAll] = useState(false); // #313 bulk-acknowledge in flight
 
   const refetch = useCallback(async () => {
     const q = new URLSearchParams({ view });
@@ -365,6 +366,18 @@ export function AftercarePage() {
     try { await fetch(`/api/aftercare/${item.id}/acknowledge`, { method: 'POST', credentials: 'same-origin' }); }
     finally { setBusy(null); refetch(); }
   }, [refetch]);
+
+  // #313: clear a large first-run backlog in one action. Acks every pending
+  // item (respecting the source filter). Does NOT touch the subtitle files.
+  const acknowledgeAll = useCallback(async () => {
+    const scope = source === 'existing_audit' ? 'audited external' : 'pending';
+    if (!window.confirm(`Mark all ${scope} aftercare items as reviewed? This clears the review list. The subtitle files are not changed.`)) return;
+    setAckingAll(true);
+    try {
+      const q = source ? `?source=${encodeURIComponent(source)}` : '';
+      await fetch(`/api/aftercare/acknowledge-all${q}`, { method: 'POST', credentials: 'same-origin' });
+    } finally { setAckingAll(false); refetch(); }
+  }, [source, refetch]);
 
   // Requeue for our own jobs; for audited EXTERNAL subs, regenerate-from-audio
   // (the server resolves the sibling video — the .srt path can't be transcribed).
@@ -418,6 +431,13 @@ export function AftercarePage() {
             detected automatically.
           </div>
         </div>
+        {items.length > 0 && (
+          <button onClick={acknowledgeAll} disabled={ackingAll} className="btn sm"
+            title="Mark all pending items reviewed — clears the backlog in one action. Does not change the subtitle files."
+            style={{ flex: 'none', whiteSpace: 'nowrap' }}>
+            {ackingAll ? 'Acknowledging…' : 'Acknowledge all'}
+          </button>
+        )}
       </div>
 
       {/* View toggle + source filter + existing-sub audit trigger (#216) */}

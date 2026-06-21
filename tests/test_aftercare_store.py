@@ -117,3 +117,21 @@ def test_list_results_source_filter(tmp_path):
     assert [r["canonical_path"] for r in audited] == ["TV/A/ext.en.srt"]
     everything = s.list_results(view="all", limit=50, offset=0)
     assert len(everything) == 2
+
+
+def test_mark_all_reviewed_clears_every_pending(tmp_path):
+    # #313 bulk-ack: one action clears a large first-run backlog.
+    s = _store(tmp_path)
+    s.record(canonical_path="TV/A/e1.mkv", completed_at=1.0, evaluation=_ev(True), source="subgenscan")
+    s.record(canonical_path="TV/A/e2.mkv", completed_at=1.0, evaluation=_ev(True), source="subgenscan")
+    s.record(canonical_path="TV/B/e1.mkv", completed_at=1.0, evaluation=_ev(True), source="existing_audit")
+    assert s.mark_all_reviewed() == 3
+    assert s.mark_all_reviewed() == 0  # idempotent — nothing left pending
+
+
+def test_mark_all_reviewed_honours_source_filter(tmp_path):
+    s = _store(tmp_path)
+    s.record(canonical_path="TV/A/e1.mkv", completed_at=1.0, evaluation=_ev(True), source="subgenscan")
+    s.record(canonical_path="TV/B/e1.mkv", completed_at=1.0, evaluation=_ev(True), source="existing_audit")
+    assert s.mark_all_reviewed(source="existing_audit") == 1  # only the audited one
+    assert s.mark_all_reviewed() == 1  # the subgenscan one still pending

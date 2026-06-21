@@ -143,6 +143,27 @@ class AfterCareStore:
                 )
             return True
 
+    def mark_all_reviewed(self, *, source: str | None = None) -> int:
+        """#313: mark every still-pending result reviewed in one action — the
+        bulk-acknowledge for a large first-run backlog (e.g. a 4500-episode
+        library audited on day one). Optional source filter mirrors
+        list_results ('existing_audit' etc.). Only touches rows where
+        reviewed_at IS NULL, so already-reviewed rows keep their original time.
+        Returns the count marked."""
+        now = time.time()
+        with self._lock:
+            if source is not None:
+                cur = self._conn.execute(
+                    "UPDATE aftercare_results SET reviewed_at = ? WHERE reviewed_at IS NULL AND source = ?",
+                    (now, source),
+                )
+            else:
+                cur = self._conn.execute(
+                    "UPDATE aftercare_results SET reviewed_at = ? WHERE reviewed_at IS NULL",
+                    (now,),
+                )
+            return cur.rowcount or 0
+
     def close(self) -> None:
         self._conn.close()
 
