@@ -343,6 +343,41 @@ class AudioLangStore:
             rows = self._conn.execute("SELECT file_path FROM track_mismatch_dismissed").fetchall()
         return {r[0] for r in rows}
 
+    # ── #316: per-title sub ignore (movie file path, or series prefix) ────
+
+    def ignore_title(self, path: str, note: str | None = None) -> None:
+        """Mark a title as ignored so build_coverage drops its rows from gaps /
+        Review / the auto-queue. `path` is a movie's file_canonical_path or a
+        series prefix ending in '/'. Idempotent."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO subs_ignored (path, ignored_at, note) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET "
+                "  ignored_at=excluded.ignored_at, note=excluded.note",
+                (path, time.time(), note),
+            )
+
+    def unignore_title(self, path: str) -> bool:
+        """Stop ignoring a title. True if an ignore existed."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM subs_ignored WHERE path = ?", (path,))
+            return cur.rowcount > 0
+
+    def get_ignored_titles_set(self) -> set[str]:
+        """All currently-ignored paths — read by build_coverage to drop rows."""
+        with self._lock:
+            rows = self._conn.execute("SELECT path FROM subs_ignored").fetchall()
+        return {r[0] for r in rows}
+
+    def list_ignored_titles(self) -> list[dict[str, Any]]:
+        """Ignored titles with metadata, newest first — for the management UI."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT path, ignored_at, note FROM subs_ignored ORDER BY ignored_at DESC"
+            ).fetchall()
+        return [{"path": r[0], "ignored_at": r[1], "note": r[2]} for r in rows]
+
     def bulk_for_series(
         self,
         series_canonical_prefix: str,
