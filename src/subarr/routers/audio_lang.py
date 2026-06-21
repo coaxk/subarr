@@ -11,9 +11,10 @@ GET  /api/audio-lang/pending-review       — coverage rows needing user input
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -496,16 +497,31 @@ class TrackSwapRequest(BaseModel):
     file_canonical_path: str
 
 
-@router.post("/track-mismatch-swap")
-async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[str, Any]:
-    """#159: make the original-language audio track the sole default, in place,
-    via mkvpropedit (instant, lossless, reversible). The server RE-VALIDATES the
-    mismatch against a live probe + the coverage row's originalLanguage — the
-    client only names the file, never the track index."""
+async def _refresh_coverage_cache(request: Request) -> None:
+    """Best-effort coalesced coverage refresh so cleared rows disappear. Bulk
+    callers invoke this ONCE after the whole batch, not per file."""
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is None:
+        return
+    try:
+        cov_cache.request_refresh(
+            request.app.state.integrations,
+            request.app.state.probe_store,
+            request.app.state.audio_lang,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _swap_one_track_mismatch(file_path: str, request: Request) -> dict[str, Any]:
+    """#159 core: make the native-language audio track the sole default for one
+    flagged .mkv, in place via mkvpropedit. Re-validates the mismatch against a
+    live probe + the coverage row's originalLanguage (the client only names the
+    file, never the track index). Does NOT refresh the coverage cache — callers
+    batch that. Raises HTTPException on validation/probe/swap failure."""
     from ..media_probe import detect_default_track_mismatch, probe
     from ..track_swap import TrackSwapError, swap_default_audio_track
 
-    file_path = req.file_canonical_path
     if not file_path.lower().endswith(".mkv"):
         raise HTTPException(400, detail="track swap is only supported for .mkv files")
 
@@ -532,7 +548,7 @@ async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[s
         raise HTTPException(502, detail=f"probe failed: {safe_error(e)}")
     m = detect_default_track_mismatch(result.audio, original_language)
     if m is None:
-        return {"ok": True, "swapped": False, "detail": "already correct"}
+        return {"swapped": False, "file_canonical_path": file_path, "detail": "already correct"}
 
     # 3. Swap: make the native-language track the sole default audio track.
     audio_ordinals = list(range(1, len(result.audio) + 1))
@@ -541,7 +557,8 @@ async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[s
     except TrackSwapError as e:
         raise HTTPException(500, detail=safe_error(e))
 
-    # 4. Re-probe + refresh the cache so the row clears immediately.
+    # 4. Re-probe + upsert so the row clears immediately (cache refresh is the
+    #    caller's job — batched once for bulk).
     try:
         st = Path(fs).stat()
         fresh = await probe(Path(fs))
@@ -554,23 +571,47 @@ async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[s
         )
     except Exception:  # noqa: BLE001 — best-effort cache freshness
         pass
-    if cov_cache is not None:
-        try:
-            cov_cache.request_refresh(
-                request.app.state.integrations,
-                request.app.state.probe_store,
-                request.app.state.audio_lang,
-            )
-        except Exception:  # noqa: BLE001
-            pass
     return {
-        "ok": True,
         "swapped": True,
         "file_canonical_path": file_path,
         "made_default_track": f"a{m.native_audio_ordinal}",
         "native_lang": m.native_lang,
         "previous_default_lang": m.default_lang,
     }
+
+
+@router.post("/track-mismatch-swap")
+async def track_mismatch_swap(req: TrackSwapRequest, request: Request) -> dict[str, Any]:
+    """#159: make the original-language audio track the sole default, in place,
+    via mkvpropedit (instant, lossless, reversible)."""
+    res = await _swap_one_track_mismatch(req.file_canonical_path, request)
+    await _refresh_coverage_cache(request)
+    return {"ok": True, **res}
+
+
+class TrackSwapBulkRequest(BaseModel):
+    file_canonical_paths: list[str]
+
+
+@router.post("/track-mismatch-swap-bulk")
+async def track_mismatch_swap_bulk(req: TrackSwapBulkRequest, request: Request) -> dict[str, Any]:
+    """#310: swap many flagged track-mismatches at once (e.g. "swap all in this
+    show"). The per-file swap is heavy (probe → mkvpropedit → re-probe), so loop
+    it server-side and refresh the coverage cache ONCE at the end rather than
+    have the client fire N POSTs. Per-file failures are recorded, not fatal."""
+    paths = [p for p in (req.file_canonical_paths or []) if p]
+    swapped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for p in paths:
+        try:
+            res = await _swap_one_track_mismatch(p, request)
+            if res.get("swapped"):
+                swapped.append(res)
+        except HTTPException as e:
+            failed.append({"file_canonical_path": p, "error": str(e.detail)})
+    if swapped:
+        await _refresh_coverage_cache(request)
+    return {"ok": True, "swapped": len(swapped), "failed": failed, "results": swapped}
 
 
 def _resolve_canonical_to_fs(canonical: str) -> str:

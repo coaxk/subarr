@@ -93,7 +93,7 @@ function CheckBox({ checked, indeterminate, onChange, label }) {
 // rows. The fix isn't "pick a language" (we already know it); it's a one-click
 // in-place swap of the default audio track to the show's original language, so
 // subgen stops transcribing a dub into double-translated subs.
-function TrackMismatchRow({ item, busy, onSwap, onDismiss, onOpen }) {
+function TrackMismatchRow({ item, selected, onToggle, busy, onSwap, onDismiss, onOpen }) {
   const path = item.file_canonical_path || item.canonical_path;
   const def = (item.mismatch_default_track_lang || '?').toUpperCase();
   const native = (item.mismatch_native_track_lang || item.original_language || '?').toUpperCase();
@@ -113,8 +113,11 @@ function TrackMismatchRow({ item, busy, onSwap, onDismiss, onOpen }) {
       display: 'flex', alignItems: 'center', gap: 10,
       padding: '8px 16px 8px 32px',
       borderBottom: '1px solid var(--bg-3)',
-      background: 'rgba(245,158,11,0.05)',
+      background: selected ? 'rgba(245,158,11,0.12)' : 'rgba(245,158,11,0.05)',
     }}>
+      <CheckBox checked={selected}
+                onChange={onToggle}
+                label={`Select ${item.title} ${item.episode_number || ''}`} />
       <span title={why} aria-label="default audio track mismatch"
         style={{ fontSize: 'var(--text-sm)' }}>⇄</span>
       <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)', width: 70 }}>
@@ -146,7 +149,8 @@ function TrackMismatchRow({ item, busy, onSwap, onDismiss, onOpen }) {
 
 function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss }) {
   if (item.flag === 'track_mismatch') {
-    return <TrackMismatchRow item={item} busy={busy} onSwap={onSwap}
+    return <TrackMismatchRow item={item} selected={selected} onToggle={onToggle}
+                             busy={busy} onSwap={onSwap}
                              onDismiss={onDismiss} onOpen={onOpen} />;
   }
   const audio = (item.audio_langs || []).join(',') || 'und';
@@ -201,11 +205,10 @@ function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss 
 function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelectAll,
                       epSelection, onToggleEp, onOpenEp, busyPath, onSwap, onDismiss }) {
   const eps = series.items;
-  // Track-mismatch rows have their own swap/dismiss actions — they're NOT part
-  // of the bulk language-assign selection, so exclude them from select-all.
-  const epIds = eps
-    .filter((e) => e.flag !== 'track_mismatch')
-    .map((e) => e.file_canonical_path || e.canonical_path);
+  // #310: one unified selection. Track-mismatch rows are selectable too — the
+  // bulk bar partitions the selection by flag and offers Swap/Dismiss for the
+  // track-mismatch half, language-assign for the rest.
+  const epIds = eps.map((e) => e.file_canonical_path || e.canonical_path);
   const checkedCount = epIds.filter((id) => epSelection.has(id)).length;
   const allChecked = epIds.length > 0 && checkedCount === epIds.length;
   const indeterminate = checkedCount > 0 && !allChecked;
@@ -448,6 +451,41 @@ export function ReviewPage() {
     }
   }, [fetchPending]);
 
+  // #310: swap many flagged track-mismatches at once. The per-file swap is heavy
+  // (probe → mkvpropedit → re-probe), so the server loops it and does ONE
+  // coverage refresh at the end — we fire a single POST, not N.
+  const swapTrackBulk = useCallback(async (items) => {
+    const paths = items.map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean);
+    if (!paths.length) return;
+    if (!window.confirm(
+      `Swap the default audio track to the original language for ${paths.length} file${paths.length === 1 ? '' : 's'}?\n\n`
+      + `In-place, lossless, reversible (no re-encode). subgen will then transcribe the original `
+      + `audio instead of the dub. Files already correct are skipped.`
+    )) return;
+    setBusyPath('__bulk__');
+    try {
+      const r = await fetch('/api/audio-lang/track-mismatch-swap-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ file_canonical_paths: paths }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+      if (body.failed && body.failed.length) {
+        window.alert(`Swapped ${body.swapped}. ${body.failed.length} could not be swapped (already correct, non-MKV, or unflagged).`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('bulk track swap failed', e);
+      window.alert(`Bulk track swap failed: ${e.message || e}`);
+    } finally {
+      setBusyPath(null);
+      clearSelection();
+      fetchPending({ silent: true });
+    }
+  }, [fetchPending, clearSelection]);
+
   // Filter + group by series.
   const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
@@ -497,13 +535,30 @@ export function ReviewPage() {
     return { groups, tvGroups, movieGroups, totalCounts: counts };
   }, [data, filter, search]);
 
+  // #310: track-mismatch rows are now selectable alongside language-assignable
+  // ones, so split the current selection by flag — each half gets its own bulk
+  // action (you can't assign a language to a track-mismatch, or swap a track on
+  // a plain language row). Looked up against data.items, not the filtered view.
+  const { selTmItems, selAssignPaths } = useMemo(() => {
+    const items = data?.items || [];
+    const sel = items.filter((it) => epSelection.has(it.file_canonical_path || it.canonical_path));
+    return {
+      selTmItems: sel.filter((it) => it.flag === 'track_mismatch'),
+      selAssignPaths: sel
+        .filter((it) => it.flag !== 'track_mismatch')
+        .map((it) => it.file_canonical_path || it.canonical_path),
+    };
+  }, [data, epSelection]);
+
   // Bulk action — fires one POST per file. Each one runs the full
   // verification pipeline (Sonarr propagation + Bazarr sync trigger), so
   // bulk-assigning Spanish to a whole telenovela closes the bazarr-blind
   // loop for every episode. Serial-ish; we cap concurrency at 4 so the
   // user gets fast feedback but we don't slam Sonarr.
   const applyBulk = useCallback(async () => {
-    const paths = Array.from(epSelection);
+    // #310: only the language-assignable rows — track-mismatch rows in the same
+    // selection are handled by Swap all / Dismiss all instead.
+    const paths = selAssignPaths;
     if (!paths.length) return;
     if (!window.confirm(
       `Assign "${bulkLang}" as the audio language for ${paths.length} file${paths.length === 1 ? '' : 's'}?`
@@ -573,7 +628,7 @@ export function ReviewPage() {
     clearSelection();
     // Refetch in case some verifies failed; ensures the list is honest.
     fetchPending({ silent: true });
-  }, [epSelection, bulkLang, fetchPending, clearSelection, rememberFuture, data]);
+  }, [selAssignPaths, bulkLang, fetchPending, clearSelection, rememberFuture, data]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
@@ -783,35 +838,66 @@ export function ReviewPage() {
           <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-0)', fontWeight: 600 }}>
             {selectedCount} file{selectedCount === 1 ? '' : 's'} selected
           </span>
-          <span style={{ color: 'var(--bg-5)' }}>·</span>
-          <label style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-            Assign audio language
-          </label>
-          <select value={bulkLang}
-                  onChange={(e) => setBulkLang(e.target.value)}
+
+          {/* Language-assignable rows (suspect / unknown). */}
+          {selAssignPaths.length > 0 && (
+            <>
+              <span style={{ color: 'var(--bg-5)' }}>·</span>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                Assign audio language
+              </label>
+              <select value={bulkLang}
+                      onChange={(e) => setBulkLang(e.target.value)}
+                      disabled={bulkRunning}
+                      aria-label="Audio language to assign"
+                      style={{
+                        height: 28, padding: '0 8px',
+                        background: 'var(--bg-1)', color: 'var(--fg-0)',
+                        border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                        fontSize: 'var(--text-sm)',
+                      }}>
+                {LANG_PICKS.map(([code, name]) => (
+                  <option key={code} value={code}>{name} ({code})</option>
+                ))}
+              </select>
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'pointer',
+              }}
+                title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
+                <input type="checkbox" checked={rememberFuture}
+                  onChange={(e) => setRememberFuture(e.target.checked)}
                   disabled={bulkRunning}
-                  aria-label="Audio language to assign"
-                  style={{
-                    height: 28, padding: '0 8px',
-                    background: 'var(--bg-1)', color: 'var(--fg-0)',
-                    border: 'var(--border)', borderRadius: 'var(--radius-md)',
-                    fontSize: 'var(--text-sm)',
-                  }}>
-            {LANG_PICKS.map(([code, name]) => (
-              <option key={code} value={code}>{name} ({code})</option>
-            ))}
-          </select>
-          <label style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'pointer',
-          }}
-            title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
-            <input type="checkbox" checked={rememberFuture}
-              onChange={(e) => setRememberFuture(e.target.checked)}
-              disabled={bulkRunning}
-              style={{ accentColor: 'var(--violet-500)' }} />
-            Remember for future downloads
-          </label>
+                  style={{ accentColor: 'var(--violet-500)' }} />
+                Remember for future downloads
+              </label>
+              <button className="btn primary" onClick={applyBulk} disabled={bulkRunning}>
+                {bulkRunning ? 'Applying…' : `Apply to ${selAssignPaths.length}`}
+              </button>
+            </>
+          )}
+
+          {/* #310: track-mismatch rows in the selection — swap or dismiss in bulk
+              instead of assigning a language. */}
+          {selTmItems.length > 0 && (
+            <>
+              <span style={{ color: 'var(--bg-5)' }}>·</span>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--warn-500, #f59e0b)' }}>
+                {selTmItems.length} track mismatch
+              </span>
+              <button className="btn primary" disabled={busyPath === '__bulk__'}
+                title="Make the original-language audio the default track for each (in-place, lossless, reversible)"
+                onClick={() => swapTrackBulk(selTmItems)}>
+                {busyPath === '__bulk__' ? 'Swapping…' : `⇄ Swap all (${selTmItems.length})`}
+              </button>
+              <button className="btn" disabled={busyPath === '__bulk__'}
+                title="Keep the current default track for each (don't ask again)"
+                onClick={() => dismissTrackBulk(selTmItems)}>
+                Dismiss all ({selTmItems.length})
+              </button>
+            </>
+          )}
+
           {bulkRunning && (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
               <span className="spinner-ring" style={{ marginRight: 6 }} />
@@ -826,9 +912,6 @@ export function ReviewPage() {
           <span style={{ flex: 1 }} />
           <button className="btn ghost" onClick={clearSelection} disabled={bulkRunning}>
             Clear
-          </button>
-          <button className="btn primary" onClick={applyBulk} disabled={bulkRunning}>
-            {bulkRunning ? 'Applying…' : `Apply to ${selectedCount}`}
           </button>
         </div>
       )}
