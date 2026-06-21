@@ -80,6 +80,18 @@ async def results(
     return {"count": len(items), "view": view, "items": items}
 
 
+@router.post("/acknowledge-all")
+async def acknowledge_all(
+    request: Request, source: str | None = Query(None, max_length=40)
+) -> dict[str, Any]:
+    """#313: bulk-acknowledge every still-pending result in one action — clears
+    a large first-run backlog (e.g. a freshly-audited library) without per-row
+    clicks. Optional source filter matches the /results view ('existing_audit')."""
+    store = request.app.state.aftercare
+    n = store.mark_all_reviewed(source=source)
+    return {"ok": True, "acknowledged": n}
+
+
 @router.post("/{result_id}/acknowledge")
 async def acknowledge(result_id: int, request: Request) -> dict[str, Any]:
     store = request.app.state.aftercare
