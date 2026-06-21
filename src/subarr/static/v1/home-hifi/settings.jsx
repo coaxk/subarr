@@ -1648,7 +1648,7 @@ function IntegrationPanel({ rail, refetchHealth }) {
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', padding: '0 6px' }}>
         Changes save instantly and persist across restarts. An environment
         variable always wins — env-managed fields show as read-only. You can also
-        {' '}<a href="/onboarding" style={{ color: 'var(--violet-400)' }}>re-run the onboarding wizard</a>.
+        {' '}<a href="/onboarding?reconfigure=1" style={{ color: 'var(--violet-400)' }}>re-run the onboarding wizard</a>.
       </div>
     </div>
   );
@@ -1715,7 +1715,7 @@ function SystemPanel() {
           Re-run the setup wizard to change connection details or library paths.
         </div>
         <div>
-          <a href="/onboarding" className="btn sm" style={{ textDecoration: 'none' }}>Open onboarding wizard</a>
+          <a href="/onboarding?reconfigure=1" className="btn sm" style={{ textDecoration: 'none' }}>Open onboarding wizard</a>
         </div>
       </SectionCard>
 
