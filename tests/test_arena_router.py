@@ -77,6 +77,38 @@ def test_run_created_and_listed(app_with_stub):
 
 
 @pytest.mark.subgen(handler=_arena_stub)
+@pytest.mark.subgen(handler=_arena_stub)
+def test_run_accepts_custom_cps_bar(app_with_stub):
+    """#314: the Tuning Lab posts a per-sweep CPS bar; it lands on the run."""
+    body = {**_body(kwargs={"beam_size": 5}), "cps_max": 12.0, "cps_critical": 18.0}
+    r = app_with_stub.post("/api/arena/run", json=body)
+    assert r.status_code == 202
+    assert r.json()["cps_max"] == 12.0
+    assert r.json()["cps_critical"] == 18.0
+
+
+@pytest.mark.subgen(handler=_arena_stub)
+def test_run_defaults_cps_bar_to_norms(app_with_stub):
+    """#314: omitting the bar falls back to the Netflix/BBC norms."""
+    r = app_with_stub.post("/api/arena/run", json=_body())
+    assert r.status_code == 202
+    assert (r.json()["cps_max"], r.json()["cps_critical"]) == (20.0, 25.0)
+
+
+@pytest.mark.subgen(handler=_arena_stub)
+def test_run_rejects_inverted_cps_bar(app_with_stub):
+    """#314: the comfortable bar must sit below the critical bar."""
+    r = app_with_stub.post("/api/arena/run", json={**_body(), "cps_max": 30.0, "cps_critical": 20.0})
+    assert r.status_code == 400
+    assert "cps" in str(r.json()["detail"]).lower()
+
+
+@pytest.mark.subgen(handler=_arena_stub)
+def test_run_rejects_nonpositive_cps_bar(app_with_stub):
+    r = app_with_stub.post("/api/arena/run", json={**_body(), "cps_max": 0.0, "cps_critical": 25.0})
+    assert r.status_code == 400
+
+
 def test_duplicate_variant_labels_rejected(app_with_stub):
     body = {
         "media_path": "TV/Show/ep.mkv",

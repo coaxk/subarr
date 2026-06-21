@@ -48,6 +48,10 @@ class ArenaRunRequest(BaseModel):
     media_path: str = Field(..., min_length=1)
     variants: list[VariantSpec] = Field(..., min_length=1)
     source_language: str | None = None
+    # #314: per-sweep readability rubric (CPS). The comfortable bar warns; the
+    # critical bar is a hard readability fault. Default to the Netflix/BBC norms.
+    cps_max: float = 20.0
+    cps_critical: float = 25.0
 
 
 @router.post("/run", status_code=202)
@@ -65,6 +69,10 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
     labels = [v.label for v in req.variants]
     if len(set(labels)) != len(labels):
         raise HTTPException(400, detail="variant labels must be unique")
+
+    # #314: the CPS bar must be sane — both positive, comfortable below critical.
+    if req.cps_max <= 0 or req.cps_critical <= 0 or req.cps_max >= req.cps_critical:
+        raise HTTPException(400, detail="cps_max and cps_critical must be > 0 with cps_max < cps_critical")
 
     # Capability gate upfront: a clear 503 beats kicking off a run that will
     # fail at preflight. asr_arena = subarr-subgen >=v4.10 (/asr path+kwargs).
@@ -91,11 +99,25 @@ async def create_arena_run(req: ArenaRunRequest, request: Request) -> dict:
     if not req.source_language and len({t for t in track_langs if t}) >= 2:
         runs = []
         for idx, lang in enumerate(track_langs):
-            r = svc.create(p, variants, source_language=lang, track_index=idx, is_track_fanout=True)
+            r = svc.create(
+                p,
+                variants,
+                source_language=lang,
+                track_index=idx,
+                is_track_fanout=True,
+                cps_max=req.cps_max,
+                cps_critical=req.cps_critical,
+            )
             svc.start(r)
             runs.append(r)
         return {**runs[0].to_dict(), "fanned_out": len(runs), "fanned_tracks": [t for t in track_langs]}
-    run = svc.create(p, variants, source_language=req.source_language)
+    run = svc.create(
+        p,
+        variants,
+        source_language=req.source_language,
+        cps_max=req.cps_max,
+        cps_critical=req.cps_critical,
+    )
     svc.start(run)
     return run.to_dict()
 

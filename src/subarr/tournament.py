@@ -29,7 +29,13 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any
 
-from .subtitle_readability import ReadabilityReport, analyze_srt, parse_srt
+from .subtitle_readability import (
+    CRITICAL_CPS,
+    MAX_CPS,
+    ReadabilityReport,
+    analyze_srt,
+    parse_srt,
+)
 from .transcript_signals import (
     ad_boilerplate_hits,
     canned_phrase_hits,
@@ -167,7 +173,13 @@ def _is_non_speech_clip(ranges) -> bool:
     return ranges is not None and _speech_seconds(ranges) <= NON_SPEECH_CLIP_MAX_SPEECH_S
 
 
-def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scorecard:
+def score_entrant(
+    entrant: Entrant,
+    fastest_time_s: float | None = None,
+    *,
+    cps_max: float = MAX_CPS,
+    cps_critical: float = CRITICAL_CPS,
+) -> Scorecard:
     non_speech_clip = _is_non_speech_clip(entrant.speech_ranges)
     cues = parse_srt(entrant.srt_text)
     if not cues:
@@ -205,7 +217,7 @@ def score_entrant(entrant: Entrant, fastest_time_s: float | None = None) -> Scor
             signals=None,
             notes="no parseable subtitle cues (disqualified)",
         )
-    report = analyze_srt(entrant.srt_text)
+    report = analyze_srt(entrant.srt_text, cps_max=cps_max, cps_critical=cps_critical)
     r_score = _readability_score(report)
 
     # QE-PRIMARY scoring (#65 research). Quality starts at 100 and the
@@ -329,12 +341,19 @@ def consensus_scores(
     return reports, clip_agreement
 
 
-def run_tournament(entrants: list[Entrant]) -> TournamentResult:
+def run_tournament(
+    entrants: list[Entrant],
+    *,
+    cps_max: float = MAX_CPS,
+    cps_critical: float = CRITICAL_CPS,
+) -> TournamentResult:
     if not entrants:
         return TournamentResult(scorecards=[], winner_label=None)
     times = [e.gen_time_s for e in entrants if e.gen_time_s]
     fastest = min(times) if times else None
-    cards = [score_entrant(e, fastest_time_s=fastest) for e in entrants]
+    cards = [
+        score_entrant(e, fastest_time_s=fastest, cps_max=cps_max, cps_critical=cps_critical) for e in entrants
+    ]
 
     # CONSENSUS pass (#65): the cross-config pseudo-reference. Only scorable
     # (non-disqualified) entrants form the consensus; the divergence penalty

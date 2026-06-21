@@ -22,10 +22,21 @@ import uuid
 from dataclasses import asdict
 from typing import AsyncIterator, Callable
 
+import functools
+
 from .arena import CandidateRunner, ConfigVariant, run_arena
 from .arena_store import ArenaRun, ArenaStore  # re-exported for stable imports
+from .tournament_harness import judge_candidates
 
 __all__ = ["ArenaRun", "ArenaStore", "ArenaService", "resolve_source_language"]
+
+
+def _make_judge(run: ArenaRun):
+    """#314: bind the run's per-sweep CPS bar into the judge so every recipe in
+    the sweep is scored against the same readability rubric. run_arena calls the
+    returned partial as judge(candidates, speech_ranges=, source_text=)."""
+    return functools.partial(judge_candidates, cps_max=run.cps_max, cps_critical=run.cps_critical)
+
 
 # How long to wait between capacity probes while a GPU slot is unavailable.
 # 1 s is fine for production (no burst penalty) and keeps tests responsive.
@@ -124,6 +135,8 @@ class ArenaService:
         source_language: str | None = None,
         track_index: int = 0,
         is_track_fanout: bool = False,
+        cps_max: float = 20.0,
+        cps_critical: float = 25.0,
     ) -> ArenaRun:
         run = ArenaRun(
             id=uuid.uuid4().hex[:12],
@@ -133,6 +146,8 @@ class ArenaService:
             created_at=time.time(),
             track_index=track_index,
             is_track_fanout=is_track_fanout,
+            cps_max=cps_max,
+            cps_critical=cps_critical,
         )
         self._store.save(run)
         return run
@@ -323,7 +338,14 @@ class ArenaService:
             self._persist(run)
             self._emit(run_id, {"event": "step", "data": {"done": per_clip["done"]}})
 
-        result = await run_arena(run.media_path, variants, runner=runner, on_clip=on_clip, on_step=on_step)
+        result = await run_arena(
+            run.media_path,
+            variants,
+            runner=runner,
+            judge=_make_judge(run),  # #314: score every recipe against this sweep's CPS bar
+            on_clip=on_clip,
+            on_step=on_step,
+        )
         for c in per_clip["clips"]:
             c["status"] = "done"
         serialized = asdict(result)

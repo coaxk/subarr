@@ -54,6 +54,11 @@ class ArenaRun:
     result: dict[str, Any] | None = None  # serialized TournamentResult
     error: str | None = None
     created_at: float = 0.0
+    # [#314] Per-sweep readability rubric: the CPS bar every recipe in this run
+    # was judged against. Persisted so historical results stay interpretable.
+    # Defaults to the Netflix/BBC norms (subtitle_readability MAX_CPS/CRITICAL_CPS).
+    cps_max: float = 20.0
+    cps_critical: float = 25.0
     # Audio-stream ordinal this sweep transcribes (multi-track files fan out one
     # run per track). In-memory only — it flows create→execute in one process;
     # not a persisted column (a restart errors the run anyway).
@@ -115,6 +120,8 @@ def _row_to_run(r: sqlite3.Row) -> ArenaRun:
         result=json.loads(r["result"]) if r["result"] else None,
         error=r["error"],
         created_at=r["created_at"],
+        cps_max=r["cps_max"],
+        cps_critical=r["cps_critical"],
     )
 
 
@@ -136,8 +143,9 @@ class ArenaStore:
             self._conn.execute(
                 """INSERT INTO arena_runs
                      (id, media_path, source_language, status, source_text,
-                      variants, outcomes, result, winner, error, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      variants, outcomes, result, winner, error, created_at, updated_at,
+                      cps_max, cps_critical)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                      status=excluded.status, source_text=excluded.source_text,
                      source_language=excluded.source_language,
@@ -157,6 +165,8 @@ class ArenaStore:
                     run.error,
                     run.created_at,
                     time.time(),
+                    run.cps_max,
+                    run.cps_critical,
                 ),
             )
 

@@ -20,6 +20,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .subtitle_readability import CRITICAL_CPS, MAX_CPS
 from .tournament import Entrant, TournamentResult, run_tournament
 
 
@@ -28,11 +29,16 @@ def judge_candidates(
     speech_ranges: list[tuple[float, float]] | None = None,
     gen_times: dict[str, float] | None = None,
     source_text: str | None = None,
+    *,
+    cps_max: float = MAX_CPS,
+    cps_critical: float = CRITICAL_CPS,
 ) -> TournamentResult:
     """Rank candidate SRTs (label → srt_text) with the validated judge.
 
     `source_text` is the SHARED source-language transcript of the clip (same
-    audio for every entrant); when given, the QE/adequacy judge (#123) fires."""
+    audio for every entrant); when given, the QE/adequacy judge (#123) fires.
+    `cps_max`/`cps_critical` (#314) are the per-sweep readability bar the Tuning
+    Lab passes through to the judge; they default to the module norms."""
     gen_times = gen_times or {}
     entrants = [
         Entrant(
@@ -44,7 +50,7 @@ def judge_candidates(
         )
         for label, srt in candidates.items()
     ]
-    return run_tournament(entrants)
+    return run_tournament(entrants, cps_max=cps_max, cps_critical=cps_critical)
 
 
 def load_candidates(srt_dir) -> dict[str, str]:

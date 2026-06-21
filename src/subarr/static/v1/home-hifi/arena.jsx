@@ -342,6 +342,13 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
   // shows "Queuing X/N…" so a multi-file batch visibly advances.
   const [submitting, setSubmitting] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(null);
+  // #314: the readability bar (CPS) recipes are judged against, set per sweep.
+  // Defaults to the Netflix/BBC norms (comfortable 20, critical 25).
+  const [cpsMax, setCpsMax] = useState('20');
+  const [cpsCritical, setCpsCritical] = useState('25');
+  const cpsMaxN = parseFloat(cpsMax);
+  const cpsCritN = parseFloat(cpsCritical);
+  const cpsOk = cpsMaxN > 0 && cpsCritN > 0 && cpsMaxN < cpsCritN;
 
   const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const addCustom = () => setCustom((c) => [...c, { label: `custom-${c.length + 1}`, kwargs: '{}' }]);
@@ -354,20 +361,20 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
   const dupLabel = allLabels.some((l, i) => l && allLabels.indexOf(l) !== i);
   const badCustom = customParsed.some((p) => !p.ok) || custom.some((c) => !c.label.trim());
   const total = chosen.length + custom.length;
-  const ready = mediaPath.trim() && total >= 1 && !dupLabel && !badCustom;
+  const ready = mediaPath.trim() && total >= 1 && !dupLabel && !badCustom && cpsOk;
 
   const buildVariants = () => [
     ...chosen.map((c) => ({ label: c.label, kwargs: c.kwargs })),
     ...custom.map((c, i) => ({ label: c.label.trim(), kwargs: customParsed[i].value })),
   ];
   // recipes-ready (independent of the file field) — gates the bulk path
-  const recipesReady = total >= 1 && !dupLabel && !badCustom;
+  const recipesReady = total >= 1 && !dupLabel && !badCustom && cpsOk;
 
   const submit = async () => {
     if (!ready || submitting) return;
     setSubmitting(true);
     try {
-      const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants: buildVariants() });
+      const ok = await onRun({ media_path: mediaPath.trim().replace(/^\/+/, ''), source_language: sourceLang || null, variants: buildVariants(), cps_max: cpsMaxN, cps_critical: cpsCritN });
       if (ok) setMediaPath('');  // keep recipe picks; clear the file so the next one is two clicks away
     } finally {
       setSubmitting(false);
@@ -385,7 +392,7 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
     setBulkProgress({ done: 0, total: paths.length });
     try {
       for (let i = 0; i < paths.length; i++) {
-        await onRun({ media_path: paths[i].replace(/^\/+/, ''), source_language: sourceLang || null, variants });
+        await onRun({ media_path: paths[i].replace(/^\/+/, ''), source_language: sourceLang || null, variants, cps_max: cpsMaxN, cps_critical: cpsCritN });
         setBulkProgress({ done: i + 1, total: paths.length });
       }
     } finally {
@@ -418,6 +425,23 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
           {LANGS.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
         </select>
         <Hint>Leave on Auto-detect and Whisper figures it out. Choosing the language when you know it nudges accuracy and saves a step.</Hint>
+      </div>
+
+      {/* #314: readability bar (CPS) the judge scores recipes against */}
+      <div style={fieldStyle}>
+        <span style={lblStyle}>Reading-speed bar (CPS)</span>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Comfortable ≤</span>
+            <input type="number" min="1" step="1" value={cpsMax} onChange={(e) => setCpsMax(e.target.value)} style={{ ...inputStyle, width: 96 }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Critical &gt;</span>
+            <input type="number" min="1" step="1" value={cpsCritical} onChange={(e) => setCpsCritical(e.target.value)} style={{ ...inputStyle, width: 96 }} />
+          </label>
+          {!cpsOk && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)', paddingBottom: 8 }}>Comfortable must be a positive number below Critical.</span>}
+        </div>
+        <Hint>The readability bar every recipe in this sweep is judged against — characters-per-second a viewer can keep up with. Defaults to the Netflix/BBC norms (20 comfortable, 25 critical). Raise it to favour faithful, speech-aligned subs on rapid dialogue; lower it to reward slower, easier-to-read timing.</Hint>
       </div>
 
       {/* recipes */}

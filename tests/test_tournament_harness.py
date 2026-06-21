@@ -35,6 +35,18 @@ def test_judge_candidates_ranks_and_picks_winner():
     assert [s.entrant_label for s in result.scorecards][0] == "clean"
 
 
+def test_judge_candidates_honours_cps_thresholds():
+    """#314: the per-sweep CPS bar threads judge_candidates → run_tournament →
+    score_entrant → analyze_srt. A 30-CPS entrant carries a cps readability
+    issue at the default bar and none when the sweep raises the bar past 30."""
+    h = _h()
+    fast = "1\n00:00:00,000 --> 00:00:01,000\n" + ("x" * 30) + "\n"  # 30 CPS
+    default = h.judge_candidates({"fast": fast}, speech_ranges=[(0.0, 1.0)])
+    assert any(i["kind"] == "cps" for i in default.scorecards[0].readability["issues"])
+    relaxed = h.judge_candidates({"fast": fast}, speech_ranges=[(0.0, 1.0)], cps_max=35.0, cps_critical=40.0)
+    assert not any(i["kind"] == "cps" for i in relaxed.scorecards[0].readability["issues"])
+
+
 def test_judge_candidates_threads_gen_times_for_tiebreak():
     h = _h()
     # identical output → speed breaks the tie
