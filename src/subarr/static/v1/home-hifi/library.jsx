@@ -13,6 +13,11 @@ import { StatusDot, Glyph } from './atoms.jsx';
 
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
+// #316: per-title ignore, provided to every tree row (which is rendered
+// recursively, so threading props would be painful). Value:
+// { ignoredSet, prefixes, ignore(key, name), unignore(key) }.
+const IgnoreCtx = React.createContext(null);
+
 // ─── Alphabet jump rail ──────────────────────────────────────────
 // Narrow right-side A-Z column that adapts to whatever's currently
 // expanded in the tree. Scans the live DOM for [data-lib-letter] which
@@ -209,6 +214,7 @@ function isUnderSelectedAncestor(path, selected) {
 }
 
 function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoading, childrenError, onToggleSelect, onToggleExpand, search, filterFn, ancestorMatched = false }) {
+  const ig = React.useContext(IgnoreCtx);  // #316 — before any early return (Rules of Hooks)
   // #194: search visibility. The tree is lazily loaded, so we can't
   // "find" matches inside un-expanded subtrees synchronously. Strategy:
   //   - depth 0 (TV/Movies category roots): always visible during search
@@ -234,6 +240,26 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
   const isVisuallyChecked = isSelected || isInherited;
   const indent = depth * 18;
   const isVideo = !entry.is_dir;
+
+  // #316: per-title ignore. Folder key = path + '/' (a series prefix), file key
+  // = the file path — both match build_coverage's suppression. Offer it on real
+  // titles only: depth>=1 folders + video files (not category roots / sidecars).
+  const ignoreKey = entry.is_dir ? entry.path + '/' : entry.path;
+  const directlyIgnored = !!ig && ig.ignoredSet.has(ignoreKey);
+  const underIgnored = !!ig && !directlyIgnored
+    && ig.prefixes.some((p) => (entry.path + '/').startsWith(p));
+  const isIgnored = directlyIgnored || underIgnored;
+  const canIgnore = !!ig && (entry.is_dir ? depth >= 1 : isVideo);
+  const ignoreUI = !canIgnore ? null
+    : directlyIgnored
+      ? <button className="btn ghost sm" title="Stop ignoring — flag missing subs again"
+          onClick={() => ig.unignore(ignoreKey)}
+          style={{ padding: '0 6px', fontSize: 'var(--text-2xs)', color: 'var(--violet-400, #a78bfa)' }}>Un-ignore</button>
+      : underIgnored
+        ? <span title="Covered by an ignored parent folder" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>ignored ↑</span>
+        : <button className="btn ghost sm" title={`Ignore — stop flagging missing subs for this ${entry.is_dir ? 'title' : 'file'} (reversible)`}
+            onClick={() => ig.ignore(ignoreKey, entry.name)}
+            style={{ padding: '0 6px', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>Ignore</button>;
 
   // Right-side meta: folders show rollup count, files show audio/sub langs.
   // #212: be explicit about "not yet probed" vs. "probed and empty" so the
@@ -309,13 +335,14 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
         }}
         style={{
           display: 'grid',
-          gridTemplateColumns: `${indent}px 16px 12px 16px 1fr auto 70px`,
+          gridTemplateColumns: `${indent}px 16px 12px 16px 1fr auto auto 70px`,
           alignItems: 'center', gap: 8,
           padding: '0 16px',
           height: 30,
           borderBottom: '1px solid var(--bg-3)',
           cursor: entry.is_dir ? 'pointer' : 'default',
           background: isVisuallyChecked ? 'rgba(139,92,246,0.06)' : 'transparent',
+          opacity: isIgnored ? 0.5 : 1,  // #316: ignored titles are visibly muted
           transition: 'background var(--dur-fast)',
         }}>
         <span />
@@ -359,6 +386,10 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           cursor: 'help',
         }}>{metaText}</span>
+        {/* #316: per-title ignore — stop flagging missing subs for this title. */}
+        <span style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+          {ignoreUI}
+        </span>
         <span className="num mono" style={{
           fontSize: 'var(--text-2xs)',
           color: 'var(--fg-3)',
@@ -560,6 +591,48 @@ export function LibraryPage() {
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
 
+  // #316: per-title ignore set, provided to the tree rows via IgnoreCtx.
+  const [ignoredRows, setIgnoredRows] = useState([]);
+  const fetchIgnored = useCallback(async () => {
+    try {
+      const r = await fetch('/api/coverage/ignored', { credentials: 'same-origin' });
+      if (r.ok) setIgnoredRows((await r.json()).ignored || []);
+    } catch { /* non-fatal */ }
+  }, []);
+  useEffect(() => { fetchIgnored(); }, [fetchIgnored]);
+  const ignoreValue = useMemo(() => {
+    const paths = ignoredRows.map((r) => r.path);
+    const ignore = async (key, name) => {
+      try {
+        const r = await fetch('/api/coverage/ignore-title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ path: key, note: name }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('ignore title failed', e);
+        window.alert(`Ignore failed: ${e.message || e}`);
+        return;
+      }
+      fetchIgnored();
+    };
+    const unignore = async (key) => {
+      try {
+        await fetch('/api/coverage/ignore-title?path=' + encodeURIComponent(key), {
+          method: 'DELETE', credentials: 'same-origin',
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('un-ignore failed', e);
+      }
+      fetchIgnored();
+    };
+    return { ignoredSet: new Set(paths), prefixes: paths.filter((p) => p.endsWith('/')), ignore, unignore };
+  }, [ignoredRows, fetchIgnored]);
+
   const filterFn = useMemo(() => {
     const f = FILTERS.find((x) => x.id === filter) || FILTERS[0];
     return f.test;
@@ -597,6 +670,7 @@ export function LibraryPage() {
   const isError = rootError && !rootData;
 
   return (
+    <IgnoreCtx.Provider value={ignoreValue}>
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
@@ -777,5 +851,6 @@ export function LibraryPage() {
         />
       </div>
     </main>
+    </IgnoreCtx.Provider>
   );
 }
