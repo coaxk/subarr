@@ -16,7 +16,8 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from ..coverage_engine import CoverageReport, build_coverage
 
@@ -61,6 +62,68 @@ async def refresh_coverage(request: Request) -> dict[str, Any]:
         "previous_generated_at": snap.generated_at if snap else None,
         "previous_item_count": snap.item_count if snap else 0,
     }
+
+
+class IgnoreTitleRequest(BaseModel):
+    path: str
+    note: str | None = None
+
+
+def _kick_coverage_refresh(request: Request) -> None:
+    """Best-effort coalesced rebuild so ignored rows leave (or return to) the
+    next GET /api/coverage."""
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is None:
+        return
+    try:
+        cov_cache.request_refresh(
+            request.app.state.integrations,
+            request.app.state.probe_store,
+            getattr(request.app.state, "audio_lang", None),
+            probe_walker=getattr(request.app.state, "probe_walker", None),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@router.post("/coverage/ignore-title")
+async def ignore_title(req: IgnoreTitleRequest, request: Request) -> dict[str, Any]:
+    """#316: ignore a title — a movie's file path, or a TV series prefix ending
+    in '/'. build_coverage drops its rows so it leaves gaps / Review and stops
+    feeding the auto-queue. A deliberate exclude; reversible via DELETE."""
+    raw = (req.path or "").strip()
+    path = raw.strip("/")
+    if not path:
+        raise HTTPException(400, detail="empty path")
+    if raw.endswith("/"):  # preserve the series-prefix marker strip() removed
+        path = path + "/"
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is None:
+        raise HTTPException(503, detail="ignore store not configured")
+    store.ignore_title(path, note=req.note)
+    _kick_coverage_refresh(request)
+    return {"ok": True, "ignored": True, "path": path}
+
+
+@router.delete("/coverage/ignore-title")
+async def unignore_title(request: Request, path: str = Query(...)) -> dict[str, Any]:
+    """#316: stop ignoring a title (pass the exact stored path)."""
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is None:
+        raise HTTPException(503, detail="ignore store not configured")
+    if not store.unignore_title(path):
+        raise HTTPException(404, detail=f"not ignored: {path!r}")
+    _kick_coverage_refresh(request)
+    return {"ok": True, "unignored": True, "path": path}
+
+
+@router.get("/coverage/ignored")
+async def list_ignored(request: Request) -> dict[str, Any]:
+    """#316: the managed list of ignored titles for the Library surface."""
+    store = getattr(request.app.state, "audio_lang", None)
+    if store is None:
+        return {"ignored": []}
+    return {"ignored": store.list_ignored_titles()}
 
 
 @router.get("/coverage/status")

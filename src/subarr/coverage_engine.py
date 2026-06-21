@@ -1088,6 +1088,26 @@ def _mixed_series_key(item: "CoverageItem") -> str | None:
     return item.canonical_path or None
 
 
+def _drop_ignored_titles(items: list, ignored: set[str]) -> tuple[list, int]:
+    """#316: remove rows for user-ignored titles. `ignored` holds movie
+    file_canonical_paths (exact match) and TV series prefixes ending in '/'
+    (prefix match). Returns (kept_items, dropped_count). Pure + cheap when the
+    ignore set is empty (the common case)."""
+    if not ignored:
+        return items, 0
+    exact = {k for k in ignored if not k.endswith("/")}
+    prefixes = tuple(k for k in ignored if k.endswith("/"))
+    kept: list = []
+    dropped = 0
+    for it in items:
+        p = it.file_canonical_path or it.canonical_path or ""
+        if p in exact or (prefixes and p.startswith(prefixes)):
+            dropped += 1
+            continue
+        kept.append(it)
+    return kept, dropped
+
+
 def _flag_mixed_language_series(items: list, dismissed_series: set[str] | None = None) -> int:
     """#140: flag series that contain ≥2 distinct NON-English high-trust spoken
     languages — the signature of two different shows merged into one Sonarr
@@ -1649,6 +1669,19 @@ async def build_coverage(
             for it in items:
                 if it.default_track_mismatch and it.file_canonical_path in tm_dismissed:
                     it.default_track_mismatch = False
+    # #316: drop rows for user-ignored titles (a movie file, or a series prefix)
+    # so they leave gaps / Review and stop feeding the auto-queue. A deliberate
+    # exclude — aftercare still audits any subs that exist (it reads sub files,
+    # not these rows).
+    if audio_lang_store is not None:
+        try:
+            ignored_titles = audio_lang_store.get_ignored_titles_set()
+        except Exception:  # noqa: BLE001 — never let this block a coverage build
+            ignored_titles = set()
+        if ignored_titles:
+            items, n_ignored = _drop_ignored_titles(items, ignored_titles)
+            if n_ignored:
+                sources.setdefault("coverage", {})["ignored_titles"] = n_ignored
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 

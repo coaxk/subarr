@@ -203,7 +203,7 @@ function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss 
 }
 
 function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelectAll,
-                      epSelection, onToggleEp, onOpenEp, busyPath, onSwap, onDismiss }) {
+                      epSelection, onToggleEp, onOpenEp, busyPath, onSwap, onDismiss, onIgnore }) {
   const eps = series.items;
   // #310: one unified selection. Track-mismatch rows are selectable too — the
   // bulk bar partitions the selection by flag and offers Swap/Dismiss for the
@@ -218,7 +218,7 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
         onClick={onToggleExpand}
         style={{
           display: 'grid',
-          gridTemplateColumns: '14px 14px 1fr 80px 90px',
+          gridTemplateColumns: '14px 14px 1fr 70px 70px auto',
           alignItems: 'center', gap: 10,
           padding: 'var(--row-cozy)',
           borderBottom: '1px solid var(--bg-3)',
@@ -246,6 +246,13 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
           {checkedCount > 0 ? `${checkedCount} selected` : ''}
         </span>
+        {/* #316: ignore the whole title — stop flagging missing subs for it. */}
+        <button className="btn ghost sm"
+          onClick={(e) => { e.stopPropagation(); onIgnore(series); }}
+          title={`Ignore "${series.title}" — stop flagging missing subs for this ${series.media_type === 'movie' ? 'movie' : 'show'} (reversible)`}
+          style={{ padding: '0 8px', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+          Ignore
+        </button>
       </div>
       {expanded && eps.map((it) => {
         const id = it.file_canonical_path || it.canonical_path;
@@ -485,6 +492,63 @@ export function ReviewPage() {
       fetchPending({ silent: true });
     }
   }, [fetchPending, clearSelection]);
+
+  // #316: per-title ignore ("I don't want subs here"). The ignored list is a
+  // managed set; ignoring suppresses gap flagging + auto-queue for that title.
+  const [ignored, setIgnored] = useState([]);
+  const fetchIgnored = useCallback(async () => {
+    try {
+      const r = await fetch('/api/coverage/ignored', { credentials: 'same-origin' });
+      if (r.ok) setIgnored((await r.json()).ignored || []);
+    } catch { /* non-fatal */ }
+  }, []);
+  useEffect(() => { fetchIgnored(); }, [fetchIgnored]);
+
+  const ignoreTitle = useCallback(async (series) => {
+    const items = series.items || [];
+    let path;
+    if (series.media_type === 'movie') {
+      path = items[0] && (items[0].file_canonical_path || items[0].canonical_path);
+    } else {
+      const paths = items.map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean);
+      path = distinctSeriesPrefixes(paths, data?.items || [])[0];
+    }
+    if (!path) return;
+    if (!window.confirm(
+      `Ignore "${series.title}"?\n\nsubarr will stop flagging missing subtitles for it `
+      + `(here and on the Library page) and stop auto-queuing them. Subtitles that already `
+      + `exist are left alone. You can un-ignore it any time from the Ignored list.`
+    )) return;
+    try {
+      const r = await fetch('/api/coverage/ignore-title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ path, note: series.title }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('ignore title failed', e);
+      window.alert(`Ignore failed: ${e.message || e}`);
+      return;
+    }
+    fetchIgnored();
+    fetchPending({ silent: true });
+  }, [data, fetchIgnored, fetchPending]);
+
+  const unignoreTitle = useCallback(async (path) => {
+    try {
+      await fetch('/api/coverage/ignore-title?path=' + encodeURIComponent(path), {
+        method: 'DELETE', credentials: 'same-origin',
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('un-ignore failed', e);
+    }
+    fetchIgnored();
+    fetchPending({ silent: true });
+  }, [fetchIgnored, fetchPending]);
 
   // Filter + group by series.
   const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
@@ -745,6 +809,39 @@ export function ReviewPage() {
         </div>
       )}
 
+      {/* #316: managed list of ignored titles — un-ignore brings them back. */}
+      {ignored.length > 0 && (
+        <details style={{
+          background: 'var(--bg-2)', border: 'var(--border)',
+          borderRadius: 'var(--radius-md)', padding: '6px 12px',
+        }}>
+          <summary style={{ cursor: 'pointer', fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            Ignored titles ({ignored.length}) — subarr isn't flagging missing subs for these
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+            {ignored.map((row) => {
+              const seg = row.path.replace(/\/$/, '').split('/').slice(-1)[0];
+              return (
+                <div key={row.path} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span className="mono" title={row.path} style={{
+                    flex: 1, minWidth: 0, fontSize: 'var(--text-2xs)', color: 'var(--fg-2)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {row.note || seg}
+                    {row.path.endsWith('/') && <span style={{ color: 'var(--fg-3)' }}> (series)</span>}
+                  </span>
+                  <button className="btn ghost sm"
+                    onClick={() => unignoreTitle(row.path)}
+                    style={{ padding: '0 8px', fontSize: 'var(--text-2xs)' }}>
+                    Un-ignore
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      )}
+
       {/* List */}
       <div className="panel" style={{
         flex: 1, minHeight: 0, padding: 0, display: 'flex', flexDirection: 'column',
@@ -817,6 +914,7 @@ export function ReviewPage() {
                     busyPath={busyPath}
                     onSwap={swapTrack}
                     onDismiss={dismissTrack}
+                    onIgnore={ignoreTitle}
                   />
                 ))}
               </div>
