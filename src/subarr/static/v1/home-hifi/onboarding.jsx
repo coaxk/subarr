@@ -799,13 +799,21 @@ export function OnboardingPage() {
   // Initial load — fetch state from backend; if already complete,
   // redirect to /home so the wizard isn't re-shown.
   useEffect(() => {
+    // #318: the Settings "re-run setup" links pass ?reconfigure=1. A completed
+    // install normally redirects home so incidental navigation doesn't re-show
+    // the wizard, but an explicit reconfigure request opens it from step 0
+    // (fields pre-fill from current settings via the GET state).
+    const reconfigure = new URLSearchParams(window.location.search).has('reconfigure');
     Api.getState().then((st) => {
       if (st) {
-        if (st.is_complete) {
+        if (st.is_complete && !reconfigure) {
           window.location.href = '/home';
           return;
         }
-        setState({ step: st.step || 0, progress: st.progress || {} });
+        setState({
+          step: st.is_complete && reconfigure ? 0 : st.step || 0,
+          progress: st.progress || {},
+        });
       }
       setLoaded(true);
     });
