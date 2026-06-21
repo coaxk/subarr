@@ -139,7 +139,9 @@ def parse_srt(text: str) -> list[Cue]:
     return cues
 
 
-def analyze_cues(cues: list[Cue]) -> ReadabilityReport:
+def analyze_cues(
+    cues: list[Cue], *, cps_max: float = MAX_CPS, cps_critical: float = CRITICAL_CPS
+) -> ReadabilityReport:
     report = ReadabilityReport(cue_count=len(cues))
     for n, c in enumerate(cues):
         if c.line_count > MAX_LINES:
@@ -151,15 +153,15 @@ def analyze_cues(cues: list[Cue]) -> ReadabilityReport:
                 CueIssue(c.index, "cpl", "warn", f"{c.max_cpl} chars on a line (max {MAX_CPL})")
             )
         if c.duration_s > 0:
-            if c.cps > CRITICAL_CPS:
+            if c.cps > cps_critical:
                 report.issues.append(
                     CueIssue(
-                        c.index, "cps", "critical", f"{c.cps:.0f} chars/sec (critical > {CRITICAL_CPS:.0f})"
+                        c.index, "cps", "critical", f"{c.cps:.0f} chars/sec (critical > {cps_critical:.0f})"
                     )
                 )
-            elif c.cps > MAX_CPS:
+            elif c.cps > cps_max:
                 report.issues.append(
-                    CueIssue(c.index, "cps", "warn", f"{c.cps:.0f} chars/sec (comfortable <= {MAX_CPS:.0f})")
+                    CueIssue(c.index, "cps", "warn", f"{c.cps:.0f} chars/sec (comfortable <= {cps_max:.0f})")
                 )
         if 0 < c.duration_s < MIN_DURATION_S:
             report.issues.append(
@@ -180,6 +182,8 @@ def analyze_cues(cues: list[Cue]) -> ReadabilityReport:
     return report
 
 
-def analyze_srt(text: str) -> ReadabilityReport:
+def analyze_srt(
+    text: str, *, cps_max: float = MAX_CPS, cps_critical: float = CRITICAL_CPS
+) -> ReadabilityReport:
     """Parse + analyse an SRT string in one call."""
-    return analyze_cues(parse_srt(text))
+    return analyze_cues(parse_srt(text), cps_max=cps_max, cps_critical=cps_critical)

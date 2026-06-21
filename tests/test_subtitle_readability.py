@@ -53,6 +53,22 @@ def test_cps_flagged_when_too_fast():
     assert report.clean is False
 
 
+def test_cps_thresholds_are_overridable():
+    """#314: the Tuning Lab passes a per-sweep CPS bar; analyze must honour it
+    rather than the module defaults. A 30-CPS cue is critical at the default 25
+    but comfortable when the sweep raises the bar past 30."""
+    sr = _mod()
+    srt = "1\n00:00:00,000 --> 00:00:01,000\n" + ("x" * 30) + "\n"  # 30 CPS
+    # default thresholds (25 critical): a critical cps issue
+    assert any(i.kind == "cps" and i.severity == "critical" for i in sr.analyze_srt(srt).issues)
+    # sweep relaxes the bar above 30 → no cps issue at all
+    relaxed = sr.analyze_srt(srt, cps_max=35.0, cps_critical=40.0)
+    assert not any(i.kind == "cps" for i in relaxed.issues)
+    # and analyze_cues takes the same kwargs (the lower-level entry point)
+    cues = sr.parse_srt(srt)
+    assert not any(i.kind == "cps" for i in sr.analyze_cues(cues, cps_max=35.0, cps_critical=40.0).issues)
+
+
 def test_cpl_flagged_when_line_too_long():
     sr = _mod()
     srt = f"1\n00:00:00,000 --> 00:00:05,000\n{'y' * 60}\n"  # 60 > 42 CPL

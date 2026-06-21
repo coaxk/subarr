@@ -16,13 +16,17 @@ from subarr.arena import ArenaUnsupported, ConfigVariant
 from subarr.arena_service import ArenaRun, ArenaService
 from subarr.arena_store import ArenaStore
 
-_ARENA_SQL = (Path(subarr.__file__).parent / "migrations" / "009_arena_runs.sql").read_text()
+_MIGRATIONS_DIR = Path(subarr.__file__).parent / "migrations"
+_ARENA_SQL = (_MIGRATIONS_DIR / "009_arena_runs.sql").read_text()
+# #314 added cps_max/cps_critical columns via 023.
+_ARENA_CPS_SQL = (_MIGRATIONS_DIR / "023_arena_cps_thresholds.sql").read_text()
 
 
 @pytest.fixture
 def store(tmp_path):
     s = ArenaStore(tmp_path / "arena.db")
-    s._conn.executescript(_ARENA_SQL)  # apply just this migration's schema
+    s._conn.executescript(_ARENA_SQL)  # apply the arena schema
+    s._conn.executescript(_ARENA_CPS_SQL)  # + the #314 cps-bar columns
     return s
 
 
@@ -62,6 +66,50 @@ def test_create_persists_pending_run(store):
     assert persisted.media_path == "/media/clip.mkv"
     assert persisted.variants == [{"label": "a", "kwargs": {"beam_size": 5}}]
     assert persisted.source_language == "ko"
+
+
+def test_store_roundtrips_cps_thresholds(store):
+    """#314: a sweep's per-run CPS bar must survive a restart (it's the rubric
+    every recipe in the run was judged against)."""
+    run = ArenaRun(
+        id="cps1",
+        media_path="/m.mkv",
+        variants=[{"label": "a", "kwargs": {}}],
+        created_at=1.0,
+        cps_max=12.0,
+        cps_critical=18.0,
+    )
+    store.save(run)
+    got = store.get("cps1")
+    assert got.cps_max == 12.0
+    assert got.cps_critical == 18.0
+
+
+def test_create_defaults_cps_thresholds_to_norms(store):
+    """#314: an un-tuned sweep falls back to the Netflix/BBC norms (20/25)."""
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})])
+    assert run.cps_max == 20.0
+    assert run.cps_critical == 25.0
+
+
+def test_create_accepts_and_persists_cps_thresholds(store):
+    """#314: a tuned sweep carries its CPS bar through create → SQLite."""
+    svc = _service(store, [])
+    run = svc.create("/m.mkv", [ConfigVariant("a", {})], cps_max=12.0, cps_critical=18.0)
+    assert (run.cps_max, run.cps_critical) == (12.0, 18.0)
+    assert (svc.get(run.id).cps_max, svc.get(run.id).cps_critical) == (12.0, 18.0)
+
+
+def test_make_judge_binds_run_cps_bar():
+    """#314: the per-sweep CPS bar is bound into the judge the arena calls, so
+    every recipe in the run is scored against the same rubric."""
+    from subarr.arena_service import _make_judge
+
+    run = ArenaRun(id="j", media_path="/m.mkv", variants=[], cps_max=12.0, cps_critical=18.0)
+    judge = _make_judge(run)
+    assert judge.keywords["cps_max"] == 12.0
+    assert judge.keywords["cps_critical"] == 18.0
 
 
 def test_save_coerces_numpy_like_scalars_in_result(store):
@@ -674,6 +722,7 @@ class _NoopRunner:
 def _cap_svc(tmp_path, *, processing, n, runner=None, capacity_poll_interval_s=0.02):
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
+    s._conn.executescript(_ARENA_CPS_SQL)
     sub = _FakeSubgen(processing)
     svc = ArenaService(
         s,
@@ -740,6 +789,7 @@ async def test_await_capacity_fails_open_after_unreadable_probes(tmp_path):
 
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
+    s._conn.executescript(_ARENA_CPS_SQL)
     svc = ArenaService(
         s,
         build_runner=lambda run: _NoopRunner(),
@@ -779,6 +829,7 @@ async def test_n2_allows_one_concurrent_then_blocks(tmp_path):
 
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
+    s._conn.executescript(_ARENA_CPS_SQL)
     sub = MutableSubgen()
     svc = ArenaService(
         s,
@@ -816,6 +867,7 @@ async def test_delete_waiting_sweep_cancels_task_and_no_resurrection(tmp_path):
     # capacity is freed and the task unwinds.
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
+    s._conn.executescript(_ARENA_CPS_SQL)
     sub = _FakeSubgen([{"path": "/m/x.mkv"}])  # at capacity
     svc = ArenaService(
         s,
@@ -882,6 +934,7 @@ async def test_inflight_returns_to_zero_after_delete(tmp_path):
     # correctly decrement _inflight back to 0.
     s = ArenaStore(tmp_path / "arena.db")
     s._conn.executescript(_ARENA_SQL)
+    s._conn.executescript(_ARENA_CPS_SQL)
 
     execute_started = asyncio.Event()
     delete_done = asyncio.Event()
