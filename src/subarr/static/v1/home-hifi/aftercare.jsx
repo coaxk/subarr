@@ -32,7 +32,11 @@ function badgeKind(item) {
 function flagChips(item) {
   const out = [];
   const s = item.signals || {}, c = (item.readability || {}).counts || {};
-  if ((s.repeated_line_ratio || 0) > 0) out.push(`${Math.round(s.repeated_line_ratio * 100)}% repeats`);
+  // Only flag repeats once they cross the backend's failure threshold
+  // (AFTERCARE_REPEAT_MAX = 0.20). Below that a stray repeated line is normal,
+  // so showing "1% repeats" — or a sub-0.5% ratio that rounds to "0%" — as a
+  // red chip was a false alarm that disagreed with the score.
+  if ((s.repeated_line_ratio || 0) > 0.20) out.push(`${Math.round(s.repeated_line_ratio * 100)}% repeats`);
   if ((s.canned_phrase_hits || 0) > 0) out.push(`${s.canned_phrase_hits} canned`);
   if ((s.ad_boilerplate_hits || 0) > 0) out.push(`${s.ad_boilerplate_hits} ad/boilerplate`);
   if ((s.sync_overrun_s || 0) > 30) out.push(`${Math.round(s.sync_overrun_s)}s overrun`);
