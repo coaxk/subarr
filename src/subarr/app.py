@@ -122,6 +122,12 @@ from .single_process import check_single_process
 from .subgen_client import SubgenClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# r/sonarr feedback: httpx/httpcore log EVERY request at INFO, so the health/
+# queue polls to subgen/sonarr/radarr/bazarr/tautulli/plex flood the info log
+# with "200 OK" lines and bury real signal. Pin them to WARNING — routine
+# request success is debug-level detail, not an info event.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 
