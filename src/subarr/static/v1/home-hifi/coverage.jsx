@@ -2296,7 +2296,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
     out.push(
       <GroupHeader
         key={`show-${show.title}`}
-        depth={0}
+        depth={1}
         label={show.title}
         onClick={() => toggleShow(show.title)}
         expanded={showExpanded}
@@ -2330,7 +2330,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
       out.push(
         <GroupHeader
           key={`season-${seasonId}`}
-          depth={1}
+          depth={2}
           label={sk === '?' ? 'Season (unknown)' : `Season ${parseInt(sk, 10)}`}
           onClick={() => toggleSeason(seasonId)}
           expanded={seasonExpanded}
@@ -2349,7 +2349,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
       if (!seasonExpanded) continue;
       for (const r of season.eps) {
         out.push(
-          <div key={`ep-${r.id}`} style={{ paddingLeft: 44 }}>
+          <div key={`ep-${r.id}`} style={{ paddingLeft: 66 }}>
             <CoverageRow
               r={r}
               onClick={toggleRow}
