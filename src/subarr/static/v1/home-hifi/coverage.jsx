@@ -2397,7 +2397,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
 // row only becomes actionable once subarr has actually probed it. Holds
 // rows visibly until then (or, for failures, until the file is fixed) so
 // nothing the user hasn't seen silently disappears.
-function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false }) {
+function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false, onQueued }) {
   const [open, setOpen] = useState(false);
   // #317 Slice B: per-row state for the "transcribe a full sub anyway" action
   // on the forced-only bucket. Maps row.id → 'pending' | 'done' | 'error'.
@@ -2407,10 +2407,13 @@ function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false
     try {
       await queueRow(row, { ignoreForced: true });
       setForcedQueue(s => ({ ...s, [row.id]: 'done' }));
+      // Silent refresh so the row leaves the forced-only bucket once subgen
+      // takes it (mirrors handleRowQueue); the 10s poll would catch it anyway.
+      onQueued && onQueued();
     } catch {
       setForcedQueue(s => ({ ...s, [row.id]: 'error' }));
     }
-  }, []);
+  }, [onQueued]);
   if (!rows.length) return null;
   const META = {
     unprobed: {
@@ -2924,6 +2927,7 @@ export function CoveragePage() {
         kind="forced_skip"
         rows={forcedSkipRows}
         canFillForced={!!data?.subgen_request_ignore_forced}
+        onQueued={() => refetch({ fresh: true, silent: true })}
       />
 
       {/* Bottom selection bar — sits in page flow but sticky */}

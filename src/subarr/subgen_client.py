@@ -182,6 +182,7 @@ class SubgenCapabilities:
             asr_detected_language=False,
             ignore_forced_subtitles=False,
             runtime_config=False,
+            request_ignore_forced=False,
             subarr_subgen_patch_rev=None,
         )
 

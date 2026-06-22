@@ -173,6 +173,12 @@ class PendingQueueStore:
                 (canonical_path, STATUS_PENDING, STATUS_SUBMITTED),
             ).fetchone()
             if existing:
+                # Dedup wins: an already-pending/submitted path returns the
+                # existing job unchanged — including its ignore_forced. So
+                # "transcribe anyway" on a file already queued as a normal gap
+                # won't retro-set the override. Harmless in practice: forced-
+                # only rows are never auto-enqueued (the scheduler treats them
+                # as non-gaps), so this collision effectively can't arise.
                 return _row(existing)
             # append within the bucket: max position among pending of this prio
             row = self._conn.execute(
