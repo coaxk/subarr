@@ -5,6 +5,7 @@
   "description": "Build-time tooling for the subarr static SPA bundles. Not published.",
   "type": "module",
   "scripts": {
+    "prepare": "node scripts/setup-hooks.mjs",
     "build:frontend": "node scripts/build-frontend.mjs",
     "dev:frontend": "node scripts/build-frontend.mjs --watch",
     "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'",
