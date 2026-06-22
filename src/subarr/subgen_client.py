@@ -132,6 +132,13 @@ class SubgenCapabilities:
     # gate on (see subgen_capacity). None on older subgen that doesn't publish
     # it → the gate stays disabled (dormant-safe).
     concurrent_transcriptions: int | None = None
+    # v4.15 capability (#317 Slice B): subgen honours a per-REQUEST
+    # ignore_forced flag on POST /batch (overrides the global
+    # IGNORE_FORCED_SUBTITLES for one job). subarr gates its "transcribe a full
+    # sub anyway" action on this — older subgen silently drops the unknown
+    # query param and would re-skip the forced-only file. Distinct from
+    # ignore_forced_subtitles above, which is subgen's GLOBAL runtime value.
+    request_ignore_forced: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,6 +161,7 @@ class SubgenCapabilities:
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
             "release_tag": self.release_tag,
             "concurrent_transcriptions": self.concurrent_transcriptions,
+            "request_ignore_forced": self.request_ignore_forced,
         }
 
     @classmethod
@@ -307,6 +315,7 @@ class SubgenClient:
         ignore_forced_subtitles = False
         runtime_config = False
         concurrent_transcriptions: int | None = None
+        request_ignore_forced = False
         patch_rev: str | None = None
         release_tag: str | None = None
         try:
@@ -338,6 +347,7 @@ class SubgenClient:
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
                             ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
                             runtime_config = bool(caps_block.get("runtime_config"))
+                            request_ignore_forced = bool(caps_block.get("request_ignore_forced"))
                             _ct = caps_block.get("concurrent_transcriptions")
                             # bool is an int subclass — exclude it so a misconfig'd
                             # `true` doesn't silently parse as N=1 and serialize the feed.
@@ -373,6 +383,7 @@ class SubgenClient:
             ignore_forced_subtitles=ignore_forced_subtitles,
             runtime_config=runtime_config,
             concurrent_transcriptions=concurrent_transcriptions,
+            request_ignore_forced=request_ignore_forced,
             subarr_subgen_patch_rev=patch_rev,
             release_tag=release_tag,
         )
@@ -419,6 +430,7 @@ class SubgenClient:
         audio_language_override: str | None = None,
         kwargs: dict[str, Any] | None = None,
         task: str | None = None,
+        ignore_forced: bool = False,
     ) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
@@ -469,6 +481,12 @@ class SubgenClient:
             params["kwargs"] = json.dumps(kwargs)
         if task:
             params["task"] = task
+        if ignore_forced:
+            # v4.15 (#317 Slice B): override subgen's forced-only skip for THIS
+            # batch only — drives "transcribe a full sub anyway". Omitted when
+            # False so ≤v4.14 subgen keeps its global behaviour (and silently
+            # drops the unknown param). Gate on capabilities.request_ignore_forced.
+            params["ignore_forced"] = "true"
         try:
             r = await self._client.post("/batch", params=params)
         except httpx.HTTPError as e:

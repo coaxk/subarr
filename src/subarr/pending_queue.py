@@ -61,6 +61,10 @@ class PendingJob:
     # (completion_watcher needs series_id to fire Bazarr's scan-disk task).
     series_id: int | None = None
     sonarr_episode_id: int | None = None
+    # #317 Slice B: forward ?ignore_forced=true to subgen's /batch for THIS job
+    # so a forced-only file is transcribed instead of skipped ("transcribe a
+    # full sub anyway"). Default False = normal skip behaviour.
+    ignore_forced: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,13 +81,14 @@ class PendingJob:
             "error": self.error,
             "series_id": self.series_id,
             "sonarr_episode_id": self.sonarr_episode_id,
+            "ignore_forced": self.ignore_forced,
         }
 
 
 _COLS = (
     "id, canonical_path, position, priority, status, "
     "audio_language_override, task, source, created_at, submitted_at, error, "
-    "series_id, sonarr_episode_id"
+    "series_id, sonarr_episode_id, ignore_forced"
 )
 
 # Statements built ONCE as constants. The only interpolation is the static
@@ -98,7 +103,7 @@ _SELECT = f"SELECT {_COLS} FROM pending_queue"  # nosec B608
 _Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1"
 _Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
 _Q_INSERT = (  # nosec B608
-    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _Q_GET = f"{_SELECT} WHERE id = ?"
 _Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
@@ -125,6 +130,7 @@ def _row(r: tuple) -> PendingJob:
         error=r[10],
         series_id=r[11],
         sonarr_episode_id=r[12],
+        ignore_forced=bool(r[13]),
     )
 
 
@@ -155,6 +161,7 @@ class PendingQueueStore:
         task: str | None = None,
         series_id: int | None = None,
         sonarr_episode_id: int | None = None,
+        ignore_forced: bool = False,
     ) -> PendingJob:
         """Add a job, or return the existing ACTIVE one for this path (dedup —
         we never double-queue a file that's already pending or in subgen).
@@ -187,6 +194,7 @@ class PendingQueueStore:
                 error=None,
                 series_id=series_id,
                 sonarr_episode_id=sonarr_episode_id,
+                ignore_forced=ignore_forced,
             )
             self._conn.execute(
                 _Q_INSERT,
@@ -204,6 +212,7 @@ class PendingQueueStore:
                     job.error,
                     job.series_id,
                     job.sonarr_episode_id,
+                    int(job.ignore_forced),
                 ),
             )
             return job

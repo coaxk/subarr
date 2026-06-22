@@ -63,6 +63,10 @@ class ScanRunner:
         # Lives in memory only — if subarr restarts mid-scan the override
         # is lost, but so is the in-flight scan, so no consistency hole.
         self._overrides: dict[str, str] = {}
+        # #317 Slice B: scan ids that should pass ?ignore_forced=true to subgen's
+        # /batch (transcribe a forced-only file anyway). In-memory, same lifetime
+        # as _overrides — lost on restart, but so is the in-flight scan.
+        self._ignore_forced: set[str] = set()
         self._lock = asyncio.Lock()
         # Callable returning the cached SubgenCapabilities snapshot.
         # We don't probe per-scan — caps are stable per app boot.
@@ -110,15 +114,23 @@ class ScanRunner:
             except (asyncio.CancelledError, Exception):
                 pass
 
-    def start(self, scan: Scan, audio_language_override: str | None = None) -> None:
+    def start(
+        self,
+        scan: Scan,
+        audio_language_override: str | None = None,
+        ignore_forced: bool = False,
+    ) -> None:
         if audio_language_override:
             self._overrides[scan.id] = audio_language_override
+        if ignore_forced:
+            self._ignore_forced.add(scan.id)
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
         task.add_done_callback(
             lambda t, sid=scan.id: (
                 self._tasks.pop(sid, None),
                 self._overrides.pop(sid, None),
+                self._ignore_forced.discard(sid),
             )
         )
 
@@ -184,6 +196,7 @@ class ScanRunner:
                     directory,
                     reverse=scan.reverse,
                     audio_language_override=override,
+                    ignore_forced=scan_id in self._ignore_forced,
                 )
                 result.subgen_status_code = status_code
                 result.subgen_body = body
