@@ -15,6 +15,17 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
+## New in 2.2
+
+Filling more gaps, finding more controls, and a deep reliability pass. Non-breaking — upgrades transparently.
+
+- **Blacklist a bad sub without leaving subarr.** When a provider sub is broken, blacklist it from Aftercare or the Library tree and Bazarr stops re-fetching that release. A shared panel shows the file's Bazarr download history and blacklists the offending provider sub through Bazarr's own API.
+- **Transcribe a full sub on forced-only files.** A file whose only English sub is *forced* (foreign-dialogue-only) used to sit in a "subgen will skip" bucket. Now each row has a **Transcribe full sub** button that generates a complete subtitle for just that file, without flipping subgen's global forced-subs setting. Needs the matching subgen image (`ghcr.io/coaxk/subarr-subgen:2026.05.3-r10`+); older subgen keeps the old guidance.
+- **Per-title ignore.** Tell subarr "I don't want subs here" inline on a Library row or from Review — suppress a whole show or a single file.
+- **A home for the scattered controls.** A new **Other subtitle controls** card on the Rules page signposts every force/ignore/language control to where it lives, so you can find them as a set.
+- **Back up your database on demand.** A Health-page card writes a clean, defragmented, timestamped copy and runs a deep integrity check — with a callout that nudges you to back up before changes if integrity ever looks off.
+- **The UI no longer freezes under load.** A dogfood-reported stall traced to per-poll filesystem work on the event loop; that work moved off-loop and a stall monitor stays in. Plus durability, Plex-client, queue-reconciliation, telemetry, and auth hardening from heavy real-world use. Full list in the [changelog](CHANGELOG.md).
+
 ## New in 2.0
 
 A security-hardening + activation release. The two headline changes are breaking for some deployments — see [Upgrading](#upgrading-to-20) below.
@@ -146,12 +157,12 @@ Subarr's value compounds with: multi-language libraries, three or more Bazarr pr
 | Surface | Function |
 |---|---|
 | Dashboard | Live column-as-stage pipeline (discovered → probing → bazarr-wanted → transcribing → written-back), GPU widget, integration health, next scheduled run, recent activity |
-| Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue |
-| Library | Tree across all series and movies. Audio / sub / runtime columns with probe-state indicators |
+| Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue. **(2.2) Transcribe a full sub** on forced-only files (an embedded sub that only covers foreign dialogue) without flipping subgen's global forced-subs knob |
+| Library | Tree across all series and movies. Audio / sub / runtime columns with probe-state indicators. **(2.2) Per-title ignore** inline (suppress a whole show or one file) and **blacklist a bad provider sub** on any video |
 | Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row and **bulk** requeue / remove / cancel (multi-select across every section). **Pending backlog** with **step-wise reorder + pause/resume + target-depth** — subarr holds its own queue in front of subgen and feeds it at a set depth instead of flooding. **Every submission routes through it** (1.4) — manual scans and requeues included — so nothing stampedes subgen; manual still jumps the line and starts near-instantly. **Backfill gaps** drains the whole verified-gap backlog at low priority |
 | Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, Layer 3 Whisper detection inline. **Default-track mismatch (1.4):** flags files whose default audio is not the original language (the double-translation trap) with a one-click in-place track swap (`mkvpropedit`) or dismiss, single or bulk. **Speech-aware clip selection (1.1):** the player lands on actual dialogue via silero VAD, with a speech-detected badge |
-| Aftercare | **(1.4)** Post-transcription quality review: every finished job is judged for failures + readability and surfaced (page + header pill + dashboard panel) with a country flag, language, source tag, composite score, and a legend. Requeue from the row. Flags problems, never a confident grade |
-| Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification |
+| Aftercare | **(1.4)** Post-transcription quality review: every finished job is judged for failures + readability and surfaced (page + header pill + dashboard panel) with a country flag, language, source tag, composite score, and a legend. Requeue from the row, or **blacklist a bad provider sub (2.2)** straight to Bazarr. Flags problems, never a confident grade |
+| Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification. **(2.2)** An "Other subtitle controls" card signposts every force / ignore / language control to the page where it lives |
 | Tuning Lab | Config arena: sweep Whisper recipes against your live subgen, judged by a validated tournament judge across multiple strata clips. Per-language herd view, global recipe leaderboard, and an Audio language issues panel surfacing mislabeled / bilingual / multi-track files from on-demand sweeps and the opt-in library-wide scan |
 | Settings | Per-language Whisper kwargs, **in-app integration editing** (URLs + API keys + Plex token, test-connection + live apply, env-set fields stay read-only), integrations health, system actions, telemetry transparency panel showing the exact JSON last sent. **Speech-aware audio:** enable/disable + download the silero model |
 
@@ -274,7 +285,7 @@ volumes:
 
 Internally, extra libraries qualify their file keys with a stable `@<id>/` head while the default library keeps today's keys — which is why existing installs upgrade with zero migration. The simple union-mount workaround (binding several host paths under one container root) still works fine if you prefer it.
 
-## Known limitations (v2.0)
+## Known limitations (v2.2)
 
 Transparent before you install.
 
