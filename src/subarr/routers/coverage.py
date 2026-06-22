@@ -217,6 +217,11 @@ async def get_coverage(
     # live "settling (Xm left)" countdown from each row's import_ts.
     _sched = getattr(request.app.state, "schedule", None)
     settle_minutes = _sched.get_rules().settle_minutes if _sched else 0
+    # #317 Slice B: surface whether the connected subgen supports a per-request
+    # ignore_forced override, so the frontend can offer "transcribe a full sub
+    # anyway" on forced-only rows only when it'll actually work.
+    _caps = getattr(request.app.state, "subgen_caps", None)
+    req_ignore_forced = bool(getattr(_caps, "request_ignore_forced", False))
 
     if cov_cache is not None and not fresh:
         snap = cov_cache.get_cached()
@@ -240,6 +245,7 @@ async def get_coverage(
                 hide_pending_download=hide_pending_download,
                 only_wanted_langs=only_wanted_langs,
                 settle_minutes=settle_minutes,
+                subgen_request_ignore_forced=req_ignore_forced,
             )
 
     # ?fresh=true OR no cache available → synchronous rebuild and store.
@@ -268,6 +274,7 @@ async def get_coverage(
             hide_english_audio=hide_english_audio,
             hide_pending_download=hide_pending_download,
             settle_minutes=settle_minutes,
+            subgen_request_ignore_forced=req_ignore_forced,
         )
 
     # Fallback (e.g. boot before warm) — synchronous build, no cache write.
@@ -286,6 +293,7 @@ async def get_coverage(
         hide_stale_disk=hide_stale_disk,
         hide_english_audio=hide_english_audio,
         hide_pending_download=hide_pending_download,
+        subgen_request_ignore_forced=req_ignore_forced,
     )
 
 
@@ -299,6 +307,7 @@ def _apply_filters_and_pack(
     hide_pending_download: bool,
     only_wanted_langs: str = "",
     settle_minutes: int = 0,
+    subgen_request_ignore_forced: bool = False,
 ) -> dict[str, Any]:
     """Shared post-processing: applies the hide_* filters over the items
     list and returns the response body. Mutates `body` (caller passes a
@@ -376,4 +385,9 @@ def _apply_filters_and_pack(
     # row's live "settling (Xm left)" from this + the row's import_ts, so the
     # countdown is always current rather than baked into the cached snapshot.
     body["settle_minutes"] = settle_minutes
+    # #317 Slice B: does the connected subgen honour a per-request ignore_forced
+    # on /batch? The frontend gates the "transcribe a full sub anyway" action on
+    # the forced-only-skip bucket on this — without it the action would silently
+    # no-op (older subgen drops the param and re-skips the file).
+    body["subgen_request_ignore_forced"] = subgen_request_ignore_forced
     return body

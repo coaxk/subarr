@@ -2148,10 +2148,13 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   );
 }
 
-export async function queueRow(row) {
+export async function queueRow(row, { ignoreForced = false } = {}) {
   const body = row._sonarr_episode_id
     ? { sonarr_episode_id: row._sonarr_episode_id }
     : { canonical_path: row._canonical_path };
+  // #317 Slice B: "transcribe a full sub anyway" — tell subgen to ignore the
+  // forced-only embedded sub for THIS job (gated on subgen capability upstream).
+  if (ignoreForced) body.ignore_forced = true;
   const r = await fetch('/api/coverage/queue', {
     method: 'POST',
     credentials: 'same-origin',
@@ -2394,8 +2397,20 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
 // row only becomes actionable once subarr has actually probed it. Holds
 // rows visibly until then (or, for failures, until the file is fixed) so
 // nothing the user hasn't seen silently disappears.
-function CoverageBucket({ kind, rows, onProbeNow, probing }) {
+function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false }) {
   const [open, setOpen] = useState(false);
+  // #317 Slice B: per-row state for the "transcribe a full sub anyway" action
+  // on the forced-only bucket. Maps row.id → 'pending' | 'done' | 'error'.
+  const [forcedQueue, setForcedQueue] = useState(() => ({}));
+  const transcribeAnyway = useCallback(async (row) => {
+    setForcedQueue(s => ({ ...s, [row.id]: 'pending' }));
+    try {
+      await queueRow(row, { ignoreForced: true });
+      setForcedQueue(s => ({ ...s, [row.id]: 'done' }));
+    } catch {
+      setForcedQueue(s => ({ ...s, [row.id]: 'error' }));
+    }
+  }, []);
   if (!rows.length) return null;
   const META = {
     unprobed: {
@@ -2426,6 +2441,15 @@ function CoverageBucket({ kind, rows, onProbeNow, probing }) {
     },
   };
   const meta = META[kind] || META.probe_failed;
+  // #317 Slice B: when the connected subgen supports a per-request override,
+  // these forced-only files ARE fillable per-file — swap the "flip the global
+  // knob" guidance for the one-click action described.
+  const blurb = (kind === 'forced_skip' && canFillForced)
+    ? 'These files have only a FORCED English embedded subtitle (covers foreign '
+      + 'dialogue only, not a full transcript). Use "Transcribe full sub" to have '
+      + 'subgen generate a complete English sub for just that file — no need to '
+      + 'change the global IGNORE_FORCED_SUBTITLES setting.'
+    : meta.blurb;
   return (
     <div className="panel" style={{
       flexShrink: 0, padding: '10px 14px',
@@ -2453,13 +2477,15 @@ function CoverageBucket({ kind, rows, onProbeNow, probing }) {
         </span>
       </div>
       <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)', marginTop: 4 }}>
-        {meta.blurb}
+        {blurb}
       </div>
       {open && (
         <div style={{ marginTop: 8, maxHeight: '55vh', overflow: 'auto' }}>
-          {rows.map(r => (
+          {rows.map(r => {
+            const st = forcedQueue[r.id];
+            return (
             <div key={r.id} style={{
-              display: 'flex', gap: 10, padding: '4px 0',
+              display: 'flex', gap: 10, padding: '4px 0', alignItems: 'center',
               fontSize: 'var(--text-sm)', borderTop: '1px solid var(--bg-3)',
             }}>
               <span style={{ color: 'var(--fg-1)' }}>{r.title}</span>
@@ -2468,8 +2494,23 @@ function CoverageBucket({ kind, rows, onProbeNow, probing }) {
               <span className="mono" style={{ color: 'var(--fg-3)', fontSize: 'var(--text-2xs)' }}>
                 {r.type}
               </span>
+              {kind === 'forced_skip' && canFillForced && (
+                st === 'done' ? (
+                  <span style={{ color: 'var(--success-500)', fontSize: 'var(--text-xs)' }}>queued ✓</span>
+                ) : (
+                  <button
+                    className="btn btn-sm"
+                    disabled={st === 'pending'}
+                    onClick={() => transcribeAnyway(r)}
+                    title="Queue subgen to transcribe a full English subtitle for this file, ignoring its forced-only embedded sub (this file only)."
+                  >
+                    {st === 'pending' ? 'Queuing…' : st === 'error' ? 'Retry' : 'Transcribe full sub'}
+                  </button>
+                )
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -2879,7 +2920,11 @@ export function CoveragePage() {
       {/* #79: forced-only-EN rows the connected subgen will skip
           (IGNORE_FORCED_SUBTITLES off). Distinct, visible, non-actionable —
           not a fillable gap, not silently dropped. */}
-      <CoverageBucket kind="forced_skip" rows={forcedSkipRows} />
+      <CoverageBucket
+        kind="forced_skip"
+        rows={forcedSkipRows}
+        canFillForced={!!data?.subgen_request_ignore_forced}
+      />
 
       {/* Bottom selection bar — sits in page flow but sticky */}
       <div style={{ position: 'sticky', bottom: 16, marginTop: 0, marginBottom: 16 }}>
