@@ -36,6 +36,10 @@ export function LogsPage() {
   const [sources, setSources] = useState(new Set(SOURCES));
   const [search, setSearch] = useState('');
   const [connected, setConnected] = useState(false);
+  // #328: a server-sent docker-unavailable notice (subarr can't reach the
+  // Docker socket to stream subgen's log). Holds the backend message; renders
+  // a help panel instead of an endless "Connecting…".
+  const [streamError, setStreamError] = useState(null);
   const bufRef = useRef([]);
   const flushTimer = useRef(null);
   const viewRef = useRef(null);
@@ -46,8 +50,16 @@ export function LogsPage() {
     let es;
     try {
       es = new EventSource('/api/logs/events');
-      es.onopen = () => setConnected(true);
+      es.onopen = () => { setConnected(true); setStreamError(null); };
       es.onerror = () => setConnected(false);
+      // #328: subarr couldn't reach the Docker socket to stream subgen's log.
+      // A dedicated event (not the transport 'error') carrying the reason.
+      es.addEventListener('stream_error', (e) => {
+        let msg = e.data || '';
+        try { msg = JSON.parse(msg); } catch { /* already plain */ }
+        setStreamError(msg || 'Docker is unavailable.');
+        setConnected(false);
+      });
       // #209 fix: backend emits 'event: log' (not default 'message'), so we
       // listen on the named event channel. Also keep onmessage for any
       // future generic events.
@@ -158,11 +170,35 @@ export function LogsPage() {
         fontFamily: 'JetBrains Mono, monospace',
         fontSize: 12, lineHeight: 1.45,
       }}>
-        {filtered.length === 0 && (
+        {filtered.length === 0 && (streamError ? (
+          <div style={{ padding: 32, maxWidth: 660, margin: '0 auto' }}>
+            <div style={{ color: 'var(--error-500, #ef4444)', fontWeight: 600, fontSize: 'var(--text-md)', marginBottom: 8 }}>
+              Can't reach Docker
+            </div>
+            <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
+              The Logs viewer streams subgen's container log, which needs Docker
+              socket access — and subarr's container can't reach it, so there's
+              nothing to show here.
+              <br /><br />
+              Give the subarr container the socket: bind-mount{' '}
+              <code style={{ color: 'var(--fg-1)' }}>/var/run/docker.sock</code>{' '}
+              (read-only is fine) into subarr, or point it at a socket-proxy, then
+              reload. Everything else in subarr works without it — only this Logs
+              viewer needs it.
+            </div>
+            <div className="mono" style={{
+              marginTop: 14, padding: '8px 10px', background: 'var(--bg-1)',
+              borderRadius: 'var(--radius-md)', color: 'var(--fg-3)',
+              fontSize: 'var(--text-2xs)', wordBreak: 'break-all',
+            }}>
+              {String(streamError)}
+            </div>
+          </div>
+        ) : (
           <div style={{ color: 'var(--fg-3)', textAlign: 'center', padding: 40 }}>
             {connected ? 'Waiting for log events…' : 'Connecting…'}
           </div>
-        )}
+        ))}
         {filtered.map(l => (
           <div key={l.id} style={{
             whiteSpace: 'pre-wrap', wordBreak: 'break-all',

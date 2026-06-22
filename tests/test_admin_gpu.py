@@ -220,4 +220,6 @@ def test_logs_sse_emits_error_when_docker_down(app_with_stub):
                 break
 
     assert events
-    assert events[0][0] == "error"
+    # #328: a dedicated event name (not "error") so the frontend can tell a
+    # server-sent docker-down notice from an EventSource transport error.
+    assert events[0][0] == "stream_error"

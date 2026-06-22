@@ -212,7 +212,7 @@ Real library, real foreign-language content — nothing staged.
 
 ![Settings — telemetry](docs/screenshots/08-settings-telemetry.png)
 
-**Logs** — structured, filterable runtime logs.
+**Logs** — structured, filterable runtime logs streamed live from subgen's container. This view (and the "restart subgen" button) needs **Docker socket access** — bind-mount `/var/run/docker.sock` (read-only is fine) into the subarr container, or use the [socket proxy](#architecture) from Tier 2 below. Without it, the Logs page shows a clear "can't reach Docker" notice with this fix, and the rest of subarr works normally.
 
 ![Logs](docs/screenshots/09-logs.png)
 
