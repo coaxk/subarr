@@ -1,0 +1,41 @@
+#!/bin/sh
+# Auto-rebuild the v1 SPA bundles when a frontend source is staged, so a
+# stale bundle can never reach CI's frontend drift gate
+# (.github/workflows/frontend.yml). The esbuild build is ~50ms — see
+# scripts/build-frontend.mjs. Wired up via core.hooksPath (.githooks),
+# set by scripts/setup-hooks.mjs on `npm install`.
+#
+# Escape hatch (use only if the bundles are already current and Node is
+# unavailable):  SKIP_FRONTEND_BUILD=1 git commit ...
+set -e
+
+[ "${SKIP_FRONTEND_BUILD:-}" = "1" ] && exit 0
+
+# Only act when a staged change can affect bundle output: JSX/JS sources
+# under the SPA tree (including the injected session-guard.js) or the build
+# script itself. Generated bundles are never hand-edited, so editing them
+# directly won't trigger a rebuild — but a source edit always will.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+needs_build=$(printf '%s\n' "$staged" \
+  | grep -E '^(src/subarr/static/v1/.*\.(jsx|js)|scripts/build-frontend\.mjs)$' || true)
+[ -z "$needs_build" ] && exit 0
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "pre-commit: frontend source staged but 'npm' is not on PATH." >&2
+  echo "  Install Node and retry, rebuild elsewhere and re-stage the bundles," >&2
+  echo "  or bypass with:  SKIP_FRONTEND_BUILD=1 git commit ..." >&2
+  exit 1
+fi
+
+echo "pre-commit: frontend source staged -> rebuilding SPA bundles..."
+npm run build:frontend >/dev/null
+
+# Re-stage the regenerated outputs so the commit is self-consistent and the
+# CI drift gate stays green. Stage only generated artifacts (.bundle.js +
+# .map) — never the .jsx sources, so partial-staged commits keep their
+# intended source diff. The .html pages are hand-authored sources, not build
+# outputs, so they are deliberately left to the developer.
+git add -- src/subarr/static/v1/home-hifi/*.bundle.js \
+           src/subarr/static/v1/home-hifi/*.bundle.js.map
+
+exit 0
