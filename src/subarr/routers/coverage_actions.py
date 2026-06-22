@@ -33,6 +33,12 @@ class CoverageQueueRequest(BaseModel):
     # Fallback for movies / rows missing sonarr id.
     canonical_path: str | None = None
     reverse: bool = False
+    # #317 Slice B: "transcribe a full sub anyway" on a forced-only file —
+    # forwards ?ignore_forced=true to subgen's /batch so it transcribes instead
+    # of treating the forced-only embedded sub as "exists". The UI only sends
+    # this when the connected subgen advertises capabilities.request_ignore_forced;
+    # an older subgen silently drops the param (the file re-skips, no harm).
+    ignore_forced: bool = False
 
 
 @router.post("/coverage/queue", status_code=202)
@@ -116,6 +122,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         audio_language_override=audio_language_override,
         series_id=series_id,
         sonarr_episode_id=req.sonarr_episode_id,
+        ignore_forced=req.ignore_forced,
     )
 
     return {

@@ -1,0 +1,12 @@
+-- 025_pending_queue_ignore_forced.sql
+--
+-- #317 Slice B: a pending job can carry a per-request `ignore_forced` flag so
+-- the feeder forwards it to subgen's POST /batch (?ignore_forced=true). That
+-- lets subarr's "transcribe a full sub anyway" action fill a forced-only gap
+-- (subgen otherwise treats a forced-only target-language embedded sub as
+-- "exists" and skips the file) WITHOUT flipping the global IGNORE_FORCED_-
+-- SUBTITLES knob.
+--
+-- 0/1 INTEGER, default 0 = normal skip behaviour. Pre-existing rows get 0,
+-- which is correct: they were queued as ordinary gaps, not forced-overrides.
+ALTER TABLE pending_queue ADD COLUMN ignore_forced INTEGER NOT NULL DEFAULT 0;

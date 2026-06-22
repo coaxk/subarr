@@ -61,4 +61,26 @@ describe('queueRow', () => {
 
     await expect(queueRow({ _sonarr_episode_id: 7 })).resolves.not.toThrow();
   });
+
+  // #317 Slice B: "transcribe a full sub anyway" passes ignore_forced through.
+  it('adds ignore_forced:true to the body when ignoreForced option is set', async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 202, json: async () => ({}) }));
+    globalThis.fetch = spy;
+
+    await queueRow({ _sonarr_episode_id: 5 }, { ignoreForced: true });
+
+    const [, opts] = spy.mock.calls[0];
+    expect(JSON.parse(opts.body)).toEqual({ sonarr_episode_id: 5, ignore_forced: true });
+  });
+
+  it('omits ignore_forced by default (normal queue)', async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 202, json: async () => ({}) }));
+    globalThis.fetch = spy;
+
+    await queueRow({ _canonical_path: '/m/x.mkv' });
+
+    const [, opts] = spy.mock.calls[0];
+    expect(JSON.parse(opts.body)).toEqual({ canonical_path: '/m/x.mkv' });
+    expect('ignore_forced' in JSON.parse(opts.body)).toBe(false);
+  });
 });

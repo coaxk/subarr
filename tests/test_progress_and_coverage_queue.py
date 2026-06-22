@@ -303,3 +303,44 @@ def test_coverage_queue_omits_override_when_no_verification(
     jobs = [j for j in app_with_stub.app.state.pending_queue.list() if j.canonical_path == canonical]
     assert jobs, "coverage/queue did not enqueue a pending job"
     assert jobs[0].audio_language_override is None
+
+
+# ─── #317 Slice B: transcribe-a-full-sub-anyway (ignore_forced) ────────────
+
+
+@pytest.mark.subgen(handler=_capturing_subgen_handler)
+def test_coverage_queue_carries_ignore_forced_when_requested(
+    app_with_stub,
+    coverage_queue_media_root,
+):
+    """The 'transcribe a full sub anyway' action sends ignore_forced=true; it
+    must ride on the pending job so the feeder forwards ?ignore_forced=true to
+    subgen's /batch (subgen otherwise skips a forced-only file)."""
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+
+    r = app_with_stub.post(
+        "/api/coverage/queue",
+        json={"canonical_path": canonical, "ignore_forced": True},
+    )
+    assert r.status_code == 202, r.json()
+
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list() if j.canonical_path == canonical]
+    assert jobs, "coverage/queue did not enqueue a pending job"
+    assert jobs[0].ignore_forced is True
+
+
+@pytest.mark.subgen(handler=_capturing_subgen_handler)
+def test_coverage_queue_ignore_forced_defaults_false(
+    app_with_stub,
+    coverage_queue_media_root,
+):
+    """A normal gap queue (no ignore_forced) leaves the job's flag False so the
+    file goes through subgen's standard skip logic."""
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+
+    r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical})
+    assert r.status_code == 202
+
+    jobs = [j for j in app_with_stub.app.state.pending_queue.list() if j.canonical_path == canonical]
+    assert jobs, "coverage/queue did not enqueue a pending job"
+    assert jobs[0].ignore_forced is False
