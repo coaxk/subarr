@@ -10,6 +10,7 @@
 // srt_count, has_sibling_srt, embedded_en, size_mb}.
 
 import { StatusDot, Glyph } from './atoms.jsx';
+import { BlacklistPanel } from './blacklist-panel.jsx';
 
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
@@ -386,8 +387,17 @@ function TreeNode({ entry, depth, selected, expanded, childrenData, childrenLoad
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           cursor: 'help',
         }}>{metaText}</span>
-        {/* #316: per-title ignore — stop flagging missing subs for this title. */}
-        <span style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+        {/* #316 ignore + #317 blacklist — both stop-propagation so the row
+            doesn't toggle expand. */}
+        <span style={{ textAlign: 'right', display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
+          {isVideo && (
+            <button className="btn ghost sm"
+              title="Bazarr subtitle history — blacklist a bad downloaded sub"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-blacklist', { detail: { path: entry.path, title: entry.name } }))}
+              style={{ padding: '0 6px', fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              subs
+            </button>
+          )}
           {ignoreUI}
         </span>
         <span className="num mono" style={{
@@ -850,6 +860,7 @@ export function LibraryPage() {
           queueState={queueState}
         />
       </div>
+      <BlacklistPanel />
     </main>
     </IgnoreCtx.Provider>
   );

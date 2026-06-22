@@ -65,3 +65,53 @@ def test_history_endpoint_shapes_rows(app_with_stub):
 def test_history_endpoint_rejects_bad_media_type(app_with_stub):
     # FastAPI Query(pattern=...) rejects an out-of-set media_type as 422.
     assert app_with_stub.get("/api/blacklist/history?media_type=show&id=1").status_code == 422
+
+
+# ── path → (media_type, arr_id) resolution (aftercare entry passes a sub path) ──
+
+_COV_ITEMS = [
+    {
+        "file_canonical_path": "TV/Show/Season 1/Show.S01E01.mkv",
+        "media_type": "episode",
+        "bazarr_episode_id": 42,
+    },
+    {"file_canonical_path": "Movies/Film (2020)/Film.mkv", "media_type": "movie", "bazarr_radarr_id": 9},
+]
+
+
+def test_resolve_media_ref():
+    from subarr.routers.blacklist import _resolve_media_ref
+
+    # exact video path
+    assert _resolve_media_ref("TV/Show/Season 1/Show.S01E01.mkv", _COV_ITEMS) == ("episode", 42)
+    # a sidecar .srt resolves to its sibling video by stem prefix
+    assert _resolve_media_ref("TV/Show/Season 1/Show.S01E01.en.srt", _COV_ITEMS) == ("episode", 42)
+    # movie
+    assert _resolve_media_ref("Movies/Film (2020)/Film.mkv", _COV_ITEMS) == ("movie", 9)
+    # unknown path
+    assert _resolve_media_ref("TV/Other/x.mkv", _COV_ITEMS) is None
+
+
+class _SnapCache:
+    def __init__(self, items):
+        self._snap = type("S", (), {"items": items})()
+
+    def get_cached(self):
+        return self._snap
+
+    def request_refresh(self, *a, **k):
+        pass
+
+
+@pytest.mark.integrations_stub(bazarr_handler=_bazarr_history_stub)
+def test_history_endpoint_resolves_by_path(app_with_stub):
+    app_with_stub.app.state.coverage_cache = _SnapCache(_COV_ITEMS)
+    r = app_with_stub.get("/api/blacklist/history?path=TV/Show/Season 1/Show.S01E01.en.srt")
+    assert r.status_code == 200
+    assert sum(1 for s in r.json()["subtitles"] if s["blacklistable"]) == 1
+
+
+@pytest.mark.integrations_stub(bazarr_handler=_bazarr_history_stub)
+def test_history_endpoint_404_for_unknown_path(app_with_stub):
+    app_with_stub.app.state.coverage_cache = _SnapCache(_COV_ITEMS)
+    assert app_with_stub.get("/api/blacklist/history?path=TV/Nope/x.mkv").status_code == 404
