@@ -4,7 +4,7 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v2.0-violet)](https://github.com/coaxk/subarr)
+[![status](https://img.shields.io/badge/status-v2.2-violet)](https://github.com/coaxk/subarr)
 [![tests](https://img.shields.io/badge/tests-1159_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
@@ -311,6 +311,7 @@ What to do about it:
 
 - **Include `/data` in whatever backup tool you already run** (restic, borg, Backrest, duplicati — anything). Probe data and coverage rebuild themselves; verifications do not.
 - For a consistent live copy of a running instance: `docker exec subarr sqlite3 /data/subarr.db ".backup /data/subarr-backup.db"`, then pick up the backup file. Copying `subarr.db` while subarr is writing can produce a torn copy (WAL); stopping the container first also works.
+- **Or do it from the UI (2.2):** the **Health page** has a **Back up database now** button that writes a clean, defragmented, timestamped copy into `/data/backups/` (atomic `VACUUM INTO`, the 5 most recent kept), plus a **Run full integrity check** for a deep `PRAGMA integrity_check` — no shell needed. Include `/data` in your off-box backup either way.
 - **Keep `/data` on a local disk, not NFS/SMB.** SQLite in WAL mode over network filesystems is a well-known corruption hazard. Your media library on NAS is fine — that's read-mostly; the database is not.
 - Subarr runs an integrity check (`PRAGMA quick_check`) on every boot. If your database is damaged you'll see it on the **Health page** and the red header pill — back up `/data` immediately at that point, before anything else writes.
 - **Make sure `/data` is an actual volume.** If you run without one (a bare container, or you removed the volume line), every `docker compose up` starts from an empty database — all your verifications gone, and a brand-new install each time. Subarr detects this on boot and flags it loudly on the Health page; if you see that warning, add a volume for `/data` before you do anything else.
@@ -421,14 +422,16 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## Roadmap
 
-**v2.0 (this release):**
+**v2.2 (this release):**
 
-- **Authentication on by default** (shipped): first-run admin setup, login + signed sessions, brute-force throttle, managed API keys, and built-in recovery — see [Security](#authentication).
-- **Non-root container** (shipped): drops to `PUID`/`PGID`, entrypoint chowns `/data` then drops privileges.
-- **Schedule pause/resume** (shipped): halt or restart automation from the dashboard.
-- **Setup-completion auto-walk** (shipped): the first coverage walk runs automatically so you land on a populated dashboard.
+- **Blacklist a bad provider sub** (shipped): from Aftercare or the Library tree, straight to Bazarr, so it stops re-fetching the same broken release.
+- **Transcribe forced-only files** (shipped): a per-file full-sub override on forced-only files, without flipping subgen's global forced-subs setting (needs `subarr-subgen` r10+).
+- **Per-title ignore** (shipped): suppress a whole show or a single file, inline on Library or Review.
+- **Subtitle-controls hub** (shipped): one card on the Rules page that signposts every force / ignore / language control to where it lives.
+- **On-demand database backup + integrity check** (shipped): from the Health page.
+- **Reliability pass** (shipped): event-loop UI-freeze fix, database durability, Plex-client circuit breaker, queue reconciliation, telemetry + auth hardening.
 
-*Previously: guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
+*Previously: security hardening, non-root container, and activation (2.0); guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
 
 **Later** — still on the list:
 
