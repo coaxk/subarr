@@ -2155,7 +2155,7 @@ function LangRulesPanel() {
   if (rules.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)', maxWidth: 560 }}>
-        No language rules yet. On the <strong>Review</strong> page, tick a whole show or movie,
+        No language rules yet. On the <a href="/review">Review page</a>, tick a whole show or movie,
         pick its audio language, and check <em>"Remember for future downloads."</em>
       </div>
     );

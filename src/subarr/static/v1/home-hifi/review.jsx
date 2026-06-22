@@ -969,6 +969,14 @@ export function ReviewPage() {
                   style={{ accentColor: 'var(--violet-500)' }} />
                 Remember for future downloads
               </label>
+              {/* #317 Slice C: rules are declared here, managed in Settings — close the loop. */}
+              <a
+                href="/settings#lang-rules"
+                title="View, edit, or revoke saved language rules."
+                style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', whiteSpace: 'nowrap' }}
+              >
+                manage rules →
+              </a>
               <button className="btn primary" onClick={applyBulk} disabled={bulkRunning}>
                 {bulkRunning ? 'Applying…' : `Apply to ${selAssignPaths.length}`}
               </button>

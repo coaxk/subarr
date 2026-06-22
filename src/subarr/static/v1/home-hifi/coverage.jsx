@@ -2481,6 +2481,13 @@ function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false
       </div>
       <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)', marginTop: 4 }}>
         {blurb}
+        {kind === 'forced_skip' && (
+          <>
+            {' '}
+            {/* #317 Slice C: signpost to the subtitle-controls hub on the Rules page. */}
+            <a href="/rules" style={{ whiteSpace: 'nowrap' }}>All subtitle controls →</a>
+          </>
+        )}
       </div>
       {open && (
         <div style={{ marginTop: 8, maxHeight: '55vh', overflow: 'auto' }}>
