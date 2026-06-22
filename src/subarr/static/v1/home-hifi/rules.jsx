@@ -838,6 +838,86 @@ function RulesWelcomeCard({ rulesDraft, setRulesDraft, mode, setMode }) {
   );
 }
 
+// ─── #317 Slice C: subtitle-controls discoverability hub ─────────
+// This page configures AUTO-QUEUE. The other controls that shape subtitle
+// behaviour live on the pages where you act on them. This card is a signpost
+// to each — it does NOT duplicate any control, it links to where it lives.
+// Exported so a test can assert the link targets stay valid routes.
+export const SUBTITLE_CONTROLS = [
+  {
+    label: 'Forced subtitles',
+    blurb: 'Files whose only English sub is FORCED (covers foreign dialogue only, '
+         + 'not a full transcript). Transcribe a full sub per file.',
+    links: [{ href: '/coverage', label: 'Coverage →' }],
+  },
+  {
+    label: 'Ignored titles',
+    blurb: 'Skip a whole series or movie from subtitle processing.',
+    links: [{ href: '/library', label: 'Library →' }],
+  },
+  {
+    label: 'Language rules',
+    blurb: "Tell subarr a show's real audio language so it stops re-asking. "
+         + 'Declared during audio-language review; managed in Settings.',
+    links: [
+      { href: '/settings#lang-rules', label: 'Manage →' },
+      { href: '/review', label: 'Declare in Review →' },
+    ],
+  },
+  {
+    label: 'Audio-language review',
+    blurb: "Confirm a file's audio language when subarr isn't sure.",
+    links: [{ href: '/review', label: 'Review →' }],
+  },
+];
+
+function SubtitleControlsHub() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="panel" style={{ padding: '10px 14px' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexWrap: 'wrap' }}
+      >
+        <span aria-hidden="true">🎛️</span>
+        <span style={{ fontWeight: 600, color: 'var(--fg-0)' }}>Other subtitle controls</span>
+        <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
+          forced subs · ignored titles · language rules · audio-language review
+        </span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>{open ? 'hide' : 'show'}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)' }}>
+            This page configures <strong>auto-queue</strong>. These related controls live on the
+            pages where you act on them:
+          </div>
+          {SUBTITLE_CONTROLS.map(c => (
+            <div
+              key={c.label}
+              style={{
+                display: 'flex', gap: 12, alignItems: 'flex-start',
+                padding: '8px 0', borderTop: '1px solid var(--bg-3)',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: 'var(--fg-1)', fontSize: 'var(--text-sm)' }}>{c.label}</div>
+                <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)', marginTop: 2 }}>{c.blurb}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {c.links.map(l => (
+                  <a key={l.href} href={l.href} className="btn btn-sm ghost">{l.label}</a>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page wrapper ────────────────────────────────────────────────
 export function RulesPage() {
   const { data, loading, error, refetch } = useSchedule();
@@ -965,6 +1045,9 @@ export function RulesPage() {
         mode={mode}
         setMode={setMode}
       />
+
+      {/* #317 Slice C: signpost to the other (non-auto-queue) subtitle controls. */}
+      <SubtitleControlsHub />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <ModeSegment mode={mode} setMode={setMode} />
