@@ -4,6 +4,7 @@
 
 import { StatusDot } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
+import { BlacklistPanel } from './blacklist-panel.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -207,6 +208,21 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
             style={{ fontSize: 'var(--text-xs)' }}>
             Find a better config
           </button>
+          {/* #317: external (provider) subs can be blacklisted in Bazarr so it
+              stops re-fetching the bad release. Opens the history panel for this
+              file; only meaningful for audited externals, not our subgen output. */}
+          {item.source === 'existing_audit' && (
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('open-blacklist', {
+                detail: { path: item.canonical_path, title: filename },
+              }))}
+              disabled={isBusy}
+              title="Blacklist this provider's subtitle in Bazarr (stops re-fetching the bad release)"
+              className="btn sm"
+              style={{ fontSize: 'var(--text-xs)' }}>
+              Blacklist
+            </button>
+          )}
           <span
             onClick={() => onToggleExpand(item.id)}
             role="button" tabIndex={0}
@@ -531,6 +547,7 @@ export function AftercarePage() {
       {/* Single-file audio modal — reused from Coverage. Listens for the
           open-audio-review event dispatched by the 🎧 button. */}
       <AudioReviewModal />
+      <BlacklistPanel />
     </main>
   );
 }
