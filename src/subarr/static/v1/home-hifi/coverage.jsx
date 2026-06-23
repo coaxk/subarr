@@ -2011,7 +2011,7 @@ function CheckBox({ checked, indeterminate }) {
 // rebuilds on data/selection change). The row passes r.id to onClick so
 // the parent's handler stays referentially stable (the documented trap:
 // an inline `() => toggleRow(r.id)` per row would defeat the memo).
-function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
+function CoverageRowImpl({ r, onClick, onQueue, queuing, queued }) {
   return (
     <div className="cov-row"
       data-testid="coverage-row"
@@ -2103,10 +2103,16 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing }) {
           data-testid="coverage-row-queue"
           className="btn ghost"
           onClick={(e) => { e.stopPropagation(); onQueue && onQueue(r); }}
-          disabled={queuing}
-          title="Queue this row for subgen / Whisper transcription"
-          style={{ height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)' }}>
-          {queuing ? '…' : '↻'}
+          disabled={queuing || queued}
+          title={queued
+            ? 'Queued — waiting in subarr’s pending queue; it will show in subgen shortly'
+            : 'Queue this row for subgen / Whisper transcription'}
+          style={{
+            height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)',
+            color: queued ? 'var(--success-500)' : undefined,
+            borderColor: queued ? 'var(--success-500)' : undefined,
+          }}>
+          {queued ? '✓ queued' : queuing ? '…' : '↻'}
         </button>
       </div>
     </div>
@@ -2254,7 +2260,7 @@ function MixedSeriesNotice({ show, onDismiss }) {
   );
 }
 
-function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismissMixed }) {
+function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, queuedRows, onDismissMixed }) {
   const tree = useMemo(() => buildShowTree(rows), [rows]);
   const movies = useMemo(() => rows.filter((r) => r.type === 'mov'), [rows]);
   const [expandedShows, setExpandedShows] = useState(() => new Set());
@@ -2358,6 +2364,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
               onClick={toggleRow}
               onQueue={onQueue}
               queuing={rowQueuing.has(r.id)}
+              queued={queuedRows.has(r.id)}
             />
           </div>
         );
@@ -2384,6 +2391,7 @@ function CoverageTree({ rows, selected, toggleRow, onQueue, rowQueuing, onDismis
             onClick={toggleRow}
             onQueue={onQueue}
             queuing={rowQueuing.has(r.id)}
+            queued={queuedRows.has(r.id)}
           />
         </div>
       ))
@@ -2537,6 +2545,10 @@ export function CoveragePage() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(() => new Set());
   const [rowQueuing, setRowQueuing] = useState(() => new Set()); // ids in flight
+  // #336: ids successfully queued — a lasting "queued ✓" so the user knows it
+  // worked even though the job sits in the pending feeder and takes a while to
+  // surface in subgen's queue. Persists until the row leaves coverage.
+  const [queuedRows, setQueuedRows] = useState(() => new Set());
   const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
   const [walking, setWalking] = useState(false);
 
@@ -2644,6 +2656,8 @@ export function CoveragePage() {
     setRowQueuing(prev => { const n = new Set(prev); n.add(row.id); return n; });
     try {
       await queueRow(row);
+      // #336: lasting confirmation — the job is in the pending feeder now.
+      setQueuedRows(prev => new Set(prev).add(row.id));
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('queue row failed:', e);
@@ -2907,6 +2921,7 @@ export function CoveragePage() {
               onClick={toggleRow}
               onQueue={handleRowQueue}
               queuing={rowQueuing.has(r.id)}
+              queued={queuedRows.has(r.id)}
             />
           ))}
           {!isInitialLoad && !isError && groupBy === 'tree' && (
@@ -2916,6 +2931,7 @@ export function CoveragePage() {
               toggleRow={toggleRow}
               onQueue={handleRowQueue}
               rowQueuing={rowQueuing}
+              queuedRows={queuedRows}
               onDismissMixed={dismissMixed}
             />
           )}
