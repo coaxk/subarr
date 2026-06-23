@@ -20,6 +20,12 @@ class TrackSwapError(RuntimeError):
     pass
 
 
+class TrackSwapWriteError(TrackSwapError):
+    """mkvpropedit couldn't write the file — typically a read-only media mount
+    or missing write permission. Distinct so the router can surface an
+    actionable, leak-free message instead of the generic sanitized one."""
+
+
 def mkvpropedit_available() -> bool:
     return shutil.which("mkvpropedit") is not None
 
@@ -62,6 +68,9 @@ async def swap_default_audio_track(
     # 0 = ok, 1 = warnings (still applied), ≥2 = error.
     if proc.returncode and proc.returncode >= 2:
         detail = (stderr.decode(errors="replace") or stdout.decode(errors="replace"))[:300]
+        low = detail.lower()
+        if "writing" in low or "write-protected" in low or "read-only" in low or "permission" in low:
+            raise TrackSwapWriteError(f"mkvpropedit could not write the file: {detail}")
         raise TrackSwapError(f"mkvpropedit exit {proc.returncode}: {detail}")
     if proc.returncode == 1:
         log.warning(

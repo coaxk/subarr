@@ -151,3 +151,38 @@ def test_refresh_healthy_build_publishes_and_resets_holds(subarr_env, tmp_path, 
     assert cache.get_cached().generated_at == good.generated_at  # held
     asyncio.run(cache.refresh(bundle=None, probe_store=None, audio_lang_store=None))
     assert cache.get_cached().generated_at != good.generated_at  # healthy → published
+
+
+def test_clear_track_mismatch_for_clears_cached_flag(tmp_path):
+    """#159 follow-up: after a default-track swap, clearing the cached item's
+    default_track_mismatch in place lets the Review row drop immediately, without
+    waiting for the throttled (120s) rebuild. Only the named file is touched."""
+    from subarr.coverage_cache import CoverageCache
+    from subarr.migrate import run_migrations
+
+    db = tmp_path / "t.db"
+    run_migrations(db)
+    cache = CoverageCache(db)
+    cache.store(
+        items=[
+            {
+                "file_canonical_path": "TV/Show/S01E03.mkv",
+                "default_track_mismatch": True,
+                "mismatch_default_track_lang": "fre",
+                "mismatch_native_track_lang": "swe",
+                "mismatch_native_audio_ordinal": 2,
+            },
+            {"file_canonical_path": "TV/Show/S01E05.mkv", "default_track_mismatch": True},
+        ],
+        totals={"items": 2},
+        sources={"sonarr": {"ok": True}, "bazarr": {"ok": True}},
+        build_duration_s=1.0,
+    )
+
+    assert cache.clear_track_mismatch_for("TV/Show/S01E03.mkv") == 1
+    items = {i["file_canonical_path"]: i for i in cache.get_cached().items}
+    assert items["TV/Show/S01E03.mkv"]["default_track_mismatch"] is False
+    assert "mismatch_native_audio_ordinal" not in items["TV/Show/S01E03.mkv"]
+    assert items["TV/Show/S01E05.mkv"]["default_track_mismatch"] is True  # untouched
+    # idempotent — nothing left to clear
+    assert cache.clear_track_mismatch_for("TV/Show/S01E03.mkv") == 0

@@ -297,6 +297,26 @@ class CoverageCache:
     def get_cached(self) -> CachedSnapshot | None:
         return self._cached
 
+    def clear_track_mismatch_for(self, file_canonical_path: str) -> int:
+        """#159 follow-up: a successful default-track swap fixes the file, but the
+        cached snapshot still carries default_track_mismatch=True until the next
+        rebuild — which is throttled up to `_min_interval_s` (120s), so the Review
+        row wouldn't drop. Clear the flag on the matching cached item(s) in place
+        so pending-review excludes the row immediately; the next rebuild re-probes
+        and confirms. Returns the number of items cleared."""
+        with self._lock:
+            if self._cached is None:
+                return 0
+            n = 0
+            for it in self._cached.items:
+                if it.get("file_canonical_path") == file_canonical_path and it.get("default_track_mismatch"):
+                    it["default_track_mismatch"] = False
+                    it.pop("mismatch_default_track_lang", None)
+                    it.pop("mismatch_native_track_lang", None)
+                    it.pop("mismatch_native_audio_ordinal", None)
+                    n += 1
+            return n
+
     def is_refreshing(self) -> bool:
         return self._refreshing
 
