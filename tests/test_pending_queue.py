@@ -168,72 +168,8 @@ def test_reorder_unknown_id_raises(store):
         store.promote("nope")
 
 
-# ── repend_orphaned_submitted (#287) ────────────────────────────────
-
-
-def test_repend_orphaned_submitted_basic(store):
-    """Job whose sg_path is NOT in live_subgen_paths gets re-pended; job whose
-    sg_path IS still in live set stays SUBMITTED. Returns count of re-pended."""
-    from subarr.paths import canonical_to_subgen_batch
-
-    j1 = store.enqueue("TV/S01/e01.mkv", source="gaps")
-    j2 = store.enqueue("TV/S01/e02.mkv", source="gaps")
-    store.mark_submitted(j1.id)
-    store.mark_submitted(j2.id)
-
-    sg1 = canonical_to_subgen_batch("TV/S01/e01.mkv")
-    # j1 is still in subgen; j2 is orphaned (not in the live set)
-    n = store.repend_orphaned_submitted({sg1})
-    assert n == 1
-
-    j1_after = store.get(j1.id)
-    j2_after = store.get(j2.id)
-    assert j1_after.status == STATUS_SUBMITTED  # kept
-    assert j2_after.status == STATUS_PENDING  # re-pended
-    assert j2_after.submitted_at is None  # cleared
-
-
-def test_repend_orphaned_submitted_all_live(store):
-    """When every SUBMITTED job is in the live set, nothing is re-pended."""
-    from subarr.paths import canonical_to_subgen_batch
-
-    j = store.enqueue("TV/a.mkv", source="gaps")
-    store.mark_submitted(j.id)
-    sg = canonical_to_subgen_batch("TV/a.mkv")
-    n = store.repend_orphaned_submitted({sg})
-    assert n == 0
-    assert store.get(j.id).status == STATUS_SUBMITTED
-
-
-def test_repend_orphaned_submitted_empty_live(store):
-    """Empty live set means every SUBMITTED row is orphaned and re-pended."""
-    j1 = store.enqueue("TV/a.mkv", source="gaps")
-    j2 = store.enqueue("TV/b.mkv", source="gaps")
-    store.mark_submitted(j1.id)
-    store.mark_submitted(j2.id)
-    n = store.repend_orphaned_submitted(set())
-    assert n == 2
-    for jid in (j1.id, j2.id):
-        j = store.get(jid)
-        assert j.status == STATUS_PENDING
-        assert j.submitted_at is None
-
-
-def test_repend_orphaned_submitted_skips_pending_and_done(store):
-    """Only SUBMITTED rows are candidates; PENDING and DONE are untouched."""
-
-    p = store.enqueue("TV/pending.mkv", source="gaps")
-    s = store.enqueue("TV/submitted.mkv", source="gaps")
-    store.mark_submitted(s.id)
-    # mark the first one done
-    store.set_status(p.id, STATUS_DONE)
-    # Neither the done nor pending path is in the live set
-    n = store.repend_orphaned_submitted(set())
-    assert n == 1  # only the submitted one
-    assert store.get(p.id).status == STATUS_DONE
-    # PENDING job was never submitted so it would not be touched regardless,
-    # but here it's STATUS_DONE — confirm unchanged
-    assert store.get(s.id).status == STATUS_PENDING
+# ── resolve_orphaned_submitted (#336) — see the dedicated tests appended below
+# (the earlier #287 repend_orphaned_submitted was superseded and removed) ──────
 
 
 def test_move_step_walks_to_top(store):
@@ -268,3 +204,42 @@ def test_move_step_down_walks_to_bottom_then_noop(store):
     assert [j.id for j in store.list(status="pending")][-1] == top
     store.move_step(top, up=False)  # at bottom → no-op
     assert [j.id for j in store.list(status="pending")][-1] == top
+
+
+def test_resolve_orphaned_submitted_removes_past_grace(store):
+    """#336: a SUBMITTED row subgen no longer reports, aged past the grace, is
+    REMOVED (not re-pended) so already-done files stop churning the feeder."""
+    import time
+
+    job = store.enqueue("TV/gone.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    store._conn.execute("UPDATE pending_queue SET submitted_at = ? WHERE id = ?", (time.time() - 120, job.id))
+    removed = store.resolve_orphaned_submitted(set(), older_than_s=60.0)
+    assert removed == 1
+    assert store.get(job.id) is None
+
+
+def test_resolve_orphaned_submitted_keeps_within_grace(store):
+    """A just-submitted row (within grace) is left alone — subgen may not have
+    surfaced it in /queue yet."""
+    job = store.enqueue("TV/fresh.mkv", source="gaps")
+    store.mark_submitted(job.id)  # submitted_at = now
+    removed = store.resolve_orphaned_submitted(set(), older_than_s=60.0)
+    assert removed == 0
+    assert store.get(job.id).status == STATUS_SUBMITTED
+
+
+def test_resolve_orphaned_submitted_keeps_if_in_subgen(store):
+    """A SUBMITTED row whose path IS in subgen's live queue is kept even past
+    grace — it's actively processing, not orphaned."""
+    import time
+
+    from subarr.paths import canonical_to_subgen_batch
+
+    job = store.enqueue("TV/active.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    store._conn.execute("UPDATE pending_queue SET submitted_at = ? WHERE id = ?", (time.time() - 120, job.id))
+    live = {canonical_to_subgen_batch("TV/active.mkv")}
+    removed = store.resolve_orphaned_submitted(live, older_than_s=60.0)
+    assert removed == 0
+    assert store.get(job.id).status == STATUS_SUBMITTED

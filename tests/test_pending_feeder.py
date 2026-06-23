@@ -5,6 +5,7 @@ shared-queue back-off + dedup, submit-failure isolation, priority order.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -319,23 +320,22 @@ async def test_inflight_counted_in_capacity_gate_across_ticks(store):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_repends_submitted_not_in_subgen(store):
-    """A SUBMITTED job whose sg_path is absent from subgen's /queue is
-    re-pended on the first successful reconcile tick so it gets re-fed."""
+async def test_reconcile_resolves_orphaned_submitted(store):
+    """#336: a SUBMITTED job subgen no longer reports (past the grace) is
+    RESOLVED (removed) — not re-pended. It re-surfaces as a coverage gap if still
+    needed, instead of being re-submitted to subgen forever (the zombie churn)."""
     job = store.enqueue("TV/lost.mkv", source="gaps")
     store.mark_submitted(job.id)
-    # subgen's queue is empty — it lost the job after a restart
-    subgen = FakeSubgen(queued=[], processing=[])
+    # age it past ORPHAN_GRACE_S so it's eligible for resolution
+    store._conn.execute("UPDATE pending_queue SET submitted_at = ? WHERE id = ?", (time.time() - 120, job.id))
+    subgen = FakeSubgen(queued=[], processing=[])  # subgen no longer has it
     rec = SubmitRecorder()
     feeder = _feeder(store, subgen, rec, target=2)
 
-    # First tick triggers the one-shot reconcile, then normal feeding
     await feeder.tick()
 
-    refreshed = store.get(job.id)
-    # The job was re-pended by reconcile, then immediately re-submitted by the feeder
-    assert refreshed.status == STATUS_SUBMITTED
-    assert rec.calls == ["TV/lost.mkv"]
+    assert store.get(job.id) is None  # removed, not re-pended
+    assert rec.calls == []  # nothing left to re-feed
 
 
 @pytest.mark.asyncio
@@ -379,34 +379,31 @@ async def test_reconcile_skipped_when_subgen_unreachable(store):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_runs_once_per_process_start(store):
-    """The one-shot reconcile flag means it only fires once, even across
-    multiple ticks. Subsequent ticks don't repeat the reconcile logic."""
-    job = store.enqueue("TV/a.mkv", source="gaps")
-    store.mark_submitted(job.id)
-    # subgen starts empty (lost the job), then on 2nd tick also empty
+async def test_resolve_runs_every_tick_not_just_boot(store):
+    """#336: orphan resolution runs EVERY tick, not once at boot — a job that
+    orphans AFTER the first tick is still resolved on a later tick."""
     subgen = FakeSubgen(queued=[], processing=[])
     rec = SubmitRecorder()
     feeder = _feeder(store, subgen, rec, target=2)
 
-    # tick 1: reconcile fires, re-pends + re-submits
-    await feeder.tick()
-    assert rec.calls == ["TV/a.mkv"]
-    first_call_count = len(rec.calls)
+    await feeder.tick()  # first tick: nothing to resolve
 
-    # tick 2: reconcile must NOT fire again (one-shot)
-    await feeder.tick()
-    # No additional reconcile-triggered re-feed (any new calls would be
-    # normal feeder feeding, which would only happen if there were more pending)
-    assert len(rec.calls) == first_call_count
+    # now a job is submitted, orphaned (subgen still empty), and aged past grace
+    job = store.enqueue("TV/late.mkv", source="gaps")
+    store.mark_submitted(job.id)
+    store._conn.execute("UPDATE pending_queue SET submitted_at = ? WHERE id = ?", (time.time() - 120, job.id))
+
+    await feeder.tick()  # a later tick must still resolve it
+    assert store.get(job.id) is None
 
 
 @pytest.mark.asyncio
-async def test_reconcile_retries_if_subgen_was_down_first(store):
-    """If subgen.queue() fails on tick 1, the reconcile flag is NOT set, so
-    tick 2 (with a reachable subgen) successfully reconciles."""
+async def test_resolve_deferred_until_subgen_readable(store):
+    """#336: if subgen.queue() fails, resolution is skipped that tick (we can't
+    confirm the job is gone); the next reachable tick resolves it."""
     job = store.enqueue("TV/b.mkv", source="gaps")
     store.mark_submitted(job.id)
+    store._conn.execute("UPDATE pending_queue SET submitted_at = ? WHERE id = ?", (time.time() - 120, job.id))
 
     call_count = {"n": 0}
 
@@ -415,17 +412,17 @@ async def test_reconcile_retries_if_subgen_was_down_first(store):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise SubgenUnavailable("down on first call")
-            # Second call succeeds with empty queue (job was lost)
+            # Second call succeeds with empty queue (job is gone)
             return {"queued": [], "processing": [], "queued_count": 0, "processing_count": 0}
 
     rec = SubmitRecorder()
     feeder = _feeder(store, FlakeySubgen(), rec, target=2)
 
-    # tick 1: subgen down → soft skip, reconcile not performed
+    # tick 1: subgen down → soft skip, job untouched
     n1 = await feeder.tick()
     assert n1 == 0
-    assert store.get(job.id).status == STATUS_SUBMITTED  # untouched
+    assert store.get(job.id).status == STATUS_SUBMITTED
 
-    # tick 2: subgen reachable → reconcile fires, re-pends + re-submits
+    # tick 2: subgen reachable → resolve removes the orphan
     await feeder.tick()
-    assert rec.calls == ["TV/b.mkv"]
+    assert store.get(job.id) is None

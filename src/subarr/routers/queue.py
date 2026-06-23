@@ -33,6 +33,7 @@ from ..config import settings
 from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs
 from ..scan_store import (
+    PATH_STATUS_EMPTY,
     PATH_STATUS_ERROR,
     PATH_STATUS_OK,
     PATH_STATUS_ORPHANED,
@@ -190,6 +191,15 @@ def _path_outcome_chip(
             "category": "orphaned",
             "label": "lost on restart",
             "detail": error or "subgen restarted before transcription completed",
+        }
+    if status == PATH_STATUS_EMPTY:
+        # subgen returned 404 / walked == 0 — the file is no longer on disk
+        # (deleted or moved after it was queued). An expected terminal outcome,
+        # not an error; surface it as a skip so it doesn't vanish silently.
+        return {
+            "category": "skipped",
+            "label": "file removed",
+            "detail": "file is no longer on disk — nothing to transcribe, dropped from the queue",
         }
     return {"category": "pending", "label": status, "detail": ""}
 

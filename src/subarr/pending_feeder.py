@@ -42,6 +42,11 @@ DEFAULT_TARGET_DEPTH = 2
 # very short job that completed before it ever showed up).
 INFLIGHT_GRACE_S = 30.0
 
+# #336: how long a SUBMITTED row that subgen no longer reports must have been
+# submitted before we resolve (drop) it as orphaned. 2x the inflight grace so a
+# job subgen is merely slow to surface isn't dropped prematurely.
+ORPHAN_GRACE_S = 60.0
+
 
 def _subgen_paths(q: dict) -> set[str]:
     """The set of subgen-space paths currently queued/processing (same shape
@@ -97,11 +102,6 @@ class PendingQueueFeeder:
         # → monotonic submit time. Counted toward effective depth so we don't
         # re-fill a slot subgen hasn't reported yet (the over-feed race).
         self._inflight: dict[str, float] = {}
-        # #287: one-shot reconcile on first successful subgen /queue read.
-        # Stays False until a /queue read succeeds; set to True after the first
-        # reconcile runs. Reset to False on start() so a process restart always
-        # re-reconciles once.
-        self._reconciled: bool = False
 
     @property
     def _subgen(self):
@@ -113,7 +113,6 @@ class PendingQueueFeeder:
         if self._task is not None and not self._task.done():
             return
         self._stop.clear()
-        self._reconciled = False  # #287: re-reconcile on every process start
         self._task = asyncio.create_task(self._loop(), name="subarr-queue-feeder")
 
     def kick(self) -> None:
@@ -179,21 +178,18 @@ class PendingQueueFeeder:
 
         subgen_paths = _subgen_paths(q)
 
-        # #287: one-shot boot reconcile. On the first tick where subgen's /queue
-        # is readable, re-pend any SUBMITTED rows that subgen no longer knows
-        # about (subgen was restarted and lost its queue). Runs BEFORE normal
-        # feeding so re-pended jobs are immediately eligible this same tick.
-        # The flag is only set after a successful /queue read so a momentarily
-        # unreachable subgen does NOT trigger a spurious re-pend.
-        if not self._reconciled:
-            n_repended = self._store.repend_orphaned_submitted(subgen_paths)
-            if n_repended:
-                log.info(
-                    "queue-feeder boot reconcile: re-pended %d orphaned SUBMITTED job(s) "
-                    "(subgen queue was empty for them after restart)",
-                    n_repended,
-                )
-            self._reconciled = True
+        # #336: every tick, RESOLVE (drop) SUBMITTED rows that subgen no longer
+        # has and that are past the surface grace. A submitted job leaves subgen's
+        # queue when it's transcribed, SKIPPED (sub already exists / file gone), or
+        # lost on restart — in every case the scan already recorded the outcome, so
+        # the pending row has done its job and should be dropped. This replaces the
+        # old #287 boot-only RE-PEND, which flipped orphans back to PENDING and
+        # re-submitted already-done files forever — the zombie churn that piled up
+        # orphaned SUBMITTED rows and starved the feeder's effective depth. A
+        # genuinely-lost transcription re-surfaces as a coverage gap on the next walk.
+        n_resolved = self._store.resolve_orphaned_submitted(subgen_paths, older_than_s=ORPHAN_GRACE_S)
+        if n_resolved:
+            log.info("queue-feeder: resolved %d orphaned SUBMITTED job(s) subgen no longer has", n_resolved)
 
         now = time.monotonic()
         # Release in-flight reservations that have surfaced in subgen's queue
