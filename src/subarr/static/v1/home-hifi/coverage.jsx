@@ -1917,10 +1917,10 @@ export function AudioReviewModal() {
                   <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
                                 background: 'var(--bg-1)', borderRadius: 'var(--radius-md)',
                                 padding: 8, lineHeight: 1.5 }}>
-                    🎧 That sampled the <b>current default track</b> ({agg.language}) — the dub. To
-                    confirm the original is on another track, switch tracks above and re-run.
-                    To fix this row, close and use <b>“Make … default”</b> — a language verify here
-                    wouldn&apos;t change which track is default.
+                    🎧 Whisper samples the file&apos;s <b>primary audio track</b> ({agg.language}) — here,
+                    the dub. It can&apos;t target the other track yet, so use the <b>player above</b> to
+                    listen to each track and confirm the original by ear. To fix this row, use
+                    <b> “Make … default”</b> — a language verify wouldn&apos;t change which track is default.
                   </div>
                 )}
               </>
