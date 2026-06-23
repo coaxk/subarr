@@ -25,6 +25,14 @@ class _SnapCache:
     def get_cached(self):
         return self._snap
 
+    def clear_track_mismatch_for(self, file_canonical_path):
+        n = 0
+        for it in self._snap.items:
+            if it.get("file_canonical_path") == file_canonical_path and it.get("default_track_mismatch"):
+                it["default_track_mismatch"] = False
+                n += 1
+        return n
+
 
 _PATH = "TV/Show/Season 1/ep.mkv"
 _TM_ITEM = {
