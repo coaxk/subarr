@@ -136,6 +136,22 @@ class PartialScanRequest(BaseModel):
     path: str
 
 
+def _ensure_abs_path_contained(p: str) -> None:
+    """#285: reject an absolute partial-scan path that resolves outside every
+    configured library root. Canonical paths are already containment-checked by
+    canonical_to_fs; the absolute branch was forwarded to Plex unchecked. Reuses
+    fs_to_canonical, which raises PathOutsideRootError (realpath containment) for
+    any path under no library root."""
+    from pathlib import Path
+
+    from ..paths import PathOutsideRootError, fs_to_canonical
+
+    try:
+        fs_to_canonical(Path(p))
+    except PathOutsideRootError:
+        raise HTTPException(400, detail="path is outside the media library") from None
+
+
 @router.post("/plex/partial-scan")
 async def plex_partial_scan(req: PartialScanRequest, request: Request) -> dict:
     """v1.1.1: trigger a Plex partial scan targeting one file's directory.
@@ -154,6 +170,12 @@ async def plex_partial_scan(req: PartialScanRequest, request: Request) -> dict:
         from ..paths import canonical_to_fs
 
         p = str(canonical_to_fs(p))
+    else:
+        # #285: the absolute branch skips canonical_to_fs's containment guard.
+        # Validate it resolves inside a configured library root before handing
+        # it to Plex's scan API — admin-authed, but still don't let a caller
+        # trigger a scan of an arbitrary host directory.
+        _ensure_abs_path_contained(p)
     try:
         return await plex.partial_scan(p)
     except IntegrationError as e:

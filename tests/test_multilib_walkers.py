@@ -110,3 +110,21 @@ def test_library_canonical_resolves_for_partial_scan(two_libraries):
 
     expected = (two_libraries / "Movies" / "film.mkv").resolve()
     assert canonical_to_fs("@disk2/Movies/film.mkv") == expected
+
+
+def test_partial_scan_absolute_path_containment(two_libraries):
+    """#285: an absolute /api/plex/partial-scan path that resolves outside every
+    configured library root is rejected (400), not forwarded to Plex's scan API.
+    A path under a library root passes."""
+    import pytest
+    from fastapi import HTTPException
+
+    from subarr.paths import canonical_to_fs
+    from subarr.routers.admin import _ensure_abs_path_contained
+
+    inside = canonical_to_fs("@disk2/Movies/film.mkv")  # under disk2's root
+    _ensure_abs_path_contained(inside)  # contained → must not raise
+
+    with pytest.raises(HTTPException) as ei:
+        _ensure_abs_path_contained("/nonexistent-root/etc/passwd")
+    assert ei.value.status_code == 400
