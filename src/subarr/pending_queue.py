@@ -396,6 +396,24 @@ class PendingQueueStore:
             )
             return self._require(job_id)
 
+    def move_step(self, job_id: str, *, up: bool) -> PendingJob:
+        """Move a job one step up/down in the FULL pending order (across priority
+        buckets). The neighbour is resolved HERE from current state, not handed in
+        by the caller — so reorder is immune to a stale client view (the feeder
+        churns the list constantly + the UI only polls every few seconds). At a
+        boundary it's a no-op. Reuses move() for the actual placement."""
+        ordered = self.list(status=STATUS_PENDING)
+        idx = next((i for i, j in enumerate(ordered) if j.id == job_id), None)
+        if idx is None:
+            raise KeyError(job_id)
+        if up:
+            if idx == 0:
+                return ordered[idx]  # already at the top
+            return self.move(job_id, before_id=ordered[idx - 1].id)
+        if idx >= len(ordered) - 1:
+            return ordered[idx]  # already at the bottom
+        return self.move(job_id, after_id=ordered[idx + 1].id)
+
     # ── internal ────────────────────────────────────────────────────
 
     def _require(self, job_id: str) -> PendingJob:

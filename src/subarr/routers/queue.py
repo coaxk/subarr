@@ -601,6 +601,10 @@ class PendingMoveRequest(BaseModel):
     after_id: str | None = None
 
 
+class PendingStepRequest(BaseModel):
+    dir: str  # "up" | "down"
+
+
 class QueueControlRequest(BaseModel):
     paused: bool | None = None
     target_depth: int | None = None
@@ -660,6 +664,22 @@ async def move_pending(job_id: str, req: PendingMoveRequest, request: Request) -
         raise HTTPException(400, detail="provide before_id or after_id")
     try:
         return store.move(job_id, before_id=req.before_id, after_id=req.after_id).to_dict()
+    except KeyError as e:
+        raise HTTPException(404, detail=str(e))
+
+
+@router.post("/queue/pending/{job_id}/move-step")
+async def move_step_pending(job_id: str, req: PendingStepRequest, request: Request) -> dict:
+    """Move a job one step up/down. The neighbour is resolved server-side from
+    current state, so the reorder can't target a stale row (the feeder churns the
+    pending list + the UI polls on an interval) — fixes #336 (arrows that no-op or
+    stop working after a few clicks)."""
+    if req.dir not in ("up", "down"):
+        raise HTTPException(400, detail="dir must be 'up' or 'down'")
+    store = request.app.state.pending_queue
+    _require_pending(store, job_id)
+    try:
+        return store.move_step(job_id, up=(req.dir == "up")).to_dict()
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
 

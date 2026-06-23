@@ -500,16 +500,17 @@ function PendingPanel() {
     } catch (e) { /* best-effort */ }
   }, [refetch]);
 
-  // #169: step-wise reorder via /move relative to the adjacent row (up = before
-  // the row above, down = after the row below). promote/demote reorder only
-  // WITHIN a priority bucket, so a lone manual job (its own bucket) couldn't
-  // move at all. /move adopts the target's priority, so up/down cross buckets
-  // one step at a time and an explicit reorder overrides default source priority.
-  const move = useCallback(async (id, body) => {
+  // #169/#336: step-wise reorder. The backend resolves the adjacent row from
+  // CURRENT state (up = before the row above, down = after the row below) and
+  // moves one step, adopting the target's priority so up/down cross priority
+  // buckets one step at a time. We just say "up"/"down" — passing a before_id/
+  // after_id computed from this (poll-lagged) list targeted stale rows once the
+  // feeder churned the queue, so arrows would no-op or stop after a few clicks.
+  const moveStep = useCallback(async (id, dir) => {
     try {
-      await fetch(`/api/queue/pending/${id}/move`, {
+      await fetch(`/api/queue/pending/${id}/move-step`, {
         method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }),
       });
       refetch();
     } catch (e) { /* best-effort */ }
@@ -544,8 +545,8 @@ function PendingPanel() {
             </div>
           : pending.map((job, i) => (
               <PendingRow key={job.id} job={job} idx={i} total={pending.length}
-                onMoveUp={(id) => move(id, { before_id: pending[i - 1].id })}
-                onMoveDown={(id) => move(id, { after_id: pending[i + 1].id })}
+                onMoveUp={(id) => moveStep(id, 'up')}
+                onMoveDown={(id) => moveStep(id, 'down')}
                 onRemove={(id) => act(id, 'remove')} />
             ))}
       </div>
