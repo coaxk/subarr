@@ -204,3 +204,48 @@ def test_ui_bootstrap_when_no_key(app_with_stub):
     r = app_with_stub.get("/api/ui-bootstrap", headers={"Sec-Fetch-Site": "same-origin"})
     assert r.status_code == 200
     assert r.json()["api_key"] == ""
+
+
+def test_ui_bootstrap_no_key_never_403s(app_with_stub):
+    """#329: with no key configured there's nothing to protect — return empty
+    even header-less, so proxied keyless installs get a clean 200 (no console 403)."""
+    r = app_with_stub.get("/api/ui-bootstrap", headers={})
+    assert r.status_code == 200
+    assert r.json()["api_key"] == ""
+
+
+def test_ui_bootstrap_referer_fallback_when_fetch_metadata_stripped(app_with_stub):
+    """#329: a reverse proxy may strip Sec-Fetch-Site. When it's absent, a
+    same-origin Referer/Origin still gets the key; mismatched/absent/cross-site
+    is still denied (cross-site JS defence intact)."""
+    from subarr.config import settings
+
+    object.__setattr__(settings, "api_key", "sekrit123")
+    try:
+        # proxy dropped Sec-Fetch-Site but kept a same-origin Referer → key
+        r = app_with_stub.get("/api/ui-bootstrap", headers={"Referer": "http://testserver/queue.html"})
+        assert r.status_code == 200, r.text
+        assert r.json()["api_key"] == "sekrit123"
+        # same-origin Origin works too
+        assert (
+            app_with_stub.get("/api/ui-bootstrap", headers={"Origin": "http://testserver"}).status_code == 200
+        )
+        # X-Forwarded-Host (set by the proxy) is honoured over Host
+        r = app_with_stub.get(
+            "/api/ui-bootstrap",
+            headers={"Referer": "http://subarr.example/queue.html", "X-Forwarded-Host": "subarr.example"},
+        )
+        assert r.status_code == 200
+        # cross-origin Referer → denied
+        assert (
+            app_with_stub.get("/api/ui-bootstrap", headers={"Referer": "http://evil.example/x"}).status_code
+            == 403
+        )
+        # explicit cross-site fetch → denied even with a same-origin Referer
+        r = app_with_stub.get(
+            "/api/ui-bootstrap",
+            headers={"Sec-Fetch-Site": "cross-site", "Referer": "http://testserver/x"},
+        )
+        assert r.status_code == 403
+    finally:
+        object.__setattr__(settings, "api_key", "")
