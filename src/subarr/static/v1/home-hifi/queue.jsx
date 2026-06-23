@@ -254,7 +254,10 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
   // The underlying outcome.category stays 'skipped' for API consumers;
   // only the visual category changes.
   const rawCategory = out.category || 'pending';
-  const category = (rawCategory === 'skipped' && out.skip_reason === 'sub_exists')
+  // Benign skips (matching .srt on disk, or the file was removed) get the
+  // neutral 'sub_exists' chip style rather than the warn-amber 'skipped' one.
+  const benignSkip = out.skip_reason === 'sub_exists' || out.skip_reason === 'file_removed';
+  const category = (rawCategory === 'skipped' && benignSkip)
     ? 'sub_exists'
     : rawCategory;
   const ageS = Math.max(0, (Date.now() / 1000) - (entry.created_at || 0));
@@ -674,20 +677,21 @@ export function QueuePage() {
   // so the eye-catching problem rows are top.
   const history = data?.history || [];
   const orphaned = history.filter(h => h.outcome?.category === 'orphaned');
-  // 'skipped + sub_exists' = matching .srt already on disk → not really an
-  // issue. Route those into Recently done. Everything else skipped
-  // (unknown reason, likely audio_lang) stays in Issues so the user
-  // notices and can verify their skip-language list.
+  // Benign skips (matching .srt already on disk, or the file was removed
+  // before subgen ran) are NOT issues — route them into Recently done.
+  // Everything else skipped (unknown reason, likely audio_lang) stays in
+  // Issues so the user notices and can verify their skip-language list.
+  const isBenignSkip = (o) => o.skip_reason === 'sub_exists' || o.skip_reason === 'file_removed';
   const issues = history.filter(h => {
     const o = h.outcome || {};
     if (o.category === 'error') return true;
-    if (o.category === 'skipped' && o.skip_reason !== 'sub_exists') return true;
+    if (o.category === 'skipped' && !isBenignSkip(o)) return true;
     return false;
   });
   const completed = history.filter(h => {
     const o = h.outcome || {};
     if (o.category === 'ok' || o.category === 'running') return true;
-    if (o.category === 'skipped' && o.skip_reason === 'sub_exists') return true;
+    if (o.category === 'skipped' && isBenignSkip(o)) return true;
     return false;
   });
   const completedShown = completed.slice(0, 100);  // section caps display at 100

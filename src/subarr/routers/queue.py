@@ -210,6 +210,10 @@ def _path_outcome_chip(
             "category": "skipped",
             "label": "file removed",
             "detail": "file is no longer on disk — nothing to transcribe, dropped from the queue",
+            # #346 follow-up: a benign terminal outcome, not a fail. The
+            # skip_reason routes it to Recently-done (neutral) rather than the
+            # "Issues — silent fails" bucket, alongside sub_exists.
+            "skip_reason": "file_removed",
         }
     return {"category": "pending", "label": status, "detail": ""}
 

@@ -248,6 +248,8 @@ def test_empty_status_surfaces_as_file_removed():
     assert chip["category"] == "skipped"
     assert chip["label"] == "file removed"
     assert "no longer on disk" in chip["detail"]
+    # benign skip_reason routes it to Recently-done, not the Issues bucket
+    assert chip["skip_reason"] == "file_removed"
 
 
 def test_ok_relabels_to_completed_when_transcription_done():
