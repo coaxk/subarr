@@ -194,6 +194,84 @@ def _path_outcome_chip(
     return {"category": "pending", "label": status, "detail": ""}
 
 
+# ─── #336: history view stale-while-revalidate cache ─────────────────────────
+# Building the history view does a NAS iterdir()+stat per SKIPPED row (see
+# _infer_skip_reason) — seconds of filesystem I/O over a network mount. It was
+# rebuilt on every /api/queue poll AND every page load, so switching to the
+# Queue page blocked on it. Serve the last-built view instantly; refresh in the
+# background when older than the TTL. Only a truly cold cache pays the cost.
+_HIST_TTL_S = 5.0
+
+
+def _hist_cache(state) -> dict:
+    """Per-app history cache (on app.state, so test apps don't share one)."""
+    c = getattr(state, "_queue_hist_cache", None)
+    if c is None:
+        c = {"key": None, "built_at": 0.0, "history": [], "counts": {}, "refreshing": False}
+        state._queue_hist_cache = c
+    return c
+
+
+def _build_history_view(scans: list, live_paths: set) -> tuple[list[dict], dict]:
+    """Flatten scans → per-path outcome rows + category counts. Pure (no app
+    state) so it can run in a worker thread and be cached. The expensive bit is
+    _path_outcome_chip → _infer_skip_reason (filesystem) for skipped rows."""
+    history: list[dict] = []
+    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
+    for scan in scans:
+        for r in scan.results:
+            basename = os.path.basename(r.path)
+            # Skip if this path is currently live in subgen — already shown in
+            # the processing/queued section (covers a running scan_store row and
+            # a just-submitted OK row). Skipped/error/orphaned are kept.
+            if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
+                continue
+            outcome = _path_outcome_chip(r.status, r.subgen_body, r.error, canonical_path=r.path)
+            cat = outcome["category"]
+            if cat in counts:
+                counts[cat] += 1
+            history.append(
+                {
+                    "scan_id": scan.id,
+                    "created_at": scan.created_at,
+                    "scan_status": scan.status,
+                    "path": r.path,
+                    "outcome": outcome,
+                    "started_at": r.started_at,
+                    "finished_at": r.finished_at,
+                    "subgen_status_code": r.subgen_status_code,
+                }
+            )
+    return history, counts
+
+
+async def _refresh_history_cache(request: Request, history_window_s: int, cache_key: tuple) -> None:
+    """Background rebuild of the history cache. Single-flight via the cache's
+    own `refreshing` flag (per-app)."""
+    c = _hist_cache(request.app.state)
+    if c["refreshing"]:
+        return
+    c["refreshing"] = True
+    try:
+        store = request.app.state.scans
+        since = time.time() - history_window_s
+        scans = store.list_recent(since_epoch=since, limit=500)
+        live_paths: set[str] = set()
+        try:
+            q = await request.app.state.subgen.queue()
+            for t in (q.get("processing") or []) + (q.get("queued") or []):
+                if isinstance(t, dict) and t.get("path"):
+                    live_paths.add(os.path.basename(t["path"]))
+        except Exception:  # nosec B110 — best-effort dedup; stale is fine
+            pass
+        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths)
+        c.update(key=cache_key, built_at=time.time(), history=history, counts=counts)
+    except Exception as e:
+        log.debug("history cache refresh failed: %s", e)
+    finally:
+        c["refreshing"] = False
+
+
 @router.get("/queue")
 async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_WINDOW_S) -> dict:
     """Featured Queue: live subgen + recent subarr scan history merged.
@@ -259,65 +337,31 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
                 if prog is not None:
                     task["progress"] = prog
 
-    # HISTORY (subarr scan_store). Flatten scans → per-path rows so each
-    # row in the UI is a single submission outcome, not a scan-with-N-paths.
-    store = request.app.state.scans
-    since = time.time() - history_window_s
-    scans = store.list_recent(since_epoch=since, limit=500)
-    history: list[dict] = []
-    counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
-    # Build a set of paths currently live in subgen so we don't double-count
-    # an in-flight row as "running" via scan_store AND "processing" via subgen.
-    live_paths: set[str] = set()
-    for t in live.get("processing", []) or []:
-        if isinstance(t, dict) and t.get("path"):
-            live_paths.add(os.path.basename(t["path"]))
-    for t in live.get("queued", []) or []:
-        if isinstance(t, dict) and t.get("path"):
-            live_paths.add(os.path.basename(t["path"]))
-
-    # _path_outcome_chip → _infer_skip_reason does a SYNCHRONOUS filesystem
-    # iterdir() + per-sibling stat for every SKIPPED row (checking for an
-    # existing sidecar on disk). Over a NAS/network mount that's ~1.5s, and
-    # /api/queue is polled constantly — running it on the event loop froze
-    # every concurrent request mid-walk. It's pure filesystem I/O (releases the
-    # GIL), so run the whole history build off-loop in a worker thread.
-    def _build_history() -> None:
-        for scan in scans:
-            for r in scan.results:
-                basename = os.path.basename(r.path)
-                # Skip history row if this path is currently live in subgen —
-                # it's already shown in the processing/queued section. This
-                # covers BOTH a running scan_store row AND a just-submitted OK
-                # row ("subgen queued 1"): without OK here, a freshly-queued
-                # file showed in the live Queued section AND again in
-                # Recently-done. Skipped/error/orphaned rows are kept so real
-                # outcomes still surface even if a newer submission is live.
-                if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
-                    continue
-                outcome = _path_outcome_chip(
-                    r.status,
-                    r.subgen_body,
-                    r.error,
-                    canonical_path=r.path,
-                )
-                cat = outcome["category"]
-                if cat in counts:
-                    counts[cat] += 1
-                history.append(
-                    {
-                        "scan_id": scan.id,
-                        "created_at": scan.created_at,
-                        "scan_status": scan.status,
-                        "path": r.path,
-                        "outcome": outcome,
-                        "started_at": r.started_at,
-                        "finished_at": r.finished_at,
-                        "subgen_status_code": r.subgen_status_code,
-                    }
-                )
-
-    await asyncio.to_thread(_build_history)
+    # HISTORY (subarr scan_store), stale-while-revalidate (#336). The build does
+    # NAS filesystem I/O per skipped row (_infer_skip_reason), so serve the
+    # last-built view instantly and rebuild in the background once stale — only a
+    # cold cache blocks the response. The 24h/500-row build was previously paid
+    # on every poll AND every page switch, which is why the Queue page was slow.
+    cache_key = (history_window_s,)
+    now = time.time()
+    c = _hist_cache(request.app.state)
+    if c["key"] == cache_key and c["built_at"] > 0:
+        history = c["history"]
+        counts = c["counts"]
+        if now - c["built_at"] >= _HIST_TTL_S:
+            asyncio.create_task(_refresh_history_cache(request, history_window_s, cache_key))
+    else:
+        # Cold cache — build synchronously this once (reuse the already-fetched
+        # live queue for the dedup set, no extra subgen call).
+        store = request.app.state.scans
+        since = now - history_window_s
+        scans = store.list_recent(since_epoch=since, limit=500)
+        live_paths: set[str] = set()
+        for t in (live.get("processing") or []) + (live.get("queued") or []):
+            if isinstance(t, dict) and t.get("path"):
+                live_paths.add(os.path.basename(t["path"]))
+        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths)
+        c.update(key=cache_key, built_at=now, history=history, counts=counts)
 
     # Count of arena sweeps actively transcribing (running /asr) — NOT sweeps
     # parked in waiting_for_capacity (those hold no GPU slot, so the "using a

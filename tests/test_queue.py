@@ -217,3 +217,22 @@ def test_cancel_passes_subgen_path_verbatim(app_with_stub):
     assert r.json().get("cancelled") is True
     # The exact subgen path (leading slash + all) must reach subgen.
     assert _CANCEL_SEEN["path"] == full
+
+
+def test_queue_history_is_cached_within_ttl(app_with_stub, monkeypatch):
+    """#336: history is stale-while-revalidate. The first /api/queue builds it
+    (cold cache); a second call within the TTL serves the cached view without
+    rebuilding (the NAS-walking build is what made the page slow)."""
+    import subarr.routers.queue as q
+
+    calls = {"n": 0}
+    orig = q._build_history_view
+
+    def counting(scans, live_paths):
+        calls["n"] += 1
+        return orig(scans, live_paths)
+
+    monkeypatch.setattr(q, "_build_history_view", counting)
+    assert app_with_stub.get("/api/queue").status_code == 200
+    assert app_with_stub.get("/api/queue").status_code == 200
+    assert calls["n"] == 1  # built once; second call served the cache
