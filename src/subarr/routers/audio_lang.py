@@ -819,10 +819,14 @@ async def whisper_detect(req: WhisperDetectRequest, request: Request) -> dict[st
     if not fs_path.exists():
         raise HTTPException(404, detail=f"not found on disk: {canonical!r}")
     subgen = request.app.state.subgen
-    # subgen wants the path as IT sees it (same media_root mount). The
-    # canonical form is mount-relative; both sides share the same root
-    # by design (see compose.yaml + onboarding wizard mounting docs).
-    subgen_path = str(fs_path)
+    # subgen wants the path in ITS mount space (SUBGEN_MEDIA_PREFIX, e.g.
+    # /media/TV/...), NOT subarr's fs view (/media/library/TV/...). The two
+    # mounts differ, so translate exactly like /batch does — passing the bare
+    # fs_path made subgen's ffprobe fail (file-not-found) and silently return
+    # "und" for every detect.
+    from ..paths import canonical_to_subgen_batch
+
+    subgen_path = canonical_to_subgen_batch(canonical)
     try:
         result = await subgen.detect_language_robust(
             subgen_path,

@@ -292,9 +292,9 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
         }}>{ageLabel}</span>
         {canRequeue && (
           <button className="btn ghost sm"
-            onClick={() => onRequeue && onRequeue(path)}
+            onClick={() => onRequeue && onRequeue(path, entry.scan_id)}
             disabled={busy}
-            title="Resubmit this path to subgen as a new scan"
+            title="Resubmit this path to subgen as a new scan (removes this entry)"
             aria-label={`Requeue ${path}`}>
             {busy ? '…' : '↻ requeue'}
           </button>
@@ -701,8 +701,8 @@ export function QueuePage() {
   // show the "needs v4.4+" hint so the user knows to upgrade.
   const canCancel = data?.capabilities?.queue_cancel === true;
 
-  const requeue = useCallback(async (path) => {
-    setBusyAction(path);
+  const requeue = useCallback(async (path, scanId) => {
+    setBusyAction(scanId || path);
     try {
       const r = await fetch('/api/queue/requeue', {
         method: 'POST',
@@ -713,6 +713,11 @@ export function QueuePage() {
       if (!r.ok && r.status !== 202) {
         const t = await r.text().catch(() => '');
         throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+      }
+      // Requeued from a history row → drop the old failed/cancelled entry so it
+      // doesn't linger in Issues; the new attempt creates its own history row.
+      if (scanId) {
+        await fetch(`/api/queue/scan/${scanId}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
       }
       await refetch({ silent: true });
     } catch (e) {
