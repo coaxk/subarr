@@ -1350,10 +1350,15 @@ async def build_coverage(
     probe_by_series_prefix: dict[str, list[tuple[str, Any]]] = {}
     if probe_store is not None:
         sources["probe_cache"] = {"ok": True, "entries": 0}
-        for path in probe_store.all_paths():
-            entry = probe_store.get(path)  # non-strict — accept whatever's cached
-            if entry is None:
-                continue
+        # PERF (#308-class loop stall): this was all_paths() + get(path) PER path
+        # — thousands of synchronous SQLite round-trips on the event loop, which
+        # stalled it >0.5s on a large library and transiently flapped the Bazarr/
+        # Radarr health pills (the watchdog reads time out while the loop is
+        # blocked). all_entries() returns the identical hydrated ProbeResults in a
+        # SINGLE query; run it (query + JSON hydration) off-loop in a worker.
+        entries = await asyncio.to_thread(probe_store.all_entries)
+        for entry in entries:
+            path = entry.canonical_path
             sources["probe_cache"]["entries"] += 1
             # Index under all ancestor prefixes so a single all-series cache scan
             # finds matches for any series-level Bazarr row.
@@ -1367,7 +1372,7 @@ async def build_coverage(
     # un-flagged gap that subgen would then skip.
     probe_failed_by_prefix: dict[str, list[str]] = {}
     if probe_store is not None:
-        failed = probe_store.failed_paths()
+        failed = await asyncio.to_thread(probe_store.failed_paths)
         if failed and "probe_cache" in sources:
             sources["probe_cache"]["failures"] = len(failed)
         for path in failed:
