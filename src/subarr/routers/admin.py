@@ -19,21 +19,54 @@ log = logging.getLogger(__name__)
 
 @router.get("/ui-bootstrap")
 async def ui_bootstrap(request: Request) -> dict:
-    """#198: hand the configured API key to the bundled frontend, but ONLY
-    to scripts running on a page we served. Gated on Sec-Fetch-Site ==
-    same-origin: a cross-site page can neither set that header nor read this
-    response (CORS). Returns an empty key when none is configured (the UI
-    then sends no X-Api-Key, which is correct — the middleware is a no-op)."""
+    """#198/#329: hand the configured API key to the bundled frontend, but ONLY
+    to scripts running on a page we served.
+
+    Primary gate is Sec-Fetch-Site == same-origin (a cross-site page can neither
+    forge that header nor read this response under CORS). #329: some reverse
+    proxies (unraid WebUI, etc.) strip fetch-metadata headers, which used to 403
+    every proxied install that set SUBARR_API_KEY — no key reached the UI, so
+    every authenticated /api call 401'd and the whole UI broke. So when
+    Sec-Fetch-Site is ABSENT we fall back to a same-origin Referer/Origin match.
+    A genuine cross-site fetch still carries Sec-Fetch-Site: cross-site (rejected
+    below) and a Referer on the attacker's host — the cross-site-JS defence is
+    intact; only a header-less direct hit with a forged Referer slips through,
+    and that caller already has direct network access to the API anyway."""
     from ..config import settings
 
+    # Nothing to protect when no key is configured — return empty unconditionally
+    # so keyless installs behind any proxy get a clean 200, not a console 403.
+    if not settings.api_key:
+        return {"api_key": ""}
+
     sfs = request.headers.get("sec-fetch-site", "").lower()
-    if sfs and sfs != "same-origin":
+    if sfs == "same-origin":
+        return {"api_key": settings.api_key}
+    if sfs:
+        # An explicit non-same-origin browser fetch (cross-site / same-site /
+        # none) — never hand out the key.
         raise HTTPException(403, detail="ui-bootstrap is same-origin only")
-    # Header-less requests (no Sec-Fetch-Site at all) are direct hits, not
-    # same-origin page fetches — also denied so curl can't lift the key.
-    if not sfs:
-        raise HTTPException(403, detail="ui-bootstrap is same-origin only")
-    return {"api_key": settings.api_key}
+    # Sec-Fetch-Site absent: likely a proxy that stripped fetch-metadata. Accept
+    # a same-origin Referer/Origin; otherwise it's a header-less direct hit.
+    if _referer_is_same_origin(request):
+        return {"api_key": settings.api_key}
+    raise HTTPException(403, detail="ui-bootstrap is same-origin only")
+
+
+def _referer_is_same_origin(request: Request) -> bool:
+    """True when the request's Origin/Referer host matches the host the client
+    addressed (X-Forwarded-Host if a proxy set it, else Host). Lets proxied
+    installs that drop Sec-Fetch-Site through without weakening the cross-site
+    defence — a cross-site page's Referer carries the attacker's host."""
+    from urllib.parse import urlsplit
+
+    ref = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not ref:
+        return False
+    ref_host = urlsplit(ref).netloc.rsplit("@", 1)[-1].lower()
+    fwd = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    host = fwd.split(",")[0].strip().lower()
+    return bool(ref_host) and ref_host == host
 
 
 def _auth_is_configured(api_key: str, auth_user: str, auth_pass: str) -> bool:
