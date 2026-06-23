@@ -214,6 +214,18 @@ async def _stages_block(state) -> list[dict[str, Any]]:
                         log.debug("stages: scanning progress error: %s", e)
     except Exception as e:
         log.debug("stages: scanning error: %s", e)
+    # #336: include subarr's pending feeder backlog so the tile reflects work
+    # WAITING to transcribe, not just what's already been handed to subgen.
+    # Without this the tile read "0 queued" while jobs sat throttled in the
+    # pending queue (the same Queued-vs-Pending gap the Queue page had).
+    try:
+        pq = getattr(state, "pending_queue", None)
+        if pq is not None:
+            pending_waiting = pq.count_by_status().get("pending", 0)
+            queued_count += pending_waiting
+            scanning_count = active_count + queued_count
+    except Exception as e:
+        log.debug("stages: pending-count error: %s", e)
     stages.append(
         {
             "id": "scanning",
