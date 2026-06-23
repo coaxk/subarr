@@ -1896,8 +1896,11 @@ export function AudioReviewModal() {
                 </div>
                 {/* #90 (B): accept the machine detection AS whisper-verified
                     (distinct from Confirm below, which stores it as YOUR call).
-                    Stores source=whisper → cyan badge + tag-mismatch flag. */}
-                {agg.language && agg.language !== 'und' && agg.n_total > 0 && (
+                    Stores source=whisper → cyan badge + tag-mismatch flag.
+                    #159: hidden on track-mismatch rows — Whisper there samples the
+                    CURRENT default (the dub), so "accept fr" is the wrong action;
+                    the fix is the default-track swap, not a language verify. */}
+                {!row.listen_only && agg.language && agg.language !== 'und' && agg.n_total > 0 && (
                   <button className="btn sm"
                     onClick={() => save(agg.language, {
                       source: 'whisper',
@@ -1909,6 +1912,16 @@ export function AudioReviewModal() {
                     style={{ alignSelf: 'flex-start', background: 'rgba(34,211,238,0.18)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.35)' }}>
                     {saving ? 'Saving…' : `✓ Accept as Whisper-verified (${agg.language})`}
                   </button>
+                )}
+                {row.listen_only && agg.language && agg.language !== 'und' && (
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+                                background: 'var(--bg-1)', borderRadius: 'var(--radius-md)',
+                                padding: 8, lineHeight: 1.5 }}>
+                    🎧 That sampled the <b>current default track</b> ({agg.language}) — the dub. To
+                    confirm the original is on another track, switch tracks above and re-run.
+                    To fix this row, close and use <b>“Make … default”</b> — a language verify here
+                    wouldn&apos;t change which track is default.
+                  </div>
                 )}
               </>
             );
