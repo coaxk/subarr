@@ -292,35 +292,35 @@ class PendingQueueStore:
             )
             return cur.rowcount > 0
 
-    def repend_orphaned_submitted(self, live_subgen_paths: set[str]) -> int:
-        """#287: re-pend SUBMITTED jobs that subgen no longer knows about.
+    def resolve_orphaned_submitted(self, live_subgen_paths: set[str], *, older_than_s: float) -> int:
+        """#336: REMOVE SUBMITTED jobs that subgen no longer reports and that were
+        submitted longer ago than `older_than_s` (past the surface-in-/queue grace).
 
-        For each row with status=SUBMITTED whose subgen-space path
-        (`canonical_to_subgen_batch(canonical_path)`) is NOT in
-        `live_subgen_paths`, flip it back to STATUS_PENDING and clear
-        `submitted_at` so the feeder treats it as a fresh job.
-
-        Call this once at boot (after a successful /queue read) to recover
-        jobs that were SUBMITTED when subgen was restarted and lost its queue.
-        Returns the number of rows re-pended.
-        """
+        A submitted job leaves subgen's queue when it's transcribed, SKIPPED (sub
+        already exists / 404 file gone), or lost on a subgen restart — in every
+        case the scan already recorded the outcome in history, so the pending row
+        has done its job and is dropped. This replaces an earlier reconcile that
+        RE-PENDED orphans (flipped them back to PENDING), which re-submitted
+        already-done files forever — the zombie churn that piled up orphaned
+        SUBMITTED rows and starved the feeder's effective depth. A genuinely lost
+        transcription re-surfaces as a coverage gap on the next walk. Returns the
+        number removed."""
         from .paths import canonical_to_subgen_batch
 
+        cutoff = time.time() - older_than_s
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, canonical_path FROM pending_queue WHERE status = ?",
+                "SELECT id, canonical_path, submitted_at FROM pending_queue WHERE status = ?",
                 (STATUS_SUBMITTED,),
             ).fetchall()
-            count = 0
-            for job_id, canonical_path in rows:
-                sg_path = canonical_to_subgen_batch(canonical_path)
-                if sg_path not in live_subgen_paths:
-                    self._conn.execute(
-                        "UPDATE pending_queue SET status = ?, submitted_at = NULL WHERE id = ?",
-                        (STATUS_PENDING, job_id),
-                    )
-                    count += 1
-            return count
+            removed = 0
+            for job_id, canonical_path, submitted_at in rows:
+                if submitted_at is not None and submitted_at > cutoff:
+                    continue  # within grace — subgen may not have surfaced it yet
+                if canonical_to_subgen_batch(canonical_path) not in live_subgen_paths:
+                    self._conn.execute("DELETE FROM pending_queue WHERE id = ?", (job_id,))
+                    removed += 1
+            return removed
 
     def clear(self, status: str | None = None) -> int:
         with self._lock:

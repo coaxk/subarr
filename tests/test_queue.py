@@ -236,3 +236,15 @@ def test_queue_history_is_cached_within_ttl(app_with_stub, monkeypatch):
     assert app_with_stub.get("/api/queue").status_code == 200
     assert app_with_stub.get("/api/queue").status_code == 200
     assert calls["n"] == 1  # built once; second call served the cache
+
+
+def test_empty_status_surfaces_as_file_removed():
+    """#336: subgen 404 / walked==0 (file gone from disk) must NOT vanish into
+    the hidden 'pending' fallback — it surfaces as a visible 'file removed' skip."""
+    import subarr.routers.queue as q
+    from subarr.scan_store import PATH_STATUS_EMPTY
+
+    chip = q._path_outcome_chip(PATH_STATUS_EMPTY, None, None)
+    assert chip["category"] == "skipped"
+    assert chip["label"] == "file removed"
+    assert "no longer on disk" in chip["detail"]
