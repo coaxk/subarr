@@ -522,7 +522,7 @@ function PendingPanel() {
   return (
     <div className="panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
       <div style={{ padding: '12px 18px', borderBottom: 'var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span className="label">Pending</span>
+        <span className="label" title="subarr's own backlog. Jobs land here first, then subarr feeds them into subgen's Queued above at your target depth instead of flooding the GPU.">Pending <span style={{ fontWeight: 400, color: 'var(--fg-3)' }}>· subarr backlog</span></span>
         <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>{pending.length}</span>
         {paused && (
           <span className="chip" style={{ fontSize: 'var(--text-2xs)', color: '#facc15' }}>feed paused</span>
@@ -858,7 +858,7 @@ export function QueuePage() {
           borderBottom: 'var(--border)',
           display: 'flex', alignItems: 'center', gap: 10,
         }}>
-          <span className="label">Queued</span>
+          <span className="label" title="Handed to subgen and waiting for the GPU. subarr feeds these from the Pending backlog below at your target depth — so this can be empty while Pending still has work.">Queued in subgen</span>
           <span className="num mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
             {queued.length}
           </span>
@@ -866,7 +866,7 @@ export function QueuePage() {
         <div>
           <AsyncState
             empty={!isInitialLoad && !isError && queued.length === 0}
-            emptyMessage="Nothing waiting in line.">
+            emptyMessage="Nothing handed to subgen right now. New jobs wait in Pending below until subarr feeds them in.">
           {queued.map((item, i) => {
             const p = item.path || item.canonical_path || item.file || '';
             return (
