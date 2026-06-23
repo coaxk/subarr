@@ -2108,11 +2108,14 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing, queued }) {
             ? 'Queued — waiting in subarr’s pending queue; it will show in subgen shortly'
             : 'Queue this row for subgen / Whisper transcription'}
           style={{
-            height: 22, padding: '0 8px', fontSize: 'var(--text-2xs)',
+            height: 22, padding: '0 8px',
+            fontSize: queued ? 'var(--text-sm)' : 'var(--text-2xs)',
+            fontWeight: queued ? 700 : undefined,
+            lineHeight: 1,
             color: queued ? 'var(--success-500)' : undefined,
             borderColor: queued ? 'var(--success-500)' : undefined,
           }}>
-          {queued ? '✓ queued' : queuing ? '…' : '↻'}
+          {queued ? '✓' : queuing ? '…' : '↻'}
         </button>
       </div>
     </div>
