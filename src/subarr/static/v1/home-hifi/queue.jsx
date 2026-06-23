@@ -391,6 +391,35 @@ function SubmitScanForm({ onSubmitted }) {
   );
 }
 
+// #336: the manual-scan-by-path form is a power-user escape hatch (a path subarr
+// doesn't surface as a gap). The everyday way to queue is the Gaps page or the
+// Library tree (browse + select), so tuck it behind a collapsed "Advanced"
+// disclosure to keep the Queue page focused on monitoring.
+function AdvancedScanDisclosure({ onSubmitted }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="panel" style={{ padding: '10px 18px' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+      >
+        <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>{open ? '▾' : '▸'}</span>
+        <span className="label">Advanced</span>
+        <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>submit a manual scan by path</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)', marginBottom: 8 }}>
+            For a path subarr doesn't surface as a gap. Most of the time, queue from the{' '}
+            <a href="/coverage">Gaps</a> page or the <a href="/library">Library</a> tree instead.
+          </div>
+          <SubmitScanForm onSubmitted={onSubmitted} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── #66/#116: pending-queue authority (subarr's backlog before subgen) ──
 function useLivePending(intervalMs = 5000) {
   const [data, setData] = useState(null);
@@ -814,11 +843,9 @@ export function QueuePage() {
       {/* Arena sweep GPU slot indicator — shown when Tuning Lab is running */}
       <ArenaSlotIndicator arenaActive={data?.arena_active || 0} />
 
-      {/* Submit manual scan */}
-      <div className="panel" style={{ padding: '16px 18px' }}>
-        <div className="label" style={{ marginBottom: 10 }}>Submit a manual scan</div>
-        <SubmitScanForm onSubmitted={() => refetch({ silent: false })} />
-      </div>
+      {/* #336: manual scan tucked behind an "Advanced" disclosure — the Queue
+          page is for monitoring; everyday queuing is Gaps + Library. */}
+      <AdvancedScanDisclosure onSubmitted={() => refetch({ silent: false })} />
 
       {/* Processing — header padding 12x18 to align with the SUBMIT
           A MANUAL SCAN panel above. No maxHeight: auto-sizes to the
