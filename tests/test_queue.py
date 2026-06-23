@@ -228,9 +228,9 @@ def test_queue_history_is_cached_within_ttl(app_with_stub, monkeypatch):
     calls = {"n": 0}
     orig = q._build_history_view
 
-    def counting(scans, live_paths):
+    def counting(scans, live_paths, completed_paths=None):
         calls["n"] += 1
-        return orig(scans, live_paths)
+        return orig(scans, live_paths, completed_paths)
 
     monkeypatch.setattr(q, "_build_history_view", counting)
     assert app_with_stub.get("/api/queue").status_code == 200
@@ -248,3 +248,23 @@ def test_empty_status_surfaces_as_file_removed():
     assert chip["category"] == "skipped"
     assert chip["label"] == "file removed"
     assert "no longer on disk" in chip["detail"]
+
+
+def test_ok_relabels_to_completed_when_transcription_done():
+    """#346: an OK scan row whose canonical path is in completed_paths (subgen
+    finished it) shows 'completed', not the stale hand-off 'queued' label."""
+    import subarr.routers.queue as q
+    from subarr.scan_store import PATH_STATUS_OK
+
+    path = "TV/Show/Season 1/Show - S01E01.mkv"
+    # not yet completed → still 'queued'
+    pending = q._path_outcome_chip(
+        PATH_STATUS_OK, {"queued": 1}, None, canonical_path=path, completed_paths=set()
+    )
+    assert pending["label"] == "queued"
+    # completion recorded → 'completed'
+    done = q._path_outcome_chip(
+        PATH_STATUS_OK, {"queued": 1}, None, canonical_path=path, completed_paths={path}
+    )
+    assert done["label"] == "completed"
+    assert done["category"] == "ok"

@@ -147,6 +147,7 @@ def _path_outcome_chip(
     body: dict | None,
     error: str | None,
     canonical_path: str | None = None,
+    completed_paths: set[str] | None = None,
 ) -> dict:
     """Derive a single 'outcome' shape per scan path for the UI:
     {category, label, detail, skip_reason?}.
@@ -161,6 +162,15 @@ def _path_outcome_chip(
         return {"category": "running", "label": "running", "detail": "scan_runner forwarding to subgen"}
     if status == PATH_STATUS_OK:
         queued = (body or {}).get("queued", 0) if isinstance(body, dict) else 0
+        if completed_paths is not None and canonical_path in completed_paths:
+            # #346: subgen finished this one (completion-watcher recorded it in
+            # provenance) — show the final state, not the stale "queued at
+            # hand-off" label that lingers in Recently-done.
+            return {
+                "category": "ok",
+                "label": "completed",
+                "detail": "transcribed — subtitle written",
+            }
         return {
             "category": "ok",
             "label": "queued",
@@ -222,10 +232,15 @@ def _hist_cache(state) -> dict:
     return c
 
 
-def _build_history_view(scans: list, live_paths: set) -> tuple[list[dict], dict]:
+def _build_history_view(
+    scans: list, live_paths: set, completed_paths: set | None = None
+) -> tuple[list[dict], dict]:
     """Flatten scans → per-path outcome rows + category counts. Pure (no app
     state) so it can run in a worker thread and be cached. The expensive bit is
-    _path_outcome_chip → _infer_skip_reason (filesystem) for skipped rows."""
+    _path_outcome_chip → _infer_skip_reason (filesystem) for skipped rows.
+
+    `completed_paths` (canonical paths subgen finished) relabels OK rows from
+    'queued' → 'completed' (#346)."""
     history: list[dict] = []
     counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
     for scan in scans:
@@ -236,7 +251,9 @@ def _build_history_view(scans: list, live_paths: set) -> tuple[list[dict], dict]
             # a just-submitted OK row). Skipped/error/orphaned are kept.
             if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
                 continue
-            outcome = _path_outcome_chip(r.status, r.subgen_body, r.error, canonical_path=r.path)
+            outcome = _path_outcome_chip(
+                r.status, r.subgen_body, r.error, canonical_path=r.path, completed_paths=completed_paths
+            )
             cat = outcome["category"]
             if cat in counts:
                 counts[cat] += 1
@@ -274,7 +291,8 @@ async def _refresh_history_cache(request: Request, history_window_s: int, cache_
                     live_paths.add(os.path.basename(t["path"]))
         except Exception:  # nosec B110 — best-effort dedup; stale is fine
             pass
-        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths)
+        completed_paths = await asyncio.to_thread(request.app.state.provenance.completed_paths_since, since)
+        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths, completed_paths)
         c.update(key=cache_key, built_at=time.time(), history=history, counts=counts)
     except Exception as e:
         log.debug("history cache refresh failed: %s", e)
@@ -370,7 +388,8 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
         for t in (live.get("processing") or []) + (live.get("queued") or []):
             if isinstance(t, dict) and t.get("path"):
                 live_paths.add(os.path.basename(t["path"]))
-        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths)
+        completed_paths = await asyncio.to_thread(request.app.state.provenance.completed_paths_since, since)
+        history, counts = await asyncio.to_thread(_build_history_view, scans, live_paths, completed_paths)
         c.update(key=cache_key, built_at=now, history=history, counts=counts)
 
     # Count of arena sweeps actively transcribing (running /asr) — NOT sweeps
