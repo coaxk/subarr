@@ -28,6 +28,27 @@ router = APIRouter(prefix="/api", tags=["coverage"])
 log = logging.getLogger(__name__)
 
 
+def _file_has_target_sub(fs_path, target_lang: str = "en") -> bool:
+    """True when a `target_lang` .srt sidecar already sits next to the video —
+    subgen would just skip the job ("Subtitles already exist in English"). A live
+    per-file mirror of coverage's has_sub_on_disk, so we don't enqueue a job
+    that's certain to no-op even if the (throttled) coverage snapshot is stale."""
+    try:
+        if not fs_path.is_file():
+            return False
+        from ..coverage_engine import _langs_in_sidecars
+
+        stem = fs_path.stem
+        srts = [
+            p.name
+            for p in fs_path.parent.iterdir()
+            if p.is_file() and p.name.startswith(stem + ".") and p.suffix.lower() == ".srt"
+        ]
+        return target_lang in _langs_in_sidecars(srts)
+    except OSError:
+        return False
+
+
 class CoverageQueueRequest(BaseModel):
     sonarr_episode_id: int | None = None
     # Fallback for movies / rows missing sonarr id.
@@ -99,6 +120,24 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         )
     if not (target.is_file() or target.is_dir()):
         raise HTTPException(400, detail=f"resolved path is neither file nor dir: {canonical!r}")
+
+    # #345/#351 follow-up: don't enqueue a file that already has a target-language
+    # (English) sub on disk — subgen would just skip it, wasting a feed cycle and
+    # cluttering the queue/Issues (and an interrupted skip looks like a "fail").
+    # Live per-file check beats the throttled coverage snapshot, so a sub Bazarr
+    # just wrote is caught now. The forced-only "transcribe anyway" path
+    # (ignore_forced) bypasses this deliberately.
+    if not req.ignore_forced and _file_has_target_sub(target):
+        log.info("coverage_queue: %s already has an English sub on disk — not queued", canonical)
+        return {
+            "queued": False,
+            "reason": "already_subtitled",
+            "path": canonical,
+            "detail": (
+                "An English subtitle already exists on disk — not queued (subgen would skip it). "
+                "If Bazarr still lists it as missing, it just hasn't re-indexed the file yet."
+            ),
+        }
 
     # #229: shared override-resolution helper. Same logic now used by
     # the requeue endpoint — see audio_lang_store.resolve_audio_language_

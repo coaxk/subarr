@@ -256,7 +256,8 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
   const rawCategory = out.category || 'pending';
   // Benign skips (matching .srt on disk, or the file was removed) get the
   // neutral 'sub_exists' chip style rather than the warn-amber 'skipped' one.
-  const benignSkip = out.skip_reason === 'sub_exists' || out.skip_reason === 'file_removed';
+  const benignSkip = out.skip_reason === 'sub_exists' || out.skip_reason === 'file_removed'
+                  || out.skip_reason === 'interrupted';
   const category = (rawCategory === 'skipped' && benignSkip)
     ? 'sub_exists'
     : rawCategory;
@@ -681,7 +682,8 @@ export function QueuePage() {
   // before subgen ran) are NOT issues — route them into Recently done.
   // Everything else skipped (unknown reason, likely audio_lang) stays in
   // Issues so the user notices and can verify their skip-language list.
-  const isBenignSkip = (o) => o.skip_reason === 'sub_exists' || o.skip_reason === 'file_removed';
+  const isBenignSkip = (o) => o.skip_reason === 'sub_exists' || o.skip_reason === 'file_removed'
+                          || o.skip_reason === 'interrupted';
   const issues = history.filter(h => {
     const o = h.outcome || {};
     if (o.category === 'error') return true;

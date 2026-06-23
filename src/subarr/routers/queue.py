@@ -191,6 +191,17 @@ def _path_outcome_chip(
             )
         return {"category": "skipped", "label": label, "detail": detail, "skip_reason": skip_reason}
     if status == PATH_STATUS_ERROR:
+        if (error or "").strip().lower() == "cancelled":
+            # A scan interrupted (subarr restarted / shut down mid-flight) — NOT a
+            # subgen failure. Route to Recently-done as a benign "interrupted"
+            # (skip_reason keeps it out of the "silent fails" Issues bucket); the
+            # work re-surfaces as a coverage gap if still needed.
+            return {
+                "category": "skipped",
+                "label": "interrupted",
+                "detail": "scan was interrupted (subarr restarted) — re-queue if still needed",
+                "skip_reason": "interrupted",
+            }
         return {"category": "error", "label": "failed", "detail": error or "submission errored"}
     if status == PATH_STATUS_ORPHANED:
         # #229 phase 2: subgen restarted between subarr's accept and the

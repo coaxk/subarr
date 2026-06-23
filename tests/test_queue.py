@@ -270,3 +270,18 @@ def test_ok_relabels_to_completed_when_transcription_done():
     )
     assert done["label"] == "completed"
     assert done["category"] == "ok"
+
+
+def test_cancelled_scan_is_benign_interrupted():
+    """#351 follow-up: a scan cancelled by an app restart is NOT a subgen
+    failure — it surfaces as a benign 'interrupted' skip (Recently-done), not the
+    'silent fails' Issues bucket. A real error still shows as failed."""
+    import subarr.routers.queue as q
+    from subarr.scan_store import PATH_STATUS_ERROR
+
+    chip = q._path_outcome_chip(PATH_STATUS_ERROR, None, "cancelled")
+    assert chip["category"] == "skipped"
+    assert chip["label"] == "interrupted"
+    assert chip["skip_reason"] == "interrupted"
+    err = q._path_outcome_chip(PATH_STATUS_ERROR, None, "subgen exploded")
+    assert err["category"] == "error" and err["label"] == "failed"
