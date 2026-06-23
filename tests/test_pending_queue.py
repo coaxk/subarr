@@ -234,3 +234,37 @@ def test_repend_orphaned_submitted_skips_pending_and_done(store):
     # PENDING job was never submitted so it would not be touched regardless,
     # but here it's STATUS_DONE — confirm unchanged
     assert store.get(s.id).status == STATUS_PENDING
+
+
+def test_move_step_walks_to_top(store):
+    """#336: repeated up steps walk a job to the top (the stale-client bug made
+    arrows no-op / stop after a few clicks). move_step resolves the neighbour
+    server-side, so each step actually advances."""
+    jobs = [store.enqueue(f"TV/e{i}.mkv", source="gaps") for i in range(6)]
+    bottom = jobs[-1].id
+    for _ in range(5):
+        store.move_step(bottom, up=True)
+    assert [j.id for j in store.list(status="pending")][0] == bottom
+    # At the top, another up is a no-op (no error, stays put).
+    store.move_step(bottom, up=True)
+    assert [j.id for j in store.list(status="pending")][0] == bottom
+
+
+def test_move_step_crosses_priority_buckets(store):
+    """A lower-priority backfill job can step up past a higher-priority gaps job,
+    adopting its bucket (one step at a time)."""
+    g = store.enqueue("TV/gap.mkv", source="gaps")  # priority 1
+    b = store.enqueue("TV/backfill.mkv", source="backfill")  # priority 0 → below
+    assert [j.id for j in store.list(status="pending")] == [g.id, b.id]
+    store.move_step(b.id, up=True)
+    assert [j.id for j in store.list(status="pending")][0] == b.id
+
+
+def test_move_step_down_walks_to_bottom_then_noop(store):
+    jobs = [store.enqueue(f"TV/d{i}.mkv", source="gaps") for i in range(4)]
+    top = jobs[0].id
+    for _ in range(3):
+        store.move_step(top, up=False)
+    assert [j.id for j in store.list(status="pending")][-1] == top
+    store.move_step(top, up=False)  # at bottom → no-op
+    assert [j.id for j in store.list(status="pending")][-1] == top
