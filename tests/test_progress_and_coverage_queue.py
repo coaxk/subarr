@@ -344,3 +344,25 @@ def test_coverage_queue_ignore_forced_defaults_false(
     jobs = [j for j in app_with_stub.app.state.pending_queue.list() if j.canonical_path == canonical]
     assert jobs, "coverage/queue did not enqueue a pending job"
     assert jobs[0].ignore_forced is False
+
+
+def test_file_has_target_sub_detects_en_sidecar(tmp_path):
+    """#345/#351: coverage_queue gates on an existing English sidecar so it
+    doesn't enqueue a file subgen will just skip. en sidecar → True; none / a
+    non-en sidecar → False."""
+    from subarr.routers.coverage_actions import _file_has_target_sub
+
+    d = tmp_path / "TV" / "Show"
+    d.mkdir(parents=True)
+    vid = d / "Show - S01E01 - x WEBDL-1080p -GRP.mkv"
+    vid.write_text("v")
+    assert _file_has_target_sub(vid) is False  # no sub yet
+    (d / "Show - S01E01 - x WEBDL-1080p -GRP.en.srt").write_text("s")
+    assert _file_has_target_sub(vid) is True  # English sub present
+    (d / "Show - S01E01 - x WEBDL-1080p -GRP.en.alass.srt").write_text("s")
+    assert _file_has_target_sub(vid) is True  # tool-suffixed variant still counts
+
+    other = d / "Other - S01E01.mkv"
+    other.write_text("v")
+    (d / "Other - S01E01.fr.srt").write_text("s")
+    assert _file_has_target_sub(other) is False  # a French sub is not the en target

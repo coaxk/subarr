@@ -2686,9 +2686,15 @@ export function CoveragePage() {
   const handleRowQueue = useCallback(async (row) => {
     setRowQueuing(prev => { const n = new Set(prev); n.add(row.id); return n; });
     try {
-      await queueRow(row);
-      // #336: lasting confirmation — the job is in the pending feeder now.
-      setQueuedRows(prev => new Set(prev).add(row.id));
+      const res = await queueRow(row);
+      if (res && res.queued === false) {
+        // #345/#351: backend declined — a target-language sub already exists on
+        // disk, so subgen would just skip it. Don't show the queued ✓.
+        alert(res.detail || 'Already subtitled on disk — not queued (subgen would skip it).');
+      } else {
+        // #336: lasting confirmation — the job is in the pending feeder now.
+        setQueuedRows(prev => new Set(prev).add(row.id));
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('queue row failed:', e);
@@ -2702,21 +2708,25 @@ export function CoveragePage() {
   const handleBulkQueue = useCallback(async () => {
     const targets = rows.filter(r => selected.has(r.id));
     if (!targets.length) return;
-    setQueueState({ busy: true, done: 0, total: targets.length, errors: 0 });
-    let done = 0, errors = 0;
+    setQueueState({ busy: true, done: 0, total: targets.length, errors: 0, skipped: 0 });
+    let done = 0, errors = 0, skipped = 0;
     // Serial — gives the backend room to breathe + Bazarr/Sonarr are
     // rate-limited upstream. Parallel-3 could come later if needed.
     for (const row of targets) {
-      try { await queueRow(row); }
+      try {
+        const res = await queueRow(row);
+        // #345/#351: backend declined already-subtitled files — benign, not an error.
+        if (res && res.queued === false) skipped += 1;
+      }
       catch (e) {
         errors += 1;
         // eslint-disable-next-line no-console
         console.error('bulk queue failed for', row.id, e);
       }
       done += 1;
-      setQueueState({ busy: true, done, total: targets.length, errors });
+      setQueueState({ busy: true, done, total: targets.length, errors, skipped });
     }
-    setQueueState({ busy: false, done, total: targets.length, errors });
+    setQueueState({ busy: false, done, total: targets.length, errors, skipped });
     setSelected(new Set());
     refetch({ fresh: true, silent: true });
   }, [rows, selected, refetch]);
