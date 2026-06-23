@@ -253,7 +253,7 @@ def test_move_step_walks_to_top(store):
 def test_move_step_crosses_priority_buckets(store):
     """A lower-priority backfill job can step up past a higher-priority gaps job,
     adopting its bucket (one step at a time)."""
-    g = store.enqueue("TV/gap.mkv", source="gaps")      # priority 1
+    g = store.enqueue("TV/gap.mkv", source="gaps")  # priority 1
     b = store.enqueue("TV/backfill.mkv", source="backfill")  # priority 0 → below
     assert [j.id for j in store.list(status="pending")] == [g.id, b.id]
     store.move_step(b.id, up=True)
