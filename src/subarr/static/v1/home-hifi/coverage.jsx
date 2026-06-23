@@ -1922,16 +1922,29 @@ export function AudioReviewModal() {
           )}
         </div>
 
-        <div>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginBottom: 6 }}>
-            Set the actual audio language{posData && posData.audio_tracks > 1 ? ` for track ${track}` : ''}:
+        {/* #159 UX: opened from a track-mismatch row → listen-only. The audio
+            language isn't in question; which track is DEFAULT is. Hide the
+            language picker + Confirm (a no-op here that traps users) and point
+            back to the row's "Make … default" action. */}
+        {row.listen_only ? (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', background: 'var(--bg-1)',
+                        borderRadius: 'var(--radius-md)', padding: 12, lineHeight: 1.5 }}>
+            🎧 Listen-only. The audio <i>language</i> isn&apos;t the problem here — which audio
+            <b> track is default</b> is. Close this and click <b>“Make … default”</b> on the
+            row to fix it. (Confirming a language here wouldn&apos;t change the default track.)
           </div>
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}
-            style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
-                     color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
-            {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
-          </select>
-        </div>
+        ) : (
+          <div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', marginBottom: 6 }}>
+              Set the actual audio language{posData && posData.audio_tracks > 1 ? ` for track ${track}` : ''}:
+            </div>
+            <select value={selected} onChange={(e) => setSelected(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
+                       color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
+              {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
+            </select>
+          </div>
+        )}
 
         {error && <div style={{ color: 'var(--error-500)', fontSize: 'var(--text-xs)' }}>{error}</div>}
 
@@ -1941,11 +1954,13 @@ export function AudioReviewModal() {
               💾 Saving verification…
             </span>
           )}
-          <button className="btn ghost" onClick={close} disabled={saving}>cancel</button>
-          <button data-testid="review-confirm" className="btn" onClick={() => save(selected)} disabled={saving}
-            style={{ background: 'var(--violet-500)', color: '#fff' }}>
-            {saving ? 'Saving…' : `Confirm ${selected}`}
-          </button>
+          <button className="btn ghost" onClick={close} disabled={saving}>{row.listen_only ? 'close' : 'cancel'}</button>
+          {!row.listen_only && (
+            <button data-testid="review-confirm" className="btn" onClick={() => save(selected)} disabled={saving}
+              style={{ background: 'var(--violet-500)', color: '#fff' }}>
+              {saving ? 'Saving…' : `Confirm ${selected}`}
+            </button>
+          )}
         </div>
       </div>
     </div>

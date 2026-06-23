@@ -107,42 +107,58 @@ function TrackMismatchRow({ item, selected, onToggle, busy, onSwap, onDismiss, o
     _canonical_path: path, audio: (item.audio_langs || []).join(',') || 'und',
     original_language: item.original_language,
     audio_label_notes: item.notes ? [item.notes] : [],
+    // #159 UX: on a track-mismatch row the fix is "swap the default track", NOT
+    // "confirm a language" — so the 🎧 modal opens listen-only (no language
+    // picker that does nothing here and traps the user into a no-op confirm).
+    listen_only: true,
   };
+  const explainer = `Default audio is the ${def} track (a dub). This is a `
+    + `${item.original_language || native} title — set the original ${native} track (a${ord}) as `
+    + `default so subtitles transcribe from the source, not a dub-of-a-dub. In-place, lossless, reversible.`;
   return (
-    <div role="row" data-testid="review-row-mismatch" title={why} style={{
-      display: 'flex', alignItems: 'center', gap: 10,
+    <div role="row" data-testid="review-row-mismatch" style={{
+      display: 'flex', flexDirection: 'column', gap: 4,
       padding: '8px 16px 8px 32px',
       borderBottom: '1px solid var(--bg-3)',
       background: selected ? 'rgba(245,158,11,0.12)' : 'rgba(245,158,11,0.05)',
     }}>
-      <CheckBox checked={selected}
-                onChange={onToggle}
-                label={`Select ${item.title} ${item.episode_number || ''}`} />
-      <span title={why} aria-label="default audio track mismatch"
-        style={{ fontSize: 'var(--text-sm)' }}>⇄</span>
-      <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)', width: 70 }}>
-        {item.episode_number || '—'}
-      </span>
-      <span className="mono" title={path} style={{
-        fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: 1, minWidth: 0,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <CheckBox checked={selected}
+                  onChange={onToggle}
+                  label={`Select ${item.title} ${item.episode_number || ''}`} />
+        <span aria-label="default audio track mismatch"
+          style={{ fontSize: 'var(--text-sm)' }}>⇄</span>
+        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)', width: 70 }}>
+          {item.episode_number || '—'}
+        </span>
+        <span className="mono" title={path} style={{
+          fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: 1, minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {path.split('/').slice(-1)[0]}
+        </span>
+        <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warn-500, #f59e0b)' }}>
+          default {def} → should be {native} (a{ord})
+        </span>
+        <button onClick={() => onOpen(detail)} className="btn ghost sm"
+          title="Preview the audio (listen only). To fix this row, use “Make default” →"
+          aria-label={`Preview audio for ${item.title}`}
+          style={{ padding: '0 6px', fontSize: 'var(--text-2xs)' }}>🎧</button>
+        <button onClick={() => onDismiss(item)} disabled={busy} className="btn ghost sm"
+          title="Keep the current default track (don't ask again for this file)"
+          style={{ padding: '0 8px', fontSize: 'var(--text-2xs)' }}>Dismiss</button>
+        <button onClick={() => onSwap(item)} disabled={busy} className="btn primary sm"
+          title={why}
+          style={{ padding: '0 10px', fontSize: 'var(--text-2xs)' }}>
+          {busy ? '…' : `⇄ Make ${native} default`}
+        </button>
+      </div>
+      <div style={{
+        fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+        paddingLeft: 30, lineHeight: 1.45,
       }}>
-        {path.split('/').slice(-1)[0]}
-      </span>
-      <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warn-500, #f59e0b)' }}>
-        default {def} → should be {native} (a{ord})
-      </span>
-      <button onClick={() => onOpen(detail)} className="btn ghost sm"
-        title="Listen first" aria-label={`Listen to ${item.title}`}
-        style={{ padding: '0 6px', fontSize: 'var(--text-2xs)' }}>🎧</button>
-      <button onClick={() => onDismiss(item)} disabled={busy} className="btn ghost sm"
-        title="Keep the current default track (don't ask again for this file)"
-        style={{ padding: '0 8px', fontSize: 'var(--text-2xs)' }}>Dismiss</button>
-      <button onClick={() => onSwap(item)} disabled={busy} className="btn primary sm"
-        title={why}
-        style={{ padding: '0 10px', fontSize: 'var(--text-2xs)' }}>
-        {busy ? '…' : `⇄ Make ${native} default`}
-      </button>
+        {explainer}
+      </div>
     </div>
   );
 }

@@ -520,7 +520,7 @@ async def _swap_one_track_mismatch(file_path: str, request: Request) -> dict[str
     file, never the track index). Does NOT refresh the coverage cache — callers
     batch that. Raises HTTPException on validation/probe/swap failure."""
     from ..media_probe import detect_default_track_mismatch, probe
-    from ..track_swap import TrackSwapError, swap_default_audio_track
+    from ..track_swap import TrackSwapError, TrackSwapWriteError, swap_default_audio_track
 
     if not file_path.lower().endswith(".mkv"):
         raise HTTPException(400, detail="track swap is only supported for .mkv files")
@@ -548,17 +548,32 @@ async def _swap_one_track_mismatch(file_path: str, request: Request) -> dict[str
         raise HTTPException(502, detail=f"probe failed: {safe_error(e)}")
     m = detect_default_track_mismatch(result.audio, original_language)
     if m is None:
+        # Already correct (e.g. swapped on an earlier session before the snapshot
+        # rebuilt) — clear the stale cached flag so the lingering row still drops.
+        if cov_cache is not None:
+            cov_cache.clear_track_mismatch_for(file_path)
         return {"swapped": False, "file_canonical_path": file_path, "detail": "already correct"}
 
     # 3. Swap: make the native-language track the sole default audio track.
     audio_ordinals = list(range(1, len(result.audio) + 1))
     try:
         await swap_default_audio_track(fs, m.native_audio_ordinal, audio_ordinals)
+    except TrackSwapWriteError:
+        # #285-adjacent: curated, leak-free actionable message — the user can
+        # self-diagnose a read-only mount instead of seeing "unexpected error".
+        raise HTTPException(
+            400,
+            detail="couldn't write to the file — track-swap needs read-write access to your "
+            "media (it may be mounted read-only or lack write permission)",
+        ) from None
     except TrackSwapError as e:
         raise HTTPException(500, detail=safe_error(e))
 
-    # 4. Re-probe + upsert so the row clears immediately (cache refresh is the
-    #    caller's job — batched once for bulk).
+    # 4. Re-probe + upsert so a later rebuild sees the fixed file, AND clear the
+    #    default_track_mismatch flag on the cached snapshot item in place — so the
+    #    Review row drops on the next poll instead of lingering up to the 120s
+    #    rebuild throttle (the coalesced request_refresh below is eventual; this
+    #    is the immediate fix the original "row clears immediately" intent needs).
     try:
         st = Path(fs).stat()
         fresh = await probe(Path(fs))
@@ -571,6 +586,8 @@ async def _swap_one_track_mismatch(file_path: str, request: Request) -> dict[str
         )
     except Exception:  # noqa: BLE001 — best-effort cache freshness
         pass
+    if cov_cache is not None:
+        cov_cache.clear_track_mismatch_for(file_path)
     return {
         "swapped": True,
         "file_canonical_path": file_path,
