@@ -265,3 +265,30 @@ def test_test_connection_unreachable(app_with_stub, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert body["error"]
+
+
+def test_sonarr_client_explicit_credentials():
+    from subarr.integrations.sonarr import SonarrClient
+
+    c = SonarrClient(base_url="http://s2:8989", api_key="explicitkey")
+    assert c._base_url == "http://s2:8989"
+    assert c._client.headers["X-Api-Key"] == "explicitkey"
+
+
+def test_sonarr_client_defaults_to_settings(subarr_env):
+    # Settings is a frozen dataclass — do NOT mutate it. subarr_env seeds the
+    # scalars from env; assert the no-arg client mirrors them (today's behaviour).
+    from subarr import config
+    from subarr.integrations.sonarr import SonarrClient
+
+    c = SonarrClient()  # no args = today's behaviour
+    assert c._base_url == config.settings.sonarr_url
+    assert c._client.headers["X-Api-Key"] == config.settings.sonarr_api_key
+
+
+def test_bazarr_client_explicit_uses_caps_header():
+    from subarr.integrations.bazarr import BazarrClient
+
+    c = BazarrClient(base_url="http://b2:6767", api_key="bk")
+    # Bazarr header is X-API-KEY (caps), NOT X-Api-Key
+    assert c._client.headers["X-API-KEY"] == "bk"

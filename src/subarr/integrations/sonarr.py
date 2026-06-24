@@ -17,10 +17,12 @@ from .base import IntegrationClient
 class SonarrClient(IntegrationClient):
     name = "sonarr"
 
-    def __init__(self):
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        url = settings.sonarr_url if base_url is None else base_url
+        key = settings.sonarr_api_key if api_key is None else api_key
         super().__init__(
-            base_url=settings.sonarr_url if settings.sonarr_api_key else "",
-            headers={"X-Api-Key": settings.sonarr_api_key} if settings.sonarr_api_key else None,
+            base_url=url if key else "",
+            headers={"X-Api-Key": key} if key else None,
         )
 
     async def status(self) -> dict[str, Any]:
