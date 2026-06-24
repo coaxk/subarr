@@ -76,6 +76,45 @@ def two_libraries(subarr_env, monkeypatch, tmp_path: Path):
 
 
 @pytest.fixture
+def anime_stack(subarr_env, monkeypatch, tmp_path: Path):
+    """A second Sonarr instance 'anime' plus a library 'anime' bound to it.
+    Writes both override keys and reloads config/paths/coverage_engine so
+    settings.instances, settings.libraries, and a freshly built IntegrationBundle
+    all reflect them. Returns the anime library fs_root. (#161 Phase 1)"""
+    import json
+
+    anime_root = tmp_path / "anime"
+    (anime_root / "Show").mkdir(parents=True)
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "sonarr": [{"name": "Anime", "url": "http://s2.test:8989", "api_key": "anime-key"}]
+                },
+                "libraries": [
+                    {
+                        "slug": "anime",
+                        "name": "Anime",
+                        "fs_root": str(anime_root),
+                        "subgen_prefix": "/media",
+                        "arr_prefix": "/data/anime/",
+                        "sonarr_id": "anime",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, coverage_engine, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    importlib.reload(coverage_engine)
+    return anime_root
+
+
+@pytest.fixture
 def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     compose = tmp_path / "compose.yaml"
     _make_compose(compose)
