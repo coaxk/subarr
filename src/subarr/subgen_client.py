@@ -75,6 +75,10 @@ class SubgenCapabilities:
     # ground-truth funnel gates on this — without it the funnel falls
     # back to single-chunk detect_language (less reliable).
     robust_language_detection: bool = False
+    # v4.16 capability (#17): POST /detect_language_robust accepts ?track=N to
+    # detect a SPECIFIC audio stream — lets the Review track-mismatch flow confirm
+    # a non-default track's language.
+    detect_language_track: bool = False
     # v4.8 capability: POST /batch accepts a per-request `kwargs` JSON query
     # param that overrides global + per-language SUBGEN_KWARGS for THIS scan
     # only. The tuning-lab / arena gates on this — it lets one config sweep
@@ -151,6 +155,7 @@ class SubgenCapabilities:
             "audio_language_override": self.audio_language_override,
             "queue_cancel": self.queue_cancel,
             "robust_language_detection": self.robust_language_detection,
+            "detect_language_track": self.detect_language_track,
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "asr_arena": self.asr_arena,
@@ -175,6 +180,7 @@ class SubgenCapabilities:
             audio_language_override=False,
             queue_cancel=False,
             robust_language_detection=False,
+            detect_language_track=False,
             per_request_kwargs=False,
             per_request_task=False,
             asr_arena=False,
@@ -223,7 +229,7 @@ class SubgenClient:
             return {"cancelled": False, "_raw": r.text[:200], "status_code": r.status_code}
 
     async def detect_language_robust(
-        self, path: str, chunks: int = 3, chunk_length_s: int = 30
+        self, path: str, chunks: int = 3, chunk_length_s: int = 30, track: int | None = None
     ) -> dict[str, Any]:
         """v4.5+: multi-chunk Whisper language detection. Returns the
         full per-chunk breakdown + aggregate vote so subarr's review UI
@@ -233,11 +239,13 @@ class SubgenClient:
         before calling — vanilla subgen will 404."""
         # Wide read timeout: 3 chunks × ~10s + model load can hit 60s
         # on cold cache. The default 120s read timeout already covers it.
+        params: dict[str, Any] = {"path": path, "chunks": chunks, "chunk_length_s": chunk_length_s}
+        if track is not None:
+            # v4.16 (#17): detect a SPECIFIC audio stream (0-based). Gate on
+            # capabilities.detect_language_track — older subgen ignores the param.
+            params["track"] = track
         try:
-            r = await self._client.post(
-                "/detect_language_robust",
-                params={"path": path, "chunks": chunks, "chunk_length_s": chunk_length_s},
-            )
+            r = await self._client.post("/detect_language_robust", params=params)
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /detect_language_robust failed: {e}") from e
         if r.status_code >= 500:
@@ -308,6 +316,7 @@ class SubgenClient:
         audio_language_override = False
         queue_cancel = False
         robust_language_detection = False
+        detect_language_track = False
         per_request_kwargs = False
         per_request_task = False
         asr_arena = False
@@ -341,6 +350,7 @@ class SubgenClient:
                             audio_language_override = bool(caps_block.get("audio_language_override"))
                             queue_cancel = bool(caps_block.get("queue_cancel"))
                             robust_language_detection = bool(caps_block.get("robust_language_detection"))
+                            detect_language_track = bool(caps_block.get("detect_language_track"))
                             per_request_kwargs = bool(caps_block.get("per_request_kwargs"))
                             per_request_task = bool(caps_block.get("per_request_task"))
                             asr_arena = bool(caps_block.get("asr_arena"))
@@ -376,6 +386,7 @@ class SubgenClient:
             audio_language_override=audio_language_override,
             queue_cancel=queue_cancel,
             robust_language_detection=robust_language_detection,
+            detect_language_track=detect_language_track,
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             asr_arena=asr_arena,

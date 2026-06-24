@@ -194,3 +194,35 @@ def test_unreachable_factory_helper():
     caps = SubgenCapabilities.unreachable()
     assert caps.reachable is False
     assert all(not getattr(caps, f) for f in ["has_queue", "has_batch", "is_subarr_subgen"])
+
+
+@pytest.mark.asyncio
+async def test_detect_language_track_capability_parsed():
+    """#17: capabilities.detect_language_track (v4.16+) is parsed off /queue and
+    round-trips through to_dict; absent on older subgen → False."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/status":
+            return httpx.Response(
+                200, json={"version": "Subgen 2026.06.4, stable-ts 0.7.0, faster-whisper 1.0.3 (docker)"}
+            )
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={
+                    "queued": [],
+                    "processing": [],
+                    "queued_count": 0,
+                    "processing_count": 0,
+                    "idle": True,
+                    "version": "2026.06.4",
+                    "capabilities": {"robust_language_detection": True, "detect_language_track": True},
+                },
+            )
+        return httpx.Response(404)
+
+    c = _make_client(httpx.MockTransport(handler))
+    caps = await c.probe_capabilities()
+    await c.aclose()
+    assert caps.detect_language_track is True
+    assert caps.to_dict()["detect_language_track"] is True

@@ -1599,6 +1599,10 @@ export function AudioReviewModal() {
           canonical_path: row._canonical_path,
           chunks: 3,
           chunk_length_s: 30,
+          // #17: on track-mismatch (listen-only) rows the user deliberately
+          // picks a track to identify each one — send it so a v4.16+ subgen
+          // detects THAT stream. Normal verify omits it (subgen auto-selects).
+          ...(row.listen_only ? { track } : {}),
         }),
       });
       if (!r.ok) {
@@ -1917,10 +1921,10 @@ export function AudioReviewModal() {
                   <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
                                 background: 'var(--bg-1)', borderRadius: 'var(--radius-md)',
                                 padding: 8, lineHeight: 1.5 }}>
-                    🎧 Whisper samples the file&apos;s <b>primary audio track</b> ({agg.language}) — here,
-                    the dub. It can&apos;t target the other track yet, so use the <b>player above</b> to
-                    listen to each track and confirm the original by ear. To fix this row, use
-                    <b> “Make … default”</b> — a language verify wouldn&apos;t change which track is default.
+                    🎧 Detected <b>{agg.language}</b> on audio track <b>{track}</b>. Switch tracks with
+                    the buttons above and <b>re-run</b> to check each one — a current subgen (v4.16+)
+                    detects that specific track (older subgen samples the primary track). To fix this
+                    row, use <b>“Make … default”</b> — a language verify wouldn&apos;t change which track is default.
                   </div>
                 )}
               </>
