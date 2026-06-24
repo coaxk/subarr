@@ -79,6 +79,10 @@ class SubgenCapabilities:
     # detect a SPECIFIC audio stream — lets the Review track-mismatch flow confirm
     # a non-default track's language.
     detect_language_track: bool = False
+    # v4.17 capability (#6): POST /config?wait=false runs the model switch on a
+    # background thread + returns 202, with progress in /queue.config_switch.
+    # post_config() polls instead of holding a request past the 120s read timeout.
+    async_config: bool = False
     # v4.8 capability: POST /batch accepts a per-request `kwargs` JSON query
     # param that overrides global + per-language SUBGEN_KWARGS for THIS scan
     # only. The tuning-lab / arena gates on this — it lets one config sweep
@@ -156,6 +160,7 @@ class SubgenCapabilities:
             "queue_cancel": self.queue_cancel,
             "robust_language_detection": self.robust_language_detection,
             "detect_language_track": self.detect_language_track,
+            "async_config": self.async_config,
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "asr_arena": self.asr_arena,
@@ -181,6 +186,7 @@ class SubgenCapabilities:
             queue_cancel=False,
             robust_language_detection=False,
             detect_language_track=False,
+            async_config=False,
             per_request_kwargs=False,
             per_request_task=False,
             asr_arena=False,
@@ -317,6 +323,7 @@ class SubgenClient:
         queue_cancel = False
         robust_language_detection = False
         detect_language_track = False
+        async_config = False
         per_request_kwargs = False
         per_request_task = False
         asr_arena = False
@@ -351,6 +358,7 @@ class SubgenClient:
                             queue_cancel = bool(caps_block.get("queue_cancel"))
                             robust_language_detection = bool(caps_block.get("robust_language_detection"))
                             detect_language_track = bool(caps_block.get("detect_language_track"))
+                            async_config = bool(caps_block.get("async_config"))
                             per_request_kwargs = bool(caps_block.get("per_request_kwargs"))
                             per_request_task = bool(caps_block.get("per_request_task"))
                             asr_arena = bool(caps_block.get("asr_arena"))
@@ -387,6 +395,7 @@ class SubgenClient:
             queue_cancel=queue_cancel,
             robust_language_detection=robust_language_detection,
             detect_language_track=detect_language_track,
+            async_config=async_config,
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             asr_arena=asr_arena,
@@ -413,17 +422,30 @@ class SubgenClient:
         return caps
 
     async def post_config(
-        self, *, model: str | None = None, compute_type: str | None = None
+        self,
+        *,
+        model: str | None = None,
+        compute_type: str | None = None,
+        async_config: bool = False,
+        poll_timeout_s: float = 600.0,
     ) -> tuple[int, dict]:
         """POST /config — runtime model/compute switch (subarr-subgen r9+,
         gated on caps.runtime_config). Returns (status_code, body). subgen
         guarantees it ends on a working model (rollback contract); callers
-        surface body['reason']/'current_model' on failure."""
+        surface body['reason']/'current_model' on failure.
+
+        async_config (v4.17+, caps.async_config): send ?wait=false so subgen runs
+        the switch on a background thread + returns 202, then poll /queue.config_
+        switch to completion — a switch to an uncached model (minutes-long
+        download) no longer blows our read timeout. Returns the same (status,
+        body) shape as the sync path."""
         params: dict[str, str] = {}
         if model:
             params["model"] = model
         if compute_type:
             params["compute_type"] = compute_type
+        if async_config:
+            params["wait"] = "false"
         try:
             r = await self._client.post("/config", params=params)
         except httpx.HTTPError as e:
@@ -432,7 +454,45 @@ class SubgenClient:
             body = r.json()
         except ValueError:
             body = {}
+        if r.status_code == 202:
+            return await self._poll_config_switch(poll_timeout_s)
         return r.status_code, body
+
+    async def _poll_config_switch(self, timeout_s: float) -> tuple[int, dict]:
+        """Poll GET /queue.config_switch until the async /config switch reaches a
+        terminal state. Same (status, body) shape as the sync path: 200/ok,
+        422/failed (with reason/rolled_back), or 504 on poll timeout."""
+        import asyncio
+        import time
+
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                q = await self.queue()
+            except SubgenUnavailable:
+                q = {}  # transient — keep polling to the deadline
+            cs = (q or {}).get("config_switch") or {}
+            state = cs.get("state")
+            if state == "done":
+                return 200, {"ok": True, "model": cs.get("model"), "compute_type": cs.get("compute_type")}
+            if state == "failed":
+                return 422, {
+                    "ok": False,
+                    "reason": cs.get("reason"),
+                    "detail": cs.get("detail"),
+                    "rolled_back": cs.get("rolled_back"),
+                    "current_model": cs.get("model"),
+                    "current_compute_type": cs.get("compute_type"),
+                }
+            if time.monotonic() >= deadline:
+                return 504, {
+                    "ok": False,
+                    "reason": "switch_timeout",
+                    "detail": f"model switch still running after {int(timeout_s)}s",
+                    "current_model": cs.get("model"),
+                    "current_compute_type": cs.get("compute_type"),
+                }
+            await asyncio.sleep(2.0)
 
     async def batch(
         self,
