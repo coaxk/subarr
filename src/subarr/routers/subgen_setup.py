@@ -215,7 +215,15 @@ async def apply(body: ApplyBody, request: Request) -> dict[str, Any]:
             ),
         }
     try:
-        status, resp = await _post_config(request.app, model=body.model, compute_type=body.compute_type)
+        # #6: when subgen supports async /config (v4.17+), post_config sends
+        # ?wait=false + polls /queue.config_switch — so an uncached-model download
+        # (minutes) no longer dies on the 120s read timeout mid-switch.
+        status, resp = await _post_config(
+            request.app,
+            model=body.model,
+            compute_type=body.compute_type,
+            async_config=getattr(caps, "async_config", False),
+        )
     except SubgenUnavailable as e:
         # Transport failure is AMBIGUOUS — the switch may or may not have
         # landed before the connection died. Tell the user to re-detect.
