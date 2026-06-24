@@ -390,24 +390,35 @@ def _make_integration_bundle(
 
     class _StubBundle(IntegrationBundle):
         def __init__(self):
-            self.bazarr = _wrap(
-                BazarrClient,
-                bazarr_handler,
-                "http://bazarr.test:6767",
-                {"X-API-KEY": "bz-test-key"} if bazarr_handler else None,
-            )
-            self.sonarr = _wrap(
-                SonarrClient,
-                sonarr_handler,
-                "http://sonarr.test:8989",
-                {"X-Api-Key": "sn-test-key"} if sonarr_handler else None,
-            )
-            self.radarr = _wrap(
-                RadarrClient,
-                radarr_handler,
-                "http://radarr.test:7878",
-                {"X-Api-Key": "rd-test-key"} if radarr_handler else None,
-            )
+            # #161: bundle.sonarr/.radarr/.bazarr are now instance-0 alias
+            # properties reading self._clients[svc][""], so populate that dict
+            # (not the read-only attributes) with the mock-transport clients.
+            self._clients = {
+                "bazarr": {
+                    "": _wrap(
+                        BazarrClient,
+                        bazarr_handler,
+                        "http://bazarr.test:6767",
+                        {"X-API-KEY": "bz-test-key"} if bazarr_handler else None,
+                    )
+                },
+                "sonarr": {
+                    "": _wrap(
+                        SonarrClient,
+                        sonarr_handler,
+                        "http://sonarr.test:8989",
+                        {"X-Api-Key": "sn-test-key"} if sonarr_handler else None,
+                    )
+                },
+                "radarr": {
+                    "": _wrap(
+                        RadarrClient,
+                        radarr_handler,
+                        "http://radarr.test:7878",
+                        {"X-Api-Key": "rd-test-key"} if radarr_handler else None,
+                    )
+                },
+            }
             self.tautulli = _wrap(TautulliClient, tautulli_handler, "http://tautulli.test:8181")
             # v1.1.1: tests don't exercise Plex; stub with an unconfigured
             # client so .is_configured() returns False and code paths skip.

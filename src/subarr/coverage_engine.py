@@ -271,17 +271,33 @@ class IntegrationBundle:
         pool = self._clients[service]
         return pool.get(instance_id or "") or pool[""]
 
+    # Read/write aliases for instance 0. Reads resolve the env-backed default
+    # client; writes swap it (preserves the long-standing test idiom + any
+    # runtime that replaces a single client). Multi-instance code uses
+    # client_for()/clients_for() instead.
     @property
     def sonarr(self):
         return self._clients["sonarr"][""]
+
+    @sonarr.setter
+    def sonarr(self, client):
+        self._clients["sonarr"][""] = client
 
     @property
     def radarr(self):
         return self._clients["radarr"][""]
 
+    @radarr.setter
+    def radarr(self, client):
+        self._clients["radarr"][""] = client
+
     @property
     def bazarr(self):
         return self._clients["bazarr"][""]
+
+    @bazarr.setter
+    def bazarr(self, client):
+        self._clients["bazarr"][""] = client
 
     async def aclose(self) -> None:
         closers = [c.aclose() for pool in self._clients.values() for c in pool.values()]
