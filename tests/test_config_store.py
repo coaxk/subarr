@@ -48,3 +48,48 @@ def test_env_beats_file_override(tmp_path, monkeypatch):
     cs.save_override("vad_enabled", False)  # UI tried OFF
     s = config.load()
     assert s.vad_enabled is True  # env is authoritative
+
+
+def test_rebuild_instances_seeds_instance0_from_scalars(subarr_env):
+    from subarr import config
+
+    s = config.settings  # the reloaded singleton (subarr_env seeded it from env)
+    sonarrs = [i for i in s.instances if i.service == "sonarr"]
+    inst0 = next(i for i in sonarrs if i.id == "")
+    assert inst0.url == s.sonarr_url  # "http://sonarr.test:8989" from subarr_env
+    assert inst0.api_key == s.sonarr_api_key
+
+
+def test_rebuild_instances_picks_up_extras(subarr_env, monkeypatch, tmp_path):
+    import importlib
+    import json
+
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps({"instances": {"sonarr": [{"name": "Anime", "url": "http://s2:8989", "api_key": "kk"}]}})
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config
+
+    importlib.reload(config)
+    ids = {i.id for i in config.settings.instances if i.service == "sonarr"}
+    assert "" in ids and "anime" in ids
+
+
+def test_rebuild_instances_failsoft_on_bad_config(subarr_env, monkeypatch, tmp_path):
+    import importlib
+    import json
+
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "instances": {"sonarr": [{"name": "x", "url": "u"}]}  # missing api_key
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config
+
+    importlib.reload(config)  # must not raise
+    assert len([i for i in config.settings.instances if i.service == "sonarr"]) == 1
