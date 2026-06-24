@@ -7,10 +7,13 @@ boundaries.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path, PurePosixPath
 
 from .config import settings
 from .libraries import Library
+
+log = logging.getLogger(__name__)
 
 
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts"}
@@ -146,6 +149,17 @@ def subgen_to_canonical(subgen_path: str) -> str:
         if prefix and (p == prefix or p.startswith(prefix + "/")) and len(prefix) > best_len:
             best, best_len = lib, len(prefix)
     if best is None:
+        if p:
+            # #285 NIT: nothing matched a configured subgen_prefix. We still
+            # return a best-effort canonical, but a completion webhook landing
+            # here silently misses its provenance-ledger entry — surface it so a
+            # misconfigured subgen_media_prefix (esp. multi-library #161) is
+            # diagnosable rather than a silent no-op.
+            log.warning(
+                "subgen_to_canonical: %r matched no configured subgen_prefix; "
+                "completion ledger lookup will miss",
+                subgen_path,
+            )
         return p.strip("/")
     prefix = best.subgen_prefix.rstrip("/")
     rel = "" if p == prefix else p[len(prefix) + 1 :].strip("/")

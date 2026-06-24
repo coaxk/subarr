@@ -683,7 +683,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     we rely on the user pinning their env vars in compose after the
     wizard finishes (the wizard's final step shows a copy-paste
     snippet of the values they entered)."""
-    from ..config import settings, env_is_set
+    from ..config import LIBRARY_DEFINING_FIELDS, env_is_set, rebuild_libraries, settings
 
     mapping = {
         "media_root": ("media_root", Path),
@@ -700,6 +700,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
         "ollama_url": ("ollama_url", str),
         "ollama_model": ("ollama_model", str),
     }
+    libs_dirty = False
     for src_key, (settings_attr, coerce) in mapping.items():
         if src_key in progress and progress[src_key]:
             # Clobber guard: an env-set field is the operator's
@@ -717,8 +718,16 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
                 # FrozenInstanceError. object.__setattr__ bypasses the
                 # freeze for this deliberate runtime patch.
                 object.__setattr__(settings, settings_attr, coerce(progress[src_key]))
+                if settings_attr in LIBRARY_DEFINING_FIELDS:
+                    libs_dirty = True
             except Exception as e:
                 log.warning("settings flush: %s=%r failed: %s", settings_attr, progress[src_key], e)
+
+    # #285: a flushed media_root / arr_path_prefix changes the scalars
+    # libraries[0] is derived from — re-derive the library list so path
+    # resolution doesn't silently run on a stale default library until restart.
+    if libs_dirty:
+        rebuild_libraries(settings)
 
 
 async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:

@@ -53,3 +53,35 @@ def test_bad_libraries_falls_back_to_single(subarr_env, monkeypatch, tmp_path):
 
     importlib.reload(config)
     assert len(config.settings.libraries) == 1  # boot survived; only default
+
+
+def test_rebuild_libraries_picks_up_scalar_change(subarr_env):
+    # #285: rebuild_libraries() re-derives libraries[0] from the CURRENT
+    # scalars, so a runtime edit of arr_path_prefix/media_root isn't stale.
+    from pathlib import Path
+
+    from subarr import config
+
+    s = config.settings
+    object.__setattr__(s, "arr_path_prefix", "/data/Changed/")
+    object.__setattr__(s, "media_root", Path("/mnt/newroot"))
+    config.rebuild_libraries(s)
+    assert s.libraries[0].arr_prefix == "/data/Changed/"
+    assert s.libraries[0].fs_root == Path("/mnt/newroot")
+
+
+def test_rebuild_libraries_preserves_extras(subarr_env, monkeypatch, tmp_path):
+    # The rebuild must keep persisted extra libraries, not just reset to default.
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps({"libraries": [{"name": "Disk 2", "fs_root": "/mnt/d2/Movies", "arr_prefix": "/data/d2/"}]})
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    importlib.reload(__import__("subarr.config", fromlist=["x"]))
+    from subarr import config
+
+    object.__setattr__(config.settings, "arr_path_prefix", "/data/Changed/")
+    config.rebuild_libraries(config.settings)
+    libs = config.settings.libraries
+    assert libs[0].arr_prefix == "/data/Changed/"
+    assert [lib.slug for lib in libs] == ["", "disk-2"]
