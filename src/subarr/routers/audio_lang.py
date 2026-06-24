@@ -783,6 +783,10 @@ class WhisperDetectRequest(BaseModel):
     canonical_path: str
     chunks: int = 3
     chunk_length_s: int = 30
+    # #17: detect a SPECIFIC audio stream (0-based among audio tracks). Forwarded
+    # to subgen only when capabilities.detect_language_track (v4.16+); ignored by
+    # older subgen, which auto-selects the primary track.
+    track: int | None = None
 
 
 @router.post("/whisper-detect")
@@ -832,6 +836,11 @@ async def whisper_detect(req: WhisperDetectRequest, request: Request) -> dict[st
             subgen_path,
             chunks=max(1, min(10, int(req.chunks))),
             chunk_length_s=max(5, min(120, int(req.chunk_length_s))),
+            # #17: only forward a track to a subgen that supports it (v4.16+);
+            # otherwise None so older subgen auto-selects the primary stream.
+            track=req.track
+            if (req.track is not None and getattr(caps, "detect_language_track", False))
+            else None,
         )
     except SubgenUnavailable as e:
         raise HTTPException(502, detail=f"subgen unavailable: {safe_error(e)}")
