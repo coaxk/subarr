@@ -336,12 +336,25 @@ function CoverageStrip({ data, loading, error }) {
   const sonarrCount = sources.sonarr?.series_count ?? sources.sonarr?.count ?? null;
   const radarrCount = sources.radarr?.movie_count ?? sources.radarr?.count ?? null;
   const totalGaps = data?.totals?.items ?? null;
+  // #286: Bazarr is the wanted-list source. If it's configured but failed (e.g.
+  // a cold-cache build during a transient Bazarr outage), the gap count is
+  // UNRELIABLE — a 0 here would falsely read as "all covered". Surface it.
+  const bazarrDegraded = sources.bazarr?.configured && sources.bazarr?.ok === false;
 
   let statusLabel;
   if (error && !data) {
     statusLabel = <span style={{ color: 'var(--error-500)' }}>backend unreachable</span>;
   } else if (loading && !data) {
     statusLabel = <span style={{ color: 'var(--warn-500)' }}>loading…</span>;
+  } else if (bazarrDegraded) {
+    statusLabel = (
+      <span style={{ color: 'var(--warn-500)' }}
+        title={sources.bazarr?.error
+          ? `Bazarr error: ${sources.bazarr.error}`
+          : "Bazarr's wanted list didn't load — this count is incomplete, not a clean bill of health."}>
+        ⚠ coverage degraded — Bazarr unreachable
+      </span>
+    );
   } else if (totalGaps === 0) {
     statusLabel = <span style={{ color: 'var(--ok-500, var(--violet-400))' }}>no gaps to address</span>;
   } else {
@@ -353,8 +366,8 @@ function CoverageStrip({ data, loading, error }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
       <span className="label">coverage</span>
-      <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
-        bazarr <span style={{ color: 'var(--fg-0)' }}>{bazarrCount ?? '—'}</span>
+      <span className="num" style={{ fontSize: 'var(--text-xs)', color: bazarrDegraded ? 'var(--warn-500)' : 'var(--fg-2)' }}>
+        bazarr <span style={{ color: bazarrDegraded ? 'var(--warn-500)' : 'var(--fg-0)' }}>{bazarrDegraded ? '⚠' : (bazarrCount ?? '—')}</span>
       </span>
       <span className="num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
         sonarr <span style={{ color: 'var(--fg-0)' }}>{sonarrCount ?? '—'}</span>
@@ -2833,6 +2846,9 @@ export function CoveragePage() {
   const isInitialLoad = loading && !data;
   const isError = error && !data;
   const isEmpty = !isInitialLoad && !isError && rows.length === 0;
+  // #286: don't read an empty list as "all covered" when Bazarr (the wanted-list
+  // source) failed to load — that 0 is degraded data, not a clean bill.
+  const bazarrDegraded = data?.sources?.bazarr?.configured && data?.sources?.bazarr?.ok === false;
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 0', gap: 14 }}>
@@ -2951,12 +2967,15 @@ export function CoveragePage() {
             </div>
           )}
           {isEmpty && (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
-              {allRows && allRows.length === 0
-                ? 'No gaps to address — every monitored file has its subs.'
-                : analyzingRows.length
-                  ? `No verified gaps yet — ${analyzingRows.length} file(s) still being analyzed (below).`
-                  : 'No rows match the current filters.'}
+            <div style={{ padding: 40, textAlign: 'center',
+                          color: bazarrDegraded ? 'var(--warn-500)' : 'var(--fg-2)' }}>
+              {bazarrDegraded
+                ? '⚠ Coverage degraded — Bazarr is unreachable, so its wanted list didn’t load. This isn’t "all covered"; it’s incomplete data. Check Bazarr, then Refresh.'
+                : allRows && allRows.length === 0
+                  ? 'No gaps to address — every monitored file has its subs.'
+                  : analyzingRows.length
+                    ? `No verified gaps yet — ${analyzingRows.length} file(s) still being analyzed (below).`
+                    : 'No rows match the current filters.'}
             </div>
           )}
           {!isInitialLoad && !isError && groupBy === 'flat' && rows.map(r => (
