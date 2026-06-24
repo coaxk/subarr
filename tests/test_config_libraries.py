@@ -87,3 +87,34 @@ def test_rebuild_libraries_preserves_extras(subarr_env, monkeypatch, tmp_path):
     libs = config.settings.libraries
     assert libs[0].arr_prefix == "/data/Changed/"
     assert [lib.slug for lib in libs] == ["", "disk-2"]
+
+
+def test_library_binding_fields_default_empty(tmp_path):
+    from subarr.libraries import Library
+
+    lib = Library(slug="", name="d", fs_root=tmp_path, subgen_prefix="/media", arr_prefix="/data/")
+    assert lib.sonarr_id == ""
+    assert lib.radarr_id == ""
+    assert lib.bazarr_id == ""
+
+
+def test_build_libraries_passes_through_bindings(tmp_path):
+    from subarr.libraries import Library, build_libraries
+
+    default = Library(
+        slug="", name="default", fs_root=tmp_path / "m", subgen_prefix="/media", arr_prefix="/data/tv/"
+    )
+    extras = [
+        {
+            "name": "Anime",
+            "fs_root": str(tmp_path / "anime"),
+            "arr_prefix": "/data/anime/",
+            "sonarr_id": "anime",
+            "bazarr_id": "anime",
+        }
+    ]
+    libs = build_libraries(default, extras)
+    anime = next(l for l in libs if l.slug == "anime")
+    assert anime.sonarr_id == "anime"
+    assert anime.radarr_id == ""
+    assert anime.bazarr_id == "anime"
