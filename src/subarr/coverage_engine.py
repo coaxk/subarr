@@ -22,10 +22,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .config import settings
-from .paths import UNSUPPORTED_EXTS, canonical_to_fs, strip_arr_prefix
+from .paths import UNSUPPORTED_EXTS, canonical_to_fs, library_for_canonical, strip_arr_prefix
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -288,6 +288,25 @@ class IntegrationBundle:
         closers.append(self.tautulli.aclose())
         closers.append(self.plex.aclose())
         await asyncio.gather(*closers, return_exceptions=True)
+
+
+class ResolvedClients(NamedTuple):
+    sonarr: object
+    radarr: object
+    bazarr: object
+
+
+def clients_for(bundle: "IntegrationBundle", canonical: str) -> ResolvedClients:
+    """Resolve the (sonarr, radarr, bazarr) clients that own a row's library.
+    The row's '@slug' head -> Library -> bound instance ids -> clients. Empty
+    bindings resolve to instance 0, so single-stack is byte-identical. The
+    caller picks sonarr vs radarr by content type (#161 Phase 2+ wiring)."""
+    lib = library_for_canonical(canonical)
+    return ResolvedClients(
+        sonarr=bundle.client_for("sonarr", lib.sonarr_id),
+        radarr=bundle.client_for("radarr", lib.radarr_id),
+        bazarr=bundle.client_for("bazarr", lib.bazarr_id),
+    )
 
 
 # ───────────────────────────── helpers ──────────────────────────────────────
