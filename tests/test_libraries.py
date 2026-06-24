@@ -113,8 +113,11 @@ def test_build_libraries_rejects_duplicate_arr_prefix():
     from subarr.libraries import Library, LibraryConfigError, build_libraries
 
     default = Library(
-        slug="", name="default", fs_root=Path("/media"),
-        subgen_prefix="/media", arr_prefix="/data/Media/",
+        slug="",
+        name="default",
+        fs_root=Path("/media"),
+        subgen_prefix="/media",
+        arr_prefix="/data/Media/",
     )
     # extra arr_prefix == default's, modulo trailing slash -> duplicate
     with pytest.raises(LibraryConfigError, match="duplicate"):
@@ -134,8 +137,13 @@ def test_build_libraries_distinct_arr_prefixes_ok():
     from subarr.libraries import Library, build_libraries
 
     default = Library(
-        slug="", name="default", fs_root=Path("/media"),
-        subgen_prefix="/media", arr_prefix="/data/Media/",
+        slug="",
+        name="default",
+        fs_root=Path("/media"),
+        subgen_prefix="/media",
+        arr_prefix="/data/Media/",
     )
-    libs = build_libraries(default, [{"name": "Movies2", "fs_root": "/mnt/d2", "arr_prefix": "/data/Movies2/"}])
+    libs = build_libraries(
+        default, [{"name": "Movies2", "fs_root": "/mnt/d2", "arr_prefix": "/data/Movies2/"}]
+    )
     assert [lib.slug for lib in libs] == ["", "movies2"]

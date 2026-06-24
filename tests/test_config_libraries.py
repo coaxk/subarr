@@ -74,7 +74,9 @@ def test_rebuild_libraries_preserves_extras(subarr_env, monkeypatch, tmp_path):
     # The rebuild must keep persisted extra libraries, not just reset to default.
     store = tmp_path / "ov.json"
     store.write_text(
-        json.dumps({"libraries": [{"name": "Disk 2", "fs_root": "/mnt/d2/Movies", "arr_prefix": "/data/d2/"}]})
+        json.dumps(
+            {"libraries": [{"name": "Disk 2", "fs_root": "/mnt/d2/Movies", "arr_prefix": "/data/d2/"}]}
+        )
     )
     monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
     importlib.reload(__import__("subarr.config", fromlist=["x"]))
