@@ -93,3 +93,22 @@ def test_rebuild_instances_failsoft_on_bad_config(subarr_env, monkeypatch, tmp_p
 
     importlib.reload(config)  # must not raise
     assert len([i for i in config.settings.instances if i.service == "sonarr"]) == 1
+
+
+def test_credential_flush_rebuilds_instances(subarr_env, monkeypatch):
+    # #161 back-compat: a wizard credential edit must refresh settings.instances
+    # (instance 0), else the rebuilt IntegrationBundle would use a stale URL.
+    # sonarr_url must NOT be env-set, or the clobber-guard skips the flush.
+    import importlib
+
+    monkeypatch.delenv("SONARR_URL", raising=False)
+    monkeypatch.delenv("SONARR_API_KEY", raising=False)
+    from subarr import config
+
+    importlib.reload(config)
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings({"sonarr_url": "http://newsonarr:8989", "sonarr_api_key": "newkey"})
+    inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
+    assert inst0.url == "http://newsonarr:8989"
+    assert inst0.api_key == "newkey"

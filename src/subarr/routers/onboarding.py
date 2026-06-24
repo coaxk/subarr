@@ -683,7 +683,14 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     we rely on the user pinning their env vars in compose after the
     wizard finishes (the wizard's final step shows a copy-paste
     snippet of the values they entered)."""
-    from ..config import LIBRARY_DEFINING_FIELDS, env_is_set, rebuild_libraries, settings
+    from ..config import (
+        INSTANCE_DEFINING_FIELDS,
+        LIBRARY_DEFINING_FIELDS,
+        env_is_set,
+        rebuild_instances,
+        rebuild_libraries,
+        settings,
+    )
 
     mapping = {
         "media_root": ("media_root", Path),
@@ -701,6 +708,7 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
         "ollama_model": ("ollama_model", str),
     }
     libs_dirty = False
+    instances_dirty = False
     for src_key, (settings_attr, coerce) in mapping.items():
         if src_key in progress and progress[src_key]:
             # Clobber guard: an env-set field is the operator's
@@ -720,6 +728,8 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
                 object.__setattr__(settings, settings_attr, coerce(progress[src_key]))
                 if settings_attr in LIBRARY_DEFINING_FIELDS:
                     libs_dirty = True
+                if settings_attr in INSTANCE_DEFINING_FIELDS:
+                    instances_dirty = True
             except Exception as e:
                 log.warning("settings flush: %s=%r failed: %s", settings_attr, progress[src_key], e)
 
@@ -728,6 +738,13 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
     # resolution doesn't silently run on a stale default library until restart.
     if libs_dirty:
         rebuild_libraries(settings)
+    # #161: a flushed sonarr/radarr/bazarr url or api_key changes the scalars
+    # instance 0 is derived from — re-derive settings.instances so the rebuilt
+    # IntegrationBundle talks to the new credentials, not stale ones until
+    # restart. (Pre-#161 the bundle read the live scalars directly; the instance
+    # list must be refreshed to preserve that behaviour.)
+    if instances_dirty:
+        rebuild_instances(settings)
 
 
 async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:
