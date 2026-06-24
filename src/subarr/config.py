@@ -311,30 +311,46 @@ def load() -> Settings:
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )
     _apply_persisted_overrides(_s)
+    rebuild_libraries(_s)
+    return _s
 
-    # #134 Phase 1: build the library list. Library 0 = the legacy scalars
-    # (which _apply_persisted_overrides may have adjusted). Extras come from
-    # the override store's "libraries" key. Fail-soft: any config error logs
-    # and degrades to the single default library so boot never breaks.
-    _default_lib = Library(
+
+# Scalars that define the default library (libraries[0]). A runtime edit of any
+# of these must trigger rebuild_libraries() — see #285.
+LIBRARY_DEFINING_FIELDS = ("media_root", "subgen_media_prefix", "arr_path_prefix")
+
+
+def rebuild_libraries(s: Settings) -> None:
+    """(Re)build ``s.libraries`` from the current scalar config + persisted extras.
+
+    Library 0 = the legacy scalars (``media_root`` / ``subgen_media_prefix`` /
+    ``arr_path_prefix``, which a UI/onboarding edit may have changed); extras
+    come from the override store's ``libraries`` key. Fail-soft: any config
+    error logs and degrades to the single default library so this never breaks.
+
+    Called at load AND whenever a LIBRARY_DEFINING_FIELDS scalar changes at
+    runtime (#285) — without the runtime rebuild, editing arr_path_prefix /
+    media_root leaves ``libraries[0]`` stale until restart, silently breaking
+    all library-aware path resolution.
+    """
+    from . import config_store
+
+    default_lib = Library(
         slug="",
         name="default",
-        fs_root=_s.media_root,
-        subgen_prefix=_s.subgen_media_prefix,
-        arr_prefix=_s.arr_path_prefix,
+        fs_root=s.media_root,
+        subgen_prefix=s.subgen_media_prefix,
+        arr_prefix=s.arr_path_prefix,
     )
     try:
-        from . import config_store
-
-        _raw_extras = config_store.load_overrides().get("libraries", [])
-        if not isinstance(_raw_extras, list):
-            _raw_extras = []
-        _libs = build_libraries(_default_lib, _raw_extras)
+        raw_extras = config_store.load_overrides().get("libraries", [])
+        if not isinstance(raw_extras, list):
+            raw_extras = []
+        libs = build_libraries(default_lib, raw_extras)
     except LibraryConfigError:
         log.warning("invalid libraries[] config; using single default library", exc_info=True)
-        _libs = (_default_lib,)
-    object.__setattr__(_s, "libraries", _libs)
-    return _s
+        libs = (default_lib,)
+    object.__setattr__(s, "libraries", libs)
 
 
 # ─── Onboarding clobber guard support ───────────────────────────────

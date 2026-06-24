@@ -147,3 +147,27 @@ async def test_rebuild_runtime_clients_swaps_and_closes():
     assert state.subgen is not old_s
     assert state.ollama is not old_o
     assert old_b.closed and old_s.closed and old_o.closed
+
+
+def test_apply_progress_arr_prefix_rebuilds_libraries(monkeypatch):
+    # #285: the onboarding flush of a library-defining scalar must rebuild
+    # libraries[0] (derived from that scalar), not leave it stale until restart.
+    monkeypatch.delenv("ARR_PATH_PREFIX", raising=False)
+    from subarr.config import settings
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings({"arr_path_prefix": "/data/NewMedia/"})
+    assert settings.arr_path_prefix == "/data/NewMedia/"
+    assert settings.libraries[0].arr_prefix == "/data/NewMedia/"
+
+
+def test_apply_progress_media_root_rebuilds_libraries(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.delenv("SUBARR_MEDIA_ROOT", raising=False)
+    from subarr.config import settings
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings({"media_root": "/mnt/newroot"})
+    assert settings.media_root == Path("/mnt/newroot")
+    assert settings.libraries[0].fs_root == Path("/mnt/newroot")

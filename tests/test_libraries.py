@@ -104,3 +104,46 @@ def test_build_libraries_requires_fs_root_and_arr_prefix(tmp_path):
         build_libraries(_default(tmp_path), [{"name": "X", "arr_prefix": "/data/x/"}])
     with pytest.raises(LibraryConfigError, match="arr_prefix"):
         build_libraries(_default(tmp_path), [{"name": "X", "fs_root": "/x"}])
+
+
+def test_build_libraries_rejects_duplicate_arr_prefix():
+    # #285 NIT: two libraries with the same arr_prefix make strip_arr_prefix's
+    # longest-match assignment arbitrary — reject it (trailing-slash/backslash
+    # normalized, matching the resolver).
+    from subarr.libraries import Library, LibraryConfigError, build_libraries
+
+    default = Library(
+        slug="",
+        name="default",
+        fs_root=Path("/media"),
+        subgen_prefix="/media",
+        arr_prefix="/data/Media/",
+    )
+    # extra arr_prefix == default's, modulo trailing slash -> duplicate
+    with pytest.raises(LibraryConfigError, match="duplicate"):
+        build_libraries(default, [{"name": "Dup", "fs_root": "/mnt/d2", "arr_prefix": "/data/Media"}])
+    # two extras colliding with each other
+    with pytest.raises(LibraryConfigError, match="duplicate"):
+        build_libraries(
+            default,
+            [
+                {"name": "A", "fs_root": "/mnt/a", "arr_prefix": "/data/a/"},
+                {"name": "B", "fs_root": "/mnt/b", "arr_prefix": "/data/a"},
+            ],
+        )
+
+
+def test_build_libraries_distinct_arr_prefixes_ok():
+    from subarr.libraries import Library, build_libraries
+
+    default = Library(
+        slug="",
+        name="default",
+        fs_root=Path("/media"),
+        subgen_prefix="/media",
+        arr_prefix="/data/Media/",
+    )
+    libs = build_libraries(
+        default, [{"name": "Movies2", "fs_root": "/mnt/d2", "arr_prefix": "/data/Movies2/"}]
+    )
+    assert [lib.slug for lib in libs] == ["", "movies2"]

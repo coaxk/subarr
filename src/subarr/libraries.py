@@ -56,6 +56,18 @@ def build_libraries(default: Library, extras: list[dict]) -> tuple[Library, ...]
     lib0 = replace(default, slug="")
     out: list[Library] = [lib0]
     seen: set[str] = {""}
+
+    # #285 NIT: arr_prefix must be unique across libraries — two identical
+    # prefixes make strip_arr_prefix's longest-match assignment arbitrary (a
+    # real #161 multi-instance footgun). Normalize like the resolver (backslash
+    # + trailing slash) before comparing.
+    def _norm_ap(ap: str) -> str:
+        return ap.replace("\\", "/").rstrip("/")
+
+    seen_arr: set[str] = set()
+    if default.arr_prefix:
+        seen_arr.add(_norm_ap(default.arr_prefix))
+
     for i, raw in enumerate(extras):
         if not isinstance(raw, dict):
             raise LibraryConfigError(f"library[{i}] is not an object: {raw!r}")
@@ -74,6 +86,10 @@ def build_libraries(default: Library, extras: list[dict]) -> tuple[Library, ...]
         if slug in seen:
             raise LibraryConfigError(f"duplicate library slug {slug!r}")
         seen.add(slug)
+        ap_norm = _norm_ap(arr_prefix)
+        if ap_norm in seen_arr:
+            raise LibraryConfigError(f"library {name!r} has a duplicate arr_prefix {arr_prefix!r}")
+        seen_arr.add(ap_norm)
         subgen_prefix = str(raw.get("subgen_prefix", "")).strip() or lib0.subgen_prefix
         out.append(
             Library(
