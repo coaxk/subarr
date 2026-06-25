@@ -68,3 +68,20 @@ def test_region_tagged_english_audio_flagged_mislabeled():
 def test_genuine_foreign_audio_not_flagged():  # control
     assert _audio_metadata_looks_mislabeled(["de"]) is False
     assert _audio_metadata_looks_mislabeled(["ger"]) is False
+
+
+def test_normalize_galician_358():
+    # #358: Galician (As bestas) — picker sends ISO-639-2 'glg', Whisper says 'gl'
+    from subarr.langs import normalize_lang
+
+    assert normalize_lang("glg") == "gl"
+    assert normalize_lang("gal") == "gl"
+    assert normalize_lang("galician") == "gl"
+    assert normalize_lang("gl") == "gl"
+
+
+def test_normalize_zxx_no_linguistic_content_358():
+    # #358: zxx = no linguistic content (Junk Head gibberish) — must stay 'zxx'
+    from subarr.langs import normalize_lang
+
+    assert normalize_lang("zxx") == "zxx"
