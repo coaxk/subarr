@@ -152,6 +152,12 @@ class CoverageItem:
     mismatch_native_track_lang: str | None = None  # the original language (ISO-639-1)
     mismatch_native_audio_ordinal: int | None = None  # 1-based audio ordinal for the swap
 
+    def _library_label(self) -> dict[str, str]:
+        """#161 Phase 2: resolve this row's library from its canonical (fail-soft
+        to library 0). library_for_canonical never raises."""
+        lib = library_for_canonical(self.file_canonical_path or self.canonical_path or "")
+        return {"slug": lib.slug, "name": lib.name}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "media_type": self.media_type,
@@ -174,6 +180,9 @@ class CoverageItem:
             "audio_langs": self.audio_langs,
             "suggest_bazarr_rescan": self.suggest_bazarr_rescan,
             "file_canonical_path": self.file_canonical_path,
+            # #161 Phase 2: provenance label so every UI surface can show/filter
+            # by library (instance name derivable downstream from the binding).
+            "library": self._library_label(),
             "pending_download": self.pending_download,
             "now_playing": self.now_playing,
             "just_imported": self.just_imported,
