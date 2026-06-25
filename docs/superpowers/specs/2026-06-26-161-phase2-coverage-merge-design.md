@@ -99,6 +99,16 @@ coverage-degraded banner (#286) can report *which* instance is unreachable, not 
 "Bazarr". Keep a top-level rollup (`ok = all configured instances ok`) for existing
 consumers.
 
+## 6.5 Row provenance label (UX enabler)
+
+Every merged coverage row carries `@<slug>` in its canonical, but the row dict has no
+clean label. **Phase 2 adds a `library` field to `CoverageItem.to_dict()`** — `{slug,
+name}` resolved from the row's canonical via `library_for_canonical` (instance name is
+derivable downstream from the library's binding). This is the single hook every Phase 4
+display surface (Coverage filter, Queue/Review/Aftercare/Activity labels, per-instance
+Health) depends on — cheap to emit now, expensive to retrofit. No rendering this phase.
+See `2026-06-26-161-multi-instance-ux-surface-audit.md` for the full surface matrix.
+
 ## 7. Error handling
 
 Per-instance failures degrade gracefully and independently: if `Bazarr-anime` is
