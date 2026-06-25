@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .instances import Instance, InstanceConfigError, build_instances
 from .libraries import Library, LibraryConfigError, build_libraries
 
 log = logging.getLogger(__name__)
@@ -234,6 +235,12 @@ class Settings:
     # Tuple (not list) because Settings is frozen.
     libraries: tuple[Library, ...] = ()
 
+    # #161 Phase 1: validated instance list (flat tuple; each Instance carries
+    # its .service). Per-service instance 0 (id "") mirrors the legacy
+    # sonarr_url/api_key/... scalars for back-compat; extras come from the
+    # override store's "instances" key. Built in load() after scalars+overrides.
+    instances: tuple[Instance, ...] = ()
+
 
 def load() -> Settings:
     # See _env_or docstring for the empty-string fall-through rule (#127).
@@ -312,6 +319,7 @@ def load() -> Settings:
     )
     _apply_persisted_overrides(_s)
     rebuild_libraries(_s)
+    rebuild_instances(_s)
     return _s
 
 
@@ -351,6 +359,42 @@ def rebuild_libraries(s: Settings) -> None:
         log.warning("invalid libraries[] config; using single default library", exc_info=True)
         libs = (default_lib,)
     object.__setattr__(s, "libraries", libs)
+
+
+# Scalars that define each service's instance 0. A runtime edit of any of these
+# must trigger rebuild_instances() so credential changes take effect live (#161,
+# mirrors LIBRARY_DEFINING_FIELDS / #285).
+INSTANCE_DEFINING_FIELDS = (
+    "sonarr_url",
+    "sonarr_api_key",
+    "radarr_url",
+    "radarr_api_key",
+    "bazarr_url",
+    "bazarr_api_key",
+)
+
+
+def rebuild_instances(s: Settings) -> None:
+    """(Re)build ``s.instances`` from the current scalar config + persisted
+    extras. Instance 0 per service = the legacy scalars; extras come from the
+    override store's ``instances`` key. Fail-soft: any config error logs and
+    degrades to the per-service defaults so this never breaks boot."""
+    from . import config_store
+
+    defaults = [
+        Instance(id="", service="sonarr", name="default", url=s.sonarr_url, api_key=s.sonarr_api_key),
+        Instance(id="", service="radarr", name="default", url=s.radarr_url, api_key=s.radarr_api_key),
+        Instance(id="", service="bazarr", name="default", url=s.bazarr_url, api_key=s.bazarr_api_key),
+    ]
+    try:
+        raw_extras = config_store.load_overrides().get("instances", {})
+        if not isinstance(raw_extras, dict):
+            raw_extras = {}
+        insts = build_instances(defaults, raw_extras)
+    except InstanceConfigError:
+        log.warning("invalid instances config; using per-service defaults", exc_info=True)
+        insts = tuple(defaults)
+    object.__setattr__(s, "instances", insts)
 
 
 # ─── Onboarding clobber guard support ───────────────────────────────

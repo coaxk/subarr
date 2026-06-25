@@ -55,6 +55,18 @@ def _library_by_slug(slug: str) -> Library:
     raise PathOutsideRootError(f"unknown library @{slug}")
 
 
+def library_for_canonical(canonical: str) -> Library:
+    """Public, fail-soft resolver: a canonical's '@<slug>/' head -> its Library.
+    Unknown/empty slug returns library 0 (the default) rather than raising —
+    callers (clients_for, #161) must degrade to instance 0, never crash a row.
+    """
+    slug, _rel = _split_canonical(canonical)
+    try:
+        return _library_by_slug(slug)
+    except PathOutsideRootError:
+        return _library_by_slug("")
+
+
 def canonical_to_fs(canonical: str) -> Path:
     """Resolve a canonical to an absolute filesystem path under its library's
     root, guarding against traversal. A leading '@<slug>/' selects the

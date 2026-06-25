@@ -76,6 +76,45 @@ def two_libraries(subarr_env, monkeypatch, tmp_path: Path):
 
 
 @pytest.fixture
+def anime_stack(subarr_env, monkeypatch, tmp_path: Path):
+    """A second Sonarr instance 'anime' plus a library 'anime' bound to it.
+    Writes both override keys and reloads config/paths/coverage_engine so
+    settings.instances, settings.libraries, and a freshly built IntegrationBundle
+    all reflect them. Returns the anime library fs_root. (#161 Phase 1)"""
+    import json
+
+    anime_root = tmp_path / "anime"
+    (anime_root / "Show").mkdir(parents=True)
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "sonarr": [{"name": "Anime", "url": "http://s2.test:8989", "api_key": "anime-key"}]
+                },
+                "libraries": [
+                    {
+                        "slug": "anime",
+                        "name": "Anime",
+                        "fs_root": str(anime_root),
+                        "subgen_prefix": "/media",
+                        "arr_prefix": "/data/anime/",
+                        "sonarr_id": "anime",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, coverage_engine, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    importlib.reload(coverage_engine)
+    return anime_root
+
+
+@pytest.fixture
 def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     compose = tmp_path / "compose.yaml"
     _make_compose(compose)
@@ -351,24 +390,35 @@ def _make_integration_bundle(
 
     class _StubBundle(IntegrationBundle):
         def __init__(self):
-            self.bazarr = _wrap(
-                BazarrClient,
-                bazarr_handler,
-                "http://bazarr.test:6767",
-                {"X-API-KEY": "bz-test-key"} if bazarr_handler else None,
-            )
-            self.sonarr = _wrap(
-                SonarrClient,
-                sonarr_handler,
-                "http://sonarr.test:8989",
-                {"X-Api-Key": "sn-test-key"} if sonarr_handler else None,
-            )
-            self.radarr = _wrap(
-                RadarrClient,
-                radarr_handler,
-                "http://radarr.test:7878",
-                {"X-Api-Key": "rd-test-key"} if radarr_handler else None,
-            )
+            # #161: bundle.sonarr/.radarr/.bazarr are now instance-0 alias
+            # properties reading self._clients[svc][""], so populate that dict
+            # (not the read-only attributes) with the mock-transport clients.
+            self._clients = {
+                "bazarr": {
+                    "": _wrap(
+                        BazarrClient,
+                        bazarr_handler,
+                        "http://bazarr.test:6767",
+                        {"X-API-KEY": "bz-test-key"} if bazarr_handler else None,
+                    )
+                },
+                "sonarr": {
+                    "": _wrap(
+                        SonarrClient,
+                        sonarr_handler,
+                        "http://sonarr.test:8989",
+                        {"X-Api-Key": "sn-test-key"} if sonarr_handler else None,
+                    )
+                },
+                "radarr": {
+                    "": _wrap(
+                        RadarrClient,
+                        radarr_handler,
+                        "http://radarr.test:7878",
+                        {"X-Api-Key": "rd-test-key"} if radarr_handler else None,
+                    )
+                },
+            }
             self.tautulli = _wrap(TautulliClient, tautulli_handler, "http://tautulli.test:8181")
             # v1.1.1: tests don't exercise Plex; stub with an unconfigured
             # client so .is_configured() returns False and code paths skip.

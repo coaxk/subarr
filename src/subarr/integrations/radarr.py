@@ -14,10 +14,12 @@ from .base import IntegrationClient
 class RadarrClient(IntegrationClient):
     name = "radarr"
 
-    def __init__(self):
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        url = settings.radarr_url if base_url is None else base_url
+        key = settings.radarr_api_key if api_key is None else api_key
         super().__init__(
-            base_url=settings.radarr_url if settings.radarr_api_key else "",
-            headers={"X-Api-Key": settings.radarr_api_key} if settings.radarr_api_key else None,
+            base_url=url if key else "",
+            headers={"X-Api-Key": key} if key else None,
         )
 
     async def status(self) -> dict[str, Any]:

@@ -22,10 +22,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .config import settings
-from .paths import UNSUPPORTED_EXTS, canonical_to_fs, strip_arr_prefix
+from .paths import UNSUPPORTED_EXTS, canonical_to_fs, library_for_canonical, strip_arr_prefix
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -225,13 +225,32 @@ class CoverageReport:
 
 
 class IntegrationBundle:
-    """Holds the four integration clients + close-all helper. App lifespan
-    owns one instance."""
+    """Holds the integration clients + close-all helper. App lifespan owns one
+    instance. #161: the arr/bazarr trio is keyed per instance id; tautulli/plex
+    stay singleton. ``bundle.sonarr/.radarr/.bazarr`` alias instance 0 so the
+    many existing read sites keep working unchanged."""
+
+    _ARR_SERVICES = ("sonarr", "radarr", "bazarr")
 
     def __init__(self):
-        self.bazarr = BazarrClient()
-        self.sonarr = SonarrClient()
-        self.radarr = RadarrClient()
+        # SonarrClient/RadarrClient/BazarrClient are already imported at module
+        # scope — reuse them, do not re-import locally.
+        ctors = {"sonarr": SonarrClient, "radarr": RadarrClient, "bazarr": BazarrClient}
+        self._clients: dict[str, dict[str, object]] = {svc: {} for svc in self._ARR_SERVICES}
+        for inst in settings.instances:
+            if inst.service not in self._clients:
+                continue
+            self._clients[inst.service][inst.id] = ctors[inst.service](
+                base_url=inst.url, api_key=inst.api_key
+            )
+        # Defensive: guarantee an instance 0 per service even if settings.instances
+        # was never rebuilt (keeps the alias properties total). Guard with ``in``
+        # (NOT setdefault) — setdefault would eagerly construct a throwaway client
+        # every call, leaking an unclosed httpx.AsyncClient.
+        for svc in self._ARR_SERVICES:
+            if "" not in self._clients[svc]:
+                self._clients[svc][""] = ctors[svc]()
+
         self.tautulli = TautulliClient()
         # v1.1.1: Plex client for partial-scan-on-sidecar-write. Constructed
         # with env-driven config; .is_configured() reflects whether url+token
@@ -246,15 +265,64 @@ class IntegrationBundle:
             media_root=str(settings.media_root),
         )
 
+    def client_for(self, service: str, instance_id: str | None):
+        """Resolve a client by (service, instance id). Empty/unknown id falls
+        back to instance 0 — the single-stack invariant."""
+        pool = self._clients[service]
+        return pool.get(instance_id or "") or pool[""]
+
+    # Read/write aliases for instance 0. Reads resolve the env-backed default
+    # client; writes swap it (preserves the long-standing test idiom + any
+    # runtime that replaces a single client). Multi-instance code uses
+    # client_for()/clients_for() instead.
+    @property
+    def sonarr(self):
+        return self._clients["sonarr"][""]
+
+    @sonarr.setter
+    def sonarr(self, client):
+        self._clients["sonarr"][""] = client
+
+    @property
+    def radarr(self):
+        return self._clients["radarr"][""]
+
+    @radarr.setter
+    def radarr(self, client):
+        self._clients["radarr"][""] = client
+
+    @property
+    def bazarr(self):
+        return self._clients["bazarr"][""]
+
+    @bazarr.setter
+    def bazarr(self, client):
+        self._clients["bazarr"][""] = client
+
     async def aclose(self) -> None:
-        await asyncio.gather(
-            self.bazarr.aclose(),
-            self.sonarr.aclose(),
-            self.radarr.aclose(),
-            self.tautulli.aclose(),
-            self.plex.aclose(),
-            return_exceptions=True,
-        )
+        closers = [c.aclose() for pool in self._clients.values() for c in pool.values()]
+        closers.append(self.tautulli.aclose())
+        closers.append(self.plex.aclose())
+        await asyncio.gather(*closers, return_exceptions=True)
+
+
+class ResolvedClients(NamedTuple):
+    sonarr: object
+    radarr: object
+    bazarr: object
+
+
+def clients_for(bundle: "IntegrationBundle", canonical: str) -> ResolvedClients:
+    """Resolve the (sonarr, radarr, bazarr) clients that own a row's library.
+    The row's '@slug' head -> Library -> bound instance ids -> clients. Empty
+    bindings resolve to instance 0, so single-stack is byte-identical. The
+    caller picks sonarr vs radarr by content type (#161 Phase 2+ wiring)."""
+    lib = library_for_canonical(canonical)
+    return ResolvedClients(
+        sonarr=bundle.client_for("sonarr", lib.sonarr_id),
+        radarr=bundle.client_for("radarr", lib.radarr_id),
+        bazarr=bundle.client_for("bazarr", lib.bazarr_id),
+    )
 
 
 # ───────────────────────────── helpers ──────────────────────────────────────

@@ -34,6 +34,12 @@ class Library:
     fs_root: Path  # subarr's filesystem view of this library's root
     subgen_prefix: str  # subgen-space absolute prefix (e.g. "/media")
     arr_prefix: str  # *arr container path prefix (e.g. "/data/Media/")
+    # #161 Phase 1: which instance serves this library. "" = instance 0
+    # (env-backed default). A library uses one media-manager (Sonarr OR Radarr,
+    # by content type) + one Bazarr. Inert in Phase 1 — no UI sets these yet.
+    sonarr_id: str = ""
+    radarr_id: str = ""
+    bazarr_id: str = ""
 
 
 class LibraryConfigError(ValueError):
@@ -98,6 +104,9 @@ def build_libraries(default: Library, extras: list[dict]) -> tuple[Library, ...]
                 fs_root=Path(fs_root),
                 subgen_prefix=subgen_prefix,
                 arr_prefix=arr_prefix,
+                sonarr_id=str(raw.get("sonarr_id", "")).strip(),
+                radarr_id=str(raw.get("radarr_id", "")).strip(),
+                bazarr_id=str(raw.get("bazarr_id", "")).strip(),
             )
         )
     return tuple(out)
