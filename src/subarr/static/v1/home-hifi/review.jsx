@@ -31,6 +31,7 @@ const LANG_PICKS = [
   ['est','Estonian'],
   ['fin','Finnish'],
   ['fre','French'],
+  ['glg','Galician'],
   ['ger','German'],
   ['gre','Greek'],
   ['heb','Hebrew'],
@@ -58,6 +59,7 @@ const LANG_PICKS = [
   ['tur','Turkish'],
   ['ukr','Ukrainian'],
   ['vie','Vietnamese'],
+  ['zxx','No linguistic content'],
 ];
 
 function FlagDot({ flag }) {

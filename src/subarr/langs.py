@@ -56,6 +56,7 @@ _NAME_TO_ISO = {
     "romanian": "ro",
     "hungarian": "hu",
     "catalan": "ca",
+    "galician": "gl",
 }
 
 # ISO-639-2/B (and a few /T) three-letter → ISO-639-1, for ffprobe audio tags.
@@ -106,6 +107,11 @@ _ISO3_TO_ISO1 = {
     "ron": "ro",
     "hun": "hu",
     "cat": "ca",
+    "glg": "gl",
+    "gal": "gl",
+    # zxx = "no linguistic content" (constructed/gibberish or silent films, e.g.
+    # Junk Head). Not a spoken language; kept as-is so it round-trips. (#358)
+    "zxx": "zxx",
 }
 
 
