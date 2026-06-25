@@ -628,6 +628,36 @@ async def _fetch_bazarr(bz: BazarrClient, sources: dict) -> tuple[list[dict], li
         return [], []
 
 
+async def _fetch_bazarr_all(bundle: IntegrationBundle, sources: dict) -> tuple[list[dict], list[dict]]:
+    """#161 Phase 2: fetch wanted lists from ALL bazarr instances, tag each item
+    with its source instance id (`_bazarr_instance`), and record per-instance
+    health under sources["bazarr"]["instances"] with a summed/rolled-up top
+    level (keeps #286's banner + existing consumers working). Single-instance:
+    one instance ("") → identical behaviour + a one-element instances list."""
+    all_eps: list[dict] = []
+    all_movs: list[dict] = []
+    inst_status: list[dict] = []
+    for iid, client in bundle._clients["bazarr"].items():
+        sub: dict = {}
+        eps, movs = await _fetch_bazarr(client, sub)
+        for e in eps:
+            e["_bazarr_instance"] = iid
+        for m in movs:
+            m["_bazarr_instance"] = iid
+        all_eps.extend(eps)
+        all_movs.extend(movs)
+        inst_status.append({"id": iid, **sub.get("bazarr", {})})
+    configured = [s for s in inst_status if s.get("configured")]
+    sources["bazarr"] = {
+        "ok": bool(configured) and all(s.get("ok") for s in configured),
+        "configured": bool(configured),
+        "episodes_wanted": len(all_eps),
+        "movies_wanted": len(all_movs),
+        "instances": inst_status,
+    }
+    return all_eps, all_movs
+
+
 async def _fetch_arr(name: str, client, sources: dict, fetch_fn: str) -> list[dict]:
     # v1.1-B: parallel fetches share `sources` — merge into existing dict
     # instead of replacing, so a concurrent _fetch_wanted_missing's writes
