@@ -115,6 +115,24 @@ def anime_stack(subarr_env, monkeypatch, tmp_path: Path):
 
 
 @pytest.fixture
+def coverage_bundle(subarr_env):
+    """Factory for driving build_coverage end-to-end against seeded mock data.
+    Returns a callable(sonarr_handler, bazarr_handler, radarr_handler) -> a stub
+    IntegrationBundle whose clients use httpx.MockTransport. tautulli/plex are
+    left unconfigured. (#161 Phase 2 — the first end-to-end build_coverage harness.)"""
+
+    def _make(*, sonarr_handler=None, bazarr_handler=None, radarr_handler=None):
+        BundleCls = _make_integration_bundle(
+            sonarr_handler=sonarr_handler,
+            bazarr_handler=bazarr_handler,
+            radarr_handler=radarr_handler,
+        )
+        return BundleCls()
+
+    return _make
+
+
+@pytest.fixture
 def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     compose = tmp_path / "compose.yaml"
     _make_compose(compose)

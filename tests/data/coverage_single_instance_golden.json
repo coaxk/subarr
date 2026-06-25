@@ -1,0 +1,28 @@
+[
+  {
+    "bazarr_blind": false,
+    "canonical_path": "TV/Severance",
+    "file_canonical_path": "TV/Severance/Season 1/Severance.S01E01.mkv",
+    "has_sub_on_disk": false,
+    "media_type": "episode",
+    "reason": null,
+    "score": 50,
+    "score_reasons": [
+      "monitored"
+    ],
+    "title": "Severance"
+  },
+  {
+    "bazarr_blind": false,
+    "canonical_path": "Movies/Dune (2021)",
+    "file_canonical_path": "Movies/Dune (2021)/Dune.2021.mkv",
+    "has_sub_on_disk": false,
+    "media_type": "movie",
+    "reason": null,
+    "score": 50,
+    "score_reasons": [
+      "monitored"
+    ],
+    "title": "Dune"
+  }
+]
