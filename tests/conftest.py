@@ -115,6 +115,203 @@ def anime_stack(subarr_env, monkeypatch, tmp_path: Path):
 
 
 @pytest.fixture
+def coverage_bundle(subarr_env):
+    """Factory for driving build_coverage end-to-end against seeded mock data.
+    Returns a callable(sonarr_handler, bazarr_handler, radarr_handler) -> a stub
+    IntegrationBundle whose clients use httpx.MockTransport. tautulli/plex are
+    left unconfigured. (#161 Phase 2 — the first end-to-end build_coverage harness.)"""
+
+    def _make(*, sonarr_handler=None, bazarr_handler=None, radarr_handler=None):
+        BundleCls = _make_integration_bundle(
+            sonarr_handler=sonarr_handler,
+            bazarr_handler=bazarr_handler,
+            radarr_handler=radarr_handler,
+        )
+        return BundleCls()
+
+    return _make
+
+
+# ── #161 Phase 2: multi-instance build_coverage harness (KRDucky topology) ──
+def _sonarr_handler_for(series, eps_by_sid, files_by_sid):
+    def _h(req):
+        import httpx
+
+        p = req.url.path
+        if p == "/api/v3/system/status":
+            return httpx.Response(200, json={"version": "4.0.0"})
+        if p == "/api/v3/series":
+            return httpx.Response(200, json=series)
+        if p in ("/api/v3/tag", "/api/v3/customformat", "/api/v3/calendar"):
+            return httpx.Response(200, json=[])
+        if p in ("/api/v3/wanted/missing", "/api/v3/history"):
+            return httpx.Response(200, json={"records": []})
+        if p == "/api/v3/episode":
+            return httpx.Response(200, json=eps_by_sid.get(int(req.url.params.get("seriesId")), []))
+        if p == "/api/v3/episodefile":
+            return httpx.Response(200, json=files_by_sid.get(int(req.url.params.get("seriesId")), []))
+        return httpx.Response(404)
+
+    return _h
+
+
+def _bazarr_handler_for(eps_wanted, movs_wanted):
+    def _h(req):
+        import httpx
+
+        p = req.url.path
+        if p == "/api/system/status":
+            return httpx.Response(200, json={"data": {"bazarr_version": "1.5.6"}})
+        if p == "/api/badges":
+            return httpx.Response(
+                200, json={"episodes": len(eps_wanted), "movies": len(movs_wanted), "providers": 1}
+            )
+        if p == "/api/episodes/wanted":
+            return httpx.Response(200, json={"data": eps_wanted, "total": len(eps_wanted)})
+        if p == "/api/movies/wanted":
+            return httpx.Response(200, json={"data": movs_wanted, "total": len(movs_wanted)})
+        if p in ("/api/history", "/api/providers"):
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(404)
+
+    return _h
+
+
+def _radarr_empty_handler(req):
+    import httpx
+
+    p = req.url.path
+    if p == "/api/v3/system/status":
+        return httpx.Response(200, json={"version": "5.0.0"})
+    if p in ("/api/v3/movie", "/api/v3/tag", "/api/v3/customformat"):
+        return httpx.Response(200, json=[])
+    if p in ("/api/v3/wanted/missing", "/api/v3/history"):
+        return httpx.Response(200, json={"records": []})
+    return httpx.Response(404)
+
+
+@pytest.fixture
+def anime_stack_full(subarr_env, monkeypatch, tmp_path: Path):
+    """2 Sonarr (tv=instance0, anime), 2 Radarr, 2 Bazarr (each fronts a pair),
+    library 0 = TV (/data/tv/), library 'anime' (/data/anime/). The SAME raw
+    series id 11 / episode id 1011 / fileId 101 appears in BOTH Sonarrs under
+    different paths — the cross-instance collision the refactor must survive.
+    Returns a stub IntegrationBundle ready for build_coverage. (#161 Phase 2)"""
+    import importlib
+    import json
+
+    import httpx
+
+    tv_root = tmp_path / "tv"
+    (tv_root / "ShowTV" / "Season 1").mkdir(parents=True)
+    anime_root = tmp_path / "anime"
+    (anime_root / "Naruto" / "Season 1").mkdir(parents=True)
+
+    # library 0 := TV at /data/tv/ ; extra library 'anime' at /data/anime/
+    monkeypatch.setenv("SUBARR_MEDIA_ROOT", str(tv_root))
+    monkeypatch.setenv("ARR_PATH_PREFIX", "/data/tv/")
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "sonarr": [{"name": "Anime", "url": "http://s2.test:8989", "api_key": "k"}],
+                    "radarr": [{"name": "Anime", "url": "http://r2.test:7878", "api_key": "k"}],
+                    "bazarr": [{"name": "Anime", "url": "http://b2.test:6767", "api_key": "k"}],
+                },
+                "libraries": [
+                    {
+                        "slug": "anime",
+                        "name": "Anime",
+                        "fs_root": str(anime_root),
+                        "subgen_prefix": "/media",
+                        "arr_prefix": "/data/anime/",
+                        "sonarr_id": "anime",
+                        "bazarr_id": "anime",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, coverage_engine, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    importlib.reload(coverage_engine)
+
+    # Per-instance datasets — same raw ids in both Sonarrs (collision).
+    ep = lambda: [
+        {
+            "id": 1011,
+            "seriesId": 11,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "hasFile": True,
+            "episodeFileId": 101,
+            "title": "E1",
+        }
+    ]
+    tv_series = [
+        {
+            "id": 11,
+            "title": "Show TV",
+            "originalLanguage": {"name": "English"},
+            "monitored": True,
+            "path": "/data/tv/ShowTV",
+            "tags": [],
+        }
+    ]
+    tv_files = [{"id": 101, "path": "/data/tv/ShowTV/Season 1/ShowTV.S01E01.mkv"}]
+    an_series = [
+        {
+            "id": 11,
+            "title": "Naruto",
+            "originalLanguage": {"name": "Japanese"},
+            "monitored": True,
+            "path": "/data/anime/Naruto",
+            "tags": [],
+        }
+    ]
+    an_files = [{"id": 101, "path": "/data/anime/Naruto/Season 1/Naruto.S01E01.mkv"}]
+    bz_tv = [
+        {
+            "sonarrSeriesId": 11,
+            "sonarrEpisodeId": 1011,
+            "seriesTitle": "Show TV",
+            "episode_number": "1x1",
+            "missing_subtitles": [{"code2": "en"}],
+        }
+    ]
+    bz_an = [
+        {
+            "sonarrSeriesId": 11,
+            "sonarrEpisodeId": 1011,
+            "seriesTitle": "Naruto",
+            "episode_number": "1x1",
+            "missing_subtitles": [{"code2": "en"}],
+        }
+    ]
+
+    handlers = {
+        ("sonarr", ""): _sonarr_handler_for(tv_series, {11: ep()}, {11: tv_files}),
+        ("sonarr", "anime"): _sonarr_handler_for(an_series, {11: ep()}, {11: an_files}),
+        ("bazarr", ""): _bazarr_handler_for(bz_tv, []),
+        ("bazarr", "anime"): _bazarr_handler_for(bz_an, []),
+        ("radarr", ""): _radarr_empty_handler,
+        ("radarr", "anime"): _radarr_empty_handler,
+    }
+
+    bundle = coverage_engine.IntegrationBundle()  # builds _clients from settings.instances
+    for (svc, iid), handler in handlers.items():
+        client = bundle._clients[svc][iid]
+        client._base_url = f"http://{svc}-{iid or '0'}.test"
+        client._configured = True
+        client._client = httpx.AsyncClient(base_url=client._base_url, transport=httpx.MockTransport(handler))
+    return bundle
+
+
+@pytest.fixture
 def subarr_env(monkeypatch, tmp_path: Path, media_root: Path):
     compose = tmp_path / "compose.yaml"
     _make_compose(compose)

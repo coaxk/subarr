@@ -116,8 +116,11 @@ def test_dedup_against_existing_movie_rows(subarr_env):
         file_canonical_path="Movies/GapMovie/GapMovie.mkv",
         bazarr_radarr_id=1,
     )
+    # #161 Phase 2: the pass now returns ONLY its new rows (the per-instance
+    # accumulator merges them), so a movie already present in existing_items is
+    # suppressed and simply absent from the result — not re-emitted.
     out = _run([_movie(1, "GapMovie")], [existing], {})
-    assert sum(1 for it in out if it.bazarr_radarr_id == 1) == 1
+    assert sum(1 for it in out if it.bazarr_radarr_id == 1) == 0
 
 
 def test_skips_movies_without_a_file(subarr_env):
