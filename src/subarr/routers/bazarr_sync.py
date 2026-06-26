@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..integrations import IntegrationError
+from ..paths import library_for_canonical
 
 router = APIRouter(prefix="/api", tags=["bazarr"])
 log = logging.getLogger(__name__)
@@ -48,11 +49,18 @@ async def sync_disk(request: Request, req: SyncDiskRequest | None = None) -> dic
     # Accept empty body (button-click case) — pydantic model is optional now.
     req = req or SyncDiskRequest()
     bundle = request.app.state.integrations
-    if not bundle.bazarr.is_configured():
+    # #161 P3: trigger the scan on the Bazarr that owns this row's library
+    # (instance 0 when no canonical_path is supplied — the bare button click).
+    bazarr = (
+        bundle.client_for("bazarr", library_for_canonical(req.canonical_path).bazarr_id)
+        if req.canonical_path
+        else bundle.bazarr
+    )
+    if not bazarr.is_configured():
         raise HTTPException(503, detail="bazarr not configured")
 
     try:
-        tasks = await bundle.bazarr.list_tasks()
+        tasks = await bazarr.list_tasks()
     except IntegrationError as e:
         raise HTTPException(503, detail=f"bazarr list_tasks failed: {e}")
 
@@ -68,7 +76,7 @@ async def sync_disk(request: Request, req: SyncDiskRequest | None = None) -> dic
         )
 
     try:
-        await bundle.bazarr.trigger_task(task_id)
+        await bazarr.trigger_task(task_id)
     except IntegrationError as e:
         raise HTTPException(502, detail=f"bazarr trigger_task({task_id}) failed: {e}")
 

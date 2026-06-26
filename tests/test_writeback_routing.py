@@ -158,3 +158,22 @@ def test_arbiter_accept_routes_to_owning_bazarr(writeback_stack):
         return [c for c in ws.calls.get(key, []) if c["path"] == "/api/providers/episodes"]
 
     assert dl(("bazarr", "anime")) and not dl(("bazarr", ""))
+
+
+def test_bazarr_sync_disk_routes_to_owning_instance(writeback_stack):
+    import asyncio
+
+    from subarr.routers.bazarr_sync import SyncDiskRequest, sync_disk
+
+    ws = writeback_stack
+    asyncio.run(
+        sync_disk(
+            _fake_request(ws.bundle),
+            SyncDiskRequest(canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv"),
+        )
+    )
+
+    def trig(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/system/tasks"]
+
+    assert trig(("bazarr", "anime")) and not trig(("bazarr", ""))
