@@ -105,3 +105,27 @@ def test_default_db_dir_is_data_only(tmp_path: Path):
     assert str(data) in chowned, chowned
     # nothing outside the state dir tree was touched
     assert all(c == str(data) or str(data) in c for c in chowned), chowned
+
+
+def test_media_colocated_in_db_dir_survives(tmp_path: Path):
+    """#369 blocker guard: even when media is co-located INSIDE the state dir
+    (e.g. media mounted at /data AND the default DB at /data/subarr.db), the
+    foreign media files must NOT be chowned — only subarr's own inodes."""
+    data = tmp_path / "data"
+    (data / "Movies").mkdir(parents=True)
+    (data / "Movies" / "foreign.mkv").write_text("x")  # foreign media — must survive
+    (data / "subarr.db").write_text("db")  # subarr's own — must be reconciled
+
+    chowned = _run_entrypoint(tmp_path, db_path=str(data / "subarr.db"))
+
+    assert str(data) in chowned, chowned  # the dir node (so subarr can write)
+    assert str(data / "subarr.db") in chowned, chowned  # the DB file itself
+    # the media subtree is NEVER chowned — no blanket recurse over the parent
+    assert not any("Movies" in c for c in chowned), f"media must survive: {chowned}"
+
+
+def test_bare_or_root_db_dir_refused(tmp_path: Path):
+    """#369 HIGH guard: SUBARR_DB_PATH whose dir resolves to '/' (e.g. =/data) or
+    '.' must be refused — never chown / or the container CWD."""
+    chowned = _run_entrypoint(tmp_path, db_path="/data")  # dirname -> "/"
+    assert chowned == [], f"a '/'-resolving DB dir must chown nothing: {chowned}"
