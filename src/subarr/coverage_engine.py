@@ -1390,6 +1390,46 @@ def _disqualify_unsupported(items: list[CoverageItem]) -> None:
             it.verification_state = "unsupported"
 
 
+async def _resolve_sonarr_files(
+    client: SonarrClient, series_ids: set, sources: dict
+) -> tuple[dict[int, dict], dict[int, str]]:
+    """#161 Phase 2: episodes + episode-files for the given series ids from ONE
+    Sonarr instance, bounded fan-out (#286). Returns (eps_by_id, file_paths).
+    Extracted from build_coverage so the per-instance loop calls it without a
+    nested closure over the loop variable."""
+    sonarr_eps_by_id: dict[int, dict] = {}
+    ep_file_paths: dict[int, str] = {}
+    if not (series_ids and client.is_configured()):
+        return sonarr_eps_by_id, ep_file_paths
+    # #286: cap the per-series fan-out so a large library doesn't fire hundreds
+    # of simultaneous Sonarr requests (thundering herd).
+    _arr_files_sem = asyncio.Semaphore(8)
+
+    async def _one(sid: int):
+        async with _arr_files_sem:
+            try:
+                eps, files = await asyncio.gather(
+                    client.episodes(sid),
+                    client.episode_files_for_series(sid),
+                    return_exceptions=False,
+                )
+                return sid, eps, files
+            except IntegrationError as e:
+                log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
+                return sid, [], []
+
+    results = await asyncio.gather(*[_one(sid) for sid in series_ids])
+    for sid, eps, files in results:
+        for ep in eps:
+            if isinstance(ep, dict) and "id" in ep:
+                sonarr_eps_by_id[ep["id"]] = ep
+        for f in files:
+            if isinstance(f, dict) and "id" in f and f.get("path"):
+                ep_file_paths[f["id"]] = f["path"]
+    sources["sonarr_files"] = {"ok": True, "series": len(series_ids), "files": len(ep_file_paths)}
+    return sonarr_eps_by_id, ep_file_paths
+
+
 async def build_coverage(
     bundle: IntegrationBundle,
     *,
@@ -1405,34 +1445,65 @@ async def build_coverage(
     # than presented as fillable gaps. caps on → they stay actionable gaps.
     ignore_forced = bool(getattr(subgen_caps, "ignore_forced_subtitles", False))
 
-    bz_eps, bz_movs = await _fetch_bazarr(bundle.bazarr, sources)
-    sonarr_series_task = asyncio.create_task(_fetch_arr("sonarr", bundle.sonarr, sources, "series"))
-    radarr_movies_task = asyncio.create_task(_fetch_arr("radarr", bundle.radarr, sources, "movies"))
-    sonarr_tags_task = asyncio.create_task(_fetch_arr_tags("sonarr", bundle.sonarr, sources))
-    radarr_tags_task = asyncio.create_task(_fetch_arr_tags("radarr", bundle.radarr, sources))
-    # v1.1-B: wanted/missing sets — "no file imported yet" authoritative truth.
-    sonarr_missing_task = asyncio.create_task(_fetch_wanted_missing("sonarr", bundle.sonarr, sources))
-    radarr_missing_task = asyncio.create_task(_fetch_wanted_missing("radarr", bundle.radarr, sources))
-    # v1.1-I: recent imports (<24h) — high-likelihood watch targets.
-    sonarr_recent_task = asyncio.create_task(_fetch_recent_imports("sonarr", bundle.sonarr, sources))
-    radarr_recent_task = asyncio.create_task(_fetch_recent_imports("radarr", bundle.radarr, sources))
-    # v1.1-H: calendar upcoming (<48h) — pre-warm the queue.
-    sonarr_calendar_task = asyncio.create_task(_fetch_calendar_upcoming(bundle.sonarr, sources))
-    # v1.1-E: NOW PLAYING via Tautulli get_activity.
+    # ── Bazarr: fan out across ALL instances; each wanted item is tagged with
+    #    its source instance id (_bazarr_instance) for routing (#161 Phase 2).
+    #    Single-instance: exactly one "" instance → unchanged behaviour.
+    bz_eps, bz_movs = await _fetch_bazarr_all(bundle, sources)
+
+    # #161 Phase 2 routing: invert the library bindings into, per arr instance,
+    # the set of Bazarr instance ids that feed it. lib0 ("") guarantees a
+    # ""→{""} entry so single-stack is unchanged; a Bazarr id bound by no
+    # library is routed to instance 0 (see _route_wanted) so rows are never lost.
+    sonarr_bazarrs: dict[str, set[str]] = {}
+    radarr_bazarrs: dict[str, set[str]] = {}
+    for _lib in settings.libraries:
+        sonarr_bazarrs.setdefault(_lib.sonarr_id, set()).add(_lib.bazarr_id)
+        radarr_bazarrs.setdefault(_lib.radarr_id, set()).add(_lib.bazarr_id)
+    _sonarr_bound_bz = set().union(*sonarr_bazarrs.values()) if sonarr_bazarrs else set()
+    _radarr_bound_bz = set().union(*radarr_bazarrs.values()) if radarr_bazarrs else set()
+
+    def _route_wanted(wanted: list[dict], feeds: set[str], bound: set[str], inst_id: str) -> list[dict]:
+        out = []
+        for w in wanted:
+            bid = w.get("_bazarr_instance", "")
+            if bid in feeds or (inst_id == "" and bid not in bound):
+                out.append(w)
+        return out
+
+    sonarr_ids = list(bundle._clients["sonarr"])
+    radarr_ids = list(bundle._clients["radarr"])
+
+    # Per-instance arr fetches (series/tags/missing/recent[/calendar]), fanned
+    # out across instances. Single-instance issues exactly the same calls as
+    # before and writes the same `sources` entries.
+    async def _fetch_sonarr_inst(iid: str):
+        client = bundle._clients["sonarr"][iid]
+        return iid, await asyncio.gather(
+            _fetch_arr("sonarr", client, sources, "series"),
+            _fetch_arr_tags("sonarr", client, sources),
+            _fetch_wanted_missing("sonarr", client, sources),
+            _fetch_recent_imports("sonarr", client, sources),
+            _fetch_calendar_upcoming(client, sources),
+        )
+
+    async def _fetch_radarr_inst(iid: str):
+        client = bundle._clients["radarr"][iid]
+        return iid, await asyncio.gather(
+            _fetch_arr("radarr", client, sources, "movies"),
+            _fetch_arr_tags("radarr", client, sources),
+            _fetch_wanted_missing("radarr", client, sources),
+            _fetch_recent_imports("radarr", client, sources),
+        )
+
+    # v1.1-E: NOW PLAYING via Tautulli get_activity (singleton, fired in parallel).
     tautulli_activity_task = (
         asyncio.create_task(_fetch_tautulli_activity(bundle.tautulli, sources)) if use_tautulli else None
     )
     tautulli_task = asyncio.create_task(_fetch_tautulli(bundle.tautulli, sources)) if use_tautulli else None
 
-    sonarr_series = await sonarr_series_task
-    radarr_movies = await radarr_movies_task
-    sonarr_tags = await sonarr_tags_task
-    radarr_tags = await radarr_tags_task
-    sonarr_missing_ids = await sonarr_missing_task  # set[int]
-    radarr_missing_ids = await radarr_missing_task  # set[int]
-    sonarr_recent_ids = await sonarr_recent_task  # dict[int, float] (id→import_ts) #117
-    radarr_recent_ids = await radarr_recent_task  # dict[int, float] (id→import_ts) #117
-    airing_soon_ids = await sonarr_calendar_task  # set[int]
+    # iid -> (series, tags, missing_ids, recent_ids, airing_ids) / (movies, ...)
+    sonarr_data = dict(await asyncio.gather(*[_fetch_sonarr_inst(i) for i in sonarr_ids]))
+    radarr_data = dict(await asyncio.gather(*[_fetch_radarr_inst(i) for i in radarr_ids]))
     history = await tautulli_task if tautulli_task else []
     activity = (
         await tautulli_activity_task
@@ -1448,8 +1519,6 @@ async def build_coverage(
         ep_titles = {(w.get("seriesTitle") or "") for w in bz_eps}
         plex_audio_hints = await _fetch_plex_audio_hints(bundle.plex, ep_titles, sources)
 
-    sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
-    radarr_by_id = {m["id"]: m for m in radarr_movies if isinstance(m, dict) and "id" in m}
     tt_signals = _tautulli_signals(history) if history else {}
 
     # Probe-cache index: { series_canonical_prefix → [(file_canonical, ProbeResult)] }
@@ -1514,251 +1583,246 @@ async def build_coverage(
     for _p in whisper_verifications:
         user_verifications.pop(_p, None)
 
-    items: list[CoverageItem] = []
+    # #161 Phase 2: assemble rows PER arr instance, then merge. Four ordered
+    # accumulators reproduce the historical single-list order exactly
+    # ([episodes, movies, bazarr-blind, radarr-blind]) so single-instance output
+    # is byte-identical; multi-instance concatenates each instance's rows.
+    ep_rows: list[CoverageItem] = []
+    movie_rows: list[CoverageItem] = []
+    sonarr_blind_rows: list[CoverageItem] = []
+    radarr_blind_rows: list[CoverageItem] = []
 
-    # Per-series srt index cache so 12 episodes of one show only walk the
-    # filesystem once.
+    # Per-series srt index cache (path-keyed) shared across instances so a dir
+    # is only walked once.
     series_srt_index: dict[str, list[str]] = {}
 
-    # #104: pre-scan all wanted-episode series dirs in parallel (bounded)
-    # up front, instead of awaiting an rglob inline one series at a time
-    # inside the loop below. On a large foreign library the serialised
-    # rglobs were the dominant cost of the build (minutes). The loop then
-    # just reads from this index.
-    _ep_canonical_dirs = [
-        strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps
-    ]
-    series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
-
-    # Authoritative file-path resolution via Sonarr (one episode + episodefile
-    # call per series with wanted eps). Replaces fragile S<NN>E<NN> filename
-    # pattern matching — catches releases that use Part.N / Episode_NN / other
-    # non-canonical naming (Stanley H is the canary).
-    wanted_series_ids = {w.get("sonarrSeriesId") for w in bz_eps if w.get("sonarrSeriesId")}
-    sonarr_eps_by_id: dict[int, dict] = {}
-    ep_file_paths: dict[int, str] = {}
-    # #161 phase 2 (T6 seam): the episode assembly + Bazarr-blind pass below run
-    # against an explicit Sonarr instance client rather than bundle.sonarr, so T7
-    # can re-run them per instance. Single-instance: this is instance 0.
-    sonarr_client = bundle.sonarr
-    if wanted_series_ids and sonarr_client.is_configured():
-        # #286: cap the per-series fan-out so a large library doesn't fire
-        # hundreds of simultaneous Sonarr requests (thundering herd).
-        _arr_files_sem = asyncio.Semaphore(8)
-
-        async def _fetch_series_files(sid: int):
-            async with _arr_files_sem:
-                try:
-                    eps, files = await asyncio.gather(
-                        sonarr_client.episodes(sid),
-                        sonarr_client.episode_files_for_series(sid),
-                        return_exceptions=False,
-                    )
-                    return sid, eps, files
-                except IntegrationError as e:
-                    log.debug("sonarr episode lookup failed for series %s: %s", sid, e)
-                    return sid, [], []
-
-        results = await asyncio.gather(*[_fetch_series_files(sid) for sid in wanted_series_ids])
-        for sid, eps, files in results:
-            for ep in eps:
-                if isinstance(ep, dict) and "id" in ep:
-                    sonarr_eps_by_id[ep["id"]] = ep
-            for f in files:
-                if isinstance(f, dict) and "id" in f and f.get("path"):
-                    ep_file_paths[f["id"]] = f["path"]
-        sources["sonarr_files"] = {"ok": True, "series": len(wanted_series_ids), "files": len(ep_file_paths)}
-
-    # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
-    for w in bz_eps:
-        sonarr_id = w.get("sonarrSeriesId")
-        s = sonarr_by_id.get(sonarr_id, {})
-        canonical = strip_arr_prefix(s.get("path"))
-        if canonical and canonical not in series_srt_index:
-            # #104: normally pre-populated by the parallel pre-scan above.
-            # This inline fallback only fires for a dir that wasn't in the
-            # pre-scan set (defensive); still offloaded so it never blocks
-            # the event loop (#228).
-            series_srt_index[canonical] = await asyncio.to_thread(_scan_for_srt_recursive, canonical)
-        srt_paths = series_srt_index.get(canonical or "", [])
-        missing_codes = [
-            ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
-        ]
-        has_srt, srts = _stale_for_episode(
-            sonarr_episode_id=w.get("sonarrEpisodeId"),
-            ep_file_paths=ep_file_paths,
-            sonarr_eps_by_id=sonarr_eps_by_id,
-            series_srt_paths=srt_paths,
-            episode_number=w.get("episode_number"),
-            missing_subs=missing_codes,
-        )
-        item = CoverageItem(
-            media_type="episode",
-            title=w.get("seriesTitle") or s.get("title") or "(unknown)",
-            episode_title=w.get("episodeTitle"),
-            episode_number=w.get("episode_number"),
-            original_language=(s.get("originalLanguage") or {}).get("name"),
-            monitored=s.get("monitored"),
-            tags=_tags_for(s, sonarr_tags),
-            canonical_path=canonical,
-            has_sub_on_disk=has_srt,
-            sub_files_seen=srts,
-            bazarr_sonarr_id=sonarr_id,
-            bazarr_episode_id=w.get("sonarrEpisodeId"),
-            missing_subtitles=[
-                ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
-            ],
-        )
-        # v1.1-B: Sonarr knows this episode has no file yet.
-        if item.bazarr_episode_id and item.bazarr_episode_id in sonarr_missing_ids:
-            item.pending_download = True
-        # Folder-row fix: attach the actual episode-file path Sonarr already
-        # resolved. canonical_path stays the series folder (the probe-match
-        # search prefix); file_canonical_path is the real file so the row
-        # isn't a dead folder-path and eager-probe can target it. Only set
-        # when Sonarr has a file — fileless episodes stay pending_download.
-        if not item.file_canonical_path:
-            item.file_canonical_path = _episode_file_canonical(
-                item.bazarr_episode_id,
-                ep_file_paths,
-                sonarr_eps_by_id,
-            )
-        _attach_probe_episode(
-            item,
-            probe_by_series_prefix,
-            tautulli_hints=activity.get("audio_lang_hints") or {},
-            user_verifications=user_verifications,
-            failed_idx=probe_failed_by_prefix,
-            plex_hints=plex_audio_hints,
-            whisper_verifications=whisper_verifications,
-        )
-        _score(
-            item,
-            tt_signals,
-            now_playing_titles=activity["now_playing_titles"],
-            transcoding_titles=activity["transcoding_titles"],
-            just_imported_eps=sonarr_recent_ids,
-            airing_soon_eps=airing_soon_ids,
-            ignore_forced_subtitles=ignore_forced,
-        )
-        items.append(item)
-
-    # Movies (Bazarr → Radarr enrichment via radarrId — Bazarr's wanted-movie
-    # rows carry a radarrId field; use it directly to avoid title-collision
-    # (last-writer-wins on same-titled remakes / reboots).
-    for w in bz_movs:
-        title = w.get("title") or w.get("movieTitle") or ""
-        m = radarr_by_id.get(w.get("radarrId"), {})
-        canonical = strip_arr_prefix(m.get("path"))
-        # Resolve the actual movie FILE (not just the folder) so an unprobed
-        # movie can be eager-probed — _attach_probe_movie only fills this in
-        # when a probe already exists, leaving unprobed wanted movies stuck in
-        # Analyzing forever (same parity gap the blind-defense pass fixes).
-        _movie_file_canonical = strip_arr_prefix((m.get("movieFile") or {}).get("path"))
-        # #228: iterdir on each movie folder blocks the event loop. Shallow
-        # scan (one level deep) so per-call cost is small, but with 500+
-        # movies the cumulative block is real. Thread it.
-        if canonical:
-            has_srt, srts = await asyncio.to_thread(_scan_for_srt, canonical)
-        else:
-            has_srt, srts = False, []
-        item = CoverageItem(
-            media_type="movie",
-            title=title,
-            original_language=(m.get("originalLanguage") or {}).get("name"),
-            monitored=m.get("monitored"),
-            tags=_tags_for(m, radarr_tags),
-            canonical_path=canonical,
-            file_canonical_path=_movie_file_canonical,
-            has_sub_on_disk=has_srt,
-            sub_files_seen=srts,
-            bazarr_radarr_id=m.get("id"),
-            missing_subtitles=[
-                ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
-            ],
-        )
-        if item.bazarr_radarr_id and item.bazarr_radarr_id in radarr_missing_ids:
-            item.pending_download = True
-        _attach_probe_movie(
-            item,
-            probe_by_series_prefix,
-            tautulli_hints=activity.get("audio_lang_hints") or {},
-            user_verifications=user_verifications,
-            failed_idx=probe_failed_by_prefix,
-            plex_hints=plex_audio_hints,
-            whisper_verifications=whisper_verifications,
-        )
-        _score(
-            item,
-            tt_signals,
-            now_playing_titles=activity["now_playing_titles"],
-            transcoding_titles=activity["transcoding_titles"],
-            just_imported_movies=radarr_recent_ids,
-            ignore_forced_subtitles=ignore_forced,
-        )
-        items.append(item)
-
-    # v1.1.1 #219 — Bazarr-blind defense.
-    # Bazarr is structurally blind to a whole class: when a file's audio
-    # metadata claims English but the series is actually foreign (encoder
-    # default / mislabeled rip), Bazarr sees audio==en and treats English
-    # subs as "already match audio" → never puts the episode in wanted.
-    # The user has no signal, subarr's coverage was empty for these rows,
-    # subgen silently skips when the user manually queues. Classic.
-    #
-    # Defense: for every Sonarr series with originalLanguage != English,
-    # iterate its episodes, and for any episode that has a file on disk
-    # but NO English sidecar sub, synthesise a coverage row flagged as
-    # audio-mislabel-suspect. Bazarr-blind cases now show up in Coverage
-    # with the same UI affordances as a regular wanted row.
-    if sonarr_client.is_configured():
-        items = await _add_bazarr_blind_synthetic_rows(
-            sonarr_client,
+    # ───────────── Episodes: one assembly per Sonarr instance ─────────────
+    for _sonarr_inst in sonarr_ids:
+        sonarr_client = bundle._clients["sonarr"][_sonarr_inst]
+        (
             sonarr_series,
-            items,
-            already_fetched_series_ids=wanted_series_ids,
-            sonarr_eps_by_id=sonarr_eps_by_id,
-            ep_file_paths=ep_file_paths,
-            series_srt_index=series_srt_index,
-            sonarr_tags=sonarr_tags,
-            sonarr_missing_ids=sonarr_missing_ids,
-            sonarr_recent_ids=sonarr_recent_ids,
-            airing_soon_ids=airing_soon_ids,
-            activity=activity,
-            tt_signals=tt_signals,
-            probe_by_series_prefix=probe_by_series_prefix,
-            failed_idx=probe_failed_by_prefix,
-            user_verifications=user_verifications,
-            whisper_verifications=whisper_verifications,
-            sources=sources,
-            plex_hints=plex_audio_hints,
-            ignore_forced_subtitles=ignore_forced,
+            sonarr_tags,
+            sonarr_missing_ids,
+            sonarr_recent_ids,
+            airing_soon_ids,
+        ) = sonarr_data[_sonarr_inst]
+        sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
+        bz_eps_i = _route_wanted(
+            bz_eps, sonarr_bazarrs.get(_sonarr_inst, set()), _sonarr_bound_bz, _sonarr_inst
         )
 
-    # Radarr movie-coverage pass. Movies otherwise appear ONLY via Bazarr's
-    # monitored-wanted list, so any movie that's unmonitored-in-Bazarr (or that
-    # Bazarr's wanted endpoint omits) was invisible — a Radarr user could see
-    # zero of their movies. This surfaces every Radarr movie with a file that's
-    # missing English coverage, carrying `monitored` so the Coverage chip
-    # filters as usual. Broader than the Sonarr foreign-only defense by design.
-    radarr_client = bundle.radarr
-    if radarr_client.is_configured():
-        items = await _add_radarr_blind_movie_rows(
-            radarr_movies,
-            items,
-            radarr_tags=radarr_tags,
-            radarr_missing_ids=radarr_missing_ids,
-            radarr_recent_ids=radarr_recent_ids,
-            activity=activity,
-            tt_signals=tt_signals,
-            probe_by_series_prefix=probe_by_series_prefix,
-            failed_idx=probe_failed_by_prefix,
-            user_verifications=user_verifications,
-            whisper_verifications=whisper_verifications,
-            plex_hints=plex_audio_hints,
-            sources=sources,
-            ignore_forced_subtitles=ignore_forced,
+        # #104: pre-scan this instance's wanted-episode series dirs in parallel
+        # (bounded) up front so the loop below just reads from the index.
+        _ep_canonical_dirs = [
+            strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps_i
+        ]
+        series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
+
+        # Authoritative file-path resolution via THIS Sonarr (episode +
+        # episodefile per series with wanted eps). Replaces fragile S<NN>E<NN>
+        # filename matching — catches Part.N / Episode_NN naming (Stanley H).
+        wanted_series_ids = {w.get("sonarrSeriesId") for w in bz_eps_i if w.get("sonarrSeriesId")}
+        sonarr_eps_by_id, ep_file_paths = await _resolve_sonarr_files(
+            sonarr_client, wanted_series_ids, sources
         )
+
+        # Episodes (Bazarr → Sonarr enrichment via sonarrSeriesId)
+        inst_ep_rows: list[CoverageItem] = []
+        for w in bz_eps_i:
+            sonarr_id = w.get("sonarrSeriesId")
+            s = sonarr_by_id.get(sonarr_id, {})
+            canonical = strip_arr_prefix(s.get("path"))
+            if canonical and canonical not in series_srt_index:
+                # #104: defensive inline fallback (pre-scan above normally
+                # covers this); offloaded so it never blocks the loop (#228).
+                series_srt_index[canonical] = await asyncio.to_thread(_scan_for_srt_recursive, canonical)
+            srt_paths = series_srt_index.get(canonical or "", [])
+            missing_codes = [
+                ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+            ]
+            has_srt, srts = _stale_for_episode(
+                sonarr_episode_id=w.get("sonarrEpisodeId"),
+                ep_file_paths=ep_file_paths,
+                sonarr_eps_by_id=sonarr_eps_by_id,
+                series_srt_paths=srt_paths,
+                episode_number=w.get("episode_number"),
+                missing_subs=missing_codes,
+            )
+            item = CoverageItem(
+                media_type="episode",
+                title=w.get("seriesTitle") or s.get("title") or "(unknown)",
+                episode_title=w.get("episodeTitle"),
+                episode_number=w.get("episode_number"),
+                original_language=(s.get("originalLanguage") or {}).get("name"),
+                monitored=s.get("monitored"),
+                tags=_tags_for(s, sonarr_tags),
+                canonical_path=canonical,
+                has_sub_on_disk=has_srt,
+                sub_files_seen=srts,
+                bazarr_sonarr_id=sonarr_id,
+                bazarr_episode_id=w.get("sonarrEpisodeId"),
+                missing_subtitles=[
+                    ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+                ],
+            )
+            # v1.1-B: Sonarr knows this episode has no file yet.
+            if item.bazarr_episode_id and item.bazarr_episode_id in sonarr_missing_ids:
+                item.pending_download = True
+            # Folder-row fix: attach the actual episode-file path Sonarr already
+            # resolved. canonical_path stays the series folder (the probe-match
+            # search prefix); file_canonical_path is the real file so the row
+            # isn't a dead folder-path and eager-probe can target it. Only set
+            # when Sonarr has a file — fileless episodes stay pending_download.
+            if not item.file_canonical_path:
+                item.file_canonical_path = _episode_file_canonical(
+                    item.bazarr_episode_id,
+                    ep_file_paths,
+                    sonarr_eps_by_id,
+                )
+            _attach_probe_episode(
+                item,
+                probe_by_series_prefix,
+                tautulli_hints=activity.get("audio_lang_hints") or {},
+                user_verifications=user_verifications,
+                failed_idx=probe_failed_by_prefix,
+                plex_hints=plex_audio_hints,
+                whisper_verifications=whisper_verifications,
+            )
+            _score(
+                item,
+                tt_signals,
+                now_playing_titles=activity["now_playing_titles"],
+                transcoding_titles=activity["transcoding_titles"],
+                just_imported_eps=sonarr_recent_ids,
+                airing_soon_eps=airing_soon_ids,
+                ignore_forced_subtitles=ignore_forced,
+            )
+            inst_ep_rows.append(item)
+
+        # v1.1.1 #219 — Bazarr-blind defense for THIS Sonarr instance. Dedup is
+        # scoped to this instance's episode rows so a raw episode id shared
+        # across instances doesn't cross-suppress (#161 collision).
+        if sonarr_client.is_configured():
+            sonarr_blind_rows.extend(
+                await _add_bazarr_blind_synthetic_rows(
+                    sonarr_client,
+                    sonarr_series,
+                    inst_ep_rows,
+                    already_fetched_series_ids=wanted_series_ids,
+                    sonarr_eps_by_id=sonarr_eps_by_id,
+                    ep_file_paths=ep_file_paths,
+                    series_srt_index=series_srt_index,
+                    sonarr_tags=sonarr_tags,
+                    sonarr_missing_ids=sonarr_missing_ids,
+                    sonarr_recent_ids=sonarr_recent_ids,
+                    airing_soon_ids=airing_soon_ids,
+                    activity=activity,
+                    tt_signals=tt_signals,
+                    probe_by_series_prefix=probe_by_series_prefix,
+                    failed_idx=probe_failed_by_prefix,
+                    user_verifications=user_verifications,
+                    whisper_verifications=whisper_verifications,
+                    sources=sources,
+                    plex_hints=plex_audio_hints,
+                    ignore_forced_subtitles=ignore_forced,
+                )
+            )
+        ep_rows.extend(inst_ep_rows)
+
+    # ───────────── Movies: one assembly per Radarr instance ─────────────
+    for _radarr_inst in radarr_ids:
+        radarr_client = bundle._clients["radarr"][_radarr_inst]
+        radarr_movies, radarr_tags, radarr_missing_ids, radarr_recent_ids = radarr_data[_radarr_inst]
+        radarr_by_id = {m["id"]: m for m in radarr_movies if isinstance(m, dict) and "id" in m}
+        bz_movs_i = _route_wanted(
+            bz_movs, radarr_bazarrs.get(_radarr_inst, set()), _radarr_bound_bz, _radarr_inst
+        )
+
+        # Movies (Bazarr → Radarr enrichment via radarrId — Bazarr's wanted-movie
+        # rows carry a radarrId field; use it directly to avoid title-collision
+        # (last-writer-wins on same-titled remakes / reboots).
+        inst_movie_rows: list[CoverageItem] = []
+        for w in bz_movs_i:
+            title = w.get("title") or w.get("movieTitle") or ""
+            m = radarr_by_id.get(w.get("radarrId"), {})
+            canonical = strip_arr_prefix(m.get("path"))
+            # Resolve the actual movie FILE (not just the folder) so an unprobed
+            # movie can be eager-probed — _attach_probe_movie only fills this in
+            # when a probe already exists, leaving unprobed wanted movies stuck
+            # in Analyzing forever (same parity gap the blind-defense pass fixes).
+            _movie_file_canonical = strip_arr_prefix((m.get("movieFile") or {}).get("path"))
+            # #228: iterdir on each movie folder blocks the event loop. Shallow
+            # scan (one level deep), threaded so the cumulative cost stays off-loop.
+            if canonical:
+                has_srt, srts = await asyncio.to_thread(_scan_for_srt, canonical)
+            else:
+                has_srt, srts = False, []
+            item = CoverageItem(
+                media_type="movie",
+                title=title,
+                original_language=(m.get("originalLanguage") or {}).get("name"),
+                monitored=m.get("monitored"),
+                tags=_tags_for(m, radarr_tags),
+                canonical_path=canonical,
+                file_canonical_path=_movie_file_canonical,
+                has_sub_on_disk=has_srt,
+                sub_files_seen=srts,
+                bazarr_radarr_id=m.get("id"),
+                missing_subtitles=[
+                    ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
+                ],
+            )
+            if item.bazarr_radarr_id and item.bazarr_radarr_id in radarr_missing_ids:
+                item.pending_download = True
+            _attach_probe_movie(
+                item,
+                probe_by_series_prefix,
+                tautulli_hints=activity.get("audio_lang_hints") or {},
+                user_verifications=user_verifications,
+                failed_idx=probe_failed_by_prefix,
+                plex_hints=plex_audio_hints,
+                whisper_verifications=whisper_verifications,
+            )
+            _score(
+                item,
+                tt_signals,
+                now_playing_titles=activity["now_playing_titles"],
+                transcoding_titles=activity["transcoding_titles"],
+                just_imported_movies=radarr_recent_ids,
+                ignore_forced_subtitles=ignore_forced,
+            )
+            inst_movie_rows.append(item)
+
+        # Radarr movie-coverage pass for THIS Radarr instance (dedup scoped to
+        # this instance's movie rows). Movies otherwise appear ONLY via Bazarr's
+        # monitored-wanted list, so an unmonitored-in-Bazarr movie missing a sub
+        # was invisible — this surfaces every Radarr movie with a file missing
+        # English coverage, carrying `monitored` for the Coverage chip filter.
+        if radarr_client.is_configured():
+            radarr_blind_rows.extend(
+                await _add_radarr_blind_movie_rows(
+                    radarr_movies,
+                    inst_movie_rows,
+                    radarr_tags=radarr_tags,
+                    radarr_missing_ids=radarr_missing_ids,
+                    radarr_recent_ids=radarr_recent_ids,
+                    activity=activity,
+                    tt_signals=tt_signals,
+                    probe_by_series_prefix=probe_by_series_prefix,
+                    failed_idx=probe_failed_by_prefix,
+                    user_verifications=user_verifications,
+                    whisper_verifications=whisper_verifications,
+                    plex_hints=plex_audio_hints,
+                    sources=sources,
+                    ignore_forced_subtitles=ignore_forced,
+                )
+            )
+        movie_rows.extend(inst_movie_rows)
+
+    # Merge in the canonical order (episodes, movies, then the two blind passes)
+    # so single-instance row ordering — and thus the score-tie-break in the
+    # final sort — is unchanged from the pre-#161 single global pass.
+    items = ep_rows + movie_rows + sonarr_blind_rows + radarr_blind_rows
 
     _disqualify_unsupported(items)
     _refine_audio_sources(items, verification_sources)
@@ -1807,7 +1871,7 @@ async def build_coverage(
 async def _add_bazarr_blind_synthetic_rows(
     sonarr_client: SonarrClient,
     sonarr_series: list[dict],
-    items: list[CoverageItem],
+    existing_items: list[CoverageItem],
     *,
     already_fetched_series_ids: set[int],
     sonarr_eps_by_id: dict[int, dict],
@@ -1847,7 +1911,7 @@ async def _add_bazarr_blind_synthetic_rows(
             "synthetic_rows": 0,
             "note": "no foreign-language series in Sonarr — pass skipped",
         }
-        return items
+        return []
 
     # Fetch episodes + files for foreign series we haven't already loaded
     # (Bazarr-wanted iteration may have pre-fetched some).
@@ -1880,8 +1944,9 @@ async def _add_bazarr_blind_synthetic_rows(
 
     # Build dedup sets from existing items so we don't double-render rows
     # that already came from Bazarr wanted or other sources.
-    seen_ep_ids: set[int] = {it.bazarr_episode_id for it in items if it.bazarr_episode_id}
-    seen_files: set[str] = {it.file_canonical_path for it in items if it.file_canonical_path}
+    new_rows: list[CoverageItem] = []
+    seen_ep_ids: set[int] = {it.bazarr_episode_id for it in existing_items if it.bazarr_episode_id}
+    seen_files: set[str] = {it.file_canonical_path for it in existing_items if it.file_canonical_path}
 
     # #93 perf: pre-group episodes by series id ONCE. The previous inner
     # loop scanned ALL of sonarr_eps_by_id for every foreign series — an
@@ -2023,7 +2088,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 airing_soon_eps=airing_soon_ids,
                 ignore_forced_subtitles=ignore_forced_subtitles,
             )
-            items.append(item)
+            new_rows.append(item)
             seen_ep_ids.add(ep_id)
             seen_files.add(file_canonical)
             synthetic_added += 1
@@ -2038,12 +2103,12 @@ async def _add_bazarr_blind_synthetic_rows(
         synthetic_added,
         len(foreign_series),
     )
-    return items
+    return new_rows
 
 
 async def _add_radarr_blind_movie_rows(
     radarr_movies: list[dict],
-    items: list[CoverageItem],
+    existing_items: list[CoverageItem],
     *,
     radarr_tags: dict[int, str],
     radarr_missing_ids: set[int],
@@ -2072,10 +2137,11 @@ async def _add_radarr_blind_movie_rows(
     and _score applies the movie signals. `monitored` rides along so the
     Coverage 'monitored' chip filters as usual.
     """
+    new_rows: list[CoverageItem] = []
     seen_radarr_ids = {
-        it.bazarr_radarr_id for it in items if it.media_type == "movie" and it.bazarr_radarr_id
+        it.bazarr_radarr_id for it in existing_items if it.media_type == "movie" and it.bazarr_radarr_id
     }
-    seen_files = {it.file_canonical_path for it in items if it.file_canonical_path}
+    seen_files = {it.file_canonical_path for it in existing_items if it.file_canonical_path}
     added = 0
     for m in radarr_movies:
         if not isinstance(m, dict) or not m.get("hasFile"):
@@ -2131,14 +2197,14 @@ async def _add_radarr_blind_movie_rows(
             just_imported_movies=radarr_recent_ids,
             ignore_forced_subtitles=ignore_forced_subtitles,
         )
-        items.append(item)
+        new_rows.append(item)
         seen_files.add(file_canonical)
         if rid:
             seen_radarr_ids.add(rid)
         added += 1
     sources["radarr_movie_coverage"] = {"ok": True, "movies_added": added}
     log.info("radarr movie-coverage: added %d movie rows missing English coverage", added)
-    return items
+    return new_rows
 
 
 def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
