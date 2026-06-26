@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..integrations import IntegrationError
+from ..paths import library_for_canonical
 
 router = APIRouter(prefix="/api/arbiter", tags=["arbiter"])
 log = logging.getLogger(__name__)
@@ -92,13 +93,23 @@ class AcceptRequest(BaseModel):
     score: int
     forced: bool = False
     hi: bool = False
+    canonical_path: str | None = None  # #161 P3: routes the download to the owning Bazarr
+
+
+def _bazarr_for(request: Request, canonical_path: str | None):
+    """#161 P3: the Bazarr client that owns this row's library, or instance 0
+    when no canonical_path is supplied (back-compat)."""
+    bundle = request.app.state.integrations
+    if canonical_path:
+        return bundle.client_for("bazarr", library_for_canonical(canonical_path).bazarr_id)
+    return bundle.bazarr
 
 
 @router.post("/accept")
 async def accept_candidate(req: AcceptRequest, request: Request) -> dict[str, Any]:
     if not req.episode_id and not req.movie_id:
         raise HTTPException(400, detail="episode_id or movie_id required")
-    bazarr = request.app.state.integrations.bazarr
+    bazarr = _bazarr_for(request, req.canonical_path)
     if not bazarr.is_configured():
         raise HTTPException(503, detail="bazarr not configured")
     try:

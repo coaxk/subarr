@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..integrations import IntegrationError
+from ..paths import library_for_canonical
 
 router = APIRouter(prefix="/api/blacklist", tags=["blacklist"])
 log = logging.getLogger(__name__)
@@ -128,6 +129,15 @@ async def blacklist_history(
     }
 
 
+def _bazarr_for(request: Request, canonical_path: str | None):
+    """#161 P3: the Bazarr client that owns this row's library, or instance 0
+    when no canonical_path is supplied (back-compat for external callers)."""
+    bundle = request.app.state.integrations
+    if canonical_path:
+        return bundle.client_for("bazarr", library_for_canonical(canonical_path).bazarr_id)
+    return bundle.bazarr
+
+
 class EpisodeBlacklistRequest(BaseModel):
     series_id: int
     episode_id: int
@@ -136,6 +146,7 @@ class EpisodeBlacklistRequest(BaseModel):
     language: str = "en"
     subtitles_path: str
     reason: str | None = None  # user-supplied note (stored locally for telemetry later)
+    canonical_path: str | None = None  # #161 P3: routes the blacklist to the owning Bazarr
 
 
 class MovieBlacklistRequest(BaseModel):
@@ -145,11 +156,12 @@ class MovieBlacklistRequest(BaseModel):
     language: str = "en"
     subtitles_path: str
     reason: str | None = None
+    canonical_path: str | None = None  # #161 P3: routes the blacklist to the owning Bazarr
 
 
 @router.post("/episode")
 async def blacklist_episode(req: EpisodeBlacklistRequest, request: Request) -> dict[str, Any]:
-    bazarr = request.app.state.integrations.bazarr
+    bazarr = _bazarr_for(request, req.canonical_path)
     if not bazarr.is_configured():
         raise HTTPException(503, detail="bazarr not configured")
     try:
@@ -168,7 +180,7 @@ async def blacklist_episode(req: EpisodeBlacklistRequest, request: Request) -> d
 
 @router.post("/movie")
 async def blacklist_movie(req: MovieBlacklistRequest, request: Request) -> dict[str, Any]:
-    bazarr = request.app.state.integrations.bazarr
+    bazarr = _bazarr_for(request, req.canonical_path)
     if not bazarr.is_configured():
         raise HTTPException(503, detail="bazarr not configured")
     try:

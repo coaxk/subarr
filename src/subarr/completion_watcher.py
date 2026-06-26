@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs
+from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
 from .provenance import ProvenanceStore
@@ -89,8 +89,8 @@ class CompletionWatcher:
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
-        self._bazarr_task_id: str | None = None
-        self._bazarr_task_lookup_attempted = False
+        # #161 P3: scan-disk task id cached PER Bazarr instance (key = base_url).
+        self._bazarr_task_ids: dict[str, str] = {}
         # Cached caps. When /queue is missing (vanilla subgen), the
         # _pass_pending queue-poll is skipped + a one-time warning logs.
         # v1.x will add a file-watch fallback that detects .srt sidecars
@@ -113,6 +113,45 @@ class CompletionWatcher:
     @property
     def _plex(self):
         return self._bundle_provider().plex if self._bundle_provider else self._plex_direct
+
+    def _bazarr_for(self, canonical_path: str):
+        """#161 P3: the Bazarr client for the instance that owns this row's
+        library (instance 0 when single-stack / unbound). Falls back to the
+        directly-injected client when there is no bundle provider."""
+        if self._bundle_provider is None:
+            return self._bazarr_direct
+        bundle = self._bundle_provider()
+        return bundle.client_for("bazarr", library_for_canonical(canonical_path).bazarr_id)
+
+    async def _bazarr_task_for(self, bz) -> str | None:
+        """Discover + cache the Bazarr scan-disk task id for THIS instance
+        (keyed by base_url; cached on success only, so a transient failure can
+        retry next tick)."""
+        key = getattr(bz, "_base_url", "") or str(id(bz))
+        cached = self._bazarr_task_ids.get(key)
+        if cached:
+            return cached
+        try:
+            tasks = await bz.list_tasks()
+        except IntegrationError as e:
+            log.warning("bazarr list_tasks failed: %s", e)
+            return None
+        for hint in _BAZARR_SCAN_TASK_HINTS:
+            h = hint.lower()
+            for t in tasks:
+                job_id = (t.get("job_id") or "").lower()
+                name = (t.get("name") or "").lower()
+                if h in job_id or h in name:
+                    tid = t.get("job_id") or t.get("id") or t.get("name")
+                    self._bazarr_task_ids[key] = tid
+                    log.info("bazarr scan-disk task for %s: %s (hint %r)", key, tid, hint)
+                    return tid
+        log.warning(
+            "no bazarr scan-disk task matched hints for %s; job_ids: %s",
+            key,
+            [t.get("job_id") for t in tasks][:20],
+        )
+        return None
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -217,7 +256,7 @@ class CompletionWatcher:
         # to scan-disk task if upload fails or we lack episode_id.
         uploaded = await self._try_upload_to_bazarr(entry)
         if not uploaded and entry.series_id is not None:
-            await self._trigger_bazarr_scan(entry.id, entry.series_id)
+            await self._trigger_bazarr_scan(entry.id, entry.series_id, entry.canonical_path)
         # v1.1.1: fire Plex partial-scan against the file's directory
         # so the freshly-written sidecar appears in Plex (and on Apple
         # TV) without waiting for Plex's periodic scan. Best-effort —
@@ -255,31 +294,39 @@ class CompletionWatcher:
             return  # older provenance store without this method
         if not stuck:
             return
-        # We only need ONE trigger to flush all of them — Bazarr's
-        # series_full_scan_subtitles is library-wide.
-        fired = False
+        # #161 P3: one library-wide trigger PER Bazarr instance. Bazarr's
+        # series_full_scan_subtitles is library-wide, but with multiple stacks a
+        # row's scan must fire on the Bazarr that owns its library — so group the
+        # stuck rows by owning instance and fire each once.
+        by_instance: dict[str, list] = {}
+        clients: dict[str, object] = {}
         for entry in stuck:
             if entry.series_id is None:
                 continue
-            if not fired:
-                if not self._bazarr.is_configured():
-                    return
-                if self._bazarr_task_id is None:
-                    await self._discover_bazarr_task()
-                if self._bazarr_task_id is None:
-                    return
-                try:
-                    await self._bazarr.trigger_task(self._bazarr_task_id)
-                    log.info(
-                        "bazarr scan-disk retry fired for %d completed-but-not-notified rows",
-                        len(stuck),
-                    )
-                    fired = True
-                except IntegrationError as e:
-                    log.warning("bazarr scan-disk retry failed: %s", e)
-                    return
+            bz = self._bazarr_for(entry.canonical_path)
+            key = getattr(bz, "_base_url", "") or str(id(bz))
+            clients.setdefault(key, bz)
+            by_instance.setdefault(key, []).append(entry)
+        for key, entries in by_instance.items():
+            bz = clients[key]
+            if not bz.is_configured():
+                continue
+            tid = await self._bazarr_task_for(bz)
+            if tid is None:
+                continue
+            try:
+                await bz.trigger_task(tid)
+                log.info(
+                    "bazarr scan-disk retry fired on %s for %d completed-but-not-notified rows",
+                    key,
+                    len(entries),
+                )
+            except IntegrationError as e:
+                log.warning("bazarr scan-disk retry failed on %s: %s", key, e)
+                continue
             # Mark each row notified so we don't keep re-firing.
-            self._provenance.mark_bazarr_triggered(entry.id)
+            for entry in entries:
+                self._provenance.mark_bazarr_triggered(entry.id)
 
     async def _try_upload_to_bazarr(self, entry) -> bool:
         """v1.1-G: Multipart-upload the freshly-Whispered .srt directly
@@ -290,7 +337,8 @@ class CompletionWatcher:
         the cleanest write-back — no race vs filesystem scans. But older
         Bazarrs or movie rows without a known radarr_id need the disk-scan
         fallback. Best-effort: any error → fallback path."""
-        if not self._bazarr.is_configured():
+        bz = self._bazarr_for(entry.canonical_path)
+        if not bz.is_configured():
             return False
         srt_path = self._find_srt_sidecar(entry.canonical_path)
         if srt_path is None:
@@ -298,7 +346,7 @@ class CompletionWatcher:
             return False
         try:
             if entry.sonarr_episode_id and entry.series_id:
-                await self._bazarr.upload_episode_subtitle(
+                await bz.upload_episode_subtitle(
                     series_id=entry.series_id,
                     episode_id=entry.sonarr_episode_id,
                     language="en",
@@ -405,53 +453,21 @@ class CompletionWatcher:
             pass
         return None
 
-    async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int) -> None:
-        if not self._bazarr.is_configured():
+    async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int, canonical_path: str) -> None:
+        bz = self._bazarr_for(canonical_path)
+        if not bz.is_configured():
             log.debug("bazarr not configured; skipping scan-disk trigger")
             return
-        if self._bazarr_task_id is None and not self._bazarr_task_lookup_attempted:
-            await self._discover_bazarr_task()
-        if self._bazarr_task_id is None:
+        tid = await self._bazarr_task_for(bz)
+        if tid is None:
             log.warning("no Bazarr scan-disk task id discovered; cannot trigger write-back")
             return
         try:
-            await self._bazarr.trigger_task(self._bazarr_task_id)
+            await bz.trigger_task(tid)
             self._provenance.mark_bazarr_triggered(ledger_id)
-            log.info(
-                "bazarr scan-disk triggered for series_id=%d via task %s", series_id, self._bazarr_task_id
-            )
+            log.info("bazarr scan-disk triggered for series_id=%d via task %s", series_id, tid)
         except IntegrationError as e:
             log.warning("bazarr scan-disk trigger failed: %s", e)
 
-    async def _discover_bazarr_task(self) -> None:
-        # Allow re-discovery if previous attempts failed — Bazarr might have
-        # been transiently down. We only flip _bazarr_task_lookup_attempted
-        # to True on SUCCESS so a one-off failure doesn't lock us out.
-        try:
-            tasks = await self._bazarr.list_tasks()
-        except IntegrationError as e:
-            log.warning("bazarr list_tasks failed: %s", e)
-            return
-        # Check both job_id AND name against each hint — hints can match
-        # either canonical IDs (`series_full_scan_subtitles`) or human
-        # labels ("Index All Existing Episodes Subtitles").
-        for hint in _BAZARR_SCAN_TASK_HINTS:
-            h = hint.lower()
-            for t in tasks:
-                job_id = (t.get("job_id") or "").lower()
-                name = (t.get("name") or "").lower()
-                if h in job_id or h in name:
-                    self._bazarr_task_id = t.get("job_id") or t.get("id") or t.get("name")
-                    self._bazarr_task_lookup_attempted = True
-                    log.info(
-                        "bazarr scan-disk task discovered: %s (matched hint %r against %s)",
-                        self._bazarr_task_id,
-                        hint,
-                        "job_id" if h in job_id else "name",
-                    )
-                    return
-        log.warning(
-            "no bazarr task matched scan-disk hints %s; available job_ids: %s",
-            list(_BAZARR_SCAN_TASK_HINTS),
-            [t.get("job_id") for t in tasks][:20],
-        )
+    # _discover_bazarr_task removed (#161 P3): replaced by per-instance
+    # _bazarr_task_for(bz), which caches the scan-disk task id keyed by instance.

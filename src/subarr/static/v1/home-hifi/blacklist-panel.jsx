@@ -19,6 +19,20 @@ function _historyQuery(ref) {
   return null;
 }
 
+// #161 P3 (T8): build the blacklist endpoint + body for a history row. The
+// opened item's canonical path (ref.path, supplied by aftercare/library openers)
+// routes the Bazarr blacklist call to the instance owning that library; id-only
+// openers (no path) omit it → instance 0 (back-compat). Pure (exported for test).
+export function blacklistRequest(row, ref) {
+  const isEp = row.episode_id != null || ref?.media_type === 'episode';
+  const url = isEp ? '/api/blacklist/episode' : '/api/blacklist/movie';
+  const body = isEp
+    ? { series_id: row.series_id, episode_id: row.episode_id, provider: row.provider, subs_id: row.subs_id, language: row.language, subtitles_path: row.subtitles_path }
+    : { radarr_id: row.radarr_id, provider: row.provider, subs_id: row.subs_id, language: row.language, subtitles_path: row.subtitles_path };
+  if (ref?.path) body.canonical_path = ref.path;
+  return { url, body };
+}
+
 export function BlacklistPanel() {
   const [ref, setRef] = useState(null);          // the open media ref, or null
   const [rows, setRows] = useState(null);
@@ -61,11 +75,7 @@ export function BlacklistPanel() {
       + `Bazarr will stop re-fetching this exact release and can search for a different one. Reversible from Bazarr.`
     )) return;
     setBusyKey(row.subs_id);
-    const isEp = row.episode_id != null || ref?.media_type === 'episode';
-    const url = isEp ? '/api/blacklist/episode' : '/api/blacklist/movie';
-    const body = isEp
-      ? { series_id: row.series_id, episode_id: row.episode_id, provider: row.provider, subs_id: row.subs_id, language: row.language, subtitles_path: row.subtitles_path }
-      : { radarr_id: row.radarr_id, provider: row.provider, subs_id: row.subs_id, language: row.language, subtitles_path: row.subtitles_path };
+    const { url, body } = blacklistRequest(row, ref);
     try {
       const resp = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
