@@ -1390,6 +1390,30 @@ def _disqualify_unsupported(items: list[CoverageItem]) -> None:
             it.verification_state = "unsupported"
 
 
+def _rollup_arr_health(instances: list[dict]) -> dict:
+    """#365: roll a list of per-instance arr health dicts into a back-compat top
+    level: ok = all configured instances ok, configured = any configured, numeric
+    keys summed, warnings/errors concatenated, plus the `instances` list. A single
+    instance reproduces the old flat shape + a one-element `instances` list."""
+    configured = [h for h in instances if h.get("configured")]
+    roll: dict = {
+        "ok": bool(configured) and all(h.get("ok") for h in configured),
+        "configured": bool(configured),
+        "instances": instances,
+    }
+    for key in ("count", "wanted_missing", "recent_imports_24h", "airing_within_48h"):
+        vals = [h[key] for h in instances if isinstance(h.get(key), int)]
+        if vals:
+            roll[key] = sum(vals)
+    warnings = [w for h in instances for w in h.get("warnings", [])]
+    if warnings:
+        roll["warnings"] = warnings
+    errors = [f"[{h.get('id') or '0'}] {h['error']}" for h in instances if h.get("error")]
+    if errors:
+        roll["error"] = "; ".join(errors)
+    return roll
+
+
 def _bazarr_routing(libraries) -> tuple[dict[str, str], dict[str, str]]:
     """#161 Phase 2: map each Bazarr instance id to the SINGLE Sonarr / Radarr
     instance that owns its episode / movie wanted items. A Bazarr fronts one
@@ -1501,32 +1525,40 @@ async def build_coverage(
     # a fetch blowing up (even a non-IntegrationError) degrades THAT instance to
     # empty data instead of sinking the whole build (per-instance isolation is
     # the point of the fan-out).
+    # #365: each fetch writes into a PER-INSTANCE scratch dict so health can be
+    # rolled up under sources[svc]["instances"] instead of N instances clobbering
+    # one flat sources[svc]. Returns (id, data_tuple, health) where health is the
+    # instance's sources[svc] entry tagged with its id.
     async def _fetch_sonarr_inst(iid: str):
         client = bundle._clients["sonarr"][iid]
+        inst_src: dict = {}
         try:
-            return iid, await asyncio.gather(
-                _fetch_arr("sonarr", client, sources, "series"),
-                _fetch_arr_tags("sonarr", client, sources),
-                _fetch_wanted_missing("sonarr", client, sources),
-                _fetch_recent_imports("sonarr", client, sources),
-                _fetch_calendar_upcoming(client, sources),
+            data = await asyncio.gather(
+                _fetch_arr("sonarr", client, inst_src, "series"),
+                _fetch_arr_tags("sonarr", client, inst_src),
+                _fetch_wanted_missing("sonarr", client, inst_src),
+                _fetch_recent_imports("sonarr", client, inst_src),
+                _fetch_calendar_upcoming(client, inst_src),
             )
         except Exception as e:  # noqa: BLE001 — isolate a bad instance, never sink the fleet
             log.warning("sonarr instance %r fetch failed: %s", iid, e)
-            return iid, ([], {}, set(), {}, set())
+            data = ([], {}, set(), {}, set())
+        return iid, data, {"id": iid, **inst_src.get("sonarr", {})}
 
     async def _fetch_radarr_inst(iid: str):
         client = bundle._clients["radarr"][iid]
+        inst_src: dict = {}
         try:
-            return iid, await asyncio.gather(
-                _fetch_arr("radarr", client, sources, "movies"),
-                _fetch_arr_tags("radarr", client, sources),
-                _fetch_wanted_missing("radarr", client, sources),
-                _fetch_recent_imports("radarr", client, sources),
+            data = await asyncio.gather(
+                _fetch_arr("radarr", client, inst_src, "movies"),
+                _fetch_arr_tags("radarr", client, inst_src),
+                _fetch_wanted_missing("radarr", client, inst_src),
+                _fetch_recent_imports("radarr", client, inst_src),
             )
         except Exception as e:  # noqa: BLE001 — isolate a bad instance, never sink the fleet
             log.warning("radarr instance %r fetch failed: %s", iid, e)
-            return iid, ([], {}, set(), {})
+            data = ([], {}, set(), {})
+        return iid, data, {"id": iid, **inst_src.get("radarr", {})}
 
     # v1.1-E: NOW PLAYING via Tautulli get_activity (singleton, fired in parallel).
     tautulli_activity_task = (
@@ -1535,8 +1567,13 @@ async def build_coverage(
     tautulli_task = asyncio.create_task(_fetch_tautulli(bundle.tautulli, sources)) if use_tautulli else None
 
     # iid -> (series, tags, missing_ids, recent_ids, airing_ids) / (movies, ...)
-    sonarr_data = dict(await asyncio.gather(*[_fetch_sonarr_inst(i) for i in sonarr_ids]))
-    radarr_data = dict(await asyncio.gather(*[_fetch_radarr_inst(i) for i in radarr_ids]))
+    _sonarr_fetched = await asyncio.gather(*[_fetch_sonarr_inst(i) for i in sonarr_ids])
+    _radarr_fetched = await asyncio.gather(*[_fetch_radarr_inst(i) for i in radarr_ids])
+    sonarr_data = {iid: data for iid, data, _h in _sonarr_fetched}
+    radarr_data = {iid: data for iid, data, _h in _radarr_fetched}
+    # #365: per-instance health rolled up to a back-compat top level + instances[].
+    sources["sonarr"] = _rollup_arr_health([h for _i, _d, h in _sonarr_fetched])
+    sources["radarr"] = _rollup_arr_health([h for _i, _d, h in _radarr_fetched])
     history = await tautulli_task if tautulli_task else []
     activity = (
         await tautulli_activity_task

@@ -129,3 +129,38 @@ def test_route_wanted_dangling_binding_degrades_to_instance0():
     bz_to_sonarr = {"ghostbz": "ghost"}  # "ghost" is not a real instance id
     assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "") == eps
     assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "s1") == []
+
+
+def test_rollup_arr_health_rolls_ok_configured_and_sums():
+    """#365: per-instance arr health rolls up to a back-compat top level —
+    ok = all configured instances ok, configured = any configured, numeric
+    keys summed, warnings concatenated, plus the per-instance `instances` list."""
+    from subarr.coverage_engine import _rollup_arr_health
+
+    insts = [
+        {"id": "", "ok": True, "configured": True, "count": 5, "wanted_missing": 2},
+        {"id": "anime", "ok": False, "configured": True, "count": 3, "error": "boom"},
+    ]
+    roll = _rollup_arr_health(insts)
+    assert roll["configured"] is True
+    assert roll["ok"] is False  # one configured instance is down
+    assert roll["count"] == 8  # summed across instances
+    assert roll["instances"] == insts
+
+    # unconfigured-only -> configured False, ok False (matches the old flat shape)
+    roll2 = _rollup_arr_health([{"id": "", "ok": False, "configured": False}])
+    assert roll2["configured"] is False
+    assert roll2["ok"] is False
+
+
+def test_sources_sonarr_per_instance_health(anime_stack_full):
+    """#365: build_coverage records per-instance Sonarr/Radarr health under
+    sources[svc]["instances"] with a rolled-up top level (mirrors bazarr)."""
+    from subarr.coverage_engine import build_coverage
+
+    report = asyncio.run(build_coverage(anime_stack_full, use_tautulli=False))
+    src = report.to_dict()["sources"]
+    assert {i["id"] for i in src["sonarr"]["instances"]} == {"", "anime"}
+    assert src["sonarr"]["configured"] is True
+    assert src["sonarr"]["ok"] is True  # both instances healthy
+    assert {i["id"] for i in src["radarr"]["instances"]} == {"", "anime"}
