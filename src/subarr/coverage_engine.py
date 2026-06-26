@@ -1537,7 +1537,11 @@ async def build_coverage(
     wanted_series_ids = {w.get("sonarrSeriesId") for w in bz_eps if w.get("sonarrSeriesId")}
     sonarr_eps_by_id: dict[int, dict] = {}
     ep_file_paths: dict[int, str] = {}
-    if wanted_series_ids and bundle.sonarr.is_configured():
+    # #161 phase 2 (T6 seam): the episode assembly + Bazarr-blind pass below run
+    # against an explicit Sonarr instance client rather than bundle.sonarr, so T7
+    # can re-run them per instance. Single-instance: this is instance 0.
+    sonarr_client = bundle.sonarr
+    if wanted_series_ids and sonarr_client.is_configured():
         # #286: cap the per-series fan-out so a large library doesn't fire
         # hundreds of simultaneous Sonarr requests (thundering herd).
         _arr_files_sem = asyncio.Semaphore(8)
@@ -1546,8 +1550,8 @@ async def build_coverage(
             async with _arr_files_sem:
                 try:
                     eps, files = await asyncio.gather(
-                        bundle.sonarr.episodes(sid),
-                        bundle.sonarr.episode_files_for_series(sid),
+                        sonarr_client.episodes(sid),
+                        sonarr_client.episode_files_for_series(sid),
                         return_exceptions=False,
                     )
                     return sid, eps, files
@@ -1707,9 +1711,9 @@ async def build_coverage(
     # but NO English sidecar sub, synthesise a coverage row flagged as
     # audio-mislabel-suspect. Bazarr-blind cases now show up in Coverage
     # with the same UI affordances as a regular wanted row.
-    if bundle.sonarr.is_configured():
+    if sonarr_client.is_configured():
         items = await _add_bazarr_blind_synthetic_rows(
-            bundle,
+            sonarr_client,
             sonarr_series,
             items,
             already_fetched_series_ids=wanted_series_ids,
@@ -1737,7 +1741,8 @@ async def build_coverage(
     # zero of their movies. This surfaces every Radarr movie with a file that's
     # missing English coverage, carrying `monitored` so the Coverage chip
     # filters as usual. Broader than the Sonarr foreign-only defense by design.
-    if bundle.radarr.is_configured():
+    radarr_client = bundle.radarr
+    if radarr_client.is_configured():
         items = await _add_radarr_blind_movie_rows(
             radarr_movies,
             items,
@@ -1800,7 +1805,7 @@ async def build_coverage(
 
 # v1.1.1 #219 — Bazarr-blind defense pass.
 async def _add_bazarr_blind_synthetic_rows(
-    bundle: IntegrationBundle,
+    sonarr_client: SonarrClient,
     sonarr_series: list[dict],
     items: list[CoverageItem],
     *,
@@ -1857,8 +1862,8 @@ async def _add_bazarr_blind_synthetic_rows(
             async with _arr_files_sem:
                 try:
                     eps, files = await asyncio.gather(
-                        bundle.sonarr.episodes(sid),
-                        bundle.sonarr.episode_files_for_series(sid),
+                        sonarr_client.episodes(sid),
+                        sonarr_client.episode_files_for_series(sid),
                     )
                     return sid, eps, files
                 except IntegrationError as e:
