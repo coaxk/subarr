@@ -15,7 +15,13 @@ set -e
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 APP_USER=subarr
-HF_DIR="${HF_HOME:-/data/.cache/huggingface}"
+# #369: subarr's OWN writable state all lives in the directory that holds the DB
+# (subarr.db + -wal/-shm, subarr-overrides.json, subarr.lock, vad/, backups/).
+# Default /data; relocate the whole lot by pointing SUBARR_DB_PATH at a dedicated
+# volume (e.g. /config). The HF cache follows that dir so it stays on the app's
+# own volume and is never an excuse to touch the media mount.
+DB_DIR="$(dirname "${SUBARR_DB_PATH:-/data/subarr.db}")"
+HF_DIR="${HF_HOME:-$DB_DIR/.cache/huggingface}"
 
 log() { echo "[entrypoint] $*"; }
 
@@ -31,19 +37,34 @@ groupmod -o -g "$PGID" "$APP_USER" 2>/dev/null || groupadd -o -g "$PGID" "$APP_U
 usermod -o -u "$PUID" -g "$PGID" "$APP_USER" 2>/dev/null \
   || useradd -o -u "$PUID" -g "$PGID" -M -s /usr/sbin/nologin "$APP_USER"
 
-# 2. Fix ownership of writable volumes — only when needed (recursive chown over a
-#    multi-GB HF model cache is slow; skip when the top dir already matches).
-mkdir -p /data "$HF_DIR"
-chown_if_needed() {
+# 2. Reconcile ownership of subarr's OWN state dir + HF cache — only when needed
+#    (skip when the top dir already matches; a recursive chown over a multi-GB HF
+#    cache is slow).
+#
+#    #369 — CRITICAL: ONLY subarr's own dir is touched. The media library is a
+#    SEPARATE mount (default /media/library) that subarr treats as foreign,
+#    read-mostly data — it is NEVER chowned. In multi-library setups EVERY media
+#    mount must already be owned/writable by PUID (subarr writes sidecars there);
+#    the entrypoint cannot enumerate them (it runs before the app reads its
+#    config) and must never re-own them. The old code chowned a hardcoded /data
+#    recursively, which destroyed foreign ownership whenever the media dataset
+#    was mounted at /data. Do NOT point SUBARR_DB_PATH at a media mount — keep
+#    subarr state on a dedicated volume (/data or /config).
+mkdir -p "$DB_DIR" "$HF_DIR"
+reconcile_owner() {
   d="$1"
   [ -e "$d" ] || return 0
   if [ "$(stat -c '%u:%g' "$d")" != "$PUID:$PGID" ]; then
     log "chown -R $PUID:$PGID $d"
-    chown -R "$PUID:$PGID" "$d" 2>/dev/null \
-      || log "WARN: could not chown $d — add CHOWN/FOWNER/DAC_OVERRIDE caps or run rootful; continuing"
+    # Errors are surfaced (no 2>/dev/null): a failed reconcile means subarr may
+    # be unable to write its DB/cache, and the operator needs to see why.
+    if ! chown -R "$PUID:$PGID" "$d"; then
+      log "WARN: could not chown $d — add CHOWN/FOWNER/DAC_OVERRIDE caps or run rootful; continuing (subarr may be unable to write here)"
+    fi
   fi
 }
-chown_if_needed /data   # HF_DIR lives under /data, so this covers it too
+reconcile_owner "$DB_DIR"   # subarr.db + -wal/-shm, overrides, lock, vad/, backups/
+reconcile_owner "$HF_DIR"   # LaBSE/QE model cache (under DB_DIR by default)
 
 # 3. Raw docker socket support: a non-root user can't read a root:docker socket
 #    unless it's in that gid. (socket-proxy users hit a TCP endpoint — no socket,

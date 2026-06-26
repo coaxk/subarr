@@ -7,6 +7,13 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-06-26
+
+**Critical hotfix: the entrypoint no longer chowns the shared media mount (#369).**
+
+### Fixed
+- **Entrypoint scoped its ownership fix to subarr's own data dir — never the media library (#369).** The non-root entrypoint (added in 2.0) ran `chown -R $PUID:$PGID /data` at boot, with a top-level-only guard that made a full-tree recursive chown *more* likely to fire silently. When the media library was mounted at `/data` (common on NAS setups), a routine `compose pull` rewrote ownership of the entire dataset — and any co-located foreign data (e.g. a Nextcloud data dir) — to subarr's uid, taking out unrelated services. It also chowned `/data` while the DB could live at `/config`, so it missed its own target and the app could still crash-loop on a readonly database. The entrypoint now reconciles ownership of **only** the directory holding `SUBARR_DB_PATH` (subarr's own state: db, `-wal`/`-shm`, `subarr-overrides.json`, `subarr.lock`, `vad/`, `backups/`) plus the HF cache (now under that dir), follows `SUBARR_DB_PATH` wherever it points (so `/config` setups are fixed too), and surfaces chown errors instead of swallowing them. The media library is treated as foreign, read-mostly data and is never re-owned — in multi-library setups every media mount must be owned/writable by `PUID` (subarr writes sidecars there). Thanks to @tikibozo for the detailed report. **If you mounted media at `/data`, keep `SUBARR_DB_PATH` on a dedicated volume.**
+
 ## [2.2.0] - 2026-06-22
 
 **Bazarr-parity force/ignore controls, per-title ignore, and a deep pass on reliability.** This release closes the long-running #317 trio — blacklist a bad sub, fill forced-only gaps, and find the controls that were scattered across the app — adds per-title ignore, and hardens the queue, database, Plex client, and event loop after heavy real-world use.

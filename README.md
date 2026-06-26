@@ -31,7 +31,7 @@ Filling more gaps, finding more controls, and a deep reliability pass. Non-break
 A security-hardening + activation release. The two headline changes are breaking for some deployments — see [Upgrading](#upgrading-to-20) below.
 
 - **Authentication is on by default.** subarr's API can drive Sonarr, Bazarr, and subgen, so a default install no longer ships wide open. First launch creates an admin account, then it's a normal login + signed session cookie. Recovery is built in (env override, `SUBARR_AUTH_RESET=1`, or `docker exec subarr python -m subarr.cli reset-auth`), failed logins are rate-limited, and you can mint named **managed API keys** for scripts. Already authenticating at a reverse proxy? `SUBARR_AUTH_DISABLED=1` hands auth back to it. Full detail under [Security → Authentication](#authentication).
-- **Runs as a non-root user.** The container drops to `PUID`/`PGID` (default `1000:1000`); its entrypoint starts as root only long enough to fix `/data` ownership and grant docker-socket access, then drops privileges before the app runs. `PUID`/`PGID` are now real, not decorative. Hardened-compose users need a small `cap_add` set — see [Hardened deployment](#hardened-deployment-optional).
+- **Runs as a non-root user.** The container drops to `PUID`/`PGID` (default `1000:1000`); its entrypoint starts as root only long enough to fix ownership of **its own data dir** (never your media library) and grant docker-socket access, then drops privileges before the app runs. `PUID`/`PGID` are now real, not decorative. Hardened-compose users need a small `cap_add` set — see [Hardened deployment](#hardened-deployment-optional).
 - **Pause/resume the schedule from the dashboard.** The "Next scheduled run" card gains a Pause/Resume button next to Run now — halt or restart automation without opening Rules.
 - **You land on a populated dashboard.** Finishing onboarding now auto-runs the first coverage walk (when an arr is configured), with a clear empty-state as the safety net for anyone who still lands walk-less.
 
@@ -40,8 +40,8 @@ A security-hardening + activation release. The two headline changes are breaking
 ### Upgrading to 2.0
 
 - **You'll see a one-time login screen.** Create an admin account on first launch after upgrading. Installs that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are **not** forced into setup — those keep working. Locked out? `SUBARR_AUTH_RESET=1`, the env pair, or `docker exec subarr python -m subarr.cli reset-auth`. Behind a reverse proxy that authenticates? `SUBARR_AUTH_DISABLED=1`.
-- **Hardened-compose users:** the container now runs non-root and chowns `/data` at boot, so add `cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]` alongside your `cap_drop: [ALL]` and set `PUID`/`PGID` to the uid that owns `/data` + media. See [Hardened deployment](#hardened-deployment-optional). The LaBSE QE cache moved to `/data/.cache/huggingface` — drop any old `/root/.cache` mount.
-- **Everything else upgrades transparently** — existing installs keep working and `/data` is chowned automatically.
+- **Hardened-compose users:** the container now runs non-root and reconciles ownership of **its own data dir** at boot — the volume holding `SUBARR_DB_PATH` (default `/data`), **never the media library** (a separate mount subarr treats as foreign data you own). Add `cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]` alongside your `cap_drop: [ALL]` and set `PUID`/`PGID` to the uid that owns that data dir **and** your media mounts (subarr writes sidecars there). See [Hardened deployment](#hardened-deployment-optional). The LaBSE QE cache lives under the data dir (`<data>/.cache/huggingface`) — drop any old `/root/.cache` mount.
+- **Everything else upgrades transparently** — existing installs keep working and subarr's own data dir is reconciled automatically. Keep `SUBARR_DB_PATH` on a dedicated subarr volume (e.g. `/data` or `/config`); never point it at the media tree.
 
 ---
 
@@ -113,7 +113,7 @@ Subarr runs as a **non-root** user (default `1000:1000`, set yours via `PUID`/`P
         reservations: { cpus: '0.25', memory: 256M }
 ```
 
-The five caps let the entrypoint `chown /data` (so an existing root-owned database stays readable after upgrade) and drop to `PUID/PGID`; the running app then holds **no** capabilities and is non-root — a stronger posture than the old root-with-everything default. The LaBSE QE model now caches under `/data/.cache/huggingface` (on your data volume, so it persists) — if you previously mounted a volume at `/root/.cache`, you can drop it.
+The five caps let the entrypoint reconcile ownership of **subarr's own data dir** — the volume holding `SUBARR_DB_PATH` (default `/data`), so an existing root-owned database stays writable after upgrade — and drop to `PUID/PGID`; the running app then holds **no** capabilities and is non-root — a stronger posture than the old root-with-everything default. It does **not** chown your media library: that's a separate mount (e.g. `/media/library`) subarr only writes sidecar `.srt` files into, so **you** must own it (set `PUID` to match; in multi-library setups every media mount must be writable by `PUID`). The LaBSE QE model caches under the data dir (`<data>/.cache/huggingface`, so it persists) — if you previously mounted a volume at `/root/.cache`, you can drop it.
 
 The image already ships a `HEALTHCHECK` (hits `/api/health`), so Compose and orchestrators get container health for free — no `healthcheck:` block needed. The login is on by default (see [Security](#authentication)); add an `SUBARR_API_KEY` only if scripts or other automation need non-browser access.
 
