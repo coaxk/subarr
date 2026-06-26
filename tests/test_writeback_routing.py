@@ -88,3 +88,52 @@ def test_audio_lang_bazarr_sync_routes_to_owning_instance(writeback_stack):
     asyncio.run(_trigger_bazarr_sync(ws.bundle, "@anime/Naruto/Season 1/Naruto.S01E01.mkv"))
     assert triggers(("bazarr", "anime")), "anime bazarr should get the sync trigger"
     assert not triggers(("bazarr", "")), "instance 0 must NOT get it"
+
+
+def _fake_request(bundle):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(integrations=bundle)))
+
+
+def test_blacklist_episode_routes_to_owning_bazarr(writeback_stack):
+    import asyncio
+
+    from subarr.routers.blacklist import EpisodeBlacklistRequest, blacklist_episode
+
+    ws = writeback_stack
+    req = EpisodeBlacklistRequest(
+        series_id=11,
+        episode_id=1011,
+        provider="x",
+        subs_id="s",
+        subtitles_path="/p.srt",
+        canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
+    )
+    asyncio.run(blacklist_episode(req, _fake_request(ws.bundle)))
+
+    def bl(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/episodes/blacklist"]
+
+    assert bl(("bazarr", "anime")) and not bl(("bazarr", ""))
+
+
+def test_blacklist_movie_routes_to_owning_bazarr(writeback_stack):
+    import asyncio
+
+    from subarr.routers.blacklist import MovieBlacklistRequest, blacklist_movie
+
+    ws = writeback_stack
+    req = MovieBlacklistRequest(
+        radarr_id=5,
+        provider="x",
+        subs_id="s",
+        subtitles_path="/p.srt",
+        canonical_path="@anime/SomeFilm/SomeFilm.mkv",
+    )
+    asyncio.run(blacklist_movie(req, _fake_request(ws.bundle)))
+
+    def bl(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/movies/blacklist"]
+
+    assert bl(("bazarr", "anime")) and not bl(("bazarr", ""))
