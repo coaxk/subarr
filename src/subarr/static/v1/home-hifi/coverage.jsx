@@ -1303,6 +1303,24 @@ function BatchReviewModal() {
   );
 }
 
+// #161 P3 (T8): build the /api/arbiter/accept body from the coverage row +
+// chosen candidate. canonical_path (when the row carries one) routes the Bazarr
+// download to the instance owning the row's library; absent → instance 0.
+// Pure (exported for unit test) — mirrors queueRow's payload-mapper convention.
+export function arbiterAcceptBody(row, c) {
+  const body = {
+    episode_id: row._sonarr_episode_id,
+    language: 'en',
+    provider: c.provider,
+    subtitles_id: c.subtitle || c.subs_id || '',
+    score: c.score || 0,
+    forced: c.forced === 'True' || c.forced === true,
+    hi: c.hearing_impaired === 'True' || c.hi === true,
+  };
+  if (row._canonical_path) body.canonical_path = row._canonical_path;
+  return body;
+}
+
 // v1.1-F Arbiter dialog: before queueing Whisper, ask Bazarr's providers
 // what human subs are available. Triggered by row "Bazarr?" button →
 // CustomEvent('open-arbiter') from CoverageRow.
@@ -1343,15 +1361,7 @@ export function ArbiterModal() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({
-          episode_id: row._sonarr_episode_id,
-          language: 'en',
-          provider: c.provider,
-          subtitles_id: c.subtitle || c.subs_id || '',
-          score: c.score || 0,
-          forced: c.forced === 'True' || c.forced === true,
-          hi: c.hearing_impaired === 'True' || c.hi === true,
-        }),
+        body: JSON.stringify(arbiterAcceptBody(row, c)),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
