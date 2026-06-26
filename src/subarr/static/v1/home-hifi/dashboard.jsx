@@ -311,7 +311,7 @@ function GpuWidget({ data }) {
           <span className="label">GPU</span>
         </div>
         <div style={{ color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-          no GPU telemetry — none detected, or subgen is unreachable.
+          no GPU telemetry — no NVIDIA GPU detected, or nvidia-smi is unavailable in this container.
         </div>
         <div style={{ height: 44 }} />
       </div>
