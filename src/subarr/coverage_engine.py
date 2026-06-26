@@ -1390,6 +1390,41 @@ def _disqualify_unsupported(items: list[CoverageItem]) -> None:
             it.verification_state = "unsupported"
 
 
+def _bazarr_routing(libraries) -> tuple[dict[str, str], dict[str, str]]:
+    """#161 Phase 2: map each Bazarr instance id to the SINGLE Sonarr / Radarr
+    instance that owns its episode / movie wanted items. A Bazarr fronts one
+    Sonarr + one Radarr; prefer an explicit (non-"") binding so a movie-only
+    library (sonarr_id="") that shares a Bazarr with a TV library does not steal
+    episodes into the default Sonarr (and vice-versa for movies). An unmapped
+    Bazarr id resolves to "" (instance 0) at routing time."""
+    bz_to_sonarr: dict[str, str] = {}
+    bz_to_radarr: dict[str, str] = {}
+    for lib in libraries:
+        if lib.bazarr_id not in bz_to_sonarr or (lib.sonarr_id and not bz_to_sonarr[lib.bazarr_id]):
+            bz_to_sonarr[lib.bazarr_id] = lib.sonarr_id
+        if lib.bazarr_id not in bz_to_radarr or (lib.radarr_id and not bz_to_radarr[lib.bazarr_id]):
+            bz_to_radarr[lib.bazarr_id] = lib.radarr_id
+    return bz_to_sonarr, bz_to_radarr
+
+
+def _route_wanted(
+    wanted: list[dict], bz_to_arr: dict[str, str], valid_ids: set[str], inst_id: str
+) -> list[dict]:
+    """Wanted items (tagged `_bazarr_instance`) that THIS arr instance owns.
+    Each item routes to EXACTLY ONE instance: the one its Bazarr maps to, or
+    instance 0 ("") when the mapping is missing or points at an unknown id — so
+    a stale/dangling binding degrades to instance 0 instead of dropping rows or
+    duplicating across instances."""
+    out: list[dict] = []
+    for w in wanted:
+        target = bz_to_arr.get(w.get("_bazarr_instance", ""), "")
+        if target not in valid_ids:
+            target = ""
+        if target == inst_id:
+            out.append(w)
+    return out
+
+
 async def _resolve_sonarr_files(
     client: SonarrClient, series_ids: set, sources: dict
 ) -> tuple[dict[int, dict], dict[int, str]]:
@@ -1450,50 +1485,48 @@ async def build_coverage(
     #    Single-instance: exactly one "" instance → unchanged behaviour.
     bz_eps, bz_movs = await _fetch_bazarr_all(bundle, sources)
 
-    # #161 Phase 2 routing: invert the library bindings into, per arr instance,
-    # the set of Bazarr instance ids that feed it. lib0 ("") guarantees a
-    # ""→{""} entry so single-stack is unchanged; a Bazarr id bound by no
-    # library is routed to instance 0 (see _route_wanted) so rows are never lost.
-    sonarr_bazarrs: dict[str, set[str]] = {}
-    radarr_bazarrs: dict[str, set[str]] = {}
-    for _lib in settings.libraries:
-        sonarr_bazarrs.setdefault(_lib.sonarr_id, set()).add(_lib.bazarr_id)
-        radarr_bazarrs.setdefault(_lib.radarr_id, set()).add(_lib.bazarr_id)
-    _sonarr_bound_bz = set().union(*sonarr_bazarrs.values()) if sonarr_bazarrs else set()
-    _radarr_bound_bz = set().union(*radarr_bazarrs.values()) if radarr_bazarrs else set()
-
-    def _route_wanted(wanted: list[dict], feeds: set[str], bound: set[str], inst_id: str) -> list[dict]:
-        out = []
-        for w in wanted:
-            bid = w.get("_bazarr_instance", "")
-            if bid in feeds or (inst_id == "" and bid not in bound):
-                out.append(w)
-        return out
-
+    # #161 Phase 2 routing: each Bazarr instance maps to the single Sonarr /
+    # Radarr instance that owns its wanted items (see _bazarr_routing). lib0
+    # ("") yields ""→"" so single-stack is unchanged; an unmapped/dangling
+    # Bazarr id degrades to instance 0 in _route_wanted (never dropped / dup'd).
+    bz_to_sonarr, bz_to_radarr = _bazarr_routing(settings.libraries)
     sonarr_ids = list(bundle._clients["sonarr"])
     radarr_ids = list(bundle._clients["radarr"])
+    _sonarr_id_set = set(sonarr_ids)
+    _radarr_id_set = set(radarr_ids)
 
     # Per-instance arr fetches (series/tags/missing/recent[/calendar]), fanned
     # out across instances. Single-instance issues exactly the same calls as
-    # before and writes the same `sources` entries.
+    # before and writes the same `sources` entries. Each instance is isolated:
+    # a fetch blowing up (even a non-IntegrationError) degrades THAT instance to
+    # empty data instead of sinking the whole build (per-instance isolation is
+    # the point of the fan-out).
     async def _fetch_sonarr_inst(iid: str):
         client = bundle._clients["sonarr"][iid]
-        return iid, await asyncio.gather(
-            _fetch_arr("sonarr", client, sources, "series"),
-            _fetch_arr_tags("sonarr", client, sources),
-            _fetch_wanted_missing("sonarr", client, sources),
-            _fetch_recent_imports("sonarr", client, sources),
-            _fetch_calendar_upcoming(client, sources),
-        )
+        try:
+            return iid, await asyncio.gather(
+                _fetch_arr("sonarr", client, sources, "series"),
+                _fetch_arr_tags("sonarr", client, sources),
+                _fetch_wanted_missing("sonarr", client, sources),
+                _fetch_recent_imports("sonarr", client, sources),
+                _fetch_calendar_upcoming(client, sources),
+            )
+        except Exception as e:  # noqa: BLE001 — isolate a bad instance, never sink the fleet
+            log.warning("sonarr instance %r fetch failed: %s", iid, e)
+            return iid, ([], {}, set(), {}, set())
 
     async def _fetch_radarr_inst(iid: str):
         client = bundle._clients["radarr"][iid]
-        return iid, await asyncio.gather(
-            _fetch_arr("radarr", client, sources, "movies"),
-            _fetch_arr_tags("radarr", client, sources),
-            _fetch_wanted_missing("radarr", client, sources),
-            _fetch_recent_imports("radarr", client, sources),
-        )
+        try:
+            return iid, await asyncio.gather(
+                _fetch_arr("radarr", client, sources, "movies"),
+                _fetch_arr_tags("radarr", client, sources),
+                _fetch_wanted_missing("radarr", client, sources),
+                _fetch_recent_imports("radarr", client, sources),
+            )
+        except Exception as e:  # noqa: BLE001 — isolate a bad instance, never sink the fleet
+            log.warning("radarr instance %r fetch failed: %s", iid, e)
+            return iid, ([], {}, set(), {})
 
     # v1.1-E: NOW PLAYING via Tautulli get_activity (singleton, fired in parallel).
     tautulli_activity_task = (
@@ -1607,9 +1640,7 @@ async def build_coverage(
             airing_soon_ids,
         ) = sonarr_data[_sonarr_inst]
         sonarr_by_id = {s["id"]: s for s in sonarr_series if isinstance(s, dict) and "id" in s}
-        bz_eps_i = _route_wanted(
-            bz_eps, sonarr_bazarrs.get(_sonarr_inst, set()), _sonarr_bound_bz, _sonarr_inst
-        )
+        bz_eps_i = _route_wanted(bz_eps, bz_to_sonarr, _sonarr_id_set, _sonarr_inst)
 
         # #104: pre-scan this instance's wanted-episode series dirs in parallel
         # (bounded) up front so the loop below just reads from the index.
@@ -1734,9 +1765,7 @@ async def build_coverage(
         radarr_client = bundle._clients["radarr"][_radarr_inst]
         radarr_movies, radarr_tags, radarr_missing_ids, radarr_recent_ids = radarr_data[_radarr_inst]
         radarr_by_id = {m["id"]: m for m in radarr_movies if isinstance(m, dict) and "id" in m}
-        bz_movs_i = _route_wanted(
-            bz_movs, radarr_bazarrs.get(_radarr_inst, set()), _radarr_bound_bz, _radarr_inst
-        )
+        bz_movs_i = _route_wanted(bz_movs, bz_to_radarr, _radarr_id_set, _radarr_inst)
 
         # Movies (Bazarr → Radarr enrichment via radarrId — Bazarr's wanted-movie
         # rows carry a radarrId field; use it directly to avoid title-collision

@@ -73,3 +73,59 @@ def test_dedup_does_not_cross_suppress_instances(anime_stack_full):
     nonempty = [c for c in canons if c]
     # the duplicated raw id produced two distinct library-tagged canonicals
     assert len(set(nonempty)) == len(nonempty)
+
+
+def test_bazarr_routing_no_duplicate_shared_bazarr():
+    """#161 review fix: a Bazarr fronting a TV library (sonarr) AND a movie
+    library (radarr) where each leaves the other arr id "" — episodes must
+    route ONLY to the TV Sonarr and movies ONLY to the movie Radarr, never
+    duplicated into the default "" instance."""
+    from pathlib import Path
+
+    from subarr.coverage_engine import _bazarr_routing, _route_wanted
+    from subarr.libraries import Library
+
+    libs = [
+        Library(slug="", name="Default", fs_root=Path("/d"), subgen_prefix="/media", arr_prefix="/data/"),
+        Library(
+            slug="tv",
+            name="TV",
+            fs_root=Path("/tv"),
+            subgen_prefix="/media",
+            arr_prefix="/data/tv/",
+            sonarr_id="s1",
+            bazarr_id="bz",
+        ),
+        Library(
+            slug="mov",
+            name="Movies",
+            fs_root=Path("/mov"),
+            subgen_prefix="/media",
+            arr_prefix="/data/mov/",
+            radarr_id="r1",
+            bazarr_id="bz",
+        ),
+    ]
+    bz_to_sonarr, bz_to_radarr = _bazarr_routing(libs)
+    assert bz_to_sonarr["bz"] == "s1"  # explicit TV sonarr wins over movie lib's ""
+    assert bz_to_radarr["bz"] == "r1"  # explicit movie radarr wins over TV lib's ""
+
+    eps = [{"_bazarr_instance": "bz", "sonarrEpisodeId": 1}]
+    movs = [{"_bazarr_instance": "bz", "radarrId": 1}]
+    # episode routes to s1 ONLY (no spurious dup into "")
+    assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "s1") == eps
+    assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "") == []
+    # movie routes to r1 ONLY
+    assert _route_wanted(movs, bz_to_radarr, {"", "r1"}, "r1") == movs
+    assert _route_wanted(movs, bz_to_radarr, {"", "r1"}, "") == []
+
+
+def test_route_wanted_dangling_binding_degrades_to_instance0():
+    """A Bazarr mapped to an arr id that is not a configured instance routes to
+    "" (instance 0) instead of vanishing (#161 review fix)."""
+    from subarr.coverage_engine import _route_wanted
+
+    eps = [{"_bazarr_instance": "ghostbz", "sonarrEpisodeId": 1}]
+    bz_to_sonarr = {"ghostbz": "ghost"}  # "ghost" is not a real instance id
+    assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "") == eps
+    assert _route_wanted(eps, bz_to_sonarr, {"", "s1"}, "s1") == []
