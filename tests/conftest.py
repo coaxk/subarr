@@ -764,7 +764,15 @@ def writeback_stack(subarr_env, monkeypatch, tmp_path: Path):
             if p.endswith("/system/status"):
                 return httpx.Response(200, json={"version": "4.0.0", "data": {"bazarr_version": "1.5.6"}})
             if p == "/api/system/tasks":
-                return httpx.Response(200, json={"data": [{"job_id": "sync_subtitles", "name": "Sync disk"}]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"job_id": "series_full_scan_subtitles", "name": "Scan disk"},
+                            {"job_id": "update_series", "name": "Sync with Sonarr"},
+                        ]
+                    },
+                )
             if p == "/api/v3/language":
                 return httpx.Response(200, json=[{"id": 1, "name": "English"}])
             if p == "/api/badges":

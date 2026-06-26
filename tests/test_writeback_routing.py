@@ -73,3 +73,18 @@ def test_subtitle_upload_default_row_hits_instance0(writeback_stack):
     assert asyncio.run(w._try_upload_to_bazarr(entry)) is True
     assert _subtitle_posts(ws.calls, ("bazarr", "")), "instance 0 should receive the default-row upload"
     assert not _subtitle_posts(ws.calls, ("bazarr", "anime")), "anime must NOT receive it"
+
+
+def test_audio_lang_bazarr_sync_routes_to_owning_instance(writeback_stack):
+    import asyncio
+
+    from subarr.routers.audio_lang import _trigger_bazarr_sync
+
+    ws = writeback_stack
+
+    def triggers(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/system/tasks"]
+
+    asyncio.run(_trigger_bazarr_sync(ws.bundle, "@anime/Naruto/Season 1/Naruto.S01E01.mkv"))
+    assert triggers(("bazarr", "anime")), "anime bazarr should get the sync trigger"
+    assert not triggers(("bazarr", "")), "instance 0 must NOT get it"

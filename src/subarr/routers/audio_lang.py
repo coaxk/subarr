@@ -24,7 +24,7 @@ from ..audio_sampler import (
 )
 from ..config import settings
 from ..log_safe import scrub
-from ..paths import PathOutsideRootError, canonical_to_fs
+from ..paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from ..subgen_client import SubgenUnavailable
 from ..error_detail import safe_error
 
@@ -110,7 +110,8 @@ async def _propagate_to_sonarr(
     from ..integrations import IntegrationError
 
     bundle = request.app.state.integrations
-    sonarr = bundle.sonarr
+    # #161 P3: PUT the episodeFile on the Sonarr that owns this row's library.
+    sonarr = bundle.client_for("sonarr", library_for_canonical(canonical_path).sonarr_id)
     if not sonarr.is_configured():
         return {"attempted": True, "ok": False, "detail": "Sonarr not configured"}
 
@@ -175,7 +176,7 @@ async def _propagate_to_sonarr(
     # Best-effort: failure is logged but doesn't roll back the Sonarr write,
     # because Sonarr is the source of truth — Bazarr will eventually sync
     # on its own schedule regardless.
-    bazarr_sync = await _trigger_bazarr_sync(bundle)
+    bazarr_sync = await _trigger_bazarr_sync(bundle, canonical_path)
     return {
         "attempted": True,
         "ok": True,
@@ -185,24 +186,27 @@ async def _propagate_to_sonarr(
     }
 
 
-# Cache the discovered Bazarr task id so we don't list/match every verify.
-_bazarr_sync_task_id: str | None = None
+# Cache the discovered Bazarr sync task id PER instance (key = base_url) so we
+# don't list/match on every verify. #161 P3: was a single module-global.
+_bazarr_sync_task_ids: dict[str, str] = {}
 
 
-async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
-    """Trigger Bazarr's update_series task — the metadata sync that pulls
-    fresh series + episode info from Sonarr. Bounded (~few seconds even
-    on large libraries) and idempotent. Returns {ok, detail}."""
+async def _trigger_bazarr_sync(bundle, canonical_path: str) -> dict[str, Any]:
+    """Trigger Bazarr's update_series task on the instance that OWNS this row's
+    library — the metadata sync that pulls fresh series + episode info from
+    Sonarr. Bounded (~few seconds even on large libraries) and idempotent.
+    Returns {ok, detail}."""
     from ..integrations import IntegrationError
 
-    global _bazarr_sync_task_id
-    bazarr = bundle.bazarr
+    bazarr = bundle.client_for("bazarr", library_for_canonical(canonical_path).bazarr_id)
     if not bazarr.is_configured():
         return {"attempted": False, "detail": "Bazarr not configured"}
 
-    # Discover the sync task id once per process. Bazarr exposes a stable
+    # Discover the sync task id once per instance. Bazarr exposes a stable
     # `update_series` task; we match by job_id substring for forward-compat.
-    if _bazarr_sync_task_id is None:
+    key = getattr(bazarr, "_base_url", "") or str(id(bazarr))
+    task_id = _bazarr_sync_task_ids.get(key)
+    if task_id is None:
         try:
             tasks = await bazarr.list_tasks()
         except IntegrationError as e:
@@ -211,17 +215,18 @@ async def _trigger_bazarr_sync(bundle) -> dict[str, Any]:
             jid = (t.get("job_id") or "").lower()
             name = (t.get("name") or "").lower()
             if "update_series" in jid or "sync with sonarr" in name:
-                _bazarr_sync_task_id = t.get("job_id") or t.get("id") or t.get("name")
+                task_id = t.get("job_id") or t.get("id") or t.get("name")
+                _bazarr_sync_task_ids[key] = task_id
                 break
-        if _bazarr_sync_task_id is None:
+        if task_id is None:
             return {"attempted": False, "detail": "no update_series task discovered in Bazarr"}
 
     try:
-        await bazarr.trigger_task(_bazarr_sync_task_id)
+        await bazarr.trigger_task(task_id)
     except IntegrationError as e:
         return {"attempted": True, "ok": False, "detail": f"bazarr trigger failed: {safe_error(e)}"}
-    log.info("bazarr sync triggered: task=%s", _bazarr_sync_task_id)
-    return {"attempted": True, "ok": True, "task": _bazarr_sync_task_id}
+    log.info("bazarr sync triggered: task=%s", task_id)
+    return {"attempted": True, "ok": True, "task": task_id}
 
 
 def _iso_to_sonarr_name(code: str) -> str:
