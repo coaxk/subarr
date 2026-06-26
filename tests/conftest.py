@@ -686,3 +686,101 @@ def pytest_configure(config):
         "integrations_stub(bazarr_handler=..., sonarr_handler=..., radarr_handler=..., tautulli_handler=...)",
     )
     config.addinivalue_line("markers", "ollama_stub(handler=...): override ollama mock response handler")
+
+
+@pytest.fixture
+def writeback_stack(subarr_env, monkeypatch, tmp_path: Path):
+    """#161 Phase 3 (writeback routing): 2 Sonarr + 2 Radarr + 2 Bazarr instances
+    whose mock transports RECORD every write (POST/PUT/PATCH/DELETE). Library 0
+    (tv, ids "") + an 'anime' library bound to the 'anime' instances of all three
+    services. Returns SimpleNamespace(bundle, calls) where calls[(svc, iid)] is
+    the list of recorded writes for that instance — so a writeback test can assert
+    the write landed on the instance that owns the row's library."""
+    import importlib
+    import json
+    from types import SimpleNamespace
+
+    import httpx
+
+    tv_root = tmp_path / "tv"
+    (tv_root / "ShowTV" / "Season 1").mkdir(parents=True)
+    anime_root = tmp_path / "anime"
+    (anime_root / "Naruto" / "Season 1").mkdir(parents=True)
+    monkeypatch.setenv("SUBARR_MEDIA_ROOT", str(tv_root))
+    monkeypatch.setenv("ARR_PATH_PREFIX", "/data/tv/")
+    store = tmp_path / "ov.json"
+    store.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "sonarr": [{"name": "Anime", "url": "http://s2.test:8989", "api_key": "k"}],
+                    "radarr": [{"name": "Anime", "url": "http://r2.test:7878", "api_key": "k"}],
+                    "bazarr": [{"name": "Anime", "url": "http://b2.test:6767", "api_key": "k"}],
+                },
+                "libraries": [
+                    {
+                        "slug": "anime",
+                        "name": "Anime",
+                        "fs_root": str(anime_root),
+                        "subgen_prefix": "/media",
+                        "arr_prefix": "/data/anime/",
+                        "sonarr_id": "anime",
+                        "radarr_id": "anime",
+                        "bazarr_id": "anime",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(store))
+    from subarr import config, coverage_engine, paths
+
+    importlib.reload(config)
+    importlib.reload(paths)
+    importlib.reload(coverage_engine)
+
+    calls: dict = {}
+
+    def _rec_handler(key):
+        calls[key] = []
+
+        def _h(req):
+            if req.method != "GET":
+                try:
+                    body = req.content.decode() if req.content else None
+                except Exception:
+                    body = None
+                calls[key].append(
+                    {
+                        "method": req.method,
+                        "path": req.url.path,
+                        "query": dict(req.url.params),
+                        "body": body,
+                    }
+                )
+                return httpx.Response(200, json={})
+            # GETs: sane defaults so write-flows reach their write step.
+            p = req.url.path
+            if p.endswith("/system/status"):
+                return httpx.Response(200, json={"version": "4.0.0", "data": {"bazarr_version": "1.5.6"}})
+            if p == "/api/system/tasks":
+                return httpx.Response(200, json={"data": [{"job_id": "sync_subtitles", "name": "Sync disk"}]})
+            if p == "/api/v3/language":
+                return httpx.Response(200, json=[{"id": 1, "name": "English"}])
+            if p == "/api/badges":
+                return httpx.Response(200, json={"episodes": 0, "movies": 0, "providers": 1})
+            return httpx.Response(200, json={"data": []})
+
+        return _h
+
+    bundle = coverage_engine.IntegrationBundle()
+    for svc in ("sonarr", "radarr", "bazarr"):
+        for iid in ("", "anime"):
+            client = bundle._clients[svc][iid]
+            client._base_url = f"http://{svc}-{iid or '0'}.test"
+            client._configured = True
+            client._client = httpx.AsyncClient(
+                base_url=client._base_url,
+                transport=httpx.MockTransport(_rec_handler((svc, iid))),
+            )
+    return SimpleNamespace(bundle=bundle, calls=calls)
