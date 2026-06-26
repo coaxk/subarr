@@ -137,3 +137,24 @@ def test_blacklist_movie_routes_to_owning_bazarr(writeback_stack):
         return [c for c in ws.calls.get(key, []) if c["path"] == "/api/movies/blacklist"]
 
     assert bl(("bazarr", "anime")) and not bl(("bazarr", ""))
+
+
+def test_arbiter_accept_routes_to_owning_bazarr(writeback_stack):
+    import asyncio
+
+    from subarr.routers.arbiter import AcceptRequest, accept_candidate
+
+    ws = writeback_stack
+    req = AcceptRequest(
+        episode_id=1011,
+        provider="x",
+        subtitles_id="s",
+        score=99,
+        canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
+    )
+    asyncio.run(accept_candidate(req, _fake_request(ws.bundle)))
+
+    def dl(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/providers/episodes"]
+
+    assert dl(("bazarr", "anime")) and not dl(("bazarr", ""))
