@@ -359,6 +359,10 @@ def rebuild_libraries(s: Settings) -> None:
         log.warning("invalid libraries[] config; using single default library", exc_info=True)
         libs = (default_lib,)
     object.__setattr__(s, "libraries", libs)
+    # #365: at load, instances build right after this (skip the premature check);
+    # a runtime library edit re-validates against the already-built instances.
+    if s.instances:
+        _warn_dangling_bindings(s)
 
 
 # Scalars that define each service's instance 0. A runtime edit of any of these
@@ -395,6 +399,37 @@ def rebuild_instances(s: Settings) -> None:
         log.warning("invalid instances config; using per-service defaults", exc_info=True)
         insts = tuple(defaults)
     object.__setattr__(s, "instances", insts)
+    # #365: surface library bindings that reference an unconfigured instance.
+    _warn_dangling_bindings(s)
+
+
+def validate_library_bindings(libraries, instances) -> list[str]:
+    """#365: return a warning message per library that binds an arr/bazarr
+    instance id which isn't configured. Coverage routing degrades a dangling
+    binding to instance 0, so these are visibility signals — we warn, never
+    raise (a typo must not nuke a whole multi-library config)."""
+    by_service: dict[str, set[str]] = {"sonarr": set(), "radarr": set(), "bazarr": set()}
+    for inst in instances:
+        if inst.service in by_service:
+            by_service[inst.service].add(inst.id)
+    out: list[str] = []
+    for lib in libraries:
+        for service, bound in (
+            ("sonarr", lib.sonarr_id),
+            ("radarr", lib.radarr_id),
+            ("bazarr", lib.bazarr_id),
+        ):
+            if bound and bound not in by_service[service]:
+                out.append(
+                    f"library {lib.slug or '(default)'!r} binds {service}_id={bound!r} which is not a "
+                    f"configured {service} instance; its rows fall back to instance 0"
+                )
+    return out
+
+
+def _warn_dangling_bindings(s: Settings) -> None:
+    for msg in validate_library_bindings(s.libraries, s.instances):
+        log.warning("%s", msg)
 
 
 # ─── Onboarding clobber guard support ───────────────────────────────
