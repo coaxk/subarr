@@ -428,8 +428,12 @@ def validate_library_bindings(libraries, instances) -> list[str]:
 
 
 def _warn_dangling_bindings(s: Settings) -> None:
-    for msg in validate_library_bindings(s.libraries, s.instances):
-        log.warning("%s", msg)
+    # Runs inside the fail-soft rebuild paths — must never break boot.
+    try:
+        for msg in validate_library_bindings(s.libraries, s.instances):
+            log.warning("%s", msg)
+    except Exception:  # noqa: BLE001 — binding validation is advisory, never fatal
+        log.warning("library binding validation failed", exc_info=True)
 
 
 # ─── Onboarding clobber guard support ───────────────────────────────
