@@ -28,7 +28,7 @@ from typing import Any
 from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
 from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs, strip_arr_prefix
+from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical, strip_arr_prefix
 from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
 from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
@@ -252,11 +252,7 @@ class Scheduler:
         if not stale:
             return {"fired": False, "reason": "no stale-disk items"}
 
-        bazarr = self._bundle.bazarr
-        if not bazarr.is_configured():
-            return {"fired": False, "reason": "bazarr not configured", "stale_count": len(stale)}
-
-        # Cooldown check — initialised on first call.
+        # Cooldown check — initialised on first call (global to the poke op).
         now = time.time()
         last = getattr(self, "_last_bazarr_poke_ts", 0.0)
         if now - last < self._BAZARR_POKE_COOLDOWN_S:
@@ -266,46 +262,71 @@ class Scheduler:
                 "stale_count": len(stale),
             }
 
-        # Discover the Bazarr scan-disk task id. (A prior design reused a
-        # cached id off a self._watcher backref that was never wired, so
-        # discovery always ran anyway — removed the dead reuse path.)
-        task_id = None
-        try:
-            tasks = await bazarr.list_tasks()
-            hints = (
-                "series_full_scan_subtitles",
-                "movies_full_scan_subtitles",
-                "scan_disk_series",
-                "scan_disk_episodes",
-                "scan disk",
-                "index all existing episodes",
+        # #161 P3: group stale rows by the Bazarr instance that owns their
+        # library and fire one scan-disk per instance (was a single trigger on
+        # instance 0). Single-stack: one instance → unchanged.
+        bundle = self._bundle
+        by_inst: dict[str, dict] = {}
+        for it in stale:
+            canonical = getattr(it, "file_canonical_path", None) or getattr(it, "canonical_path", None) or ""
+            bz = (
+                bundle.client_for("bazarr", library_for_canonical(canonical).bazarr_id)
+                if canonical
+                else bundle.bazarr
             )
-            for hint in hints:
-                for t in tasks:
-                    if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
-                        task_id = t.get("job_id")
-                        break
-                if task_id:
-                    break
-        except Exception as e:
-            log.warning("coverage_walk: bazarr task discovery failed: %s", e)
-            return {"fired": False, "reason": f"task discovery failed: {e}", "stale_count": len(stale)}
+            key = getattr(bz, "_base_url", "") or str(id(bz))
+            slot = by_inst.setdefault(key, {"client": bz, "count": 0})
+            slot["count"] += 1
 
-        if not task_id:
-            return {"fired": False, "reason": "no scan-disk task id found", "stale_count": len(stale)}
-
-        try:
-            await bazarr.trigger_task(task_id)
+        fired_any = False
+        instances: list[dict] = []
+        for key, slot in by_inst.items():
+            bz = slot["client"]
+            if not bz.is_configured():
+                instances.append({"instance": key, "fired": False, "reason": "bazarr not configured"})
+                continue
+            try:
+                task_id = await self._discover_bazarr_scan_task(bz)
+            except Exception as e:  # noqa: BLE001 — one bad instance must not abort the poke
+                log.warning("coverage_walk: bazarr task discovery failed on %s: %s", key, e)
+                instances.append({"instance": key, "fired": False, "reason": f"task discovery failed: {e}"})
+                continue
+            if not task_id:
+                instances.append({"instance": key, "fired": False, "reason": "no scan-disk task id found"})
+                continue
+            try:
+                await bz.trigger_task(task_id)
+                fired_any = True
+                instances.append({"instance": key, "fired": True, "task_id": task_id, "count": slot["count"]})
+                log.info(
+                    "coverage_walk: poked Bazarr %s scan-disk (%s) — %d stale-disk items",
+                    key,
+                    task_id,
+                    slot["count"],
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("coverage_walk: bazarr trigger_task failed on %s: %s", key, e)
+                instances.append({"instance": key, "fired": False, "reason": str(e)})
+        if fired_any:
             self._last_bazarr_poke_ts = now
-            log.info(
-                "coverage_walk: poked Bazarr scan-disk (%s) — %d stale-disk items detected",
-                task_id,
-                len(stale),
-            )
-            return {"fired": True, "task_id": task_id, "stale_count": len(stale)}
-        except Exception as e:
-            log.warning("coverage_walk: bazarr trigger_task failed: %s", e)
-            return {"fired": False, "reason": str(e), "stale_count": len(stale)}
+        return {"fired": fired_any, "stale_count": len(stale), "instances": instances}
+
+    async def _discover_bazarr_scan_task(self, bz) -> str | None:
+        """Find one Bazarr instance's scan-disk task id by hint match."""
+        tasks = await bz.list_tasks()
+        hints = (
+            "series_full_scan_subtitles",
+            "movies_full_scan_subtitles",
+            "scan_disk_series",
+            "scan_disk_episodes",
+            "scan disk",
+            "index all existing episodes",
+        )
+        for hint in hints:
+            for t in tasks:
+                if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
+                    return t.get("job_id")
+        return None
 
     async def run_coverage_walk(self) -> dict[str, Any]:
         """Public entry point — also called by POST /api/schedule/run-now.

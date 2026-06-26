@@ -177,3 +177,33 @@ def test_bazarr_sync_disk_routes_to_owning_instance(writeback_stack):
         return [c for c in ws.calls.get(key, []) if c["path"] == "/api/system/tasks"]
 
     assert trig(("bazarr", "anime")) and not trig(("bazarr", ""))
+
+
+def test_scheduler_poke_fans_out_per_bazarr_instance(writeback_stack):
+    import asyncio
+    from types import SimpleNamespace
+
+    from subarr.scheduler import Scheduler
+
+    ws = writeback_stack
+    sched = Scheduler(None, bundle=ws.bundle)
+    items = [
+        SimpleNamespace(
+            suggest_bazarr_rescan=True,
+            file_canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
+            canonical_path=None,
+        ),
+        SimpleNamespace(
+            suggest_bazarr_rescan=True,
+            file_canonical_path="ShowTV/Season 1/ShowTV.S01E01.mkv",
+            canonical_path=None,
+        ),
+    ]
+    res = asyncio.run(sched._maybe_poke_bazarr_for_stale_disk(items))
+
+    def trig(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/system/tasks"]
+
+    assert trig(("bazarr", "anime")), "anime bazarr should be poked"
+    assert trig(("bazarr", "")), "instance 0 should be poked too"
+    assert res["fired"] is True
