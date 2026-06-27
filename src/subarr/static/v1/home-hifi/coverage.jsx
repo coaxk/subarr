@@ -212,7 +212,25 @@ function normalizeRow(item, idx, settleMinutes = 0) {
     _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
     _canonical_path: item.file_canonical_path || item.canonical_path,
     _media_type: item.media_type,
+    // #161 Phase 4C: {slug, name} of the library this row belongs to (Phase 2
+    // emits it). Drives the library filter + per-row chip on multi-library setups.
+    library: item.library || null,
   };
+}
+
+// #161 Phase 4C: distinct libraries present in the rows, for the filter dropdown.
+// 'All' first, then each library by name. Pure + exported for unit test.
+export function libraryOptions(rows) {
+  const seen = new Map();
+  for (const r of rows || []) {
+    const lib = r.library;
+    if (lib && lib.slug && !seen.has(lib.slug)) seen.set(lib.slug, lib.name || lib.slug);
+  }
+  const opts = [{ slug: 'all', name: 'All libraries' }];
+  for (const [slug, name] of [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+    opts.push({ slug, name });
+  }
+  return opts;
 }
 
 // Score colour gradient: violet (hi) → cyan (mid) → muted (lo).
@@ -485,7 +503,7 @@ function WantedLangsChip() {
   );
 }
 
-function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, monitoredOnly, setMonitoredOnly, search, setSearch }) {
+function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilter, typeFilter, setTypeFilter, libraryFilter, setLibraryFilter, libraryOpts, monitoredOnly, setMonitoredOnly, search, setSearch }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
       {/* Search (#188: was a static placeholder span; now a real input) */}
@@ -537,6 +555,21 @@ function FilterBar({ groupBy, setGroupBy, filtered, reasonFilter, setReasonFilte
             <FilterChip active={typeFilter === t}>{t === 'all' ? 'all types' : `type: ${t}`}</FilterChip>
           </span>
         ))}
+        {/* #161 Phase 4C: library filter — only shown when a non-default library exists. */}
+        {(libraryOpts || []).length > 1 && (
+          <select
+            value={libraryFilter || 'all'}
+            onChange={(e) => setLibraryFilter && setLibraryFilter(e.target.value)}
+            title="Filter to one library"
+            style={{
+              height: 24, background: 'var(--bg-2)', color: 'var(--fg-1)',
+              border: 'var(--border)', borderRadius: 'var(--radius-md)',
+              padding: '0 8px', fontSize: 'var(--text-xs)',
+            }}
+          >
+            {libraryOpts.map((o) => <option key={o.slug} value={o.slug}>{o.name}</option>)}
+          </select>
+        )}
         <WantedLangsChip />
       </div>
 
@@ -2106,6 +2139,13 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing, queued }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           minWidth: 0,
         }}>{r.title}</span>
+        {r.library && r.library.slug && (
+          <span title={`Library: ${r.library.name}`} style={{
+            flex: '0 0 auto', padding: '1px 6px', borderRadius: 3,
+            background: 'rgba(139,92,246,0.14)', color: 'var(--violet-300, #c4b5fd)',
+            fontSize: 'var(--text-2xs)', letterSpacing: '0.02em',
+          }}>{r.library.name}</span>
+        )}
         <ScoringBadges r={r} />
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: '0 0 auto' }}>· {r.size}</span>
       </div>
@@ -2600,6 +2640,7 @@ export function CoveragePage() {
   const [groupBy, setGroupBy] = useState('tree');  // tree-by-show default — matches original subarr
   const [reasonFilter, setReasonFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [libraryFilter, setLibraryFilter] = useState('all');
   const [monitoredOnly, setMonitoredOnly] = useState(true);
   // #188: title/path substring filter, applied alongside the chips.
   const [search, setSearch] = useState('');
@@ -2671,6 +2712,8 @@ export function CoveragePage() {
       if (monitoredOnly && !r.mon) return false;
       if (reasonFilter !== 'all' && r.reason !== reasonFilter) return false;
       if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+      // #161 Phase 4C: filter to one library (by slug).
+      if (libraryFilter !== 'all' && (r.library?.slug || '') !== libraryFilter) return false;
       // #188: title / episode / canonical-path substring search.
       if (q
         && !(r.title || '').toLowerCase().includes(q)
@@ -2678,7 +2721,7 @@ export function CoveragePage() {
         && !(r._canonical_path || '').toLowerCase().includes(q)) return false;
       return true;
     }).map(r => ({ ...r, sel: selected.has(r.id) }));
-  }, [allRows, monitoredOnly, reasonFilter, typeFilter, selected, search]);
+  }, [allRows, monitoredOnly, reasonFilter, typeFilter, libraryFilter, selected, search]);
 
   // Probe-gate buckets — sticky (NOT subject to the UI filters above) and
   // never queueable. They hold rows until the probe runs, then those rows
@@ -2939,6 +2982,8 @@ export function CoveragePage() {
         filtered={rows.length}
         reasonFilter={reasonFilter} setReasonFilter={setReasonFilter}
         typeFilter={typeFilter} setTypeFilter={setTypeFilter}
+        libraryFilter={libraryFilter} setLibraryFilter={setLibraryFilter}
+        libraryOpts={libraryOptions(allRows)}
         monitoredOnly={monitoredOnly} setMonitoredOnly={setMonitoredOnly}
         search={search} setSearch={setSearch}
       />
