@@ -180,3 +180,86 @@ def test_single_stack_topology_is_clean(api):
     assert all(i["is_default"] for i in insts)
     topo = api.get("/api/topology").json()
     assert topo["binding_warnings"] == []
+
+
+# ── #378: per-instance live health (GET /api/instances/health) ──────────────
+def test_instances_health_fans_out_one_entry_per_instance(api, no_network_rebuild, monkeypatch):
+    import subarr.routers.instances as mod
+
+    # Seed a second sonarr so there are >=2 instances to fan out over.
+    api.post(
+        "/api/instances",
+        json={"service": "sonarr", "name": "Anime", "url": "http://sonarr-anime.test", "api_key": "k"},
+    )
+
+    probed: list[tuple[str, str]] = []
+
+    async def fake_probe(service, url, api_key):
+        probed.append((service, url))
+        # Only the anime instance is "up"; everything else is reachable-but-down.
+        return {"ok": url == "http://sonarr-anime.test", "detail": "probed", "root_folders": []}
+
+    monkeypatch.setattr(mod, "_probe_connection", fake_probe)
+
+    r = api.get("/api/instances/health")
+    assert r.status_code == 200, r.text
+    health = r.json()["health"]
+
+    # One entry per configured instance, each carrying identity + live status.
+    insts = api.get("/api/instances").json()["instances"]
+    assert len(health) == len(insts)
+    for h in health:
+        assert {"id", "service", "name", "online", "configured"}.issubset(h)
+
+    anime = next(h for h in health if h["service"] == "sonarr" and h["id"] == "anime")
+    assert anime["configured"] is True
+    assert anime["online"] is True
+    # The anime instance's real url was actually probed.
+    assert ("sonarr", "http://sonarr-anime.test") in probed
+
+    # A configured-but-down instance is reachable=configured, online=False.
+    default_sonarr = next(h for h in health if h["service"] == "sonarr" and h["id"] == "")
+    assert default_sonarr["configured"] is True
+    assert default_sonarr["online"] is False
+
+
+@pytest.mark.asyncio
+async def test_probe_instance_skips_network_for_unconfigured(monkeypatch):
+    import subarr.routers.instances as mod
+    from subarr.instances import Instance
+
+    async def boom(*a, **k):  # _probe_connection must NOT be called for unconfigured
+        raise AssertionError("network probe attempted for an unconfigured instance")
+
+    monkeypatch.setattr(mod, "_probe_connection", boom)
+
+    inst = Instance(id="anime", service="sonarr", name="Anime", url="", api_key="")
+    rec = await mod._probe_instance(inst)
+    assert rec["configured"] is False
+    assert rec["online"] is False
+    assert rec["id"] == "anime"
+    assert rec["service"] == "sonarr"
+
+
+@pytest.mark.asyncio
+async def test_probe_instance_caps_a_wedged_probe(monkeypatch):
+    """A configured-but-wedged instance must not hang the health fan-out for the
+    full 90s client read-timeout — it is bounded and reported offline."""
+    import asyncio
+
+    import subarr.routers.instances as mod
+    from subarr.instances import Instance
+
+    monkeypatch.setattr(mod, "_HEALTH_PROBE_TIMEOUT", 0.02)
+
+    async def wedged(service, url, api_key):
+        await asyncio.sleep(5)  # longer than the cap; would otherwise stall the endpoint
+        return {"ok": True, "detail": "connected", "root_folders": []}
+
+    monkeypatch.setattr(mod, "_probe_connection", wedged)
+
+    inst = Instance(id="anime", service="sonarr", name="Anime", url="http://x", api_key="k")
+    rec = await mod._probe_instance(inst)
+    assert rec["configured"] is True
+    assert rec["online"] is False
+    assert "tim" in rec["detail"].lower()

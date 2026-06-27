@@ -91,6 +91,45 @@ async def test_connection(req: TestConnRequest) -> dict:
     return await _probe_connection(req.service, req.url, req.api_key)
 
 
+# Health dots are a UI affordance, not a deep diagnostic: bound each probe well
+# under the integration client's 90s read timeout so a single wedged instance
+# (TCP-accepts then stalls the HTTP read) can't make the whole fan-out crawl.
+# The Test-connection button keeps the full client timeout (it calls
+# _probe_connection directly) — only the dots are time-boxed.
+_HEALTH_PROBE_TIMEOUT = 10.0
+
+
+async def _probe_instance(inst) -> dict:
+    """#378: live reachability for one configured instance, feeding the Instances
+    UI health dots. Unconfigured instances (no url/api_key — e.g. a default whose
+    env scalars are unset) are reported online=False WITHOUT a network call, so a
+    fresh single-stack install never fires a doomed probe. Never raises: the
+    underlying _probe_connection already maps every failure to {ok: False}; a
+    wedged instance that blows the _HEALTH_PROBE_TIMEOUT is reported offline."""
+    configured = bool(inst.url and inst.api_key)
+    base = {"id": inst.id, "service": inst.service, "name": inst.name, "configured": configured}
+    if not configured:
+        return {**base, "online": False, "detail": "not configured"}
+    try:
+        res = await asyncio.wait_for(
+            _probe_connection(inst.service, inst.url, inst.api_key), timeout=_HEALTH_PROBE_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        return {**base, "online": False, "detail": "probe timed out"}
+    return {**base, "online": bool(res.get("ok")), "detail": res.get("detail", "")}
+
+
+@router.get("/instances/health")
+async def instances_health() -> dict:
+    """Per-instance live health for the Settings ▸ Instances dots. Fans the probes
+    out concurrently (one cheap authenticated GET each); a slow/down instance never
+    blocks the others. Read-only — never mutates config or the live bundle."""
+    from ..config import settings
+
+    results = await asyncio.gather(*(_probe_instance(i) for i in settings.instances))
+    return {"health": list(results)}
+
+
 def _extras() -> dict:
     raw = config_store.load_overrides().get("instances", {})
     return raw if isinstance(raw, dict) else {}
