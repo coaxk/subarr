@@ -730,6 +730,8 @@ export function LibraryPage() {
 
   const isInitialLoad = rootLoading && !rootData;
   const isError = rootError && !rootData;
+  // #378: computed once — null on single-library installs (picker hidden).
+  const pickerOpts = libraryPickerOptions(libraries);
 
   return (
     <IgnoreCtx.Provider value={ignoreValue}>
@@ -743,7 +745,7 @@ export function LibraryPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {/* #378: library root picker — only when >1 library is bound. */}
-          {libraryPickerOptions(libraries) && (
+          {pickerOpts && (
             <select
               value={libRoot || ''}
               onChange={(e) => changeLibRoot(e.target.value)}
@@ -754,7 +756,7 @@ export function LibraryPage() {
                 color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
               }}
             >
-              {libraryPickerOptions(libraries).map((o) => (
+              {pickerOpts.map((o) => (
                 <option key={o.slug || '(default)'} value={o.slug}>{o.name}</option>
               ))}
             </select>
