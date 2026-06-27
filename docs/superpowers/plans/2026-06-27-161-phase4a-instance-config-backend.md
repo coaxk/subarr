@@ -629,6 +629,8 @@ git commit -m "feat(#161): GET /api/topology resolved bindings + plex section (p
 
 ## Task 7: PUT /api/libraries/{slug}/binding — override a library's arr/Bazarr binding
 
+> **DEFERRED to Phase 4B (during execution, 2026-06-27).** `build_libraries` builds the default library (slug `""`) from scalars with bindings forced empty (always instance 0, not overridable), and **non-default libraries are fully defined — bindings included — by their override-store entry**, which only exists once library creation/proposal (root-folder auto-enumerate) lands. That creation flow is 4B, so a standalone binding-override endpoint has nothing to operate on in 4A. It ships with 4B alongside the topology UI + library proposal. (Original task text retained below for 4B.)
+
 **Files:**
 - Modify: `src/subarr/routers/instances.py`
 - Test: `tests/test_instances_api.py`

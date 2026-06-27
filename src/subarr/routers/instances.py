@@ -199,3 +199,40 @@ async def delete_instance(service: str, instance_id: str, request: Request) -> d
     await _apply_instances(request, extras)
     warnings = validate_library_bindings(settings.libraries, settings.instances)
     return {"removed": True, "binding_warnings": warnings}
+
+
+async def _plex_section_for(request: Request, lib) -> dict:
+    """Live-match the library's fs_root to a Plex section (displayed, not stored).
+    Returns {name|None, matched: bool}. Never raises (Plex may be unconfigured)."""
+    plex = getattr(request.app.state.integrations, "plex", None)
+    try:
+        if plex is not None and plex.is_configured():
+            section = await plex._section_for_path(str(lib.fs_root))
+            return {"name": section, "matched": bool(section)}
+    except Exception:  # noqa: BLE001 - topology must render even if Plex errs
+        log.debug("plex section match failed for %s", lib.slug, exc_info=True)
+    return {"name": None, "matched": False}
+
+
+@router.get("/topology")
+async def topology(request: Request) -> dict:
+    from ..config import settings, validate_library_bindings
+
+    libs = []
+    for lib in settings.libraries:
+        plex = await _plex_section_for(request, lib)
+        libs.append(
+            {
+                "slug": lib.slug,
+                "name": lib.name or "(default)",
+                "sonarr_id": lib.sonarr_id,
+                "radarr_id": lib.radarr_id,
+                "bazarr_id": lib.bazarr_id,
+                "plex_section": plex["name"],
+                "plex_matched": plex["matched"],
+            }
+        )
+    return {
+        "libraries": libs,
+        "binding_warnings": validate_library_bindings(settings.libraries, settings.instances),
+    }

@@ -148,3 +148,24 @@ def test_delete_instance_removes_and_applies(api, no_network_rebuild):
 def test_delete_unknown_instance_is_404(api):
     r = api.delete("/api/instances/sonarr/nope")
     assert r.status_code == 404
+
+
+# ── Task 6: GET /api/topology ───────────────────────────────────────────────
+def test_topology_lists_libraries_with_bindings(api):
+    r = api.get("/api/topology")
+    assert r.status_code == 200
+    data = r.json()
+    assert "libraries" in data and isinstance(data["libraries"], list)
+    lib0 = data["libraries"][0]
+    assert {"slug", "name", "sonarr_id", "radarr_id", "bazarr_id", "plex_section", "plex_matched"}.issubset(
+        lib0
+    )
+    assert "binding_warnings" in data
+
+
+# ── Task 8: single-stack back-compat guard ──────────────────────────────────
+def test_single_stack_topology_is_clean(api):
+    insts = api.get("/api/instances").json()["instances"]
+    assert all(i["is_default"] for i in insts)
+    topo = api.get("/api/topology").json()
+    assert topo["binding_warnings"] == []
