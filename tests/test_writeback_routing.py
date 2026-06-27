@@ -247,3 +247,42 @@ def test_retry_bazarr_notify_isolates_one_instances_unexpected_error(writeback_s
     assert default_triggers, "instance 0 must still fire despite anime's non-IntegrationError"
     assert 2 in marked  # the default row was notified
     assert 1 not in marked  # the anime row was NOT (its trigger never fired)
+
+
+def test_poke_cooldown_is_per_instance(writeback_stack):
+    # #371: a recent poke on one Bazarr instance must NOT gate a DIFFERENT
+    # instance whose rows just went stale. Cooldown is keyed per instance.
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from subarr.scheduler import Scheduler
+
+    ws = writeback_stack
+    sched = Scheduler(None, bundle=ws.bundle)
+    # instance 0 (tv) was poked just now; the anime instance never was.
+    cooled = time.time()
+    sched._bazarr_poke_ts = {"http://bazarr-0.test": cooled}
+    items = [
+        SimpleNamespace(
+            suggest_bazarr_rescan=True,
+            file_canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
+            canonical_path=None,
+        ),
+        SimpleNamespace(
+            suggest_bazarr_rescan=True,
+            file_canonical_path="ShowTV/Season 1/ShowTV.S01E01.mkv",
+            canonical_path=None,
+        ),
+    ]
+    res = asyncio.run(sched._maybe_poke_bazarr_for_stale_disk(items))
+
+    def trig(key):
+        return [c for c in ws.calls.get(key, []) if c["path"] == "/api/system/tasks"]
+
+    assert trig(("bazarr", "anime")), "anime is not under cooldown — it must fire"
+    assert not trig(("bazarr", "")), "instance 0 is under its own cooldown — it must NOT fire"
+    assert res["fired"] is True  # the op fired (anime), even though instance 0 was gated
+    # per-instance advance: anime now cooled; instance 0's ts is unchanged (it didn't fire)
+    assert "http://bazarr-anime.test" in sched._bazarr_poke_ts
+    assert sched._bazarr_poke_ts["http://bazarr-0.test"] == cooled

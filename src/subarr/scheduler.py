@@ -245,22 +245,25 @@ class Scheduler:
         to re-scan is the only way to get those items off the wanted list
         (Bazarr only re-checks disk on its scheduled cadence otherwise).
 
-        Returns: dict with {fired, reason, stale_count, ...}. Logged for
-        the run-now JSON response so users can see what happened.
+        Returns: a dict logged for the run-now JSON response so users can see
+        what happened. Two shapes: the no-work early-out is
+        {fired: False, reason: "no stale-disk items"}; otherwise
+        {fired, stale_count, instances: [{instance, fired, reason|task_id, count}]}
+        — fired/skip reasons are per-instance (#371), not a single top-level reason.
         """
         stale = [it for it in items if getattr(it, "suggest_bazarr_rescan", False)]
         if not stale:
             return {"fired": False, "reason": "no stale-disk items"}
 
-        # Cooldown check — initialised on first call (global to the poke op).
+        # #371: per-instance cooldown. A recent poke on one Bazarr instance must
+        # not gate a DIFFERENT instance whose rows just went stale, and a failed
+        # instance must not be left under cooldown — so the cooldown is keyed per
+        # instance (same base_url key as the task-id cache) and only advances for
+        # an instance that actually fired. (Was a single global timestamp.)
         now = time.time()
-        last = getattr(self, "_last_bazarr_poke_ts", 0.0)
-        if now - last < self._BAZARR_POKE_COOLDOWN_S:
-            return {
-                "fired": False,
-                "reason": f"cooldown ({int(self._BAZARR_POKE_COOLDOWN_S - (now - last))}s left)",
-                "stale_count": len(stale),
-            }
+        cooldowns = getattr(self, "_bazarr_poke_ts", None)
+        if cooldowns is None:
+            cooldowns = self._bazarr_poke_ts = {}
 
         # #161 P3: group stale rows by the Bazarr instance that owns their
         # library and fire one scan-disk per instance (was a single trigger on
@@ -285,6 +288,18 @@ class Scheduler:
             if not bz.is_configured():
                 instances.append({"instance": key, "fired": False, "reason": "bazarr not configured"})
                 continue
+            # #371: skip an instance still inside its own cooldown window.
+            since = now - cooldowns.get(key, 0.0)
+            if since < self._BAZARR_POKE_COOLDOWN_S:
+                instances.append(
+                    {
+                        "instance": key,
+                        "fired": False,
+                        "reason": f"cooldown ({int(self._BAZARR_POKE_COOLDOWN_S - since)}s left)",
+                        "count": slot["count"],
+                    }
+                )
+                continue
             try:
                 task_id = await self._discover_bazarr_scan_task(bz)
             except Exception as e:  # noqa: BLE001 — one bad instance must not abort the poke
@@ -297,6 +312,7 @@ class Scheduler:
             try:
                 await bz.trigger_task(task_id)
                 fired_any = True
+                cooldowns[key] = now  # #371: advance ONLY this instance's cooldown, on success
                 instances.append({"instance": key, "fired": True, "task_id": task_id, "count": slot["count"]})
                 log.info(
                     "coverage_walk: poked Bazarr %s scan-disk (%s) — %d stale-disk items",
@@ -307,8 +323,6 @@ class Scheduler:
             except Exception as e:  # noqa: BLE001
                 log.warning("coverage_walk: bazarr trigger_task failed on %s: %s", key, e)
                 instances.append({"instance": key, "fired": False, "reason": str(e)})
-        if fired_any:
-            self._last_bazarr_poke_ts = now
         return {"fired": fired_any, "stale_count": len(stale), "instances": instances}
 
     async def _discover_bazarr_scan_task(self, bz) -> str | None:
@@ -376,9 +390,9 @@ class Scheduler:
         # because of release-name mismatch or external sub source). The
         # completion watcher only fires Bazarr scan-disk after subarr's OWN
         # transcriptions; this covers the "existing sub Bazarr never
-        # noticed" case. Single library-wide trigger — Bazarr's scan-disk
-        # is global, no need to fan out per-file. Rate-limited via the
-        # _last_bazarr_poke_ts attribute so back-to-back walks don't spam.
+        # noticed" case. One library-wide trigger per Bazarr instance —
+        # Bazarr's scan-disk is global, no need to fan out per-file. Rate-limited
+        # per instance via the _bazarr_poke_ts map so back-to-back walks don't spam.
         bazarr_poked = await self._maybe_poke_bazarr_for_stale_disk(report.items)
 
         # Build the in-flight set from the provenance ledger so the
