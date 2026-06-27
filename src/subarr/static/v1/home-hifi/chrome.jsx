@@ -59,10 +59,12 @@ async function _fetchChromeCounts() {
     fetch('/api/health/tasks', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     // #156: job aftercare — pending post-transcription review items.
     fetch('/api/aftercare/pending', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
-    // #378: per-instance reachability — folds non-default instances into the
-    // global health pill so a down second Sonarr/Bazarr is visible everywhere,
-    // not just on Settings ▸ Instances. null/[] on failure = pill counts defaults only.
-    fetch('/api/instances/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    // #378: NON-default instance reachability — folds extra Sonarr/Bazarr stacks
+    // into the global health pill so a down second instance is visible everywhere,
+    // not just on Settings ▸ Instances. ?non_default=1 skips the defaults (already
+    // counted via /api/integrations/health), so single-stack installs fire zero
+    // extra probes. null/[] on failure = pill counts defaults only.
+    fetch('/api/instances/health?non_default=1', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   const next = {};
   if (dash?.stages) {
