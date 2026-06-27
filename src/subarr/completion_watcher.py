@@ -308,25 +308,29 @@ class CompletionWatcher:
             clients.setdefault(key, bz)
             by_instance.setdefault(key, []).append(entry)
         for key, entries in by_instance.items():
-            bz = clients[key]
-            if not bz.is_configured():
-                continue
-            tid = await self._bazarr_task_for(bz)
-            if tid is None:
-                continue
+            # #372: isolate each instance. The task-discovery call (_bazarr_task_for)
+            # only catches IntegrationError, so a non-IntegrationError from one
+            # Bazarr's list_tasks would otherwise abort the pass for every remaining
+            # instance. Mirror the scheduler's per-instance broad-except fan-out.
             try:
+                bz = clients[key]
+                if not bz.is_configured():
+                    continue
+                tid = await self._bazarr_task_for(bz)
+                if tid is None:
+                    continue
                 await bz.trigger_task(tid)
                 log.info(
                     "bazarr scan-disk retry fired on %s for %d completed-but-not-notified rows",
                     key,
                     len(entries),
                 )
-            except IntegrationError as e:
+                # Mark each row notified so we don't keep re-firing.
+                for entry in entries:
+                    self._provenance.mark_bazarr_triggered(entry.id)
+            except Exception as e:  # noqa: BLE001 - one instance's failure must not abort the rest
                 log.warning("bazarr scan-disk retry failed on %s: %s", key, e)
                 continue
-            # Mark each row notified so we don't keep re-firing.
-            for entry in entries:
-                self._provenance.mark_bazarr_triggered(entry.id)
 
     async def _try_upload_to_bazarr(self, entry) -> bool:
         """v1.1-G: Multipart-upload the freshly-Whispered .srt directly
