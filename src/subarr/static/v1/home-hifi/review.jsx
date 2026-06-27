@@ -199,13 +199,15 @@ function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss 
       <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
         {item.episode_number || '—'}
       </span>
-      <span className="mono" title={path} style={{
-        fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-      }}>
-        {path.split('/').slice(-1)[0]}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <span className="mono" title={path} style={{
+          fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+        }}>
+          {path.split('/').slice(-1)[0]}
+        </span>
+        <LibraryChip library={item.library} />
       </span>
-      <LibraryChip library={item.library} />
       <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
         audio: {audio}
       </span>
