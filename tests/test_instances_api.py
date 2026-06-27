@@ -239,3 +239,27 @@ async def test_probe_instance_skips_network_for_unconfigured(monkeypatch):
     assert rec["online"] is False
     assert rec["id"] == "anime"
     assert rec["service"] == "sonarr"
+
+
+@pytest.mark.asyncio
+async def test_probe_instance_caps_a_wedged_probe(monkeypatch):
+    """A configured-but-wedged instance must not hang the health fan-out for the
+    full 90s client read-timeout — it is bounded and reported offline."""
+    import asyncio
+
+    import subarr.routers.instances as mod
+    from subarr.instances import Instance
+
+    monkeypatch.setattr(mod, "_HEALTH_PROBE_TIMEOUT", 0.02)
+
+    async def wedged(service, url, api_key):
+        await asyncio.sleep(5)  # longer than the cap; would otherwise stall the endpoint
+        return {"ok": True, "detail": "connected", "root_folders": []}
+
+    monkeypatch.setattr(mod, "_probe_connection", wedged)
+
+    inst = Instance(id="anime", service="sonarr", name="Anime", url="http://x", api_key="k")
+    rec = await mod._probe_instance(inst)
+    assert rec["configured"] is True
+    assert rec["online"] is False
+    assert "tim" in rec["detail"].lower()
