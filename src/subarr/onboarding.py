@@ -52,8 +52,10 @@ STEP_GPU = 8
 STEP_SPEECH = 9  # #111 — speech-aware audio (silero VAD) opt-in
 STEP_FIRST_WALK = 10
 # #378 Phase 5: the wizard gained the optional frontend-only "More stacks" step,
-# so the last reachable frontend index is now 12 (two frontend-only steps sit
-# above the named constants: subgen-setup + stacks). STEP_DONE is the resume
+# so the last reachable frontend index is now 12. Two frontend-only steps are
+# interspersed among the named constants below (subgen-setup after STEP_SUBGEN,
+# stacks after STEP_RADARR), so those names are documentation, not a 1:1 index
+# map — only MAX_STEP and STEP_DONE are read at runtime. STEP_DONE is the resume
 # cursor's resting index after completion = the final step index.
 STEP_DONE = 12
 
