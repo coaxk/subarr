@@ -22,6 +22,7 @@ import { RailFooter } from './chrome.jsx';
 import { FormRow, TextInput, TestResult } from './onboarding.jsx';
 // #134: multi-library management (shared with the onboarding paths step).
 import { LibrariesEditor } from './libraries-editor.jsx';
+import { InstancesEditor } from './instances-editor.jsx';
 import { SubgenSetupFlow } from './subgen-setup.jsx';
 import {
   deriveTitle, groupRulesAlphabetically, activeLadderLetters,
@@ -840,7 +841,7 @@ function ProvidersPanel() {
   );
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries, subgenTuningActive, onSelectSubgenTuning }) {
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries, instancesActive, onSelectInstances, subgenTuningActive, onSelectSubgenTuning }) {
   // #10: render the same persistent GPU/queue/walker footer that the
   // other pages show in SubRail, so the bottom-left vitals are
   // visible everywhere including Settings. Aside becomes a flex
@@ -869,7 +870,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive && !subgenTuningActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive && !instancesActive && !subgenTuningActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -893,6 +894,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
         <div style={{ padding: '0 16px 6px' }}><span className="label">subarr</span></div>
         {[
           { id: 'providers', label: 'Providers', active: providersActive, onClick: onSelectProviders },
+          { id: 'instances', label: 'Instances', active: instancesActive, onClick: onSelectInstances },
           { id: 'libraries', label: 'Libraries', active: librariesActive, onClick: onSelectLibraries },
           { id: 'lang-rules', label: 'Language rules', active: langRulesActive, onClick: onSelectLangRules },
           { id: 'subgen-tuning', label: 'Subgen tuning', active: subgenTuningActive, onClick: onSelectSubgenTuning },
@@ -2255,7 +2257,7 @@ export function SettingsPage() {
   // the named view rather than dropping the user on the default integration.
   useEffect(() => {
     const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
-    if (['providers', 'telemetry', 'system', 'updates', 'lang-rules', 'subgen-tuning'].includes(hash)) {
+    if (['providers', 'instances', 'libraries', 'telemetry', 'system', 'updates', 'lang-rules', 'subgen-tuning'].includes(hash)) {
       setView(hash);
     }
     // #207: 'integrations' lands on the summary tile grid rather than
@@ -2280,6 +2282,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? ['Settings', 'Telemetry']
     : view === 'updates' ? ['Settings', 'Updates']
     : view === 'providers' ? ['Settings', 'Providers']
+    : view === 'instances' ? ['Settings', 'Instances']
     : view === 'libraries' ? ['Settings', 'Libraries']
     : view === 'lang-rules' ? ['Settings', 'Language rules']
     : view === 'subgen-tuning' ? ['Settings', 'Subgen tuning']
@@ -2291,6 +2294,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Telemetry'
     : view === 'updates' ? 'Updates'
     : view === 'providers' ? 'Provider leaderboard'
+    : view === 'instances' ? 'Instances'
     : view === 'libraries' ? 'Libraries'
     : view === 'lang-rules' ? 'Language rules'
     : view === 'subgen-tuning' ? 'Subgen tuning'
@@ -2302,6 +2306,7 @@ export function SettingsPage() {
     : view === 'telemetry' ? 'Exactly what subarr sends and how to opt in/out.'
     : view === 'updates' ? 'Per-product version checks against GitHub releases.'
     : view === 'providers' ? 'Bazarr provider success rates from your download history.'
+    : view === 'instances' ? 'Connect more than one Sonarr/Radarr/Bazarr stack. The default instance comes from your env config; add others here and bind libraries to them under Libraries.'
     : view === 'libraries' ? 'Media locations subarr walks. Each library maps a filesystem root to its subgen and *arr path prefixes; the default comes from SUBARR_MEDIA_ROOT.'
     : view === 'lang-rules' ? 'Declared audio languages for whole shows and movies. New downloads inherit automatically; a per-file correction always overrides.'
     : view === 'subgen-tuning' ? 'Hardware-matched Whisper model, device and compute type.'
@@ -2320,6 +2325,7 @@ export function SettingsPage() {
         langRulesActive={view === 'lang-rules'} onSelectLangRules={() => setView('lang-rules')}
         subgenTuningActive={view === 'subgen-tuning'} onSelectSubgenTuning={() => setView('subgen-tuning')}
         librariesActive={view === 'libraries'} onSelectLibraries={() => setView('libraries')}
+        instancesActive={view === 'instances'} onSelectInstances={() => setView('instances')}
       />
       <main className="main-canvas" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingBottom: 0 }}>
         <div style={{ flex: 1, padding: '22px 26px 24px', overflow: 'auto' }}>
@@ -2364,6 +2370,7 @@ export function SettingsPage() {
           {view === 'telemetry' && <TelemetryPanel />}
           {view === 'updates' && <UpdatesPanel />}
           {view === 'providers' && <ProvidersPanel />}
+          {view === 'instances' && <InstancesEditor />}
           {view === 'libraries' && (
             <div style={{ maxWidth: 820 }}>
               <LibrariesEditor showDetected={true} />
