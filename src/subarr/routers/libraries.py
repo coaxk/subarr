@@ -31,6 +31,12 @@ class LibraryIn(BaseModel):
     fs_root: str
     subgen_prefix: str | None = None
     arr_prefix: str
+    # #161 Phase 4B: bind this library to specific arr/Bazarr instances. Empty =
+    # the default instance ("" -> instance 0). Only meaningful for non-default
+    # libraries (the default library always resolves to instance 0).
+    sonarr_id: str | None = None
+    radarr_id: str | None = None
+    bazarr_id: str | None = None
 
 
 class LibrariesPut(BaseModel):
@@ -48,6 +54,9 @@ def _serialize(lib: Library, *, is_default: bool) -> dict:
         "fs_root": str(lib.fs_root),
         "subgen_prefix": lib.subgen_prefix,
         "arr_prefix": lib.arr_prefix,
+        "sonarr_id": lib.sonarr_id,
+        "radarr_id": lib.radarr_id,
+        "bazarr_id": lib.bazarr_id,
         "is_default": is_default,
         "reachable": lib.fs_root.is_dir(),
     }
@@ -77,6 +86,13 @@ async def put_libraries(body: LibrariesPut) -> dict:
         }
         if item.subgen_prefix:
             d["subgen_prefix"] = item.subgen_prefix
+        for field, val in (
+            ("sonarr_id", item.sonarr_id),
+            ("radarr_id", item.radarr_id),
+            ("bazarr_id", item.bazarr_id),
+        ):
+            if (val or "").strip():
+                d[field] = val.strip()
         extras.append(d)
 
     default = settings.libraries[0]
