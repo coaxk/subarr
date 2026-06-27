@@ -16,6 +16,7 @@ const SERVICE_LABEL = { sonarr: 'Sonarr', radarr: 'Radarr', bazarr: 'Bazarr' };
 
 const Api = {
   list: () => fetch('/api/instances', { credentials: 'same-origin' }).then((r) => r.json()),
+  health: () => fetch('/api/instances/health', { credentials: 'same-origin' }).then((r) => r.json()),
   test: (body) =>
     fetch('/api/instances/test', {
       method: 'POST',
@@ -57,17 +58,48 @@ export function groupByService(instances) {
   return out;
 }
 
+// #378: index the /api/instances/health fan-out by `${service}/${id}` so a row
+// can O(1) look up its own live status. Pure + exported for unit test.
+export function indexHealth(health) {
+  const out = {};
+  for (const h of health || []) out[`${h.service}/${h.id}`] = h;
+  return out;
+}
+
+// #378: resolve a row's status-dot kind from its live health record.
+//   online            → ok (green)    reachable right now
+//   configured, down  → error (red)   has creds but the probe failed
+//   not configured    → muted (grey)  nothing to reach
+//   undefined (h)     → muted         probe still pending — unknown, not false-green
+// Pure + exported for unit test.
+export function dotKindForInstance(_inst, health) {
+  if (!health || !health.configured) return 'muted';
+  return health.online ? 'ok' : 'error';
+}
+
 const EMPTY_DRAFT = { service: 'sonarr', id: null, name: '', url: '', api_key: '' };
 
 export function InstancesEditor() {
   const [instances, setInstances] = useState(null);
+  const [health, setHealth] = useState({}); // {`${service}/${id}`: {online, configured, detail}}
   const [draft, setDraft] = useState(null); // {service, id, name, url, api_key}
   const [probe, setProbe] = useState(null); // {ok, detail, root_folders} | 'pending'
   const [msg, setMsg] = useState(null); // {kind:'ok'|'err', text}
 
+  // #378: live per-instance reachability — fans out a probe per instance, so it
+  // can be slow; fetched separately from the (instant) list and folded in when
+  // it resolves. A probe failure leaves rows at their pending/unknown dot.
+  const reloadHealth = () =>
+    Api.health()
+      .then((d) => setHealth(indexHealth(d.health)))
+      .catch(() => {});
+
   const reload = () =>
     Api.list()
-      .then((d) => setInstances(d.instances || []))
+      .then((d) => {
+        setInstances(d.instances || []);
+        reloadHealth();
+      })
       .catch(() => setMsg({ kind: 'err', text: 'failed to load instances' }));
 
   useEffect(() => {
@@ -155,7 +187,17 @@ export function InstancesEditor() {
             </button>
           </div>
 
-          {grouped[svc].map((inst) => (
+          {grouped[svc].map((inst) => {
+            const h = health[`${inst.service}/${inst.id}`];
+            const dotKind = dotKindForInstance(inst, h);
+            const dotTitle = !h
+              ? 'Checking reachability…'
+              : !h.configured
+                ? 'Not configured'
+                : h.online
+                  ? 'Online'
+                  : `Offline${h.detail ? ` — ${h.detail}` : ''}`;
+            return (
             <div
               key={inst.id || '(default)'}
               style={{
@@ -164,7 +206,9 @@ export function InstancesEditor() {
                 border: '1px solid var(--bg-4)', borderRadius: 'var(--radius-md)',
               }}
             >
-              <StatusDot kind={inst.has_api_key && inst.url ? 'ok' : 'error'} />
+              <span title={dotTitle} style={{ display: 'inline-flex' }}>
+                <StatusDot kind={dotKind} />
+              </span>
               <span style={{ fontWeight: 600, color: 'var(--fg-0)', minWidth: 110 }}>
                 {inst.is_default ? 'default' : inst.name}
               </span>
@@ -194,7 +238,8 @@ export function InstancesEditor() {
                 </>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       ))}
 
