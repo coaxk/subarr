@@ -285,6 +285,17 @@ volumes:
 
 Internally, extra libraries qualify their file keys with a stable `@<id>/` head while the default library keeps today's keys — which is why existing installs upgrade with zero migration. The simple union-mount workaround (binding several host paths under one container root) still works fine if you prefer it.
 
+## Multiple stacks (instances)
+
+Most setups run one Sonarr, one Radarr, one Bazarr. But some people run **separate stacks** — the classic case is a dedicated **anime** Sonarr + Bazarr alongside the main TV/movie stack, each with its own indexers, providers, and quality profiles. subarr can track each stack independently and route every read and write to the right one.
+
+- **The default instance is your existing config** — `SONARR_URL` / `SONARR_API_KEY` (and the Radarr/Bazarr equivalents). A single-stack install needs nothing new; nothing changes, and every screen looks exactly as it does today.
+- **Add extra instances in the UI** — **Settings → Instances**. Add a Sonarr/Radarr/Bazarr instance with its URL + API key, **Test** the connection, and save. The onboarding wizard also surfaces a skippable "Run separate stacks?" pointer so first-run users know it's there.
+- **Bind a library to an instance** — **Settings → Libraries**. Each library (see above) can be bound to a specific Sonarr/Radarr/Bazarr instance; the resolved-topology table shows which arr + Bazarr (and the live Plex section) each library maps to, and flags any unbound or mis-mounted library. A library with no binding falls back to the default instance.
+- **Routing is automatic and safe.** Coverage reads merge across every instance (each row labelled with its library), and **writeback — subtitle uploads, blacklists, rescans — always fires at the instance that owns the row**, so a second Bazarr can never receive subs meant for the first. Per-instance health dots (Settings → Instances, the Integrations tiles, and the global health pill) show each stack's live reachability at a glance.
+
+Nothing here is required: if one stack covers you, skip it entirely. Like libraries, multi-instance is additive and existing installs upgrade with zero migration.
+
 ## Known limitations (v2.2)
 
 Transparent before you install.

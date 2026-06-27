@@ -78,6 +78,14 @@ def test_update_clamps_step_below_zero(store: OnboardingStore):
     assert store.get().step == 0
 
 
+def test_update_accepts_final_step_index_12(store: OnboardingStore):
+    # #378 Phase 5 added the optional "More stacks" step, so the wizard now has
+    # 13 frontend steps (max index 12). The resume cursor must reach the last one.
+    store.update(step=12)
+    assert store.get().step == 12
+    assert MAX_STEP >= 12
+
+
 def test_update_with_none_drops_key(store: OnboardingStore):
     store.update(progress_patch={"x": "value", "y": "other"})
     store.update(progress_patch={"x": None})
