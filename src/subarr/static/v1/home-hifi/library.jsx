@@ -114,15 +114,47 @@ function AlphabetRail({ containerRef }) {
 // is instant; user-driven refresh forces a fresh fetch.
 export const browseCache = new Map();
 
-export async function fetchBrowse(path, { fresh = false } = {}) {
+// #378: the /api/browse query string. Rollup is skipped at a library ROOT
+// (TV/Movies/Anime have thousands of files — rollup would take 10s+); a root may
+// be the default ('' → just ?rollup=false) OR a non-default library
+// ('@anime/' → ?path=@anime/&rollup=false). Drilling into a subtree keeps rollup
+// ON (each season is small + fast). Pure + exported for unit test.
+export function browseQuery(path, isRoot) {
+  // encodeURIComponent (not URLSearchParams) to stay byte-identical to the
+  // original ?path= encoding — this is a shared call (arena + tree drill-downs),
+  // so spaces must encode as %20, never '+'.
+  const parts = [];
+  if (path) parts.push(`path=${encodeURIComponent(path)}`);
+  if (isRoot) parts.push('rollup=false');
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+// #378: the canonical root path for a library slug — '' for the default library,
+// else its '@<slug>/' head (already understood by canonical_to_fs server-side).
+export function rootPathForLibrary(slug) {
+  return slug ? `@${slug}/` : '';
+}
+
+// #378: dropdown options for the Browse library picker — default first, then the
+// rest by name. Returns null when there's only the default library, so the picker
+// is hidden entirely on single-library installs (the page stays identical).
+export function libraryPickerOptions(libraries) {
+  const libs = libraries || [];
+  if (libs.length <= 1) return null;
+  const def = libs.filter((l) => l.is_default || l.slug === '');
+  const rest = libs
+    .filter((l) => !(l.is_default || l.slug === ''))
+    .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug));
+  return [...def, ...rest].map((l) => ({ slug: l.slug, name: l.name || l.slug || '(default)' }));
+}
+
+export async function fetchBrowse(path, { fresh = false, isRoot } = {}) {
   const key = path || '';
   if (!fresh && browseCache.has(key)) return browseCache.get(key);
-  // Skip recursive rollup at the root (TV/Movies have thousands of
-  // files — rollup would take 10s+). User drills into a show to see
-  // per-season rollup, which is fast (each season is small).
-  const isRoot = !path;
-  const qs = isRoot ? '?rollup=false' : `?path=${encodeURIComponent(path)}`;
-  const r = await fetch('/api/browse' + qs, { credentials: 'same-origin' });
+  // isRoot defaults to "the empty default root"; callers loading a non-default
+  // library root pass isRoot:true explicitly so rollup is skipped there too.
+  const atRoot = isRoot ?? !path;
+  const r = await fetch('/api/browse' + browseQuery(path, atRoot), { credentials: 'same-origin' });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const d = await r.json();
   browseCache.set(key, d);
@@ -573,23 +605,43 @@ export function LibraryPage() {
   const [selected, setSelected] = useState(() => new Set());
   const [queueState, setQueueState] = useState({ busy: false, done: 0, total: 0, errors: 0 });
   const [queueResult, setQueueResult] = useState(null);
+  // #378: Browse root picker — which library the tree is rooted at ('' = default).
+  const [libRoot, setLibRoot] = useState('');
+  const [libraries, setLibraries] = useState(null);
   // Ref for the inner tree-scroll container so the AlphabetRail can drive it.
   const treeScrollRef = useRef(null);
+
+  // #378: the bound libraries, for the root picker (hidden on single-library installs).
+  useEffect(() => {
+    fetch('/api/settings/libraries', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setLibraries(d.libraries || []))
+      .catch(() => {});
+  }, []);
 
   const loadRoot = useCallback(async (opts = {}) => {
     setRootLoading(true); setRootError(null);
     try {
       if (opts.fresh) browseCache.clear();
-      const d = await fetchBrowse('', { fresh: !!opts.fresh });
+      // #378: root the tree at the picked library ('' = default). isRoot:true so
+      // a non-default library root (@slug/) skips the expensive recursive rollup.
+      const d = await fetchBrowse(rootPathForLibrary(libRoot), { fresh: !!opts.fresh, isRoot: true });
       setRootData(d);
     } catch (e) {
       setRootError(e);
     } finally {
       setRootLoading(false);
     }
-  }, []);
+  }, [libRoot]);
 
   useEffect(() => { loadRoot(); }, [loadRoot]);
+
+  // Switching library clears the selection (canonicals are library-specific) and
+  // reloads the tree (loadRoot's identity changes with libRoot).
+  const changeLibRoot = useCallback((slug) => {
+    setLibRoot(slug);
+    setSelected(new Set());
+  }, []);
 
   const toggleSelect = useCallback((path) => {
     setSelected((prev) => {
@@ -678,6 +730,8 @@ export function LibraryPage() {
 
   const isInitialLoad = rootLoading && !rootData;
   const isError = rootError && !rootData;
+  // #378: computed once — null on single-library installs (picker hidden).
+  const pickerOpts = libraryPickerOptions(libraries);
 
   return (
     <IgnoreCtx.Provider value={ignoreValue}>
@@ -689,7 +743,24 @@ export function LibraryPage() {
             Browse your media library. Pick whatever you want — single files, full seasons, whole shows — and send them all to the queue.
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* #378: library root picker — only when >1 library is bound. */}
+          {pickerOpts && (
+            <select
+              value={libRoot || ''}
+              onChange={(e) => changeLibRoot(e.target.value)}
+              title="Browse a different library's tree"
+              style={{
+                height: 30, padding: '0 10px', background: 'var(--bg-2)',
+                border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
+              }}
+            >
+              {pickerOpts.map((o) => (
+                <option key={o.slug || '(default)'} value={o.slug}>{o.name}</option>
+              ))}
+            </select>
+          )}
           <button className="btn" onClick={() => loadRoot({ fresh: true })} disabled={rootLoading}>
             {rootLoading ? 'Refreshing…' : 'Refresh tree'}
           </button>
