@@ -223,6 +223,46 @@ def test_instances_health_fans_out_one_entry_per_instance(api, no_network_rebuil
     assert default_sonarr["online"] is False
 
 
+def test_instances_health_non_default_excludes_defaults_and_skips_their_probes(
+    api, no_network_rebuild, monkeypatch
+):
+    """?non_default=1 returns only non-default instances and never probes the
+    defaults — so the header pill (which already counts defaults via
+    /api/integrations/health) adds zero redundant probes on single-stack."""
+    import subarr.routers.instances as mod
+
+    api.post(
+        "/api/instances",
+        json={"service": "sonarr", "name": "Anime", "url": "http://sonarr-anime.test", "api_key": "k"},
+    )
+
+    probed: list[tuple[str, str]] = []
+
+    async def fake_probe(service, url, api_key):
+        probed.append((service, url))
+        return {"ok": True, "detail": "probed", "root_folders": []}
+
+    monkeypatch.setattr(mod, "_probe_connection", fake_probe)
+
+    r = api.get("/api/instances/health?non_default=1")
+    assert r.status_code == 200, r.text
+    health = r.json()["health"]
+
+    # Only the non-default 'anime' instance — no default (id "") entries at all.
+    assert health and all(h["id"] != "" for h in health)
+    assert any(h["service"] == "sonarr" and h["id"] == "anime" for h in health)
+    # The defaults were filtered out BEFORE the fan-out, so none were probed.
+    assert ("sonarr", "http://sonarr.test:8989") not in probed
+    assert ("bazarr", "http://bazarr.test:6767") not in probed
+
+
+def test_instances_health_non_default_is_empty_on_single_stack(api):
+    """No non-default instances → empty list, zero probes (single-stack cost-free)."""
+    r = api.get("/api/instances/health?non_default=1")
+    assert r.status_code == 200
+    assert r.json()["health"] == []
+
+
 @pytest.mark.asyncio
 async def test_probe_instance_skips_network_for_unconfigured(monkeypatch):
     import subarr.routers.instances as mod

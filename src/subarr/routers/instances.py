@@ -120,13 +120,18 @@ async def _probe_instance(inst) -> dict:
 
 
 @router.get("/instances/health")
-async def instances_health() -> dict:
+async def instances_health(non_default: bool = False) -> dict:
     """Per-instance live health for the Settings ▸ Instances dots. Fans the probes
     out concurrently (one cheap authenticated GET each); a slow/down instance never
-    blocks the others. Read-only — never mutates config or the live bundle."""
+    blocks the others. Read-only — never mutates config or the live bundle.
+
+    non_default=1 filters out the default (id "") instances BEFORE the fan-out:
+    the header health pill already counts defaults via /api/integrations/health, so
+    it only needs the extras — and on a single-stack install this fires zero probes."""
     from ..config import settings
 
-    results = await asyncio.gather(*(_probe_instance(i) for i in settings.instances))
+    insts = [i for i in settings.instances if i.id != ""] if non_default else settings.instances
+    results = await asyncio.gather(*(_probe_instance(i) for i in insts))
     return {"health": list(results)}
 
 
