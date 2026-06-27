@@ -8,7 +8,7 @@
 // bulk-assigning Spanish to a whole telenovela closes the bazarr-blind
 // loop for every episode at once.
 
-import { StatusDot } from './atoms.jsx';
+import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { distinctSeriesPrefixes } from './lang-rules-util.mjs';
 
@@ -139,6 +139,7 @@ function TrackMismatchRow({ item, selected, onToggle, busy, onSwap, onDismiss, o
         }}>
           {path.split('/').slice(-1)[0]}
         </span>
+        <LibraryChip library={item.library} />
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warn-500, #f59e0b)' }}>
           default {def} → should be {native} (a{ord})
         </span>
@@ -204,6 +205,7 @@ function EpisodeRow({ item, selected, onToggle, onOpen, busy, onSwap, onDismiss 
       }}>
         {path.split('/').slice(-1)[0]}
       </span>
+      <LibraryChip library={item.library} />
       <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
         audio: {audio}
       </span>

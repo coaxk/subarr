@@ -5,7 +5,7 @@
 // Row queue + bulk queue post to /api/coverage/queue. Re-walk now calls
 // /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
-import { Glyph, StatusDot, LangTag } from './atoms.jsx';
+import { Glyph, StatusDot, LangTag, LibraryChip } from './atoms.jsx';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -2139,13 +2139,7 @@ function CoverageRowImpl({ r, onClick, onQueue, queuing, queued }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           minWidth: 0,
         }}>{r.title}</span>
-        {r.library && r.library.slug && (
-          <span title={`Library: ${r.library.name}`} style={{
-            flex: '0 0 auto', padding: '1px 6px', borderRadius: 3,
-            background: 'rgba(139,92,246,0.14)', color: 'var(--violet-300, #c4b5fd)',
-            fontSize: 'var(--text-2xs)', letterSpacing: '0.02em',
-          }}>{r.library.name}</span>
-        )}
+        <LibraryChip library={r.library} />
         <ScoringBadges r={r} />
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', flex: '0 0 auto' }}>· {r.size}</span>
       </div>

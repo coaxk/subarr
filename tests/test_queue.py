@@ -163,6 +163,60 @@ def test_inflight_queued_path_not_duplicated_in_history(app_with_stub):
     )
 
 
+def test_build_history_view_emits_library_label(subarr_env, monkeypatch):
+    """#378: each history row carries a {slug, name} library label resolved from
+    its canonical path — so the Queue UI can chip non-default-library rows."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import subarr.config as config
+    from subarr.libraries import Library
+    from subarr.routers.queue import _build_history_view
+    from subarr.scan_store import PATH_STATUS_OK
+
+    libs = (
+        config.settings.libraries[0],
+        Library(
+            slug="anime",
+            name="Anime",
+            fs_root=Path("/anime"),
+            subgen_prefix="/media",
+            arr_prefix="/data/anime/",
+        ),
+    )
+    old = config.settings.libraries
+    object.__setattr__(config.settings, "libraries", libs)
+    try:
+        r = SimpleNamespace(
+            path="@anime/Frieren/S01E01.mkv",
+            status=PATH_STATUS_OK,
+            subgen_body={"walked": 1, "queued": 1},
+            error=None,
+            started_at=None,
+            finished_at=None,
+            subgen_status_code=None,
+        )
+        scan = SimpleNamespace(id=1, created_at=0.0, status="done", results=[r])
+        history, _counts = _build_history_view([scan], set(), set())
+        assert history[0]["library"] == {"slug": "anime", "name": "Anime"}
+
+        # a default-library row resolves to slug "" (the UI renders no chip)
+        r2 = SimpleNamespace(
+            path="TV/Show/S01E01.mkv",
+            status=PATH_STATUS_OK,
+            subgen_body={},
+            error=None,
+            started_at=None,
+            finished_at=None,
+            subgen_status_code=None,
+        )
+        scan2 = SimpleNamespace(id=2, created_at=0.0, status="done", results=[r2])
+        history2, _ = _build_history_view([scan2], set(), set())
+        assert history2[0]["library"]["slug"] == ""
+    finally:
+        object.__setattr__(config.settings, "libraries", old)
+
+
 def _down_handler(req: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("subgen unreachable", request=req)
 

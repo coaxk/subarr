@@ -2,7 +2,7 @@
 // expand). Leads with failure flags; never presents a confident positive grade
 // (accuracy score is L3/#123). Clean jobs read "no problems detected".
 
-import { StatusDot } from './atoms.jsx';
+import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { BlacklistPanel } from './blacklist-panel.jsx';
 
@@ -127,6 +127,7 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
             }}>
             {filename}
           </span>
+          <LibraryChip library={item.library} />
           {item.flagged && chips.length > 0 && chips.map((chip, i) => (
             <span key={i} className="chip"
               style={{ fontSize: 'var(--text-2xs)', flex: 'none',

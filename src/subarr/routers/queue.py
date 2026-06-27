@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from ..audio_lang_store import resolve_audio_language_override
 from ..config import settings
 from ..log_safe import scrub
-from ..paths import PathOutsideRootError, canonical_to_fs
+from ..paths import PathOutsideRootError, canonical_to_fs, library_label
 from ..scan_store import (
     PATH_STATUS_EMPTY,
     PATH_STATUS_ERROR,
@@ -282,6 +282,9 @@ def _build_history_view(
                     "started_at": r.started_at,
                     "finished_at": r.finished_at,
                     "subgen_status_code": r.subgen_status_code,
+                    # #378: library provenance for the history row (canonical
+                    # path; fail-soft to library 0 — no chip on single-library).
+                    "library": library_label(r.path),
                 }
             )
     return history, counts

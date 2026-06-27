@@ -9,7 +9,7 @@
 // require new subgen endpoints (or careful use of /api/scan store
 // state). Out of scope for v1.0 ship.
 
-import { AsyncState, StatusDot } from './atoms.jsx';
+import { AsyncState, StatusDot, LibraryChip } from './atoms.jsx';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -288,6 +288,7 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           minWidth: 0,
         }}>{path}</span>
+        <LibraryChip library={entry.library} />
         <span className="mono" style={{
           fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
         }}>{ageLabel}</span>

@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from .config import settings
-from .paths import UNSUPPORTED_EXTS, canonical_to_fs, library_for_canonical, strip_arr_prefix
+from .paths import (
+    UNSUPPORTED_EXTS,
+    canonical_to_fs,
+    library_for_canonical,
+    library_label,
+    strip_arr_prefix,
+)
 from .integrations import IntegrationError
 from .integrations.bazarr import BazarrClient
 from .integrations.radarr import RadarrClient
@@ -154,9 +160,8 @@ class CoverageItem:
 
     def _library_label(self) -> dict[str, str]:
         """#161 Phase 2: resolve this row's library from its canonical (fail-soft
-        to library 0). library_for_canonical never raises."""
-        lib = library_for_canonical(self.file_canonical_path or self.canonical_path or "")
-        return {"slug": lib.slug, "name": lib.name}
+        to library 0). Delegates to the shared paths.library_label (#378)."""
+        return library_label(self.file_canonical_path or self.canonical_path or "")
 
     def to_dict(self) -> dict[str, Any]:
         return {

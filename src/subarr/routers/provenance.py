@@ -40,9 +40,17 @@ def _parse_suffix(name: str) -> dict[str, Any] | None:
 
 @router.get("/provenance/recent")
 async def recent(request: Request) -> dict[str, Any]:
+    from ..paths import library_label
+
     store = request.app.state.provenance
     rows = store.recent(limit=50)
-    return {"entries": [e.to_dict() for e in rows]}
+    entries = []
+    for e in rows:
+        d = e.to_dict()
+        # #378: library provenance label (fail-soft to library 0 — no chip).
+        d["library"] = library_label(d.get("canonical_path") or "")
+        entries.append(d)
+    return {"entries": entries}
 
 
 @router.get("/provenance/{path:path}")
