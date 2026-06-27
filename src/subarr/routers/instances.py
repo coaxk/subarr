@@ -13,13 +13,13 @@ admin.py/onboarding.py and keeps the reload-based test fixtures working.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import config_store
-from ..integrations import IntegrationError
 from ..integrations.bazarr import BazarrClient
 from ..integrations.radarr import RadarrClient
 from ..integrations.sonarr import SonarrClient
@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 
 _ARR_SERVICES = ("sonarr", "radarr", "bazarr")
 _CTORS = {"sonarr": SonarrClient, "radarr": RadarrClient, "bazarr": BazarrClient}
+
+# Serializes add/edit/delete: each is a read-modify-write of the override store
+# plus a live bundle swap; concurrent calls must not interleave.
+_APPLY_LOCK = asyncio.Lock()
 
 
 def _serialize(inst) -> dict:
@@ -58,9 +62,12 @@ class TestConnRequest(BaseModel):
 
 async def _probe_connection(service: str, url: str, api_key: str) -> dict:
     """Construct a throwaway client and hit a cheap authenticated endpoint.
-    Always closes the client (no leaked httpx session)."""
-    client = _CTORS[service](base_url=url, api_key=api_key)
+    A "test connection" probe: ANY failure (incl. a malformed URL that raises
+    httpx.InvalidURL at construction, before the request) is reported as
+    {ok: false} rather than a 500. Always closes the client if one was built."""
+    client = None
     try:
+        client = _CTORS[service](base_url=url, api_key=api_key)
         if service in ("sonarr", "radarr"):
             folders = await client.root_folders()
             paths = [f.get("path") for f in folders if isinstance(f, dict) and f.get("path")]
@@ -68,10 +75,11 @@ async def _probe_connection(service: str, url: str, api_key: str) -> dict:
         # bazarr: list_tasks is a cheap authenticated GET
         await client.list_tasks()
         return {"ok": True, "detail": "connected", "root_folders": []}
-    except IntegrationError as e:
+    except Exception as e:  # noqa: BLE001 - a test probe: any failure = not ok
         return {"ok": False, "detail": str(e), "root_folders": []}
     finally:
-        await client.aclose()
+        if client is not None:
+            await client.aclose()
 
 
 @router.post("/instances/test")
@@ -91,7 +99,16 @@ def _extras() -> dict:
 async def _apply_instances(request: Request, extras: dict) -> None:
     """Validate, persist the extras dict, rebuild settings.instances, rebuild the
     live bundle. Raises HTTPException(422) on invalid config (and does NOT
-    persist) — a 422 beats rebuild_instances' silent fail-soft drop."""
+    persist) — a 422 beats rebuild_instances' silent fail-soft drop.
+
+    Serialized by _APPLY_LOCK: the persist is a read-modify-write of the override
+    store, and the bundle swap mutates app.state — concurrent add/edit/delete must
+    not interleave (lost-update on disk, or overlapping bundle rebuilds)."""
+    async with _APPLY_LOCK:
+        await _apply_instances_locked(request, extras)
+
+
+async def _apply_instances_locked(request: Request, extras: dict) -> None:
     from ..config import rebuild_instances, settings
     from ..instances import Instance, InstanceConfigError, build_instances
 

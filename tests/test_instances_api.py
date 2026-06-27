@@ -72,6 +72,17 @@ def test_test_connection_rejects_unknown_service(api):
     assert r.status_code == 422
 
 
+def test_test_connection_malformed_url_returns_ok_false_not_500(api):
+    # A control char makes httpx.InvalidURL fire at client construction (before
+    # the request) — the test button must surface {ok:false}, not a raw 500.
+    r = api.post(
+        "/api/instances/test",
+        json={"service": "sonarr", "url": "http://\x00bad", "api_key": "k"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+
+
 # ── Task 3: POST /api/instances (add) ───────────────────────────────────────
 def test_add_instance_persists_and_goes_live(api, no_network_rebuild):
     r = api.post(
