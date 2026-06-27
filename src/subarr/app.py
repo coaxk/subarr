@@ -87,6 +87,7 @@ from .routers import (
     enrichment as r_enrichment,
     gpu,
     home as r_home,
+    instances as r_instances,
     integrations,
     libraries as r_libraries,
     logs,
@@ -992,6 +993,7 @@ app.include_router(gpu.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(integrations.router)
+app.include_router(r_instances.router)
 app.include_router(r_libraries.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
