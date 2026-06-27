@@ -70,3 +70,81 @@ def test_test_connection_ok_for_sonarr(api, monkeypatch):
 def test_test_connection_rejects_unknown_service(api):
     r = api.post("/api/instances/test", json={"service": "plex", "url": "x", "api_key": "k"})
     assert r.status_code == 422
+
+
+# ── Task 3: POST /api/instances (add) ───────────────────────────────────────
+def test_add_instance_persists_and_goes_live(api, no_network_rebuild):
+    r = api.post(
+        "/api/instances",
+        json={"service": "sonarr", "name": "Anime", "url": "http://sonarr-anime.test", "api_key": "k"},
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["service"] == "sonarr"
+    assert created["id"] == "anime"  # slugified from name
+    assert created["is_default"] is False
+    assert "api_key" not in created
+
+    from subarr import config_store
+
+    extras = config_store.load_overrides().get("instances", {})
+    assert any(i["url"] == "http://sonarr-anime.test" for i in extras.get("sonarr", []))
+
+    listed = api.get("/api/instances").json()["instances"]
+    assert any(i["id"] == "anime" and i["service"] == "sonarr" for i in listed)
+
+
+def test_add_duplicate_slug_is_409(api, no_network_rebuild):
+    body = {"service": "sonarr", "name": "Anime", "url": "http://a.test", "api_key": "k"}
+    assert api.post("/api/instances", json=body).status_code == 201
+    dup = api.post("/api/instances", json={**body, "url": "http://b.test"})
+    assert dup.status_code == 409
+
+
+def test_add_rejects_unknown_service(api):
+    r = api.post("/api/instances", json={"service": "plex", "name": "X", "url": "u", "api_key": "k"})
+    assert r.status_code == 422
+
+
+# ── Task 4: PUT /api/instances/{service}/{id} (edit) ────────────────────────
+def test_edit_instance_url_and_keep_masked_key(api, no_network_rebuild):
+    api.post(
+        "/api/instances",
+        json={"service": "bazarr", "name": "Anime", "url": "http://a.test", "api_key": "orig"},
+    )
+    r = api.put("/api/instances/bazarr/anime", json={"name": "Anime", "url": "http://a2.test"})
+    assert r.status_code == 200, r.text
+    assert r.json()["url"] == "http://a2.test"
+
+    from subarr import config_store
+
+    saved = next(i for i in config_store.load_overrides()["instances"]["bazarr"] if i.get("slug") == "anime")
+    assert saved["url"] == "http://a2.test"
+    assert saved["api_key"] == "orig"  # preserved
+
+
+def test_edit_unknown_instance_is_404(api):
+    r = api.put("/api/instances/sonarr/nope", json={"name": "X", "url": "http://x.test", "api_key": "k"})
+    assert r.status_code == 404
+
+
+def test_edit_default_instance_is_400(api):
+    r = api.put("/api/instances/sonarr/%20", json={"name": "X", "url": "http://x.test", "api_key": "k"})
+    assert r.status_code in (400, 404)
+
+
+# ── Task 5: DELETE /api/instances/{service}/{id} (remove) ───────────────────
+def test_delete_instance_removes_and_applies(api, no_network_rebuild):
+    api.post(
+        "/api/instances",
+        json={"service": "radarr", "name": "Anime", "url": "http://a.test", "api_key": "k"},
+    )
+    r = api.delete("/api/instances/radarr/anime")
+    assert r.status_code == 200, r.text
+    listed = api.get("/api/instances").json()["instances"]
+    assert not any(i["id"] == "anime" and i["service"] == "radarr" for i in listed)
+
+
+def test_delete_unknown_instance_is_404(api):
+    r = api.delete("/api/instances/sonarr/nope")
+    assert r.status_code == 404
