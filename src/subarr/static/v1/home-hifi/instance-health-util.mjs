@@ -23,6 +23,25 @@ export function dotKindForInstance(_inst, health) {
   return health.online ? 'ok' : 'error';
 }
 
+// #378: the global integration-health count for the header pill ("X/Y healthy").
+// Counts the default integrations (one per service from /api/integrations/health)
+// + subgen, then folds in every NON-default instance from /api/instances/health.
+// Defaults (id "") are already represented by the integrations array, so only
+// id !== "" are added — that's how a down second Bazarr surfaces in the global
+// pill instead of being invisible. Returns "X/Y" or null when health is absent.
+export function computeHealthCount(health, instancesHealth) {
+  if (!health) return null;
+  const ints = health.integrations || [];
+  let online = ints.filter((i) => i.online).length + (health.subgen?.reachable ? 1 : 0);
+  let total = ints.length + (health.subgen ? 1 : 0);
+  for (const h of instancesHealth || []) {
+    if (h.id === '' || !h.configured) continue; // defaults already counted
+    total += 1;
+    if (h.online) online += 1;
+  }
+  return `${online}/${total}`;
+}
+
 // Per-instance sub-rows for an Integrations summary tile. Returns [] for
 // non-instanced services (plex/tautulli/subgen/ollama) and for instanced
 // services that have only the default instance — single-stack installs stay

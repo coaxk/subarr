@@ -1,6 +1,6 @@
 // #378: shared per-instance health helpers (node-env, pure functions).
 import { describe, it, expect } from 'vitest';
-import { indexHealth, dotKindForInstance, instanceSubRows } from '../instance-health-util.mjs';
+import { indexHealth, dotKindForInstance, instanceSubRows, computeHealthCount } from '../instance-health-util.mjs';
 
 describe('indexHealth', () => {
   it('keys health records by service/id', () => {
@@ -55,5 +55,42 @@ describe('instanceSubRows', () => {
   it('is case-insensitive on the service id and tolerates empty health', () => {
     expect(instanceSubRows('SONARR', health).map((r) => r.id)).toEqual(['', 'anime']);
     expect(instanceSubRows('sonarr', null)).toEqual([]);
+  });
+});
+
+describe('computeHealthCount', () => {
+  const intHealth = {
+    integrations: [
+      { name: 'sonarr', online: true },
+      { name: 'bazarr', online: true },
+    ],
+    subgen: { reachable: true },
+  };
+
+  it('returns null when integrations health is missing', () => {
+    expect(computeHealthCount(null, [])).toBe(null);
+  });
+
+  it('counts default integrations + subgen unchanged when there are no extra instances', () => {
+    expect(computeHealthCount(intHealth, [])).toBe('3/3');
+    expect(computeHealthCount(intHealth, null)).toBe('3/3');
+  });
+
+  it('does NOT double-count default instances (id "") from /api/instances/health', () => {
+    const inst = [
+      { service: 'sonarr', id: '', online: true, configured: true },
+      { service: 'bazarr', id: '', online: true, configured: true },
+    ];
+    expect(computeHealthCount(intHealth, inst)).toBe('3/3');
+  });
+
+  it('folds a DOWN non-default instance into the denominator only', () => {
+    const inst = [{ service: 'sonarr', id: 'anime', online: false, configured: true }];
+    expect(computeHealthCount(intHealth, inst)).toBe('3/4');
+  });
+
+  it('folds an ONLINE non-default instance into both numerator and denominator', () => {
+    const inst = [{ service: 'sonarr', id: 'anime', online: true, configured: true }];
+    expect(computeHealthCount(intHealth, inst)).toBe('4/4');
   });
 });

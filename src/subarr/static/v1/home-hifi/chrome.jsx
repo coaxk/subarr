@@ -11,6 +11,7 @@
 // chrome, so importing it here covers the whole UI in one place.
 import './api-fetch.mjs';
 import { Wordmark, Glyph, StatusDot } from './atoms.jsx';
+import { computeHealthCount } from './instance-health-util.mjs';
 
 const { useState, useEffect } = React;
 
@@ -44,7 +45,7 @@ function _shallowEqualCounts(a, b) {
 }
 
 async function _fetchChromeCounts() {
-  const [dash, health, queue, schedule, review, updates, tasksHealth, aftercareData] = await Promise.all([
+  const [dash, health, queue, schedule, review, updates, tasksHealth, aftercareData, instancesHealth] = await Promise.all([
     fetch('/api/home/dashboard', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/integrations/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch('/api/queue', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -58,6 +59,10 @@ async function _fetchChromeCounts() {
     fetch('/api/health/tasks', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
     // #156: job aftercare — pending post-transcription review items.
     fetch('/api/aftercare/pending', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    // #378: per-instance reachability — folds non-default instances into the
+    // global health pill so a down second Sonarr/Bazarr is visible everywhere,
+    // not just on Settings ▸ Instances. null/[] on failure = pill counts defaults only.
+    fetch('/api/instances/health', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   const next = {};
   if (dash?.stages) {
@@ -67,10 +72,8 @@ async function _fetchChromeCounts() {
   if (queue) next.queue = (queue.queued_count || 0) + (queue.processing_count || 0);
   if (schedule?.schedules) next.rules = schedule.schedules.filter((s) => s.enabled).length;
   if (health) {
-    const ints = health.integrations || [];
-    const online = ints.filter((i) => i.online).length;
-    const total = ints.length + (health.subgen ? 1 : 0);
-    next.health = `${online + (health.subgen?.reachable ? 1 : 0)}/${total}`;
+    // #378: count default integrations + subgen + every non-default instance.
+    next.health = computeHealthCount(health, instancesHealth?.health);
   }
   if (dash?.next_run?.countdown_s != null) {
     const s = dash.next_run.countdown_s;
