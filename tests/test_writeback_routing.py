@@ -207,3 +207,43 @@ def test_scheduler_poke_fans_out_per_bazarr_instance(writeback_stack):
     assert trig(("bazarr", "anime")), "anime bazarr should be poked"
     assert trig(("bazarr", "")), "instance 0 should be poked too"
     assert res["fired"] is True
+
+
+def test_retry_bazarr_notify_isolates_one_instances_unexpected_error(writeback_stack):
+    # #372: a NON-IntegrationError from one Bazarr's task discovery must not abort
+    # the retry pass for the other instances. Anime's list_tasks blows up; the
+    # default instance must still fire its scan-disk trigger.
+    import asyncio
+    from types import SimpleNamespace
+
+    from subarr.completion_watcher import CompletionWatcher
+
+    ws = writeback_stack
+    # anime row first so the raising instance is processed before the survivor —
+    # under the bug this aborts the whole pass before instance 0 is reached.
+    entries = [
+        SimpleNamespace(id=1, series_id=10, canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv"),
+        SimpleNamespace(id=2, series_id=20, canonical_path="ShowTV/Season 1/ShowTV.S01E01.mkv"),
+    ]
+    marked: list[int] = []
+    prov = SimpleNamespace(
+        completed_without_bazarr=lambda max_age_s=0: entries,
+        mark_bazarr_triggered=lambda _id: marked.append(_id),
+    )
+    watcher = CompletionWatcher(provenance=prov, bundle_provider=lambda: ws.bundle)
+
+    async def boom():
+        raise RuntimeError("list_tasks exploded")  # NOT an IntegrationError
+
+    ws.bundle._clients["bazarr"]["anime"].list_tasks = boom
+
+    asyncio.run(watcher._pass_retry_bazarr_notify())
+
+    default_triggers = [
+        c
+        for c in ws.calls.get(("bazarr", ""), [])
+        if c["path"] == "/api/system/tasks" and c["method"] != "GET"
+    ]
+    assert default_triggers, "instance 0 must still fire despite anime's non-IntegrationError"
+    assert 2 in marked  # the default row was notified
+    assert 1 not in marked  # the anime row was NOT (its trigger never fired)
