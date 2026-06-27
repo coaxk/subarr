@@ -7,7 +7,7 @@
 // file. Empty state is honest: "No activity yet — subarr writes a
 // ledger entry when it queues, scans, or writes back a file."
 
-import { StatusDot } from './atoms.jsx';
+import { StatusDot, LibraryChip } from './atoms.jsx';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -116,7 +116,10 @@ function ActivityRow({ a, focused, onClick }) {
       <StatusDot kind={KIND_DOT[dotKey] || 'muted'} />
       <span className="mono num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>{fmtClock(t)}</span>
       <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-1)', fontWeight: focused ? 600 : 500 }}>{kind}</span>
-      <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.canonical_path}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.canonical_path}</span>
+        <LibraryChip library={a.library} />
+      </span>
       <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>{meta}</span>
     </div>
   );

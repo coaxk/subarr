@@ -775,6 +775,9 @@ async def pending_review(request: Request) -> dict[str, Any]:
                 # media_type ('movie' | 'episode'/'show') lets the Review UI
                 # split the list into TV Shows vs Movies, mirroring Coverage.
                 "media_type": it.get("media_type"),
+                # #378: library provenance — reuse the label coverage already
+                # emitted on this row (no re-resolution needed).
+                "library": it.get("library"),
                 **extra,
             }
         )

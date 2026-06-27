@@ -77,6 +77,12 @@ async def results(
                 lang_by_path[fp] = normalize_lang(raw)
         for row in items:
             row["language"] = lang_by_path.get(row.get("canonical_path"))
+    # #378: library provenance label (independent of the coverage snapshot —
+    # resolved straight from each row's canonical path; fail-soft to library 0).
+    from ..paths import library_label
+
+    for row in items:
+        row["library"] = library_label(row.get("canonical_path") or "")
     return {"count": len(items), "view": view, "items": items}
 
 

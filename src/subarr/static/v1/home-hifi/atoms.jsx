@@ -97,6 +97,22 @@ export function Delta({ value, suffix = '/h' }) {
   );
 }
 
+// ─── #378: per-row library provenance chip ───────────────────────
+// A small violet pill naming the library a row belongs to. Renders NOTHING for
+// the default library (slug '') — so single-library installs stay identical and
+// only multi-library rows get a chip. Shared by Coverage + Queue/Review/
+// Aftercare/Activity (fed by the row's `library: {slug, name}` field).
+export function LibraryChip({ library }) {
+  if (!library || !library.slug) return null;
+  return (
+    <span title={`Library: ${library.name}`} style={{
+      flex: '0 0 auto', padding: '1px 6px', borderRadius: 3,
+      background: 'rgba(139,92,246,0.14)', color: 'var(--violet-300, #c4b5fd)',
+      fontSize: 'var(--text-2xs)', letterSpacing: '0.02em',
+    }}>{library.name}</span>
+  );
+}
+
 // ─── Status dot with optional pulse ──────────────────────────────
 export function StatusDot({ kind = 'ok', pulse, size }) {
   const cls = `dot ${size === 'lg' ? 'lg' : ''} ${kind}`.trim();

@@ -67,6 +67,16 @@ def library_for_canonical(canonical: str) -> Library:
         return _library_by_slug("")
 
 
+def library_label(canonical: str) -> dict[str, str]:
+    """#378: the provenance label {slug, name} for a row's library, resolved from
+    its canonical path. Fail-soft to library 0 (library_for_canonical never
+    raises). A default-library row gets slug "" — the UI renders no chip for it,
+    so single-library installs stay visually identical. Shared by the coverage
+    rows and the Queue/Review/Aftercare/Activity surfaces."""
+    lib = library_for_canonical(canonical or "")
+    return {"slug": lib.slug, "name": lib.name}
+
+
 def canonical_to_fs(canonical: str) -> Path:
     """Resolve a canonical to an absolute filesystem path under its library's
     root, guarding against traversal. A leading '@<slug>/' selects the
