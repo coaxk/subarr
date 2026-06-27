@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+**Run separate Sonarr/Radarr/Bazarr stacks (#161).** The headline use case is a dedicated **anime** Sonarr + Bazarr alongside your main TV/movie stack — each with its own indexers, providers, and profiles. subarr now models every stack as an **instance**, merges coverage across all of them, and routes every read and every writeback (subtitle uploads, blacklists, rescans) to the instance that owns the row, so a second Bazarr can never receive subs meant for the first. Fully additive — single-stack installs are byte-identical and upgrade with zero migration.
+
+### Added
+- **Multi-instance management — Settings → Instances (#161).** Add/test/edit/remove extra Sonarr/Radarr/Bazarr instances with live apply (no restart). Bind each library to a specific instance under Settings → Libraries, with a resolved-topology table (bound arr + Bazarr + the live-matched Plex section) that flags unbound or mis-mounted libraries.
+- **Per-instance live health (#378).** Reachability dots per instance on Settings → Instances, per-instance sub-dots on the Integrations tiles, and the global "X/Y healthy" header pill now counts non-default instances — so a down second stack is visible everywhere, not just where it's configured.
+- **Library labels across the Gaps surfaces (#378).** Queue, Review, Aftercare, and Activity rows carry a library chip (matching Coverage), so in a multi-stack setup you can see which library each row belongs to at a glance. Default-library rows are unchanged.
+- **Browse any library's tree (#378).** Library → Browse gains a root picker (shown only when more than one library is bound) to browse a non-default library's tree, reusing the existing cached, rollup-skipping browser so big libraries stay fast.
+- **Onboarding "Run separate stacks?" pointer (#378).** A skippable wizard step introduces multi-instance and points first-run users to Settings → Instances; single-stack onboarding is unchanged.
+
 ## [2.2.1] - 2026-06-26
 
 **Critical hotfix: the entrypoint no longer chowns the shared media mount (#369).**

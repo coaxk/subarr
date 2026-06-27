@@ -21,6 +21,9 @@ const STEPS = [
   { id: 'bazarr',   label: 'Bazarr',        group: 'integrations', service: 'bazarr' },
   { id: 'sonarr',   label: 'Sonarr',        group: 'integrations', service: 'sonarr' },
   { id: 'radarr',   label: 'Radarr',        group: 'integrations', service: 'radarr', optional: true },
+  // #378 Phase 5: optional, skippable pointer to multi-instance (Settings ▸
+  // Instances). Frontend-only step — the backend just tracks the cursor index.
+  { id: 'stacks',   label: 'More stacks',   group: 'integrations', optional: true },
   { id: 'tautulli', label: 'Tautulli',      group: 'integrations', service: 'tautulli', optional: true },
   { id: 'subgen',   label: 'subgen',        group: 'integrations', service: 'subgen' },
   // Guided hardware-matched model/compute setup. Frontend-only step —
@@ -766,6 +769,45 @@ function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
 // ─── Footer ──────────────────────────────────────────────────────
 
 
+// #378 Phase 5 — optional pointer to multi-instance. Onboarding commits config
+// only at the end, so we don't embed the live instance editor here (it would show
+// the main stack as "not configured" mid-wizard). Instead we introduce the
+// feature and point at Settings ▸ Instances, where it's fully available after
+// setup. Skip = identical to single-stack onboarding.
+function StepStacks() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span className="label" style={{ color: 'var(--violet-400)' }}>integrations</span>
+          <span style={{ width: 12, height: 1, background: 'var(--bg-4)' }} />
+          <span className="label" style={{ color: 'var(--fg-3)' }}>optional</span>
+        </div>
+        <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-lg)', fontWeight: 600, letterSpacing: '-0.01em' }}>
+          Run separate stacks?
+        </h1>
+        <p style={{ margin: '8px 0 0', fontSize: 'var(--text-md)', color: 'var(--fg-1)', lineHeight: 1.55, maxWidth: 540 }}>
+          Most setups run one Sonarr/Radarr/Bazarr. If you run <strong>separate</strong> stacks
+          — say a dedicated anime Sonarr + Bazarr alongside your main TV stack — subarr can
+          track each independently and route subtitles to the right one.
+        </p>
+      </div>
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 12,
+        background: 'rgba(139,92,246,0.07)', border: '1px solid var(--bg-4)',
+        borderRadius: 'var(--radius-md)', padding: '12px 14px', maxWidth: 540,
+      }}>
+        <span style={{ color: 'var(--violet-400)', fontSize: 16, lineHeight: 1.4 }}>＋</span>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55 }}>
+          Add extra stacks any time after setup under <strong style={{ color: 'var(--fg-1)' }}>Settings ▸ Instances</strong>:
+          add the instance, then bind a library to it under <strong style={{ color: 'var(--fg-1)' }}>Settings ▸ Libraries</strong>.
+          Nothing to do here — just <strong style={{ color: 'var(--fg-1)' }}>Skip</strong> if a single stack is all you need.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WizardFooter({ canBack, canContinue, onBack, onSkip, onContinue, continueLabel, optional }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 18, borderTop: 'var(--border)' }}>
@@ -954,6 +996,7 @@ export function OnboardingPage() {
         </div>
       );
     }
+    if (step.id === 'stacks')  return <StepStacks />;
     if (step.service)          return <StepIntegration step={step} progress={state.progress} setField={setField} testResult={testResult} onTest={onTest} isTesting={busy} />;
     if (step.id === 'gpu')     return <StepGpu gpuInfo={gpuInfo} />;
     if (step.id === 'speech')  return <StepSpeech />;

@@ -19,9 +19,11 @@ Design choices:
   memory Settings + (later) persist to a config file. This keeps
   partial completions from breaking the running app.
 
-- **Step numbering** is contiguous 0..10. The wizard frontend owns
-  the rendering; the backend only tracks the integer. Future re-
-  ordering would bump a schema version, not the column type.
+- **Step numbering** is a contiguous resume cursor 0..MAX_STEP. The wizard
+  frontend owns the rendering and the exact step list; the backend only tracks
+  the integer and clamps it. Two steps are frontend-only and not separately
+  numbered here (subgen-setup, and the #378 "More stacks" pointer), so the
+  named STEP_* constants below are documentation, not a 1:1 index map.
 """
 
 from __future__ import annotations
@@ -49,7 +51,13 @@ STEP_OLLAMA = 7
 STEP_GPU = 8
 STEP_SPEECH = 9  # #111 — speech-aware audio (silero VAD) opt-in
 STEP_FIRST_WALK = 10
-STEP_DONE = 11
+# #378 Phase 5: the wizard gained the optional frontend-only "More stacks" step,
+# so the last reachable frontend index is now 12. Two frontend-only steps are
+# interspersed among the named constants below (subgen-setup after STEP_SUBGEN,
+# stacks after STEP_RADARR), so those names are documentation, not a 1:1 index
+# map — only MAX_STEP and STEP_DONE are read at runtime. STEP_DONE is the resume
+# cursor's resting index after completion = the final step index.
+STEP_DONE = 12
 
 # Maximum step value the API accepts. STEP_DONE marks completion.
 MAX_STEP = STEP_DONE
