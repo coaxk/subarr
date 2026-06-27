@@ -8,6 +8,12 @@
 
 import { StatusDot } from './atoms.jsx';
 import { FormRow, TextInput } from './onboarding.jsx';
+import { indexHealth, dotKindForInstance } from './instance-health-util.mjs';
+
+// Re-exported for back-compat with existing importers/tests; the canonical
+// definitions now live in instance-health-util.mjs (shared with the
+// Integrations summary tiles — one home for the dot-kind truth table).
+export { indexHealth, dotKindForInstance };
 
 const { useState, useEffect } = React;
 
@@ -56,25 +62,6 @@ export function groupByService(instances) {
     out[s].sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name));
   }
   return out;
-}
-
-// #378: index the /api/instances/health fan-out by `${service}/${id}` so a row
-// can O(1) look up its own live status. Pure + exported for unit test.
-export function indexHealth(health) {
-  const out = {};
-  for (const h of health || []) out[`${h.service}/${h.id}`] = h;
-  return out;
-}
-
-// #378: resolve a row's status-dot kind from its live health record.
-//   online            → ok (green)    reachable right now
-//   configured, down  → error (red)   has creds but the probe failed
-//   not configured    → muted (grey)  nothing to reach
-//   undefined (h)     → muted         probe still pending — unknown, not false-green
-// Pure + exported for unit test.
-export function dotKindForInstance(_inst, health) {
-  if (!health || !health.configured) return 'muted';
-  return health.online ? 'ok' : 'error';
 }
 
 const EMPTY_DRAFT = { service: 'sonarr', id: null, name: '', url: '', api_key: '' };

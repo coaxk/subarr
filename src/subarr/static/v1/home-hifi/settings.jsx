@@ -27,6 +27,7 @@ import { SubgenSetupFlow } from './subgen-setup.jsx';
 import {
   deriveTitle, groupRulesAlphabetically, activeLadderLetters,
 } from './lang-rules-util.mjs';
+import { instanceSubRows } from './instance-health-util.mjs';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -69,6 +70,32 @@ function useLiveHealth(intervalMs = 10000) {
   }, [intervalMs]);
 
   return { data, loading, error, refetch: fetchOnce };
+}
+
+// #378: per-instance reachability for the Integrations summary tiles. Separate
+// from useLiveHealth because the fan-out probe (one call per instance) can be
+// slower than the single-default /api/integrations/health; the tiles render
+// immediately and fold in per-instance sub-dots when this resolves. Returns the
+// raw health array (or [] on failure — the tiles simply show no sub-rows).
+function useInstancesHealth(intervalMs = 15000) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/instances/health', { credentials: 'same-origin' });
+        const d = r.ok ? await r.json() : null;
+        if (!cancelled && d) setRows(d.health || []);
+      } catch {
+        /* leave last-known rows in place */
+      }
+      if (!cancelled) timer = setTimeout(tick, intervalMs);
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [intervalMs]);
+  return rows;
 }
 
 function useTelemetryState() {
@@ -649,7 +676,7 @@ function SettingsWelcomeCard() {
   );
 }
 
-function IntegrationsSummaryPanel({ rail, onSelect }) {
+function IntegrationsSummaryPanel({ rail, instancesHealth, onSelect }) {
   if (!rail || rail.length === 0) {
     return <div style={{ padding: 20, color: 'var(--fg-2)' }}>
       No integrations configured. Run the onboarding wizard to set them up.
@@ -668,6 +695,9 @@ function IntegrationsSummaryPanel({ rail, onSelect }) {
         {rail.map((it) => {
           const raw = it.raw || {};
           const meta = it.meta;
+          // #378: per-instance sub-dots for instanced services with >1 instance
+          // (empty for single-stack — the tile stays visually identical).
+          const subRows = instanceSubRows(it.id, instancesHealth);
           const badge = (() => {
             // Pull the most-interesting metric per integration name
             const n = (it.id || '').toLowerCase();
@@ -705,6 +735,22 @@ function IntegrationsSummaryPanel({ rail, onSelect }) {
                 {it.status === 'error' && (raw.error || 'unreachable')}
                 {it.status === 'muted' && 'not configured'}
               </div>
+              {subRows.length > 0 && (
+                <div style={{
+                  display: 'flex', flexDirection: 'column', gap: 4,
+                  marginTop: 2, paddingTop: 8, borderTop: '1px solid var(--bg-3)',
+                }}>
+                  {subRows.map((s) => (
+                    <div key={s.id || '(default)'} title={s.label}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-2xs)' }}>
+                      <StatusDot kind={s.kind} />
+                      <span style={{ color: 'var(--fg-1)', fontWeight: 500 }}>{s.name}</span>
+                      <span style={{ flex: 1 }} />
+                      <span className="mono" style={{ color: 'var(--fg-3)' }}>{s.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>open →</span>
               </div>
@@ -2243,6 +2289,7 @@ function LangRulesPanel() {
 export function SettingsPage() {
   const { data: health, loading, error, refetch } = useLiveHealth();
   const rail = useMemo(() => buildRailItems(health), [health]);
+  const instancesHealth = useInstancesHealth();
 
   const [selectedId, setSelectedId] = useState(null);
   const [view, setView] = useState('integration'); // integration|system|telemetry|updates|providers
@@ -2361,6 +2408,7 @@ export function SettingsPage() {
               <SettingsStatusRow rail={rail} onView={setView} />
               <IntegrationsSummaryPanel
                 rail={rail}
+                instancesHealth={instancesHealth}
                 onSelect={(id) => { setSelectedId(id); setView('integration'); }}
               />
             </>
