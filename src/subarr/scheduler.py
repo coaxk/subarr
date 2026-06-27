@@ -245,8 +245,11 @@ class Scheduler:
         to re-scan is the only way to get those items off the wanted list
         (Bazarr only re-checks disk on its scheduled cadence otherwise).
 
-        Returns: dict with {fired, reason, stale_count, ...}. Logged for
-        the run-now JSON response so users can see what happened.
+        Returns: a dict logged for the run-now JSON response so users can see
+        what happened. Two shapes: the no-work early-out is
+        {fired: False, reason: "no stale-disk items"}; otherwise
+        {fired, stale_count, instances: [{instance, fired, reason|task_id, count}]}
+        — fired/skip reasons are per-instance (#371), not a single top-level reason.
         """
         stale = [it for it in items if getattr(it, "suggest_bazarr_rescan", False)]
         if not stale:
