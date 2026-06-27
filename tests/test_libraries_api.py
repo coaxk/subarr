@@ -49,6 +49,39 @@ def test_put_libraries_rejects_duplicate_slug(app_with_stub, tmp_path, monkeypat
     assert r.status_code == 422
 
 
+def test_put_libraries_round_trips_instance_bindings(app_with_stub, tmp_path, monkeypatch):
+    # #161 Phase 4B: a non-default library can be bound to specific arr/Bazarr
+    # instances; the binding must persist, apply live, and come back on GET.
+    import subarr.config_store as cs
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    body = {
+        "libraries": [
+            {
+                "name": "Anime",
+                "fs_root": str(tmp_path),
+                "arr_prefix": "/data/anime/",
+                "sonarr_id": "anime",
+                "bazarr_id": "anime-bz",
+            }
+        ]
+    }
+    r = app_with_stub.put("/api/settings/libraries", json=body)
+    assert r.status_code == 200, r.text
+    lib = next(l for l in r.json()["libraries"] if l["slug"] == "anime")
+    assert lib["sonarr_id"] == "anime"
+    assert lib["bazarr_id"] == "anime-bz"
+    assert lib["radarr_id"] == ""  # unset binding defaults to instance 0
+
+    saved = next(d for d in cs.load_overrides()["libraries"] if d["slug"] == "anime")
+    assert saved["sonarr_id"] == "anime"
+
+    from subarr.config import settings
+
+    live = next(l for l in settings.libraries if l.slug == "anime")
+    assert live.sonarr_id == "anime" and live.bazarr_id == "anime-bz"
+
+
 def test_validate_library_path(app_with_stub, tmp_path):
     (tmp_path / "TV").mkdir()
     r = app_with_stub.post("/api/settings/libraries/validate", json={"fs_root": str(tmp_path)})
