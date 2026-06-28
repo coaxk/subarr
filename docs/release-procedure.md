@@ -49,6 +49,10 @@ On `main`:
 ```bash
 # pyproject.toml version is the source of truth — bump it first
 $EDITOR pyproject.toml
+# AND bump src/subarr/__init__.py __version__ to match (it backs the in-app
+# version + telemetry). tests/test_version.py fails CI if the two drift —
+# 2.3.0 once shipped reporting itself as "2.2.1" because this was missed.
+$EDITOR src/subarr/__init__.py
 
 # Commit the bump
 git commit -am "release: bump version to 1.2.0"
