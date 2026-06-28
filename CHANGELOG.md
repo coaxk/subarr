@@ -7,6 +7,11 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-06-28
+
+### Fixed
+- **In-app version display (#390).** 2.3.0 reported itself as **"2.2.1"** in the header, the "update available" banner, and telemetry — the `__version__` constant wasn't bumped alongside `pyproject` (the two were maintained separately and the release procedure only mentioned the latter). Bumped, plus a CI test that now fails if they ever drift again, and a release-procedure note. No functional change.
+
 ## [2.3.0] - 2026-06-28
 
 **Run separate Sonarr/Radarr/Bazarr stacks (#161).** The headline use case is a dedicated **anime** Sonarr + Bazarr alongside your main TV/movie stack — each with its own indexers, providers, and profiles. subarr now models every stack as an **instance**, merges coverage across all of them, and routes every read and every writeback (subtitle uploads, blacklists, rescans) to the instance that owns the row, so a second Bazarr can never receive subs meant for the first. Fully additive — single-stack installs are byte-identical and upgrade with zero migration.
