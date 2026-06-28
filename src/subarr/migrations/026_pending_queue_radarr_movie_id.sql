@@ -1,0 +1,12 @@
+-- 026_pending_queue_radarr_movie_id.sql
+--
+-- #368: a pending job can now carry the owning movie's Radarr id so that, when
+-- subgen finishes, completion_watcher uploads the generated .srt straight to the
+-- owning Bazarr's /api/movies/subtitles (the episode path already does this via
+-- series_id + sonarr_episode_id). Without it, movie subtitles only reached Bazarr
+-- via the slower scan-disk fallback.
+--
+-- Nullable INTEGER: episode jobs and manual/path-only jobs leave it NULL and keep
+-- their existing behaviour; only movie jobs that resolved a Radarr id set it.
+-- Pre-existing rows get NULL, which is correct.
+ALTER TABLE pending_queue ADD COLUMN radarr_movie_id INTEGER;

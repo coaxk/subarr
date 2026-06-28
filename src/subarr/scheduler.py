@@ -609,12 +609,16 @@ class Scheduler:
         # #66/#116 slice 6: route through the pending queue (the feeder drains
         # to subgen at target depth + writes provenance). Falls back to direct
         # submission if no pending_queue is wired (older callers / tests).
+        # #368: movies carry their Radarr id in bazarr_radarr_id (None for
+        # episodes) — thread it so completion_watcher can upload the movie .srt
+        # to the owning Bazarr instead of only the scan-disk fallback.
         if self._pending_queue is not None:
             job = self._pending_queue.enqueue(
                 canonical,
                 source="auto",
                 series_id=series_id,
                 sonarr_episode_id=item.bazarr_episode_id,
+                radarr_movie_id=item.bazarr_radarr_id,
             )
             return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
@@ -625,5 +629,6 @@ class Scheduler:
             source=SOURCE_SUBGENSCAN,
             series_id=series_id,
             sonarr_episode_id=item.bazarr_episode_id,
+            radarr_movie_id=item.bazarr_radarr_id,
         )
         return scan.id, None

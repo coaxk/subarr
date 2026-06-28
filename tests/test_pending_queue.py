@@ -243,3 +243,20 @@ def test_resolve_orphaned_submitted_keeps_if_in_subgen(store):
     removed = store.resolve_orphaned_submitted(live, older_than_s=60.0)
     assert removed == 0
     assert store.get(job.id).status == STATUS_SUBMITTED
+
+
+def test_enqueue_persists_radarr_movie_id(store):
+    # #368: a movie job carries its Radarr id so completion_watcher can upload
+    # the finished .srt to the owning Bazarr. It must round-trip through the DB.
+    j = store.enqueue("Movies/Dune (2021)/Dune.mkv", source="auto", radarr_movie_id=909)
+    assert j.radarr_movie_id == 909
+    fetched = store.get(j.id)
+    assert fetched is not None and fetched.radarr_movie_id == 909
+    assert fetched.to_dict()["radarr_movie_id"] == 909
+
+
+def test_enqueue_radarr_movie_id_defaults_none(store):
+    # episodes / path-only jobs leave it NULL (byte-identical to before #368)
+    j = store.enqueue("TV/A/s01e01.mkv", source="manual")
+    assert j.radarr_movie_id is None
+    assert store.get(j.id).radarr_movie_id is None
