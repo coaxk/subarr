@@ -76,10 +76,148 @@ def _parse_float(s: str) -> float | None:
         return None
 
 
+# ───── #363: NVML fallback ──────────────────────────────────────────────────
+#
+# On WSL2 + nvidia-container-toolkit the GPU compute libs (libcuda,
+# libnvidia-ml.so.1) are mounted but the nvidia-smi BINARY is not — so the
+# binary path above finds nothing even though CUDA runs fine. NVML IS present,
+# so query it directly (via NVIDIA's official pure-Python binding) to populate
+# the same vitals. nvidia-smi stays primary; this is the no-config fallback.
+
+
+def _nvml_shape(
+    *,
+    name: str,
+    mem_used_b: int | None,
+    mem_total_b: int | None,
+    mem_free_b: int | None,
+    util_gpu_pct: int | None,
+    util_mem_pct: int | None,
+    temp_c: int | None,
+    power_draw_mw: int | None,
+    power_limit_mw: int | None,
+    cc_major: int | None,
+    cc_minor: int | None,
+    driver_version: str | None,
+    procs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Pure: shape raw NVML readings into the exact /api/gpu result dict (bytes →
+    MiB, milliwatts → W, (major, minor) → the compute_cap float nvidia-smi emits)."""
+
+    def _mib(b: int | None) -> float | None:
+        return None if b is None else round(b / (1024 * 1024), 1)
+
+    def _w(mw: int | None) -> float | None:
+        return None if mw is None else round(mw / 1000.0, 1)
+
+    cc = float(f"{cc_major}.{cc_minor}") if cc_major is not None and cc_minor is not None else None
+    return {
+        "online": True,
+        "name": name,
+        "memory": {
+            "used_mib": _mib(mem_used_b),
+            "total_mib": _mib(mem_total_b),
+            "free_mib": _mib(mem_free_b),
+        },
+        "utilization": {"gpu_pct": util_gpu_pct, "memory_pct": util_mem_pct},
+        "temperature_c": temp_c,
+        "power": {"draw_w": _w(power_draw_mw), "limit_w": _w(power_limit_mw)},
+        "compute_cap": cc,
+        "driver_version": driver_version,
+        "processes": procs,
+    }
+
+
+def _nvml_try(fn: Any) -> Any:
+    """Best-effort single NVML query — some vitals (power, temp) are unsupported
+    on some GPUs and raise; treat those as None rather than failing the snapshot."""
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def _nvml_processes(pynvml: Any, handle: Any) -> list[dict[str, Any]]:
+    """Running compute processes via NVML (best-effort; [] on any error)."""
+    out: list[dict[str, Any]] = []
+    try:
+        procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+    except Exception:
+        return out
+    for p in procs:
+        used = getattr(p, "usedGpuMemory", None)
+        name = _nvml_try(lambda pid=p.pid: pynvml.nvmlSystemGetProcessName(pid))
+        if isinstance(name, bytes):
+            name = name.decode(errors="replace")
+        out.append(
+            {
+                "pid": int(p.pid),
+                "name": name or "unknown",
+                "memory_mib": round(used / (1024 * 1024), 1) if used else 0.0,
+            }
+        )
+    return out
+
+
+def _nvml_status() -> dict[str, Any] | None:
+    """NVML snapshot for when the nvidia-smi binary is absent. Returns the same
+    shape as the nvidia-smi path, or None when NVML itself is unavailable (no GPU
+    / lib not mounted) so the caller reports offline exactly as before. Never
+    raises — import, init, and every query are guarded."""
+    try:
+        import pynvml  # nvidia-ml-py; dlopens libnvidia-ml.so.1 lazily
+    except Exception:
+        return None
+    try:
+        pynvml.nvmlInit()
+    except Exception:
+        return None  # lib absent / no GPU — behave like nvidia-smi-missing
+    try:
+        h = pynvml.nvmlDeviceGetHandleByIndex(0)
+        name = pynvml.nvmlDeviceGetName(h)
+        if isinstance(name, bytes):
+            name = name.decode(errors="replace")
+        mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+        util = _nvml_try(lambda: pynvml.nvmlDeviceGetUtilizationRates(h))
+        temp = _nvml_try(lambda: pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU))
+        cc = _nvml_try(lambda: pynvml.nvmlDeviceGetCudaComputeCapability(h))
+        driver = _nvml_try(pynvml.nvmlSystemGetDriverVersion)
+        if isinstance(driver, bytes):
+            driver = driver.decode(errors="replace")
+        return _nvml_shape(
+            name=name,
+            mem_used_b=getattr(mem, "used", None),
+            mem_total_b=getattr(mem, "total", None),
+            mem_free_b=getattr(mem, "free", None),
+            util_gpu_pct=getattr(util, "gpu", None) if util else None,
+            util_mem_pct=getattr(util, "memory", None) if util else None,
+            temp_c=temp,
+            power_draw_mw=_nvml_try(lambda: pynvml.nvmlDeviceGetPowerUsage(h)),
+            power_limit_mw=_nvml_try(lambda: pynvml.nvmlDeviceGetEnforcedPowerLimit(h)),
+            cc_major=cc[0] if cc else None,
+            cc_minor=cc[1] if cc else None,
+            driver_version=driver,
+            procs=_nvml_processes(pynvml, h),
+        )
+    except Exception as e:
+        log.debug("nvml fallback failed: %s", e)
+        return None
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
 @router.get("/gpu")
 async def gpu_status() -> dict[str, Any]:
     exe = _nvidia_smi_path()
     if exe is None:
+        # #363: no nvidia-smi binary (common on WSL2-Docker) — try NVML, which
+        # the container toolkit DOES mount, before reporting offline.
+        nvml = _nvml_status()
+        if nvml is not None:
+            return nvml
         return {"online": False, "error": "nvidia-smi not found"}
 
     legacy = False

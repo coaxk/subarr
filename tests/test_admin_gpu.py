@@ -12,10 +12,12 @@ import pytest
 
 
 def test_gpu_returns_offline_when_smi_missing(app_with_stub, monkeypatch):
-    # Force nvidia-smi resolution to fail.
+    # Force nvidia-smi resolution to fail AND the #363 NVML fallback to be
+    # unavailable, so the result doesn't depend on the test host's GPU state.
     from subarr.routers import gpu as gpu_mod
 
     monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: None)
+    monkeypatch.setattr(gpu_mod, "_nvml_status", lambda: None)
 
     r = app_with_stub.get("/api/gpu")
     assert r.status_code == 200
@@ -223,3 +225,50 @@ def test_logs_sse_emits_error_when_docker_down(app_with_stub):
     # #328: a dedicated event name (not "error") so the frontend can tell a
     # server-sent docker-down notice from an EventSource transport error.
     assert events[0][0] == "stream_error"
+
+
+# ───── #363: NVML fallback (nvidia-smi binary absent on WSL2-Docker) ─────────
+
+
+def test_nvml_shape_converts_units():
+    from subarr.routers.gpu import _nvml_shape
+
+    out = _nvml_shape(
+        name="NVIDIA GeForce RTX 4090",
+        mem_used_b=2 * 1024 * 1024 * 1024,  # 2 GiB
+        mem_total_b=24 * 1024 * 1024 * 1024,  # 24 GiB
+        mem_free_b=22 * 1024 * 1024 * 1024,
+        util_gpu_pct=37,
+        util_mem_pct=12,
+        temp_c=51,
+        power_draw_mw=120_000,  # 120 W
+        power_limit_mw=450_000,  # 450 W
+        cc_major=8,
+        cc_minor=9,
+        driver_version="550.54.14",
+        procs=[{"pid": 42, "name": "python", "memory_mib": 1024.0}],
+    )
+    assert out["online"] is True
+    assert out["name"] == "NVIDIA GeForce RTX 4090"
+    assert out["memory"]["used_mib"] == 2048.0
+    assert out["memory"]["total_mib"] == 24576.0
+    assert out["utilization"] == {"gpu_pct": 37, "memory_pct": 12}
+    assert out["temperature_c"] == 51
+    assert out["power"] == {"draw_w": 120.0, "limit_w": 450.0}
+    assert out["compute_cap"] == 8.9
+    assert out["driver_version"] == "550.54.14"
+    assert out["processes"] == [{"pid": 42, "name": "python", "memory_mib": 1024.0}]
+
+
+def test_gpu_falls_back_to_nvml_when_smi_missing(app_with_stub, monkeypatch):
+    from subarr.routers import gpu as gpu_mod
+
+    monkeypatch.setattr(gpu_mod, "_nvidia_smi_path", lambda: None)
+    monkeypatch.setattr(
+        gpu_mod, "_nvml_status", lambda: {"online": True, "name": "Tesla T4", "processes": []}
+    )
+    r = app_with_stub.get("/api/gpu")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["online"] is True
+    assert body["name"] == "Tesla T4"
