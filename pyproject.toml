@@ -23,6 +23,13 @@ dependencies = [
     # is the Pallets lib Starlette uses for this (ubiquitous, audited). We don't
     # hand-roll session crypto.
     "itsdangerous>=2.0,<3.0",
+    # #363: NVML fallback for the GPU card when the nvidia-smi BINARY is absent
+    # but libnvidia-ml.so.1 IS mounted (the standard WSL2 + nvidia-container-
+    # toolkit container). nvidia-ml-py is NVIDIA's official pure-Python ctypes
+    # binding (provides `import pynvml`); it only dlopens the lib at call time,
+    # so it imports cleanly everywhere and just fails to {online:false} on hosts
+    # without a GPU. nvidia-smi stays the primary source.
+    "nvidia-ml-py>=12.0,<13.0",
 ]
 
 [project.optional-dependencies]
