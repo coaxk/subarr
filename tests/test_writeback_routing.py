@@ -60,6 +60,48 @@ def test_subtitle_upload_routes_to_owning_bazarr(writeback_stack):
     assert not _subtitle_posts(ws.calls, ("bazarr", "")), "instance 0 must NOT receive it"
 
 
+def _movie_subtitle_posts(calls, key):
+    return [c for c in calls.get(key, []) if c["path"] == "/api/movies/subtitles"]
+
+
+def test_movie_subtitle_upload_routes_to_owning_bazarr(writeback_stack):
+    # #368: a completed MOVIE row with a known radarr_movie_id uploads its .srt
+    # directly to the owning Bazarr (instead of falling back to scan-disk).
+    import asyncio
+    from types import SimpleNamespace
+
+    ws = writeback_stack
+    canonical = "@anime/Naruto/Season 1/Naruto.S01E01.mkv"  # anime library → anime bazarr
+    _seed_srt(canonical)
+    w = _watcher(ws.bundle)
+    entry = SimpleNamespace(
+        id=7, canonical_path=canonical, sonarr_episode_id=None, series_id=None, radarr_movie_id=909
+    )
+
+    assert asyncio.run(w._try_upload_to_bazarr(entry)) is True
+    posts = _movie_subtitle_posts(ws.calls, ("bazarr", "anime"))
+    assert posts, "anime bazarr should receive the movie upload"
+    assert not _movie_subtitle_posts(ws.calls, ("bazarr", "")), "instance 0 must NOT receive it"
+
+
+def test_movie_upload_without_radarr_id_falls_back(writeback_stack):
+    # #368: no radarr_movie_id (and not an episode) → return False so the caller
+    # falls through to the (instance-aware) scan-disk trigger, as today.
+    import asyncio
+    from types import SimpleNamespace
+
+    ws = writeback_stack
+    canonical = "@anime/Naruto/Season 1/Naruto.S01E01.mkv"
+    _seed_srt(canonical)
+    w = _watcher(ws.bundle)
+    entry = SimpleNamespace(
+        id=8, canonical_path=canonical, sonarr_episode_id=None, series_id=None, radarr_movie_id=None
+    )
+
+    assert asyncio.run(w._try_upload_to_bazarr(entry)) is False
+    assert not _movie_subtitle_posts(ws.calls, ("bazarr", "anime"))
+
+
 def test_subtitle_upload_default_row_hits_instance0(writeback_stack):
     import asyncio
     from types import SimpleNamespace

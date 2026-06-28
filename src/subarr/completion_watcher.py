@@ -359,9 +359,18 @@ class CompletionWatcher:
                 self._provenance.mark_bazarr_triggered(entry.id)
                 log.info("bazarr upload OK for episode %d (ledger #%d)", entry.sonarr_episode_id, entry.id)
                 return True
-            # Movie path (radarr_movie_id) — we'd need radarr id on the
-            # entry. Provenance ledger has radarr_movie_id; not all paths
-            # populate it. Skip for now; fall through to scan-disk.
+            # #368: movie path — same direct upload, keyed by radarr_movie_id
+            # (now carried on the job → provenance). Routes to the owning Bazarr
+            # via _bazarr_for above. No radarr id → fall through to scan-disk.
+            if entry.radarr_movie_id:
+                await bz.upload_movie_subtitle(
+                    radarr_id=entry.radarr_movie_id,
+                    language="en",
+                    file_path=srt_path,
+                )
+                self._provenance.mark_bazarr_triggered(entry.id)
+                log.info("bazarr upload OK for movie %d (ledger #%d)", entry.radarr_movie_id, entry.id)
+                return True
             return False
         except IntegrationError as e:
             log.warning("bazarr upload failed (%s); falling back to scan-disk", e)

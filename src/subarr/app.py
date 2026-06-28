@@ -479,6 +479,7 @@ async def lifespan(app_: FastAPI):
             source=SOURCE_SUBGENSCAN,
             series_id=job.series_id,
             sonarr_episode_id=job.sonarr_episode_id,
+            radarr_movie_id=job.radarr_movie_id,  # #368: movie upload provenance
         )
 
     app_.state.queue_feeder = PendingQueueFeeder(
