@@ -15,6 +15,10 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
+## New in 2.3
+
+**Run separate Sonarr/Radarr/Bazarr stacks.** The headline is multi-instance: run a dedicated **anime** Sonarr + Bazarr alongside your main TV/movie stack (or any split you like), bind libraries per-instance, and subarr tracks each independently — every read merges across stacks and every writeback routes to the instance that owns the row. Plus movie subtitles now upload straight to the owning Bazarr, and the GPU card works out-of-the-box on WSL2-Docker. Fully additive — single-stack installs are byte-identical and upgrade with zero migration. See [Multiple stacks (instances)](#multiple-stacks-instances) and the [changelog](CHANGELOG.md).
+
 ## New in 2.2
 
 Filling more gaps, finding more controls, and a deep reliability pass. Non-breaking — upgrades transparently.
