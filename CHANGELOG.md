@@ -7,6 +7,8 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-06-28
+
 **Run separate Sonarr/Radarr/Bazarr stacks (#161).** The headline use case is a dedicated **anime** Sonarr + Bazarr alongside your main TV/movie stack — each with its own indexers, providers, and profiles. subarr now models every stack as an **instance**, merges coverage across all of them, and routes every read and every writeback (subtitle uploads, blacklists, rescans) to the instance that owns the row, so a second Bazarr can never receive subs meant for the first. Fully additive — single-stack installs are byte-identical and upgrade with zero migration.
 
 ### Added
@@ -15,6 +17,12 @@ breaking config changes.
 - **Library labels across the Gaps surfaces (#378).** Queue, Review, Aftercare, and Activity rows carry a library chip (matching Coverage), so in a multi-stack setup you can see which library each row belongs to at a glance. Default-library rows are unchanged.
 - **Browse any library's tree (#378).** Library → Browse gains a root picker (shown only when more than one library is bound) to browse a non-default library's tree, reusing the existing cached, rollup-skipping browser so big libraries stay fast.
 - **Onboarding "Run separate stacks?" pointer (#378).** A skippable wizard step introduces multi-instance and points first-run users to Settings → Instances; single-stack onboarding is unchanged.
+- **Movie subtitles upload straight to Bazarr (#368).** Generated movie subtitles now upload directly to the owning Bazarr instance (the episode path already did), instead of only nudging Bazarr's scan-disk task. Threaded via a new `radarr_movie_id` on the job → provenance ledger; episodes and manual jobs are unchanged.
+- **GPU card works on WSL2-Docker out of the box (#363).** When the `nvidia-smi` binary isn't in the container (the standard WSL2 + nvidia-container-toolkit case, where only the NVML library is mounted), the GPU card now falls back to NVML for its vitals — no more "no telemetry" while CUDA runs fine, and no manual `nvidia-smi` bind-mount. nvidia-smi stays primary.
+
+### Fixed
+- **Per-instance Bazarr scan-disk cooldown (#371).** The scheduler's stale-disk poke used a single global cooldown, so a recent poke on one Bazarr stack could delay another stack's rescan; it's now tracked per instance and only advances for an instance that actually fired.
+- **Per-instance retry isolation (#372).** An unexpected error from one Bazarr instance's task lookup could abort the completion-watcher's retry pass for the remaining instances; each instance is now isolated.
 
 ## [2.2.1] - 2026-06-26
 
