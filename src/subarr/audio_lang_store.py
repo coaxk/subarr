@@ -10,7 +10,7 @@ Schema:
 
     audio_lang_verifications
         canonical_path  TEXT PRIMARY KEY   -- file path (relative to media_root)
-        lang_code       TEXT NOT NULL      -- 3-letter ISO 639-2/B
+        lang_code       TEXT NOT NULL      -- canonical 2-letter ISO-639-1 (#358; normalized on write/read)
         source          TEXT NOT NULL      -- 'user' | 'auto-high-conf' | 'whisper-robust'
         confidence      REAL               -- 0.0-1.0 (1.0 for user confirmations)
         verified_at     REAL NOT NULL      -- epoch
@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .langs import normalize_lang
 from .log_safe import scrub
 
 
@@ -101,7 +102,8 @@ class AudioLangStore:
                 "  verified_by=excluded.verified_by, evidence=excluded.evidence",
                 (
                     canonical_path,
-                    lang_code.lower(),
+                    # #358: canonical 2-letter ISO-639-1 (was raw .lower()).
+                    normalize_lang(lang_code) or lang_code.lower(),
                     source,
                     confidence,
                     time.time(),
@@ -121,7 +123,7 @@ class AudioLangStore:
         if row:
             return AudioLangVerification(
                 canonical_path=row[0],
-                lang_code=row[1],
+                lang_code=normalize_lang(row[1]) or row[1],  # #358
                 source=row[2],
                 confidence=row[3],
                 verified_at=row[4],
@@ -137,7 +139,7 @@ class AudioLangStore:
             prefix, lang, src, conf, declared_at, declared_by = intent
             return AudioLangVerification(
                 canonical_path=canonical_path,
-                lang_code=lang,
+                lang_code=normalize_lang(lang) or lang,  # #358
                 source=f"series_intent:{src}",
                 confidence=conf,
                 verified_at=declared_at,
@@ -156,7 +158,7 @@ class AudioLangStore:
             rows = self._conn.execute(
                 "SELECT canonical_path, lang_code FROM audio_lang_verifications"
             ).fetchall()
-        return {r[0]: r[1] for r in rows}
+        return {r[0]: (normalize_lang(r[1]) or r[1]) for r in rows}  # #358
 
     def get_all_sources_as_lookup(self) -> dict[str, str]:
         """Return {canonical_path: source} for all per-file verifications, so
@@ -190,7 +192,7 @@ class AudioLangStore:
             out.append(
                 AudioLangVerification(
                     canonical_path=r[0],
-                    lang_code=r[1],
+                    lang_code=normalize_lang(r[1]) or r[1],  # #358
                     source=r[2],
                     confidence=r[3],
                     verified_at=r[4],
