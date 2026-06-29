@@ -120,6 +120,10 @@ _ISO3_TO_ISO1 = {
 # audio-language picker (GET /api/languages), the display, and Sonarr-name
 # resolution. subgen accepts any of these forms via LanguageCode.from_string,
 # so the canonical stays 2-letter end to end (no 3-letter conversion).
+# NB two keys are 3-letter — 'haw' (Hawaiian) and 'yue' (Cantonese) — because
+# they have NO ISO-639-1 code. normalize_lang() passes them through unchanged,
+# so every source (Whisper, picker, store) uses the same code and they stay
+# internally consistent; the "2-letter canonical" is "ISO-639-1 where it exists".
 WHISPER_LANGUAGES: dict[str, str] = {
     "en": "English",
     "zh": "Chinese",

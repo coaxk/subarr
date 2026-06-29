@@ -439,10 +439,12 @@ def resolve_audio_language_override(
     """Look up the user-verified audio language for `canonical` and
     decide whether to forward it to subgen as audio_language_override.
 
-    Returns the ISO 639-2/B code (e.g. 'jpn', 'fre') if the verification
-    passes the evidence gate, else None. None means "let subgen detect
-    from audio" — never returns an English code because subgen's default
-    SKIP_IF_AUDIO_LANGUAGES=eng makes the override redundant there.
+    Returns the canonical 2-letter ISO-639-1 code (e.g. 'ja', 'fr') if the
+    verification passes the evidence gate, else None. (#358: was 3-letter;
+    subgen parses the override via LanguageCode.from_string which accepts any
+    form, so the 2-letter canonical the store now holds is forwarded as-is.)
+    None means "let subgen detect from audio" — never returns an English code
+    because subgen's default SKIP_IF_AUDIO_LANGUAGES=eng makes it redundant.
 
     Evidence gate (#105):
       - lang missing or 'en'/'eng' → no override (no point)

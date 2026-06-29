@@ -164,6 +164,8 @@ class CoverageItem:
         return library_label(self.file_canonical_path or self.canonical_path or "")
 
     def to_dict(self) -> dict[str, Any]:
+        from .langs import normalize_lang
+
         return {
             "media_type": self.media_type,
             "title": self.title,
@@ -182,7 +184,10 @@ class CoverageItem:
                 "missing_subtitles": self.missing_subtitles,
             },
             "embedded_en": self.embedded_en,
-            "audio_langs": self.audio_langs,
+            # #358: emit 2-letter ISO-639-1 so the frontend picker (2-letter
+            # options) pre-selects the detected audio; internal item.audio_langs
+            # stays the raw ffprobe tag for the suspect/cross-check logic.
+            "audio_langs": [normalize_lang(l) or l for l in self.audio_langs],
             "suggest_bazarr_rescan": self.suggest_bazarr_rescan,
             "file_canonical_path": self.file_canonical_path,
             # #161 Phase 2: provenance label so every UI surface can show/filter
