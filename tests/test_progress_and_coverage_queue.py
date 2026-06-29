@@ -366,3 +366,16 @@ def test_file_has_target_sub_detects_en_sidecar(tmp_path):
     other.write_text("v")
     (d / "Other - S01E01.fr.srt").write_text("s")
     assert _file_has_target_sub(other) is False  # a French sub is not the en target
+
+
+def test_coverage_queue_threads_radarr_movie_id(app_with_stub, coverage_queue_media_root):
+    # #368 follow-up: the manual "fill this gap" on a MOVIE row sends
+    # radarr_movie_id, which must be carried onto the pending job so
+    # completion_watcher uploads the .srt straight to Bazarr (not just scan-disk).
+    canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
+    r = app_with_stub.post(
+        "/api/coverage/queue", json={"canonical_path": canonical, "radarr_movie_id": 909}
+    )
+    assert r.status_code == 202, r.text
+    job = app_with_stub.app.state.pending_queue.get(r.json()["id"])
+    assert job is not None and job.radarr_movie_id == 909
