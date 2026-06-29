@@ -82,6 +82,7 @@ from .routers import (
     coverage_actions,
     discovery as r_discovery,
     household as r_household,
+    languages as r_languages,
     providers as r_providers,
     vision as r_vision,
     enrichment as r_enrichment,
@@ -998,6 +999,7 @@ app.include_router(r_instances.router)
 app.include_router(r_libraries.router)
 app.include_router(coverage.router)
 app.include_router(coverage_actions.router)
+app.include_router(r_languages.router)
 app.include_router(r_provenance.router)
 app.include_router(r_schedule.router)
 app.include_router(r_enrichment.router)
