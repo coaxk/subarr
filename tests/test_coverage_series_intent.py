@@ -51,7 +51,7 @@ def test_intent_lookup_resolves_new_episode_under_declared_series(store):
     # The new episode has no per-file row, yet membership + value resolve via
     # longest-prefix series-intent inheritance.
     assert new_ep in user_verifications
-    assert user_verifications[new_ep] == "eng"
+    assert user_verifications[new_ep] == "en"  # #358: 2-letter canonical
     assert verification_sources.get(new_ep).startswith("series_intent")
 
 
@@ -72,7 +72,7 @@ def test_classify_marks_new_episode_verified_from_series_intent(store):
     _classify_audio_label(item, user_verifications=user_verifications)
 
     assert item.audio_verified is True
-    assert item.audio_langs == ["eng"]
+    assert item.audio_langs == ["en"]  # #358: 2-letter canonical
     assert item.audio_label_unknown is False
 
 
@@ -84,7 +84,7 @@ def test_per_file_verification_still_wins_over_intent(store):
     store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv", lang_code="fre")
     user_verifications, _ = _build_verification_lookup(store)
 
-    assert user_verifications["TV/Cheers/Season 1/Cheers.S01E05.mkv"] == "fre"
+    assert user_verifications["TV/Cheers/Season 1/Cheers.S01E05.mkv"] == "fr"  # #358: 2-letter
 
 
 def test_unrelated_path_not_matched(store):

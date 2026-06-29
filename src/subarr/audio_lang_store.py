@@ -250,7 +250,15 @@ class AudioLangStore:
                 "  lang_code=excluded.lang_code, source=excluded.source, "
                 "  confidence=excluded.confidence, declared_at=excluded.declared_at, "
                 "  declared_by=excluded.declared_by, note=excluded.note",
-                (series_prefix, lang_code.lower(), source, confidence, time.time(), declared_by, note),
+                (
+                    series_prefix,
+                    normalize_lang(lang_code) or lang_code.lower(),  # #358: 2-letter canonical
+                    source,
+                    confidence,
+                    time.time(),
+                    declared_by,
+                    note,
+                ),
             )
 
     def delete_series_intent(self, series_prefix: str) -> bool:
@@ -274,7 +282,7 @@ class AudioLangStore:
         return [
             {
                 "series_prefix": r[0],
-                "lang_code": r[1],
+                "lang_code": normalize_lang(r[1]) or r[1],  # #358
                 "source": r[2],
                 "confidence": r[3],
                 "declared_at": r[4],
