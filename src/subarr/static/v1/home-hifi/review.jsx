@@ -11,56 +11,9 @@
 import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { distinctSeriesPrefixes } from './lang-rules-util.mjs';
+import { useLanguagePicks } from './languages.mjs';
 
 const { useState, useEffect, useCallback, useMemo } = React;
-
-// Language pick list — same set Coverage's per-row modal uses, so the
-// vocabulary is identical between flows. Alphabetical by English name.
-// Expanded 2026-05-31 with Balkan + Baltic + slavic langs Judd flagged
-// as missing (Serbian / Bulgarian / Croatian).
-const LANG_PICKS = [
-  ['ara','Arabic'],
-  ['bul','Bulgarian'],
-  ['cat','Catalan'],
-  ['chi','Chinese'],
-  ['hrv','Croatian'],
-  ['cze','Czech'],
-  ['dan','Danish'],
-  ['dut','Dutch'],
-  ['eng','English'],
-  ['est','Estonian'],
-  ['fin','Finnish'],
-  ['fre','French'],
-  ['glg','Galician'],
-  ['ger','German'],
-  ['gre','Greek'],
-  ['heb','Hebrew'],
-  ['hin','Hindi'],
-  ['hun','Hungarian'],
-  ['ice','Icelandic'],
-  ['ind','Indonesian'],
-  ['ita','Italian'],
-  ['jpn','Japanese'],
-  ['kor','Korean'],
-  ['lav','Latvian'],
-  ['lit','Lithuanian'],
-  ['may','Malay'],
-  ['nor','Norwegian'],
-  ['pol','Polish'],
-  ['por','Portuguese'],
-  ['rum','Romanian'],
-  ['rus','Russian'],
-  ['srp','Serbian'],
-  ['slo','Slovak'],
-  ['slv','Slovenian'],
-  ['spa','Spanish'],
-  ['swe','Swedish'],
-  ['tha','Thai'],
-  ['tur','Turkish'],
-  ['ukr','Ukrainian'],
-  ['vie','Vietnamese'],
-  ['zxx','No linguistic content'],
-];
 
 function FlagDot({ flag }) {
   const kind = flag === 'suspect' ? 'warn' : 'muted';
@@ -294,6 +247,7 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
 }
 
 export function ReviewPage() {
+  const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
   // loading = first paint only (data === null). After we've ever rendered
   // a list, refetches go through isRefetching so the stale list stays on
@@ -321,7 +275,7 @@ export function ReviewPage() {
   // Series-level expansion state.
   const [expandedSeries, setExpandedSeries] = useState(() => new Set());
   // Bulk apply state.
-  const [bulkLang, setBulkLang] = useState('fre');
+  const [bulkLang, setBulkLang] = useState('fr');
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, errors: 0 });
   // #226: also declare a durable series/movie language rule so FUTURE
@@ -976,7 +930,7 @@ export function ReviewPage() {
                         border: 'var(--border)', borderRadius: 'var(--radius-md)',
                         fontSize: 'var(--text-sm)',
                       }}>
-                {LANG_PICKS.map(([code, name]) => (
+                {langPicks.map(([code, name]) => (
                   <option key={code} value={code}>{name} ({code})</option>
                 ))}
               </select>

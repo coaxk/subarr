@@ -259,7 +259,9 @@ def test_coverage_queue_forwards_audio_language_override_when_verified(
     # drain time. So assert it's stored on the job, not POSTed immediately.
     jobs = [j for j in app_with_stub.app.state.pending_queue.list() if j.canonical_path == canonical]
     assert jobs, "coverage/queue did not enqueue a pending job"
-    assert jobs[0].audio_language_override == "fre"
+    # #358: store normalizes 'fre'→'fr'; subgen's LanguageCode.from_string
+    # resolves the 2-letter form, so forwarding 2-letter is correct.
+    assert jobs[0].audio_language_override == "fr"
 
 
 @pytest.mark.subgen(handler=_capturing_subgen_handler)
@@ -373,9 +375,7 @@ def test_coverage_queue_threads_radarr_movie_id(app_with_stub, coverage_queue_me
     # radarr_movie_id, which must be carried onto the pending job so
     # completion_watcher uploads the .srt straight to Bazarr (not just scan-disk).
     canonical = "TV/Foreign Drama/Season 1/Foreign.Drama.S01E03.mkv"
-    r = app_with_stub.post(
-        "/api/coverage/queue", json={"canonical_path": canonical, "radarr_movie_id": 909}
-    )
+    r = app_with_stub.post("/api/coverage/queue", json={"canonical_path": canonical, "radarr_movie_id": 909})
     assert r.status_code == 202, r.text
     job = app_with_stub.app.state.pending_queue.get(r.json()["id"])
     assert job is not None and job.radarr_movie_id == 909

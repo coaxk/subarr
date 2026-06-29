@@ -6,6 +6,7 @@
 // /api/schedule/coverage_walk/run-now and then forces a fresh fetch.
 
 import { Glyph, StatusDot, LangTag, LibraryChip } from './atoms.jsx';
+import { useLanguagePicks } from './languages.mjs';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -1104,10 +1105,11 @@ function PendingReviewBanner() {
 // then walks the user through each item with audio player + Confirm /
 // Correct / Skip. Burns through 50+ verifications in 10 min.
 function BatchReviewModal() {
+  const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [idx, setIdx] = useState(0);
-  const [picked, setPicked] = useState('eng');
+  const [picked, setPicked] = useState('en');
   const [posData, setPosData] = useState(null);
   const [posLoading, setPosLoading] = useState(false);
   const [activeSampleIdx, setActiveSampleIdx] = useState(0);
@@ -1144,7 +1146,7 @@ function BatchReviewModal() {
     setPosData(null);
     setActiveSampleIdx(0);
     setPosLoading(true);
-    setPicked('eng');
+    setPicked('en');
     let cancelled = false;
     fetch(`/api/audio-lang/sample-positions?canonical_path=${encodeURIComponent(curPath)}&track=${track}&n=3`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
@@ -1319,7 +1321,7 @@ function BatchReviewModal() {
               <select value={picked} onChange={(e) => setPicked(e.target.value)}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
                          color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
-                {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
+                {langPicks.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
               </select>
             </div>
 
@@ -1513,57 +1515,10 @@ export function ArbiterModal() {
 
 // v1.1-O Layer 4: per-row audio-lang verification modal. Triggered by
 // CustomEvent('open-audio-review') from AudioLabelChip clicks.
-// Alphabetical by English name. ISO 639-2 (3-letter) codes — they're
-// what Bazarr / Sonarr / Plex all settle on internally, even when the
-// UI shows ISO 639-1 (2-letter) codes elsewhere. Expanded 2026-05-31
-// to cover the Balkan + Baltic + remaining EU slavic languages
-// (missing Serbian / Bulgarian / Croatian was a hole flagged by Judd).
-const LANG_PICKS = [
-  ['ara','Arabic'],
-  ['bul','Bulgarian'],
-  ['cat','Catalan'],
-  ['chi','Chinese'],
-  ['hrv','Croatian'],
-  ['cze','Czech'],
-  ['dan','Danish'],
-  ['dut','Dutch'],
-  ['eng','English'],
-  ['est','Estonian'],
-  ['fin','Finnish'],
-  ['fre','French'],
-  ['glg','Galician'],
-  ['ger','German'],
-  ['gre','Greek'],
-  ['heb','Hebrew'],
-  ['hin','Hindi'],
-  ['hun','Hungarian'],
-  ['ice','Icelandic'],
-  ['ind','Indonesian'],
-  ['ita','Italian'],
-  ['jpn','Japanese'],
-  ['kor','Korean'],
-  ['lav','Latvian'],
-  ['lit','Lithuanian'],
-  ['may','Malay'],
-  ['nor','Norwegian'],
-  ['pol','Polish'],
-  ['por','Portuguese'],
-  ['rum','Romanian'],
-  ['rus','Russian'],
-  ['srp','Serbian'],
-  ['slo','Slovak'],
-  ['slv','Slovenian'],
-  ['spa','Spanish'],
-  ['swe','Swedish'],
-  ['tha','Thai'],
-  ['tur','Turkish'],
-  ['ukr','Ukrainian'],
-  ['vie','Vietnamese'],
-  ['zxx','No linguistic content'],
-];
 export function AudioReviewModal() {
+  const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [row, setRow] = useState(null);
-  const [selected, setSelected] = useState('eng');
+  const [selected, setSelected] = useState('en');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   // v1.1-O Layer 4++ audio player state
@@ -1584,7 +1539,7 @@ export function AudioReviewModal() {
   useEffect(() => {
     const handler = (e) => {
       setRow(e.detail);
-      setSelected((e.detail?.audio || 'eng').split(',')[0] || 'eng');
+      setSelected((e.detail?.audio || 'en').split(',')[0] || 'en');
       setError(null);
       setPosData(null);
       setTrack(0);
@@ -2019,7 +1974,7 @@ export function AudioReviewModal() {
             <select value={selected} onChange={(e) => setSelected(e.target.value)}
               style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-1)',
                        color: 'var(--fg-0)', border: 'var(--border)', borderRadius: 'var(--radius-md)' }}>
-              {LANG_PICKS.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
+              {langPicks.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
             </select>
           </div>
         )}

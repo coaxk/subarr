@@ -19,7 +19,7 @@ def test_get_returns_per_file_verification_when_present(store):
     store.upsert(canonical_path="TV/Cheers/Season 1/Cheers.S01E01.mkv", lang_code="eng")
     v = store.get("TV/Cheers/Season 1/Cheers.S01E01.mkv")
     assert v is not None
-    assert v.lang_code == "eng"
+    assert v.lang_code == "en"  # #358: store normalizes 'eng' → 2-letter canonical
     assert v.source == "user"
 
 
@@ -30,7 +30,7 @@ def test_get_falls_through_to_series_intent(store):
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
     v = store.get("TV/Cheers/Season 1/Cheers.S01E01.mkv")
     assert v is not None
-    assert v.lang_code == "eng"
+    assert v.lang_code == "en"  # #358: store normalizes 'eng' → 2-letter canonical
     assert v.source.startswith("series_intent")
     assert v.evidence == {"inherited_from_series_prefix": "TV/Cheers/"}
 
@@ -43,7 +43,7 @@ def test_per_file_beats_series_intent(store):
         canonical_path="TV/Cheers/Season 1/Cheers.S01E05.mkv", lang_code="fre"
     )  # one French-dubbed episode
     v = store.get("TV/Cheers/Season 1/Cheers.S01E05.mkv")
-    assert v.lang_code == "fre"
+    assert v.lang_code == "fr"  # #358: 'fre' → 2-letter canonical
     assert v.source == "user"  # NOT series_intent
 
 
@@ -53,7 +53,7 @@ def test_longest_series_prefix_wins(store):
     store.set_series_intent(series_prefix="TV/Cheers/", lang_code="eng")
     store.set_series_intent(series_prefix="TV/Cheers/Season 2/", lang_code="fre")
     v = store.get("TV/Cheers/Season 2/Cheers.S02E01.mkv")
-    assert v.lang_code == "fre"
+    assert v.lang_code == "fr"  # #358: 'fre' → 2-letter canonical
 
 
 def test_intent_prefix_normalised_to_trailing_slash(store):
