@@ -47,8 +47,9 @@ A table of the ~99 languages Whisper can return: `2-letter code → English name
 ### 2. Helpers (`langs.py`)
 
 - `normalize_lang(x) → 2-letter` — **unchanged** (already collapses name/iso1/iso3 → 2-letter; idempotent; never raises).
-- **new** `to_iso3(code) → 3-letter ISO-639-2/B` — `gl→glg`, `ko→kor`, `fr→fre`. Uses the **B (bibliographic)** code set to match subgen's `SKIP_IF_AUDIO_LANGUAGES` and the override docstring. Falls back to the input unchanged if unmapped (defensive — never raises, never blanks).
 - **new** `display_name(code) → str` — English name from `WHISPER_LANGUAGES`, for UI/propagation; falls back to the code if unknown.
+
+> **No `to_iso3`.** The original design added a 2→3-letter helper at the subgen boundary. **Task-0 verification of the subgen source disproved its premise** (see §4): subgen parses *any* form via `LanguageCode.from_string` and compares enums, so 2-letter is accepted. The helper is dropped (YAGNI).
 
 ### 3. Store = 2-letter always (`audio_lang_store.py`)
 
@@ -56,12 +57,11 @@ A table of the ~99 languages Whisper can return: `2-letter code → English name
 - `get` / `get_all_as_lookup` normalize on **read** too, so legacy mixed-form rows (`glg`/`fre`) come back as 2-letter **without a SQL data-migration**. (Idempotent double-normalize is harmless.)
 - Fix the stale `-- 3-letter ISO 639-2/B` schema comment to read 2-letter ISO-639-1.
 
-### 4. subgen-override boundary converts to 3-letter (`resolve_audio_language_override`)
+### 4. subgen-override boundary forwards 2-letter (`resolve_audio_language_override`)
 
-Reads the now-2-letter stored value and returns `to_iso3(lang)`. Subgen always receives the 3-letter code its skip-list expects.
-- Round-trips the regression tests: seed `fre` → store `fr` → override `to_iso3('fr')` = `fre`. ✅
-- **Fixes a latent bug**: a Whisper-detected `ko` was previously forwarded as 2-letter `ko` (may not match subgen's 3-letter skip list); now `kor`.
-- The `en`/`eng` short-circuit stays (no override for English).
+**Verified against the subgen source (Task 0):** subgen reads both `audio_language_override` and `SKIP_IF_AUDIO_LANGUAGES` through `LanguageCode.from_string` — which matches on ISO-639-1, 639-2/T, 639-2/B, English name, *or* native name — and compares the resulting **enums** (`__eq__` defined), then converts to ISO-639-1 internally for Whisper (`to_iso_639_1()`). So subgen is **format-agnostic**; 2-letter is accepted natively.
+
+Therefore **no code change** is needed at the boundary: once the store is 2-letter (§3), `resolve_audio_language_override` already returns the 2-letter value. The `en`/`eng` short-circuit stays. The only change is to the two regression tests that asserted the old 3-letter output (`fre`) — they're updated to assert the 2-letter canonical (`fr`), which is correct, not test-masking. (There is no "latent `ko`-as-2-letter" bug — subgen normalized it all along.)
 
 ### 5. Endpoint normalization (`routers/audio_lang.py::upsert_verification`)
 
@@ -87,7 +87,7 @@ Store (whisper source)         → "gl"
 User opens picker (/api/languages) → "Galician" / value "gl"  (native 2-letter)
 User confirms                  → POST /verifications {lang_code:"gl"}
   store.upsert                 → "gl"   (normalize, idempotent)
-  resolve_audio_language_override → to_iso3("gl") = "glg" → subgen  ✅ (matches SKIP list)
+  resolve_audio_language_override → "gl" → subgen (LanguageCode.from_string → enum)  ✅
   _propagate_to_sonarr         → display_name("gl") = "Galician"
                                   → matched in Sonarr /language? yes → PUT + Bazarr sync ✅
                                                               no  → honest "Sonarr can't hold Galician"
@@ -98,22 +98,21 @@ Agree/suspect heuristic        → store "gl" == whisper "gl"  ✅
 
 No SQL data-migration. Normalize-on-read in the store handles pre-existing mixed-form rows transparently. (Optional future cleanup: a one-time normalize of existing rows — not required for correctness.)
 
-## Design-validation step (during implementation)
+## Design-validation step — DONE (Task 0)
 
-Subarr owns the subgen fork (`coaxk/subarr-subgen`). Before finalizing the `to_iso3` direction, confirm in the subgen source how `audio_language_override` is matched against `SKIP_IF_AUDIO_LANGUAGES` (2- vs 3-letter, B vs T codes) — to be certain, not assume. The docstring + the 3-letter skip list strongly indicate 3-letter/B; verify.
+Subarr owns the subgen fork. Confirmed in `/subgen/language_code.py` + `/subgen/subgen.py`: subgen parses `audio_language_override` and `SKIP_IF_AUDIO_LANGUAGES` via `LanguageCode.from_string` (matches iso1/iso2t/iso2b/name_en/name_native), compares enums, and internally converts to ISO-639-1 for Whisper. **subgen is format-agnostic → forward 2-letter; `to_iso3` dropped.**
 
 ## Testing strategy
 
 **Unit (`langs.py`):**
-- `to_iso3` round-trips (`gl↔glg`, `fr↔fre`, `ko↔kor`) and falls back unchanged for unknown.
 - `WHISPER_LANGUAGES` contains `gl`/Galician and is the expected size (~99).
-- `display_name` + alias overrides resolve correctly.
+- `display_name` resolves and falls back for unknown.
 
 **Store:** `upsert` normalizes on write (`glg`/`Galician`→`gl`); read paths normalize legacy rows; `get_all_as_lookup` makes picker-`gl` and Whisper-`gl` agree.
 
 **Contract:**
-- `resolve_audio_language_override` yields **3-letter** end-to-end; the two existing regression tests stay green (seed `fre` → override `fre`).
-- Picker→store→override flow: `gl` → store `gl` → override `glg`.
+- `resolve_audio_language_override` yields the **2-letter** canonical end-to-end; the two regression tests are updated to assert `fr` (was `fre`) — correct, since subgen normalizes any form.
+- Picker→store→override flow: `gl` → store `gl` → override `gl`.
 - `GET /api/languages` returns the full set with Galician present.
 - Propagation: a language Sonarr supports → attempted+matched; a language it lacks → honest non-fatal degradation (local verification still persisted).
 
@@ -123,7 +122,7 @@ Subarr owns the subgen fork (`coaxk/subarr-subgen`). Before finalizing the `to_i
 
 1. Picking any Whisper-detectable language stores a 2-letter code that agrees with Whisper detection.
 2. The picker offers the full Whisper language set (no dead ends).
-3. subgen still receives 3-letter overrides (regression tests green); Whisper-detected non-English overrides are now 3-letter too.
+3. subgen receives the 2-letter override and resolves it correctly (regression tests updated to the 2-letter canonical).
 4. Sonarr propagation succeeds for any language Sonarr supports (incl. Galician) and degrades honestly otherwise.
 5. No regression on the existing audio-lang suite; ruff + vitest clean.
 

@@ -4,7 +4,7 @@
 
 **Goal:** Make 2-letter ISO-639-1 the canonical internal audio-language format end-to-end, give the manual picker the full Whisper language set, and close the silent Sonarr→Bazarr propagation gap for languages the curated map misses (Galician + the long tail).
 
-**Architecture:** A single `WHISPER_LANGUAGES` table in `langs.py` is the source of truth. The store normalizes to 2-letter on write and read; the *only* place 3-letter is produced is the subgen-override boundary (`to_iso3`). The picker fetches the full set from a new `GET /api/languages`. The Sonarr propagation resolves names from `WHISPER_LANGUAGES` and matches Sonarr's live `/language` list, degrading honestly when Sonarr can't represent a language.
+**Architecture:** A single `WHISPER_LANGUAGES` table in `langs.py` is the source of truth. The store normalizes to **2-letter** on write and read, and 2-letter is the canonical end-to-end — including the subgen override (Task 0 verified subgen's `LanguageCode.from_string` accepts any form, so no 3-letter conversion is needed). The picker fetches the full set from a new `GET /api/languages`. The Sonarr propagation resolves names from `WHISPER_LANGUAGES` and matches Sonarr's live `/language` list, degrading honestly when Sonarr can't represent a language.
 
 **Tech Stack:** Python 3.11 / FastAPI / SQLite (backend), vanilla JSX bundles + vitest (frontend), pytest + ruff. Spec: `docs/superpowers/specs/2026-06-29-358-audio-language-canonicalization-design.md`.
 
@@ -57,10 +57,13 @@ Write one line into your notes for Task 1's commit body, e.g. *"subgen matches o
 - [ ] **Step 1: Write the failing test**
 
 ```python
-"""#358: canonical language table + the 2→3 letter boundary helper."""
+"""#358: canonical language table + display-name helper.
+
+(No to_iso3 — Task 0 verified subgen's LanguageCode.from_string accepts any
+form and compares enums, so 2-letter is forwarded as-is to subgen.)"""
 from __future__ import annotations
 
-from subarr.langs import WHISPER_LANGUAGES, to_iso3, display_name, normalize_lang
+from subarr.langs import WHISPER_LANGUAGES, display_name
 
 
 def test_table_is_the_whisper_set_with_galician():
@@ -74,27 +77,6 @@ def test_table_is_the_whisper_set_with_galician():
         assert name and name[0].isupper()
 
 
-def test_to_iso3_round_trips_known_codes():
-    assert to_iso3("gl") == "glg"
-    assert to_iso3("fr") == "fre"   # ISO-639-2/B, not 'fra'
-    assert to_iso3("de") == "ger"   # B, not 'deu'
-    assert to_iso3("ko") == "kor"
-    assert to_iso3("en") == "eng"
-
-
-def test_to_iso3_falls_back_unchanged_for_unmapped():
-    # Defensive: never blanks, never raises — a tail language with no B-code
-    # in our map is forwarded as-is (no regression vs today's 2-letter forward).
-    assert to_iso3("xx") == "xx"
-    assert to_iso3("") == ""
-
-
-def test_to_iso3_inverts_consistently_with_normalize():
-    # normalize_lang(to_iso3(code)) must return the original 2-letter code.
-    for code in ("gl", "fr", "de", "ko", "ja", "zh", "ca", "sr"):
-        assert normalize_lang(to_iso3(code)) == code
-
-
 def test_display_name_resolves_and_falls_back():
     assert display_name("gl") == "Galician"
     assert display_name("zz") == "zz"  # unknown → the code itself
@@ -102,8 +84,9 @@ def test_display_name_resolves_and_falls_back():
 
 - [ ] **Step 2: Run it red**
 
-Run: `python -m pytest tests/test_langs_iso3_and_table.py -q`
+Run: `python -m pytest tests/test_langs_table.py -q`
 Expected: FAIL — `ImportError: cannot import name 'WHISPER_LANGUAGES'`.
+(Use filename `tests/test_langs_table.py` — there's no iso3 helper anymore.)
 
 - [ ] **Step 3: Author the table from the canonical Whisper dict**
 
@@ -147,35 +130,10 @@ WHISPER_LANGUAGES: dict[str, str] = {
 }
 ```
 
-- [ ] **Step 4: Add `to_iso3` (invert `_ISO3_TO_ISO1`, B-codes) and `display_name`**
+- [ ] **Step 4: Add `display_name`**
 
 Add below the table:
 ```python
-# #358: 2-letter ISO-639-1 → 3-letter ISO-639-2/B, ONLY for the subgen-override
-# boundary (subgen's SKIP_IF_AUDIO_LANGUAGES uses 3-letter B codes). Inverse of
-# _ISO3_TO_ISO1, taking the bibliographic (B) code where B and T differ.
-_ISO1_TO_ISO3B: dict[str, str] = {
-    "en": "eng", "fr": "fre", "de": "ger", "es": "spa", "it": "ita",
-    "pt": "por", "nl": "dut", "sv": "swe", "no": "nor", "nn": "nno",
-    "da": "dan", "fi": "fin", "is": "isl", "ru": "rus", "uk": "ukr",
-    "pl": "pol", "cs": "cze", "sk": "slo", "hr": "hrv", "sr": "srp",
-    "bg": "bul", "sl": "slv", "el": "gre", "tr": "tur", "he": "heb",
-    "ar": "ara", "fa": "per", "hi": "hin", "ko": "kor", "ja": "jpn",
-    "zh": "chi", "th": "tha", "vi": "vie", "id": "ind", "ro": "rum",
-    "hu": "hun", "ca": "cat", "gl": "glg", "zxx": "zxx",
-}
-
-
-def to_iso3(code: str | None) -> str:
-    """ISO-639-1 (or any short code) → ISO-639-2/B 3-letter, for the subgen
-    override. Falls back to the input lowercased if unmapped — never raises,
-    never blanks. Idempotent: normalize_lang(to_iso3(x)) == normalize_lang(x)."""
-    if not code:
-        return code or ""
-    c = str(code).strip().lower()
-    return _ISO1_TO_ISO3B.get(c, c)
-
-
 def display_name(code: str | None) -> str:
     """English display name from WHISPER_LANGUAGES; falls back to the code."""
     if not code:
@@ -186,18 +144,18 @@ def display_name(code: str | None) -> str:
 
 - [ ] **Step 5: Run it green**
 
-Run: `python -m pytest tests/test_langs_iso3_and_table.py -q`
-Expected: PASS (5 tests). If `test_table_is_the_whisper_set_with_galician` fails on count, reconcile against the Step-3 extraction.
+Run: `python -m pytest tests/test_langs_table.py -q`
+Expected: PASS (2 tests). If `test_table_is_the_whisper_set_with_galician` fails on count, reconcile against the Step-3 extraction.
 
 - [ ] **Step 6: Lint + commit**
 
-Run: `python -m ruff check src/subarr/langs.py tests/test_langs_iso3_and_table.py`
+Run: `python -m ruff check src/subarr/langs.py tests/test_langs_table.py`
 ```bash
-git add src/subarr/langs.py tests/test_langs_iso3_and_table.py
-git commit -m "feat(#358): WHISPER_LANGUAGES table + to_iso3/display_name helpers
+git add src/subarr/langs.py tests/test_langs_table.py
+git commit -m "feat(#358): WHISPER_LANGUAGES table + display_name helper
 
-Single source of truth for languages; to_iso3 produces 3-letter B codes only
-at the subgen-override boundary. subgen format confirmed in Task 0: <finding>.
+Single source of truth for languages. Task 0 verified subgen's
+LanguageCode.from_string accepts any form -> no to_iso3 needed.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -311,17 +269,20 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: subgen-override boundary returns 3-letter (`resolve_audio_language_override`)
+### Task 3: subgen override forwards 2-letter (regression tests only)
+
+**Why no code change:** Task 0 verified subgen parses the override via `LanguageCode.from_string` (accepts iso1/iso2t/iso2b/name/native) and compares enums. After Task 2 the store is 2-letter, so `resolve_audio_language_override` already returns the 2-letter canonical — which subgen resolves correctly. The two existing regression tests asserted the *old* 3-letter output and must be updated to the 2-letter canonical (correct, since subgen normalizes any form — not test-masking).
 
 **Files:**
-- Modify: `src/subarr/audio_lang_store.py` — `resolve_audio_language_override` final `return lang` (line ~511) and the `lang` derivation (line 462)
-- Test: `tests/test_audio_lang_override_iso3.py` (create)
+- Modify: `tests/test_progress_and_coverage_queue.py` (the `== "fre"` assertion, ~line 262)
+- Modify: `tests/test_requeue.py` (the analogous `audio_language_override` assertion)
+- Test: `tests/test_audio_lang_override_2letter.py` (create — pins the new contract)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the new contract test**
 
 ```python
-"""#358: the override forwarded to subgen is 3-letter ISO-639-2/B regardless of
-how the audio language was stored (2-letter)."""
+"""#358: the override forwarded to subgen is the 2-letter canonical (subgen's
+LanguageCode.from_string normalizes it; sending 2-letter is correct)."""
 from __future__ import annotations
 
 
@@ -334,15 +295,15 @@ def _store(tmp_path):
     return AudioLangStore(db)
 
 
-def test_override_is_iso3_for_picker_and_whisper(tmp_path):
+def test_override_is_2letter_for_picker_and_whisper(tmp_path):
     from subarr.audio_lang_store import resolve_audio_language_override
 
     s = _store(tmp_path)
-    # picker stored 'gl' (normalized) and Whisper stored 'ko' (2-letter)
-    s.upsert(canonical_path="m.mkv", lang_code="gl", source="user", confidence=1.0)
+    # picker stored 'glg' (normalized to 'gl' by the store) and Whisper 'ko'
+    s.upsert(canonical_path="m.mkv", lang_code="glg", source="user", confidence=1.0)
     s.upsert(canonical_path="k.mkv", lang_code="ko", source="whisper", confidence=1.0)
-    assert resolve_audio_language_override(s, "m.mkv") == "glg"
-    assert resolve_audio_language_override(s, "k.mkv") == "kor"  # latent bug fixed
+    assert resolve_audio_language_override(s, "m.mkv") == "gl"
+    assert resolve_audio_language_override(s, "k.mkv") == "ko"
 
 
 def test_override_still_skips_english(tmp_path):
@@ -353,44 +314,37 @@ def test_override_still_skips_english(tmp_path):
     assert resolve_audio_language_override(s, "e.mkv") is None
 ```
 
-- [ ] **Step 2: Run it red**
+- [ ] **Step 2: Run it — confirm it already passes**
 
-Run: `python -m pytest tests/test_audio_lang_override_iso3.py -q`
-Expected: FAIL — returns `gl`/`ko`, not `glg`/`kor`.
+Run: `python -m pytest tests/test_audio_lang_override_2letter.py -q`
+Expected: PASS (after Task 2, the store normalizes and the override returns 2-letter). If it fails, Task 2's read-normalize is incomplete — fix that first.
 
-- [ ] **Step 3: Convert at the boundary**
+- [ ] **Step 3: Update the two pinned regression tests to the 2-letter canonical**
 
-`resolve_audio_language_override` already computes `lang = (verification.lang_code or "").strip().lower()` (line 462) and returns it (line 511). The English short-circuit at line 466 (`if not lang or lang in ("en", "eng")`) must run on the **2-letter** value, so keep `lang` 2-letter for the gate and convert only at return. Add the import at the top of `audio_lang_store.py` (it already imports `normalize_lang` from Task 2 — add `to_iso3` to that line):
+In `tests/test_progress_and_coverage_queue.py::test_coverage_queue_forwards_audio_language_override_when_verified`, change the assertion (the seed stays `lang_code="fre"` to prove normalization end-to-end):
 ```python
-from .langs import normalize_lang, to_iso3
+    # #358: store normalizes 'fre'→'fr'; subgen's LanguageCode.from_string
+    # resolves the 2-letter form, so forwarding 2-letter is correct.
+    assert jobs[0].audio_language_override == "fr"
 ```
-Then change the two `return lang` success paths (the risky-log branch and the normal branch both fall through to the final `return lang` at line 511) — change that final line to:
-```python
-    return to_iso3(lang)
-```
-Leave every `return None` and the logging (which logs the 2-letter `lang`) unchanged.
+In `tests/test_requeue.py::test_requeue_carries_audio_language_override`, make the analogous change (find the `== "fre"` / 3-letter assertion and change it to the 2-letter equivalent, with the same one-line comment).
 
-- [ ] **Step 4: Run the new test green**
-
-Run: `python -m pytest tests/test_audio_lang_override_iso3.py -q`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Run the two regression tests that previously broke**
+- [ ] **Step 4: Run both regression tests green**
 
 Run:
 ```bash
 python -m pytest tests/test_progress_and_coverage_queue.py::test_coverage_queue_forwards_audio_language_override_when_verified tests/test_requeue.py::test_requeue_carries_audio_language_override -q
 ```
-Expected: PASS. These seed `fre`; the store normalizes to `fr`; `to_iso3("fr")` returns `fre` — the asserted `audio_language_override == "fre"` round-trips.
+Expected: PASS.
 
-- [ ] **Step 6: Lint + commit**
+- [ ] **Step 5: Lint + commit**
 
-Run: `python -m ruff check src/subarr/audio_lang_store.py tests/test_audio_lang_override_iso3.py`
+Run: `python -m ruff check tests/test_audio_lang_override_2letter.py`
 ```bash
-git add src/subarr/audio_lang_store.py tests/test_audio_lang_override_iso3.py
-git commit -m "feat(#358): subgen override emits 3-letter ISO-639-2/B at the boundary
+git add tests/test_audio_lang_override_2letter.py tests/test_progress_and_coverage_queue.py tests/test_requeue.py
+git commit -m "test(#358): override forwards 2-letter canonical (subgen normalizes any form)
 
-Fixes latent bug where Whisper-detected non-English overrides forwarded 2-letter.
+Task 0 verified subgen LanguageCode.from_string accepts 2-letter; no to_iso3.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -797,6 +751,6 @@ This change touches writeback-to-arr, a cross-service (subgen) contract, and a d
 
 ## Self-Review notes (for the executor)
 
-- **Spec coverage:** Task 1 = WHISPER_LANGUAGES/to_iso3/display_name (spec §1,§2); Task 2 = store 2-letter (spec §3); Task 3 = subgen boundary (spec §4); Task 4 = endpoint normalize (spec §5); Task 5 = /api/languages (spec §6); Task 6 = propagation coverage (spec §7); Task 7 = picker frontend (spec §6); Task 0 = the design-validation step. Bazarr direct-path alignment needs no code (verified in the spec). Migration = normalize-on-read (Task 2), no SQL.
-- **Type consistency:** `to_iso3`, `display_name`, `WHISPER_LANGUAGES`, `normalize_lang` are the only language helpers; names are identical across Tasks 1/3/5/6.
+- **Spec coverage:** Task 1 = WHISPER_LANGUAGES/display_name (spec §1,§2); Task 2 = store 2-letter (spec §3); Task 3 = subgen boundary is 2-letter, regression tests updated (spec §4); Task 4 = endpoint normalize (spec §5); Task 5 = /api/languages (spec §6); Task 6 = propagation coverage (spec §7); Task 7 = picker frontend (spec §6); Task 0 = the design-validation step (DONE — subgen is format-agnostic, `to_iso3` dropped). Bazarr direct-path alignment needs no code (verified in the spec). Migration = normalize-on-read (Task 2), no SQL.
+- **Type consistency:** `display_name`, `WHISPER_LANGUAGES`, `normalize_lang` are the only language helpers; names are identical across Tasks 1/5/6. No `to_iso3` (dropped after Task 0).
 - **Known soft spot:** the Step-3 reference `WHISPER_LANGUAGES` table is authored from memory — the docker extraction in Task 1 Step 3 is authoritative and the test guards count + spot-checks. Likewise the Task 6 Sonarr-name aliases must be reconciled against the *live* `/language` list (case-insensitive match means only genuine word-differences need an alias).
