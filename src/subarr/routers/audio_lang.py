@@ -49,10 +49,15 @@ async def list_verifications(request: Request) -> dict[str, Any]:
 
 @router.post("/verifications")
 async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str, Any]:
+    from ..langs import normalize_lang
+
     store = request.app.state.audio_lang
+    # #358: 3-letter picker codes ('glg') → 2-letter canonical, used for the
+    # store, the Sonarr propagation, and the response so all three agree.
+    lang = normalize_lang(req.lang_code) or req.lang_code
     store.upsert(
         canonical_path=req.canonical_path,
-        lang_code=req.lang_code,
+        lang_code=lang,
         source=req.source,
         confidence=req.confidence,
         evidence=req.evidence,
@@ -71,7 +76,7 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
         propagation = await _propagate_to_sonarr(
             request,
             canonical_path=req.canonical_path,
-            lang_code=req.lang_code,
+            lang_code=lang,
         )
 
     # v1.1 ARCH fix #197: kick a background coverage refresh so the
@@ -86,7 +91,7 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
     return {
         "verified": True,
         "canonical_path": req.canonical_path,
-        "lang_code": req.lang_code.lower(),
+        "lang_code": lang,
         "sonarr_propagation": propagation,
     }
 

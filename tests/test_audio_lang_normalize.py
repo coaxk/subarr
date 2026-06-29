@@ -38,3 +38,15 @@ def test_read_paths_normalize_legacy_rows(tmp_path):
     assert s.get("x.mkv").lang_code == "gl"
     assert s.get_all_as_lookup()["x.mkv"] == "gl"
     assert s.list_all()[0].lang_code == "gl"
+
+
+def test_verify_endpoint_normalizes_picker_code(app_with_stub):
+    # POST the picker's 3-letter 'glg' → response + store both canonical 'gl'.
+    canonical = "Movies/The Beasts/The Beasts (2022).mkv"
+    r = app_with_stub.post(
+        "/api/audio-lang/verifications",
+        json={"canonical_path": canonical, "lang_code": "glg", "source": "user"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["lang_code"] == "gl"
+    assert app_with_stub.app.state.audio_lang.get(canonical).lang_code == "gl"
