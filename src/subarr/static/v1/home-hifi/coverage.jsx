@@ -210,6 +210,9 @@ function normalizeRow(item, idx, settleMinutes = 0) {
     forced_skip: !!item.forced_only_subgen_will_skip,
     // raw fields kept for action handlers
     _sonarr_episode_id: item.bazarr ? item.bazarr.episode_id : null,
+    // #368: owning movie's Radarr id (None for episodes) — carried into the
+    // queue payload so a manually-filled movie gap uploads its .srt to Bazarr.
+    _radarr_movie_id: item.bazarr ? item.bazarr.radarr_id : null,
     _canonical_path: item.file_canonical_path || item.canonical_path,
     _media_type: item.media_type,
     // #161 Phase 4C: {slug, name} of the library this row belongs to (Phase 2
@@ -2248,13 +2251,23 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
   );
 }
 
-export async function queueRow(row, { ignoreForced = false } = {}) {
+// Pure (exported for unit test) — the /api/coverage/queue payload for a row.
+// Episodes route by sonarr_episode_id; movies/other by canonical_path. #368:
+// a movie row also carries radarr_movie_id (its bazarr_radarr_id) so the
+// finished .srt uploads straight to Bazarr instead of only nudging scan-disk.
+export function coverageQueueBody(row, { ignoreForced = false } = {}) {
   const body = row._sonarr_episode_id
     ? { sonarr_episode_id: row._sonarr_episode_id }
     : { canonical_path: row._canonical_path };
+  if (row._radarr_movie_id) body.radarr_movie_id = row._radarr_movie_id;
   // #317 Slice B: "transcribe a full sub anyway" — tell subgen to ignore the
   // forced-only embedded sub for THIS job (gated on subgen capability upstream).
   if (ignoreForced) body.ignore_forced = true;
+  return body;
+}
+
+export async function queueRow(row, { ignoreForced = false } = {}) {
+  const body = coverageQueueBody(row, { ignoreForced });
   const r = await fetch('/api/coverage/queue', {
     method: 'POST',
     credentials: 'same-origin',

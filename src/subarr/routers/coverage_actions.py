@@ -53,6 +53,10 @@ class CoverageQueueRequest(BaseModel):
     sonarr_episode_id: int | None = None
     # Fallback for movies / rows missing sonarr id.
     canonical_path: str | None = None
+    # #368 follow-up: the owning movie's Radarr id (the row's bazarr_radarr_id),
+    # carried so completion_watcher uploads the finished movie .srt straight to
+    # Bazarr — the manual analogue of how the auto-queue already threads it.
+    radarr_movie_id: int | None = None
     reverse: bool = False
     # #317 Slice B: "transcribe a full sub anyway" on a forced-only file —
     # forwards ?ignore_forced=true to subgen's /batch so it transcribes instead
@@ -161,6 +165,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         audio_language_override=audio_language_override,
         series_id=series_id,
         sonarr_episode_id=req.sonarr_episode_id,
+        radarr_movie_id=req.radarr_movie_id,
         ignore_forced=req.ignore_forced,
     )
 
