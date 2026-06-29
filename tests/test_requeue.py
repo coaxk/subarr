@@ -35,7 +35,8 @@ def test_requeue_carries_audio_language_override(app_with_stub):
         job = app.state.pending_queue.get(r.json()["job"])
         assert job is not None
         assert job.source == "manual"
-        assert job.audio_language_override == "fra"
+        # #358: store normalizes 'fra'→'fr'; subgen resolves the 2-letter form.
+        assert job.audio_language_override == "fr"
     finally:
         _set_paused(app, False)
 
