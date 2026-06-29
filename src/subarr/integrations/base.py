@@ -19,6 +19,19 @@ log = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=90.0, write=10.0, pool=3.0)
 
 
+def _is_client_closed(e: BaseException) -> bool:
+    """True for httpx's RuntimeError("Cannot send a request, as the client has
+    been closed.") — raised when this client was aclose()'d out from under an
+    in-flight call. The live instance/credential rebuild
+    (_rebuild_runtime_clients) swaps the bundle and closes the old clients, so a
+    concurrent poll can hit this. It's our race, not an upstream failure — degrade
+    to IntegrationError so the request soft-fails and the next poll uses the new
+    client, instead of bubbling an uncaught 500. Match the full httpx phrase, not
+    a bare "closed", so unrelated RuntimeErrors ("Event loop is closed", "File is
+    closed") still surface as real bugs."""
+    return isinstance(e, RuntimeError) and "client has been closed" in str(e).lower()
+
+
 class IntegrationClient:
     """Base class. Holds an httpx.AsyncClient bound to a base_url."""
 
@@ -77,6 +90,10 @@ class IntegrationClient:
         except httpx.HTTPError as e:
             self._breaker.record_failure()
             raise IntegrationError(f"{self.name} {path}: {e}") from e
+        except RuntimeError as e:
+            if not _is_client_closed(e):
+                raise
+            raise IntegrationError(f"{self.name} {path}: client closed mid-request (live rebuild)") from e
         self._record(r.status_code)
         if r.status_code >= 400:
             raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
@@ -94,6 +111,10 @@ class IntegrationClient:
         except httpx.HTTPError as e:
             self._breaker.record_failure()
             raise IntegrationError(f"{self.name} {path}: {e}") from e
+        except RuntimeError as e:
+            if not _is_client_closed(e):
+                raise
+            raise IntegrationError(f"{self.name} {path}: client closed mid-request (live rebuild)") from e
         self._record(r.status_code)
         if r.status_code >= 400:
             raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
@@ -116,6 +137,10 @@ class IntegrationClient:
         except httpx.HTTPError as e:
             self._breaker.record_failure()
             raise IntegrationError(f"{self.name} {path}: {e}") from e
+        except RuntimeError as e:
+            if not _is_client_closed(e):
+                raise
+            raise IntegrationError(f"{self.name} {path}: client closed mid-request (live rebuild)") from e
         self._record(r.status_code)
         if r.status_code >= 400:
             raise IntegrationError(f"{self.name} {path}: HTTP {r.status_code}: {r.text[:200]}")
