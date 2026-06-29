@@ -135,3 +135,61 @@ async def test_post_204_no_content_returns_none():
     c = _client(handler)
     result = await c._post("/api/v3/command")
     assert result is None
+
+
+# ── closed-client race (live instance/credential rebuild) ──────────────────────
+# _rebuild_runtime_clients swaps the integration bundle and aclose()s the old
+# clients. A request already in flight on an old client then hits httpx's
+# RuntimeError("Cannot send a request, as the client has been closed.") — which
+# is NOT an httpx.HTTPError, so it used to escape _get/_post/_put as an uncaught
+# 500. It must degrade to IntegrationError (the next poll uses the new client).
+
+
+@pytest.mark.asyncio
+async def test_get_on_closed_client_degrades_to_integration_error():
+    c = IntegrationClient("http://up.test")
+    await c.aclose()  # simulate the rebuild teardown
+    with pytest.raises(IntegrationError):
+        await c._get("/api/v3/system/status")
+
+
+@pytest.mark.asyncio
+async def test_post_on_closed_client_degrades_to_integration_error():
+    c = IntegrationClient("http://up.test")
+    await c.aclose()
+    with pytest.raises(IntegrationError):
+        await c._post("/api/v3/command", json_body={"name": "x"})
+
+
+@pytest.mark.asyncio
+async def test_put_on_closed_client_degrades_to_integration_error():
+    c = IntegrationClient("http://up.test")
+    await c.aclose()
+    with pytest.raises(IntegrationError):
+        await c._put("/api/v3/episodefile/1", json_body={"language": "en"})
+
+
+@pytest.mark.asyncio
+async def test_unexpected_runtime_error_still_propagates():
+    """A RuntimeError that is NOT the closed-client case must surface, not be
+    swallowed as a soft IntegrationError."""
+
+    def boom(req: httpx.Request) -> httpx.Response:
+        raise RuntimeError("something genuinely broken")
+
+    c = _client(boom)
+    with pytest.raises(RuntimeError, match="genuinely broken"):
+        await c._get("/api/v3/system/status")
+
+
+@pytest.mark.asyncio
+async def test_event_loop_closed_runtime_error_propagates():
+    """The matcher targets httpx's "client has been closed" specifically — an
+    "Event loop is closed" RuntimeError (async teardown) must NOT be swallowed."""
+
+    def boom(req: httpx.Request) -> httpx.Response:
+        raise RuntimeError("Event loop is closed")
+
+    c = _client(boom)
+    with pytest.raises(RuntimeError, match="Event loop is closed"):
+        await c._get("/api/v3/system/status")
