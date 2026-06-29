@@ -157,7 +157,19 @@ async def _propagate_to_sonarr(
         None,
     )
     if target is None:
-        return {"attempted": True, "ok": False, "detail": f"Sonarr has no language named {name!r}"}
+        # #358: honest degradation — Sonarr can't represent this language, but
+        # the local verification + subgen override (the parts that actually fix
+        # the missing subtitle) already persisted; only the optional Bazarr
+        # courtesy-sync is skipped. Say so instead of failing opaquely.
+        return {
+            "attempted": True,
+            "ok": False,
+            "detail": (
+                f"Sonarr can't represent {name!r} (not in its language list) — "
+                "your local verification and the subgen override still apply; "
+                "only the Bazarr courtesy-sync was skipped."
+            ),
+        }
 
     try:
         await sonarr.update_episode_file_languages(
@@ -235,99 +247,20 @@ async def _trigger_bazarr_sync(bundle, canonical_path: str) -> dict[str, Any]:
 
 
 def _iso_to_sonarr_name(code: str) -> str:
-    """Map ISO 639-1/2 codes the UI uses to Sonarr's language names.
-    Sonarr stores names like "English", "French", "German"."""
-    m = {
-        "en": "English",
-        "eng": "English",
-        "fr": "French",
-        "fre": "French",
-        "fra": "French",
-        "de": "German",
-        "ger": "German",
-        "deu": "German",
-        "es": "Spanish",
-        "spa": "Spanish",
-        "it": "Italian",
-        "ita": "Italian",
-        "pt": "Portuguese",
-        "por": "Portuguese",
-        "ru": "Russian",
-        "rus": "Russian",
-        "ja": "Japanese",
-        "jpn": "Japanese",
-        "ko": "Korean",
-        "kor": "Korean",
-        "zh": "Chinese",
-        "chi": "Chinese",
-        "zho": "Chinese",
-        "nl": "Dutch",
-        "dut": "Dutch",
-        "nld": "Dutch",
-        "pl": "Polish",
-        "pol": "Polish",
-        "sv": "Swedish",
-        "swe": "Swedish",
-        "no": "Norwegian",
-        "nor": "Norwegian",
-        "da": "Danish",
-        "dan": "Danish",
-        "fi": "Finnish",
-        "fin": "Finnish",
-        "tr": "Turkish",
-        "tur": "Turkish",
-        "ar": "Arabic",
-        "ara": "Arabic",
-        "he": "Hebrew",
-        "heb": "Hebrew",
-        "hi": "Hindi",
-        "hin": "Hindi",
-        # 2026-05-31 — Balkan + Baltic + remaining EU slavic langs.
-        "bg": "Bulgarian",
-        "bul": "Bulgarian",
-        "ca": "Catalan",
-        "cat": "Catalan",
-        "hr": "Croatian",
-        "hrv": "Croatian",
-        "scr": "Croatian",
-        "cs": "Czech",
-        "cze": "Czech",
-        "ces": "Czech",
-        "et": "Estonian",
-        "est": "Estonian",
-        "el": "Greek",
-        "gre": "Greek",
-        "ell": "Greek",
-        "hu": "Hungarian",
-        "hun": "Hungarian",
-        "id": "Indonesian",
-        "ind": "Indonesian",
-        "lv": "Latvian",
-        "lav": "Latvian",
-        "lt": "Lithuanian",
-        "lit": "Lithuanian",
-        "ms": "Malay",
-        "may": "Malay",
-        "msa": "Malay",
-        "ro": "Romanian",
-        "rum": "Romanian",
-        "ron": "Romanian",
-        "sr": "Serbian",
-        "srp": "Serbian",
-        "scc": "Serbian",
-        "sk": "Slovak",
-        "slo": "Slovak",
-        "slk": "Slovak",
-        "sl": "Slovenian",
-        "slv": "Slovenian",
-        "th": "Thai",
-        "tha": "Thai",
-        "uk": "Ukrainian",
-        "ukr": "Ukrainian",
-        "vi": "Vietnamese",
-        "vie": "Vietnamese",
-    }
-    return m.get(code.strip().lower(), code)
+    """Map an audio-language code to Sonarr's language *name* for the
+    episodeFile PUT. Sourced from WHISPER_LANGUAGES via display_name (#358 —
+    covers the full set incl. Galician), with aliases for the few languages
+    whose Whisper English name differs from Sonarr's. Accepts 2- or 3-letter
+    input. The caller matches the result case-insensitively against Sonarr's
+    live /language list, so a miss degrades honestly rather than mis-writing."""
+    from ..langs import display_name, normalize_lang
+
+    iso1 = normalize_lang(code) or (code or "").strip().lower()
+    # Reconcile against the live /language list as needed; a missing alias just
+    # degrades honestly (the optional Bazarr courtesy-sync is skipped). None of
+    # the Sonarr-supported languages are known to differ from Whisper's name today.
+    aliases: dict[str, str] = {}
+    return aliases.get(iso1, display_name(iso1))
 
 
 @router.delete("/verifications/{canonical_path:path}")
