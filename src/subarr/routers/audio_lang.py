@@ -256,10 +256,15 @@ def _iso_to_sonarr_name(code: str) -> str:
     from ..langs import display_name, normalize_lang
 
     iso1 = normalize_lang(code) or (code or "").strip().lower()
-    # Reconcile against the live /language list as needed; a missing alias just
-    # degrades honestly (the optional Bazarr courtesy-sync is skipped). None of
-    # the Sonarr-supported languages are known to differ from Whisper's name today.
-    aliases: dict[str, str] = {}
+    # Reconciled 2026-06-29 against the live Sonarr /language list (48 langs):
+    # every Sonarr-supported language matches display_name's spelling exactly, so
+    # the only aliases needed are Whisper varieties Sonarr collapses into a parent
+    # bucket. Languages Sonarr lacks entirely (e.g. Galician) resolve to their real
+    # name here and degrade honestly at the match step in _propagate_to_sonarr.
+    aliases = {
+        "nn": "Norwegian",  # Whisper "Nynorsk"; Sonarr has only "Norwegian"
+        "yue": "Chinese",  # Whisper "Cantonese"; Sonarr has only "Chinese"
+    }
     return aliases.get(iso1, display_name(iso1))
 
 
