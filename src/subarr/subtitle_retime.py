@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .subtitle_readability import Cue
+from .subtitle_readability import Cue, parse_srt
 
 
 @dataclass(frozen=True)
@@ -65,4 +65,5 @@ def render_srt(cues: list[Cue]) -> str:
 
 
 def retime_srt(srt_text: str, params: RetimeParams = RetimeParams()) -> str:
-    raise NotImplementedError  # Task 3
+    """Parse → re-time → re-render. The convenience entry point."""
+    return render_srt(retime_cues(parse_srt(srt_text), params))

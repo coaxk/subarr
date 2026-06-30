@@ -113,3 +113,64 @@ def test_render_srt_reindexes_1_based():
     text = render_srt(cues)
     assert text.split("\n")[0] == "1"
     assert "\n2\n" in "\n" + text  # second block re-indexed to 2
+
+
+# A translate-mode-style fixture: several cramped, high-CPS cues with real gaps
+# between them (translated text overruns the speech window).
+_HOT_SRT = """1
+00:00:00,000 --> 00:00:02,000
+This is a very long translated line that crams far too many characters
+
+2
+00:00:05,000 --> 00:00:06,200
+Another dense cue with way more text than fits comfortably here now
+
+3
+00:00:20,000 --> 00:00:20,300
+hi
+"""
+
+# A comfortable transcribe-mode fixture: low CPS, adequate durations.
+_CALM_SRT = """1
+00:00:00,000 --> 00:00:03,000
+Hello there.
+
+2
+00:00:04,000 --> 00:00:07,000
+General Kenobi.
+"""
+
+
+def test_retime_srt_reduces_cps_and_zeroes_micro_cues_no_new_overlap():
+    from subarr.subtitle_readability import CRITICAL_CPS, analyze_srt, parse_srt
+    from subarr.subtitle_retime import retime_srt
+
+    before = parse_srt(_HOT_SRT)
+    after = parse_srt(retime_srt(_HOT_SRT))
+
+    def median_cps(cues):
+        vals = sorted(c.cps for c in cues if c.duration_s > 0)
+        return vals[len(vals) // 2]
+
+    def pct_over_critical(cues):
+        return sum(1 for c in cues if c.cps > CRITICAL_CPS) / len(cues)
+
+    def micro_count(cues):
+        return sum(1 for c in cues if 0 < c.duration_s < 0.833)
+
+    assert median_cps(after) < median_cps(before)
+    assert pct_over_critical(after) <= pct_over_critical(before)
+    assert micro_count(after) == 0
+    # no NEW overlaps introduced
+    rep = analyze_srt(retime_srt(_HOT_SRT))
+    assert rep.counts.get("overlap", 0) == 0
+
+
+def test_retime_srt_leaves_comfortable_input_essentially_unchanged():
+    from subarr.subtitle_readability import parse_srt
+    from subarr.subtitle_retime import retime_srt
+
+    before = parse_srt(_CALM_SRT)
+    after = parse_srt(retime_srt(_CALM_SRT))
+    # already comfortable + adequate duration → no end moved.
+    assert [c.end_ms for c in before] == [c.end_ms for c in after]
