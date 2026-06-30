@@ -47,7 +47,7 @@ import httpx
 
 from ..circuit_breaker import CircuitBreaker
 from . import IntegrationError
-from .base import _DEFAULT_TIMEOUT
+from .base import _DEFAULT_TIMEOUT, _is_client_closed
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +132,12 @@ class PlexClient:
         except httpx.HTTPError as e:
             self._breaker.record_failure()
             raise IntegrationError(f"{self.name} {path}: {e}") from e
+        except RuntimeError as e:
+            # #392: the live _rebuild_runtime_clients aclose()d the client mid-call.
+            # Our race, not an upstream flap — degrade without tripping the breaker.
+            if not _is_client_closed(e):
+                raise
+            raise IntegrationError(f"{self.name} {path}: client closed mid-request (live rebuild)") from e
         if r.status_code >= 500:
             self._breaker.record_failure()
         else:
