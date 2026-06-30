@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
+from .base import _is_client_closed
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,9 @@ class OllamaClient:
                 return str(v) if v else None
         except (httpx.HTTPError, ValueError):
             pass
+        except RuntimeError as e:  # #392: closed-client mid-rebuild → best-effort None
+            if not _is_client_closed(e):
+                raise
         return None
 
     async def tags(self) -> dict[str, Any]:
@@ -107,6 +111,10 @@ class OllamaClient:
             r = await self._client.get("/api/tags")
         except httpx.HTTPError as e:
             raise OllamaError(f"ollama /api/tags failed: {e}") from e
+        except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
+            if not _is_client_closed(e):
+                raise
+            raise OllamaError("ollama /api/tags: client closed mid-request (live rebuild)") from e
         if r.status_code != 200:
             raise OllamaError(f"ollama /api/tags status {r.status_code}")
         return r.json()
@@ -151,6 +159,10 @@ class OllamaClient:
             r = await self._client.post("/api/generate", json=body)
         except httpx.HTTPError as e:
             raise OllamaError(f"ollama /api/generate failed: {e}") from e
+        except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
+            if not _is_client_closed(e):
+                raise
+            raise OllamaError("ollama /api/generate: client closed mid-request (live rebuild)") from e
         if r.status_code != 200:
             raise OllamaError(f"ollama /api/generate status {r.status_code}: {r.text[:200]}")
         try:
@@ -237,6 +249,10 @@ class OllamaClient:
                         yield chunk
         except httpx.HTTPError as e:
             raise OllamaError(f"ollama /api/pull failed: {e}") from e
+        except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
+            if not _is_client_closed(e):
+                raise
+            raise OllamaError("ollama /api/pull: client closed mid-request (live rebuild)") from e
         # New model — invalidate the vision-resolve cache.
         self.reset_vision_cache()
 
@@ -293,6 +309,10 @@ class OllamaClient:
             r = await self._client.post("/api/generate", json=body)
         except httpx.HTTPError as e:
             raise OllamaError(f"ollama vision: {e}") from e
+        except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
+            if not _is_client_closed(e):
+                raise
+            raise OllamaError("ollama vision: client closed mid-request (live rebuild)") from e
         if r.status_code != 200:
             raise OllamaError(f"ollama vision HTTP {r.status_code}: {r.text[:200]}")
         try:
