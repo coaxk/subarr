@@ -29,7 +29,7 @@ dependencies = [
     # binding (provides `import pynvml`); it only dlopens the lib at call time,
     # so it imports cleanly everywhere and just fails to {online:false} on hosts
     # without a GPU. nvidia-smi stays the primary source.
-    "nvidia-ml-py>=12.0,<13.0",
+    "nvidia-ml-py>=12.0,<14.0",
 ]
 
 [project.optional-dependencies]
