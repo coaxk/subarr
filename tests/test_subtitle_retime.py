@@ -83,3 +83,33 @@ def test_inputs_not_mutated():
     cues = [_cue(1, 0, 2000, "x" * 80), _cue(2, 60000, 61000, "n")]
     retime_cues(cues, P)
     assert cues[0].end_ms == 2000  # original untouched (pure)
+
+
+def test_ms_to_ts_formats_correctly():
+    from subarr.subtitle_retime import _ms_to_ts
+
+    assert _ms_to_ts(0) == "00:00:00,000"
+    assert _ms_to_ts(3_661_123) == "01:01:01,123"
+    assert _ms_to_ts(-5) == "00:00:00,000"  # clamps negatives
+
+
+def test_render_srt_roundtrips_through_parse():
+    from subarr.subtitle_readability import parse_srt
+    from subarr.subtitle_retime import render_srt
+
+    cues = [_cue(1, 0, 2000, "line one\nline two"), _cue(2, 2500, 4000, "next")]
+    text = render_srt(cues)
+    back = parse_srt(text)
+    assert [(c.start_ms, c.end_ms, c.lines) for c in back] == [
+        (0, 2000, ["line one", "line two"]),
+        (2500, 4000, ["next"]),
+    ]
+
+
+def test_render_srt_reindexes_1_based():
+    cues = [_cue(7, 0, 1000, "a"), _cue(9, 2000, 3000, "b")]
+    from subarr.subtitle_retime import render_srt
+
+    text = render_srt(cues)
+    assert text.split("\n")[0] == "1"
+    assert "\n2\n" in "\n" + text  # second block re-indexed to 2

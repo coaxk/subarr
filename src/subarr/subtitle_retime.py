@@ -47,8 +47,21 @@ def retime_cues(cues: list[Cue], params: RetimeParams = RetimeParams()) -> list[
     return out
 
 
+def _ms_to_ts(ms: int) -> str:
+    ms = max(0, int(ms))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1_000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
 def render_srt(cues: list[Cue]) -> str:
-    raise NotImplementedError  # Task 2
+    """Serialize cues to SRT text, re-indexed 1..N (the inverse of parse_srt)."""
+    blocks = []
+    for i, c in enumerate(cues, start=1):
+        stamp = f"{_ms_to_ts(c.start_ms)} --> {_ms_to_ts(c.end_ms)}"
+        blocks.append(f"{i}\n{stamp}\n" + "\n".join(c.lines))
+    return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
 def retime_srt(srt_text: str, params: RetimeParams = RetimeParams()) -> str:
