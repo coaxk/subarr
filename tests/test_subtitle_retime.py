@@ -18,8 +18,8 @@ def test_hot_cue_extended_toward_target_when_gap_available():
     # 80 chars in 2.0s = 40 cps; next cue starts at 60s (huge gap).
     cues = [_cue(1, 0, 2000, "x" * 80), _cue(2, 60000, 61000, "next")]
     out = retime_cues(cues, P)
-    # target 17 cps over 80 chars → ~4706ms duration; capped by max_cue_ms=7000.
-    assert out[0].end_ms == 80 * 1000 // 17 or abs(out[0].end_ms - round(80 / 17 * 1000)) <= 1
+    # target 17 cps over 80 chars → ~4706ms duration (well under the 7000ms cap).
+    assert abs(out[0].end_ms - round(80 / 17 * 1000)) <= 1
     assert out[0].cps <= P.target_cps + 0.5
     assert out[0].start_ms == 0 and out[1].start_ms == 60000  # starts never move
 
