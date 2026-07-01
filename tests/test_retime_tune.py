@@ -59,3 +59,67 @@ def test_sweep_lower_target_cps_reduces_median_more():
     at20 = next(r for r in rows if r.params and r.params.target_cps == 20.0)
     at15 = next(r for r in rows if r.params and r.params.target_cps == 15.0)
     assert at15.median_cps <= at20.median_cps  # aim lower → extend more → lower CPS
+
+
+def test_corpus_from_dir_reads_srts_and_skips_sync_variants(tmp_path):
+    from subarr.retime_tune import corpus_from_dir
+
+    (tmp_path / "a.en.srt").write_text(_CALM, encoding="utf-8")
+    (tmp_path / "a.en.ffsubsync.srt").write_text(_CALM, encoding="utf-8")  # subsyncarr variant
+    (tmp_path / "a.en.alass.srt").write_text(_CALM, encoding="utf-8")
+    (tmp_path / "junk.txt").write_text("nope", encoding="utf-8")
+    corpus = corpus_from_dir(str(tmp_path))
+    names = sorted(n for n, _ in corpus)
+    assert names == ["a.en.srt"]  # variants + non-srt excluded
+
+
+def test_original_sidecar_prefers_plain_and_excludes_engine_suffix(tmp_path):
+    from subarr.retime_tune import _original_sidecar
+
+    video = tmp_path / "Show - S01E01.mkv"
+    video.write_text("x")
+    (tmp_path / "Show - S01E01.en.srt").write_text(_CALM, encoding="utf-8")
+    (tmp_path / "Show - S01E01.en.ffsubsync.srt").write_text(_CALM, encoding="utf-8")
+    got = _original_sidecar(video)
+    assert got is not None and got.name == "Show - S01E01.en.srt"
+
+
+def test_corpus_from_ledger_gathers_original_and_guards_replaced(tmp_path):
+    import sqlite3
+
+    from subarr.retime_tune import corpus_from_ledger
+
+    # temp DB with the two tables we read.
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE subs_generated (canonical_path TEXT, completed_at REAL)")
+    conn.execute(
+        "CREATE TABLE aftercare_results (id INTEGER PRIMARY KEY, canonical_path TEXT, cue_count INTEGER)"
+    )
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Keep/ep.mkv", 123.0))
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Replaced/ep.mkv", 124.0))
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Pending/ep.mkv", None))  # not completed
+    conn.commit()
+
+    keep_dir = tmp_path / "keep"
+    keep_dir.mkdir()
+    (keep_dir / "ep.en.srt").write_text(_CALM, encoding="utf-8")  # 2 cues
+    repl_dir = tmp_path / "repl"
+    repl_dir.mkdir()
+    (repl_dir / "ep.en.srt").write_text(_CALM, encoding="utf-8")  # 2 cues on disk...
+    # aftercare recorded 9 cues when subarr made it → on-disk (2) mismatches → replaced.
+    conn.execute(
+        "INSERT INTO aftercare_results (canonical_path, cue_count) VALUES (?, ?)", ("TV/Replaced/ep.mkv", 9)
+    )
+    conn.execute(
+        "INSERT INTO aftercare_results (canonical_path, cue_count) VALUES (?, ?)", ("TV/Keep/ep.mkv", 2)
+    )
+    conn.commit()
+    conn.close()
+
+    def _resolve(canon: str):
+        return {"TV/Keep/ep.mkv": keep_dir / "ep.mkv", "TV/Replaced/ep.mkv": repl_dir / "ep.mkv"}.get(canon)
+
+    corpus = corpus_from_ledger(str(db), resolve=_resolve)
+    paths = [p for p, _ in corpus]
+    assert paths == ["TV/Keep/ep.mkv"]  # completed + cue_count matches; Replaced skipped, Pending excluded
