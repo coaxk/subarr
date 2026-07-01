@@ -268,7 +268,10 @@ def load() -> Settings:
         not in ("0", "false", "no", "off"),
         sonarr_propagate_audio_lang=os.environ.get("SONARR_PROPAGATE_AUDIO_LANG", "0").strip().lower()
         in ("1", "true", "yes", "on"),
-        retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "0").strip().lower()
+        # #359 bake: on by default after the corpus sweep proved it (target_cps=17,
+        # min_cue_ms=1000) cuts critical-CPS cues 22.9%->5.2% with zero new overlaps.
+        # Opt out with SUBARR_RETIME_ENABLED=0.
+        retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "1").strip().lower()
         in ("1", "true", "yes", "on"),
         plex_audio_hints=os.environ.get("PLEX_AUDIO_HINTS", "0").strip().lower()
         in ("1", "true", "yes", "on"),
