@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
 
+from .paths import PathOutsideRootError
 from .subtitle_readability import (
     CRITICAL_CPS,
     MAX_CPS,
@@ -38,7 +39,10 @@ class SweepRow:
     pct_over_critical: float  # cues > CRITICAL_CPS (25)
     pct_over_comfortable: float  # cues > MAX_CPS (20)
     micro_cues: int  # cues < MIN_DURATION_S
-    too_long: int  # cues > MAX_DURATION_S
+    # Absolute count of cues > MAX_DURATION_S, NOT a delta introduced by re-timing:
+    # the retimer caps at max_cue_ms and never shortens, so pre-existing over-long
+    # cues also show up in the baseline row.
+    too_long: int
     mean_added_ms: float  # mean screen-time added per sub
 
 
@@ -51,6 +55,8 @@ def _metrics(cues: list[Cue]) -> dict:
         "pct_over_critical": sum(1 for x in cpses if x > CRITICAL_CPS) / n,
         "pct_over_comfortable": sum(1 for x in cpses if x > MAX_CPS) / n,
         "micro_cues": sum(1 for c in live if c.duration_s < MIN_DURATION_S),
+        # Absolute count (not a re-timing delta): retimer caps at max_cue_ms and
+        # never shortens, so long cues predate the sweep and appear in baseline too.
         "too_long": sum(1 for c in live if c.duration_s > MAX_DURATION_S),
     }
 
@@ -112,7 +118,11 @@ _SYNC_MARKERS = ("ffsubsync", "alass", "autosubsync", "subsync")
 
 
 def _is_sync_variant(srt_name: str) -> bool:
-    return any(m in srt_name.lower() for m in _SYNC_MARKERS)
+    # subsyncarr writes <base>.<lang>.<engine>.srt, so the engine token is
+    # dot-delimited. Match the delimited form so a show titled e.g.
+    # "The Alass Chronicles.en.srt" is not mistaken for a re-sync variant.
+    lower = srt_name.lower()
+    return any(f".{m}." in lower for m in _SYNC_MARKERS)
 
 
 def _original_sidecar(video_full: Path) -> Path | None:
@@ -131,10 +141,13 @@ def _original_sidecar(video_full: Path) -> Path | None:
     return None
 
 
-def corpus_from_dir(path: str) -> list[tuple[str, str]]:
-    """Every *.srt in a folder (excluding subsyncarr variants + unparseable)."""
+def corpus_from_dir(path: str, *, limit: int | None = None) -> list[tuple[str, str]]:
+    """Every *.srt in a folder (excluding subsyncarr variants + unparseable).
+    Stops gathering once `limit` rows are collected (None = all)."""
     out: list[tuple[str, str]] = []
     for p in sorted(Path(path).glob("*.srt")):
+        if limit is not None and len(out) >= limit:
+            break
         if _is_sync_variant(p.name):
             continue
         try:
@@ -147,18 +160,20 @@ def corpus_from_dir(path: str) -> list[tuple[str, str]]:
 
 
 def _default_resolve(canonical_path: str) -> Path | None:
-    from .paths import PathOutsideRootError, canonical_to_fs
+    from .paths import canonical_to_fs
 
-    try:
-        return canonical_to_fs(canonical_path)
-    except (OSError, PathOutsideRootError):
-        return None
+    return canonical_to_fs(canonical_path)
 
 
-def corpus_from_ledger(db_path: str, *, resolve=None, cue_tol: int = 1) -> list[tuple[str, str]]:
+def corpus_from_ledger(
+    db_path: str, *, resolve=None, cue_tol: int = 1, limit: int | None = None
+) -> list[tuple[str, str]]:
     """Corpus from the subs_generated ledger: each completed row → its original
     subgen sidecar. Skips files whose on-disk cue_count differs from the recorded
-    aftercare cue_count by more than cue_tol (a Bazarr provider sub replaced it)."""
+    aftercare cue_count by more than cue_tol (a Bazarr provider sub replaced it).
+    Stops gathering once `limit` rows are collected (None = all). The `resolve=`
+    seam is best-effort per row: a resolver that raises (e.g. PathOutsideRootError
+    on a traversal-escaping canonical) skips that row rather than aborting."""
     resolve = resolve or _default_resolve
     conn = sqlite3.connect(db_path)
     try:
@@ -167,7 +182,12 @@ def corpus_from_ledger(db_path: str, *, resolve=None, cue_tol: int = 1) -> list[
         ).fetchall()
         out: list[tuple[str, str]] = []
         for (canon,) in rows:
-            video = resolve(canon)
+            if limit is not None and len(out) >= limit:
+                break
+            try:
+                video = resolve(canon)
+            except (OSError, PathOutsideRootError):
+                continue
             if not video:
                 continue
             srt = _original_sidecar(video)

@@ -26,9 +26,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="cap corpus size (0 = all)")
     args = ap.parse_args()
 
-    corpus = corpus_from_dir(args.dir) if args.dir else corpus_from_ledger(args.db)
-    if args.limit:
-        corpus = corpus[: args.limit]
+    limit = args.limit or None  # 0 → gather everything
+    corpus = corpus_from_dir(args.dir, limit=limit) if args.dir else corpus_from_ledger(args.db, limit=limit)
     if not corpus:
         print("empty corpus — nothing to sweep", file=sys.stderr)
         return 1

@@ -73,6 +73,25 @@ def test_corpus_from_dir_reads_srts_and_skips_sync_variants(tmp_path):
     assert names == ["a.en.srt"]  # variants + non-srt excluded
 
 
+def test_corpus_from_dir_respects_limit(tmp_path):
+    from subarr.retime_tune import corpus_from_dir
+
+    for name in ("a.en.srt", "b.en.srt", "c.en.srt"):
+        (tmp_path / name).write_text(_CALM, encoding="utf-8")
+    corpus = corpus_from_dir(str(tmp_path), limit=2)
+    assert len(corpus) == 2  # stops gathering once limit rows collected
+
+
+def test_is_sync_variant_anchors_to_delimited_engine_suffix():
+    from subarr.retime_tune import _is_sync_variant
+
+    # subsyncarr writes <base>.<lang>.<engine>.srt — the engine token is delimited.
+    assert _is_sync_variant("Show.en.alass.srt") is True
+    assert _is_sync_variant("Show.en.ffsubsync.srt") is True
+    # a show whose title merely contains an engine word is NOT a sync variant.
+    assert _is_sync_variant("The Alass Chronicles.en.srt") is False
+
+
 def test_original_sidecar_prefers_plain_and_excludes_engine_suffix(tmp_path):
     from subarr.retime_tune import _original_sidecar
 
@@ -123,6 +142,103 @@ def test_corpus_from_ledger_gathers_original_and_guards_replaced(tmp_path):
     corpus = corpus_from_ledger(str(db), resolve=_resolve)
     paths = [p for p, _ in corpus]
     assert paths == ["TV/Keep/ep.mkv"]  # completed + cue_count matches; Replaced skipped, Pending excluded
+
+
+def test_corpus_from_ledger_skips_row_when_resolve_raises(tmp_path):
+    import sqlite3
+
+    from subarr.paths import PathOutsideRootError
+    from subarr.retime_tune import corpus_from_ledger
+
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE subs_generated (canonical_path TEXT, completed_at REAL)")
+    conn.execute(
+        "CREATE TABLE aftercare_results (id INTEGER PRIMARY KEY, canonical_path TEXT, cue_count INTEGER)"
+    )
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("../escape/ep.mkv", 1.0))
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Keep/ep.mkv", 2.0))
+    conn.commit()
+    conn.close()
+
+    keep_dir = tmp_path / "keep"
+    keep_dir.mkdir()
+    (keep_dir / "ep.en.srt").write_text(_CALM, encoding="utf-8")
+
+    def _resolve(canon: str):
+        if canon == "../escape/ep.mkv":
+            raise PathOutsideRootError("traversal escapes media root")
+        return {"TV/Keep/ep.mkv": keep_dir / "ep.mkv"}.get(canon)
+
+    corpus = corpus_from_ledger(str(db), resolve=_resolve)
+    paths = [p for p, _ in corpus]
+    assert paths == ["TV/Keep/ep.mkv"]  # bad row skipped, not fatal — good row still returned
+
+
+def test_corpus_from_ledger_cue_tol_boundary(tmp_path):
+    import sqlite3
+
+    from subarr.retime_tune import corpus_from_ledger
+
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE subs_generated (canonical_path TEXT, completed_at REAL)")
+    conn.execute(
+        "CREATE TABLE aftercare_results (id INTEGER PRIMARY KEY, canonical_path TEXT, cue_count INTEGER)"
+    )
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Edge/ep.mkv", 1.0))
+    conn.execute("INSERT INTO subs_generated VALUES (?, ?)", ("TV/Over/ep.mkv", 2.0))
+    conn.commit()
+
+    edge_dir = tmp_path / "edge"
+    edge_dir.mkdir()
+    (edge_dir / "ep.en.srt").write_text(_CALM, encoding="utf-8")  # 2 cues on disk
+    over_dir = tmp_path / "over"
+    over_dir.mkdir()
+    (over_dir / "ep.en.srt").write_text(_CALM, encoding="utf-8")  # 2 cues on disk
+    # Edge: recorded 3 → |2-3| == 1 == cue_tol → NOT > tol → KEPT (diff-of-1 boundary).
+    conn.execute(
+        "INSERT INTO aftercare_results (canonical_path, cue_count) VALUES (?, ?)", ("TV/Edge/ep.mkv", 3)
+    )
+    # Over: recorded 4 → |2-4| == 2 > cue_tol → SKIPPED.
+    conn.execute(
+        "INSERT INTO aftercare_results (canonical_path, cue_count) VALUES (?, ?)", ("TV/Over/ep.mkv", 4)
+    )
+    conn.commit()
+    conn.close()
+
+    def _resolve(canon: str):
+        return {"TV/Edge/ep.mkv": edge_dir / "ep.mkv", "TV/Over/ep.mkv": over_dir / "ep.mkv"}.get(canon)
+
+    corpus = corpus_from_ledger(str(db), resolve=_resolve)  # default cue_tol=1
+    paths = [p for p, _ in corpus]
+    assert paths == ["TV/Edge/ep.mkv"]  # diff==tol kept, diff>tol skipped — locks the `>` semantics
+
+
+def test_corpus_from_ledger_respects_limit(tmp_path):
+    import sqlite3
+
+    from subarr.retime_tune import corpus_from_ledger
+
+    db = tmp_path / "s.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE subs_generated (canonical_path TEXT, completed_at REAL)")
+    conn.execute(
+        "CREATE TABLE aftercare_results (id INTEGER PRIMARY KEY, canonical_path TEXT, cue_count INTEGER)"
+    )
+    dirs = {}
+    for i in range(3):
+        canon = f"TV/S{i}/ep.mkv"
+        conn.execute("INSERT INTO subs_generated VALUES (?, ?)", (canon, float(i)))
+        d = tmp_path / f"s{i}"
+        d.mkdir()
+        (d / "ep.en.srt").write_text(_CALM, encoding="utf-8")
+        dirs[canon] = d / "ep.mkv"
+    conn.commit()
+    conn.close()
+
+    corpus = corpus_from_ledger(str(db), resolve=lambda c: dirs.get(c), limit=2)
+    assert len(corpus) == 2  # stops gathering once limit rows collected
 
 
 def test_format_report_ranks_and_shows_baseline():
