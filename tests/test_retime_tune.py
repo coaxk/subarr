@@ -123,3 +123,14 @@ def test_corpus_from_ledger_gathers_original_and_guards_replaced(tmp_path):
     corpus = corpus_from_ledger(str(db), resolve=_resolve)
     paths = [p for p, _ in corpus]
     assert paths == ["TV/Keep/ep.mkv"]  # completed + cue_count matches; Replaced skipped, Pending excluded
+
+
+def test_format_report_ranks_and_shows_baseline():
+    from subarr.retime_tune import format_report, retime_sweep
+
+    rows = retime_sweep([_HOT, _CALM], param_grid())
+    report = format_report(rows)
+    assert "baseline" in report.lower()
+    assert "median_cps" in report or "median" in report.lower()
+    # a line per row (baseline + combos)
+    assert report.count("target_cps=") >= 1

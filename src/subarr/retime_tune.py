@@ -190,3 +190,29 @@ def corpus_from_ledger(db_path: str, *, resolve=None, cue_tol: int = 1) -> list[
         return out
     finally:
         conn.close()
+
+
+def _rank_key(r: SweepRow) -> tuple:
+    # best = lowest %over-critical, then lowest median CPS, then least screen-time added.
+    return (r.pct_over_critical, r.median_cps, r.mean_added_ms)
+
+
+def format_report(rows: list[SweepRow]) -> str:
+    baseline = next((r for r in rows if r.params is None), None)
+    treated = sorted((r for r in rows if r.params is not None), key=_rank_key)
+    lines = ["# re-timer sweep (ranked; baseline = no re-timing)"]
+    if baseline:
+        lines.append(
+            f"baseline: subs={baseline.subs} median_cps={baseline.median_cps:.1f} "
+            f"%>25={baseline.pct_over_critical:.1%} %>20={baseline.pct_over_comfortable:.1%} "
+            f"micro={baseline.micro_cues} too_long={baseline.too_long}"
+        )
+    for r in treated:
+        p = r.params
+        lines.append(
+            f"target_cps={p.target_cps:<4} min_cue={p.min_cue_ms:<5} | "
+            f"median_cps={r.median_cps:.1f} %>25={r.pct_over_critical:.1%} "
+            f"%>20={r.pct_over_comfortable:.1%} micro={r.micro_cues} too_long={r.too_long} "
+            f"changed={r.subs_changed}/{r.subs} +{r.mean_added_ms:.0f}ms/sub"
+        )
+    return "\n".join(lines)
