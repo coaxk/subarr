@@ -250,6 +250,7 @@ class CompletionWatcher:
         best-effort write-backs.
         """
         self._provenance.mark_completed(entry.id)
+        self._run_retime(entry)
         self._run_aftercare(entry)
         log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
         # v1.1-G: try direct multipart upload first (closes the loop

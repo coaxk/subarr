@@ -3,6 +3,10 @@ best-effort (never blocks completion)."""
 
 from __future__ import annotations
 
+import types
+
+import pytest
+
 from subarr.completion_watcher import CompletionWatcher
 
 _HOT = (
@@ -88,3 +92,27 @@ def test_retime_failure_never_raises(tmp_path, monkeypatch):
     )
     w._run_retime(_Entry())  # best-effort: swallows the error
     assert srt.read_text(encoding="utf-8") == _HOT  # original preserved on failure
+
+
+@pytest.mark.asyncio
+async def test_complete_entry_retimes_before_aftercare_and_upload(monkeypatch):
+    w = CompletionWatcher.__new__(CompletionWatcher)
+    calls: list[str] = []
+    w._provenance = types.SimpleNamespace(mark_completed=lambda i: calls.append("mark"))
+    monkeypatch.setattr(w, "_run_retime", lambda e: calls.append("retime"))
+    monkeypatch.setattr(w, "_run_aftercare", lambda e: calls.append("aftercare"))
+
+    async def _up(e):
+        calls.append("upload")
+        return True
+
+    async def _plex(p):
+        calls.append("plex")
+
+    monkeypatch.setattr(w, "_try_upload_to_bazarr", _up)
+    monkeypatch.setattr(w, "_maybe_plex_partial_scan", _plex)
+    entry = types.SimpleNamespace(id=1, canonical_path="TV/x.mkv", series_id=None, source="s")
+    await w.complete_entry(entry)
+    # re-time must run before aftercare reads the sidecar and before the upload.
+    assert calls.index("retime") < calls.index("aftercare")
+    assert calls.index("retime") < calls.index("upload")
