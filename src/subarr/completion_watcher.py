@@ -446,8 +446,9 @@ class CompletionWatcher:
     def _run_retime(self, entry) -> None:
         """#359: re-time the produced .srt in place (extend over-CPS cues into
         the gap before the next cue) BEFORE aftercare + upload, so both see the
-        improved sub. Off by default (SUBARR_RETIME_ENABLED). Best-effort — a
-        failure here must NEVER block completion. Writes only if changed."""
+        improved sub. On by default; opt out with SUBARR_RETIME_ENABLED=0.
+        Best-effort — a failure here must NEVER block completion. Writes only if
+        changed."""
         from .config import settings as _settings
 
         if not _settings.retime_enabled:
