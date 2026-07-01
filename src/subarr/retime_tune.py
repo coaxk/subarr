@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
 
-from .paths import PathOutsideRootError
 from .subtitle_readability import (
     CRITICAL_CPS,
     MAX_CPS,
@@ -174,6 +173,13 @@ def corpus_from_ledger(
     Stops gathering once `limit` rows are collected (None = all). The `resolve=`
     seam is best-effort per row: a resolver that raises (e.g. PathOutsideRootError
     on a traversal-escaping canonical) skips that row rather than aborting."""
+    # Bind PathOutsideRootError at call time, not module-top: conftest reloads
+    # `paths` per-test, minting a NEW class identity mid-suite. A module-top bind
+    # would freeze the ORIGINAL class, so the guard below would miss a freshly
+    # reloaded PathOutsideRootError raised by an injected resolver. Lazy import
+    # (matching _default_resolve's idiom) always binds the currently-live class.
+    from .paths import PathOutsideRootError
+
     resolve = resolve or _default_resolve
     conn = sqlite3.connect(db_path)
     try:
