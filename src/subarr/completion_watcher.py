@@ -37,6 +37,7 @@ from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
 from .provenance import ProvenanceStore
 from .subgen_client import SubgenClient, SubgenUnavailable
+from .subtitle_retime import retime_srt
 
 log = logging.getLogger(__name__)
 
@@ -440,6 +441,27 @@ class CompletionWatcher:
             )
         except Exception as e:  # noqa: BLE001 - aftercare must never break completion
             log.warning("aftercare judging failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
+
+    def _run_retime(self, entry) -> None:
+        """#359: re-time the produced .srt in place (extend over-CPS cues into
+        the gap before the next cue) BEFORE aftercare + upload, so both see the
+        improved sub. Off by default (SUBARR_RETIME_ENABLED). Best-effort — a
+        failure here must NEVER block completion. Writes only if changed."""
+        from .config import settings as _settings
+
+        if not _settings.retime_enabled:
+            return
+        try:
+            srt_path = self._find_srt_sidecar(entry.canonical_path)
+            if not srt_path:
+                return
+            text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
+            new_text = retime_srt(text)
+            if new_text != text:
+                Path(srt_path).write_text(new_text, encoding="utf-8")
+                log.info("re-timed %s", entry.canonical_path)
+        except Exception as e:  # noqa: BLE001 - re-timing must never break completion
+            log.warning("re-time failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
 
     def _find_srt_sidecar(self, video_canonical: str) -> str | None:
         """Locate the .srt subgen wrote next to the video. Subgen's default
