@@ -101,6 +101,9 @@ class Settings:
     # audio and unblinds itself. Writes to Sonarr's DB, so OPT-IN. Default
     # off; set SONARR_PROPAGATE_AUDIO_LANG=1 to enable.
     sonarr_propagate_audio_lang: bool
+    # #359: re-time finished .srt subtitles (extend over-CPS cues into gaps)
+    # before aftercare/upload. Off by default until the params are arena-proven.
+    retime_enabled: bool
     # #12: read the user's per-show selected audio language directly from
     # Plex metadata (funnel layer L2.6, below Tautulli-live). Adds Plex API
     # calls per coverage build, so OPT-IN. Default off; set
@@ -264,6 +267,8 @@ def load() -> Settings:
         subgen_webhook_enabled=_env_or("SUBARR_SUBGEN_WEBHOOK_ENABLED", "1").strip().lower()
         not in ("0", "false", "no", "off"),
         sonarr_propagate_audio_lang=os.environ.get("SONARR_PROPAGATE_AUDIO_LANG", "0").strip().lower()
+        in ("1", "true", "yes", "on"),
+        retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on"),
         plex_audio_hints=os.environ.get("PLEX_AUDIO_HINTS", "0").strip().lower()
         in ("1", "true", "yes", "on"),
@@ -467,6 +472,7 @@ FIELD_ENV_VARS: dict[str, str] = {
     "vad_enabled": "SUBARR_VAD_ENABLED",
     "plex_audio_hints": "PLEX_AUDIO_HINTS",
     "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
+    "retime_enabled": "SUBARR_RETIME_ENABLED",
     "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
     "subgen_webhook_enabled": "SUBARR_SUBGEN_WEBHOOK_ENABLED",
 }
