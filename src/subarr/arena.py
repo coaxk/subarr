@@ -81,13 +81,24 @@ def parse_robust_detect(resp) -> dict | None:
     lang = agg.get("language")
     n_ag = int(agg.get("n_agreeing") or 0)
     n_tot = int(agg.get("n_total") or 0)
+    raw_chunks = resp.get("chunks") or []
     heard = sorted(
-        {
-            c.get("language")
-            for c in (resp.get("chunks") or [])
-            if c.get("language") and c.get("language") != "und"
-        }
+        {c.get("language") for c in raw_chunks if c.get("language") and c.get("language") != "und"}
     )
+    # #357: capture each chunk's (language, probability) in file order. The
+    # per-chunk probability (real post-#396) is the signal that separates a
+    # confident multilingual file (3 high-conf distinct langs) from a genuinely
+    # confused one (3 low-conf guesses). Absent field -> None (graceful; the
+    # classifier treats None as below-threshold and the legacy vote path runs).
+    chunks_conf: list[tuple[str | None, float | None]] = []
+    for c in raw_chunks:
+        c_lang = c.get("language")
+        prob = c.get("probability")
+        try:
+            prob = float(prob) if prob is not None else None
+        except (TypeError, ValueError):
+            prob = None  # malformed probability -> below-threshold, never raises
+        chunks_conf.append((c_lang, prob))
     if not n_tot:
         return None
     return {
@@ -96,6 +107,7 @@ def parse_robust_detect(resp) -> dict | None:
         "n_total": n_tot,
         "unanimous": n_tot >= 2 and n_ag == n_tot,
         "languages_heard": heard,
+        "chunks_conf": chunks_conf,
     }
 
 

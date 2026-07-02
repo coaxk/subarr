@@ -644,17 +644,32 @@ function HeaderCell({ children, w, right, center, tip }) {
 // v1.1-O Layer 4 — small badge on the AUDIO cell showing the row's
 // audio-language confidence state. Click handler hoisted by parent to
 // open the review modal.
+// #357: pure classifier for the audio badge state. Exported for unit tests.
+// multilingual + zxx sit AHEAD of suspect so a confident multi-language answer
+// stops the false suspect alarm. Contract: the backend only ever emits
+// `audio_lang_codes` alongside `audio_source==='multilingual'` (they are written
+// together in coverage_engine._apply_multilingual_verifications, and a user
+// single-correction drops the row) — so the `codes.length>=2` clause is
+// belt-and-suspenders and can never override a genuine `user` single verdict.
+export function audioBadgeKind(r) {
+  const codes = r.audio_lang_codes || [];
+  const langs = r.audio_langs || [];
+  if (r.audio_source === 'multilingual' || codes.length >= 2) return 'multilingual';
+  if (langs.length === 1 && String(langs[0]).toLowerCase() === 'zxx') return 'zxx';
+  if (r.audio_verified || r.audio_source === 'user') return 'user';
+  if (r.audio_source === 'whisper') return 'whisper';
+  if (r.audio_source === 'plex') return 'plex';
+  if (r.audio_label_suspect) return 'suspect';
+  if (r.audio_label_unknown) return 'unknown';
+  if (r.audio_source === 'ffprobe') return 'ffprobe';
+  return null;
+}
+
 function AudioLabelChip({ r, onClick }) {
   // Trust-tiered: how do we know this row's audio language? A tick for the
   // verified tiers (colour = source), a muted marker for the file-tag-only
   // case, and the existing warn/unknown states. Tooltip explains each.
-  let kind = null;
-  if (r.audio_verified || r.audio_source === 'user') kind = 'user';
-  else if (r.audio_source === 'whisper') kind = 'whisper';
-  else if (r.audio_source === 'plex') kind = 'plex';
-  else if (r.audio_label_suspect) kind = 'suspect';
-  else if (r.audio_label_unknown) kind = 'unknown';
-  else if (r.audio_source === 'ffprobe') kind = 'ffprobe';
+  const kind = audioBadgeKind(r);
   if (!kind) return null;
   const cfg = {
     user:    { ch: '✓', bg: 'rgba(34,211,161,0.18)',  fg: '#22d3a1', label: 'You verified this audio language' },
@@ -663,6 +678,8 @@ function AudioLabelChip({ r, onClick }) {
     ffprobe: { ch: '~', bg: 'rgba(148,163,184,0.12)', fg: '#94a3b8', label: "From the file's metadata tag only — unverified (tags are often wrong on retags)" },
     suspect: { ch: '⚠', bg: 'rgba(245,158,11,0.18)', fg: '#f59e0b', label: 'Audio label looks wrong (foreign title tagged as English)' },
     unknown: { ch: '?', bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', label: 'No audio language metadata on the file' },
+    multilingual: { ch: '🌐', bg: 'rgba(52,211,153,0.16)', fg: '#34d399', label: 'Multilingual audio (' + (r.audio_lang_codes || []).join('·') + ') — confident multi-language detection, not a mislabel' },
+    zxx:     { ch: '∅', bg: 'rgba(148,163,184,0.16)', fg: '#94a3b8', label: 'No linguistic content (zxx) — constructed or non-speech audio' },
   }[kind];
   const evidence = (r.audio_label_notes || []).join('\n• ');
   const mismatch = !!r.audio_label_whisper_mismatch;  // #90: tag ≠ detected audio
@@ -676,7 +693,9 @@ function AudioLabelChip({ r, onClick }) {
       onClick={(e) => { e.stopPropagation(); onClick && onClick(r); }}
       style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 16, height: 16,
+        // #357: multilingual grows to fit the gl·es·fr code string; others stay square.
+        width: kind === 'multilingual' ? 'auto' : 16, height: 16,
+        padding: kind === 'multilingual' ? '0 4px' : 0,
         borderRadius: 4,
         background: cfg.bg,
         color: cfg.fg,
@@ -685,7 +704,14 @@ function AudioLabelChip({ r, onClick }) {
         marginLeft: 6,
         cursor: 'pointer',
         flex: '0 0 auto',
-      }}>{cfg.ch}</span>
+      }}>
+      {cfg.ch}
+      {kind === 'multilingual' && (
+        <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 600 }}>
+          {(r.audio_lang_codes || []).join('·')}
+        </span>
+      )}
+    </span>
   );
   if (!mismatch) return badge;
   // small amber corner dot — the tag-vs-audio mismatch signal (#90)

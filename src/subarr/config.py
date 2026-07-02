@@ -125,6 +125,13 @@ class Settings:
     # pool. The fixed background loop (DEFAULT_INTERVAL_S) is the floor
     # cadence; this knob debounces the on-demand kicks on top of it.
     coverage_refresh_min_interval_s: float
+    # #357: chunk-probability threshold T for the confident-multilingual rule.
+    # A language counts as high-confidence when >=1 detection chunk reports
+    # probability >= T; >=2 such languages => the file is multilingual (The
+    # Beasts). Default 0.5 shipped as an env-overridable placeholder — empirical
+    # tuning is deferred until per-chunk probabilities have accrued from normal
+    # detection. Override with SUBARR_MULTILANG_CHUNK_MIN_PROB.
+    multilang_chunk_min_prob: float
 
     # v1.1 Coverage dashboard integrations. Empty url disables the upstream.
     bazarr_url: str
@@ -281,6 +288,8 @@ def load() -> Settings:
         coverage_refresh_min_interval_s=max(
             0.0, float(_env_or("SUBARR_COVERAGE_REFRESH_MIN_INTERVAL_S", "120"))
         ),
+        # #357: T default 0.5. Clamped to [0.0, 1.0] since it is a probability.
+        multilang_chunk_min_prob=min(1.0, max(0.0, float(_env_or("SUBARR_MULTILANG_CHUNK_MIN_PROB", "0.5")))),
         # Integration URLs use _env_or so a blank line in .env still gets the
         # sane in-cluster default. Disabling an integration is signalled by
         # the empty api_key, not by clearing the URL.

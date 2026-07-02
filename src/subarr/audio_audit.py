@@ -36,6 +36,7 @@ from typing import Any, Callable
 
 from .arena import parse_robust_detect
 from .arena_service import resolve_source_language
+from .log_safe import scrub
 from .paths import canonical_to_subgen_batch
 
 log = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ class AuditState:
     status: str = "running"  # running | done | cancelled | error
     total: int = 0
     processed: int = 0  # files visited (incl. resumed-skips)
-    found: int = 0  # actionable findings (mislabel/bilingual/multitrack)
+    found: int = 0  # actionable findings (mislabel/bilingual/multitrack/multilingual)
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     error: str | None = None
@@ -83,18 +84,31 @@ class AuditState:
         }
 
 
-def _derive_status(detect: dict | None, mixed: bool, mislabel: bool, multitrack: bool) -> str:
+def _derive_status(
+    detect: dict | None,
+    mixed: bool,
+    mislabel: bool,
+    multitrack: bool,
+    multilingual_langs: list[str] | None = None,
+) -> str:
     """Map the classifier's flags onto an audit bucket. Precedence:
     multitrack (the file is genuinely multi-track — the detect only saw one
     stream) → mislabel (Whisper unanimously disagrees with the tag) → bilingual
-    (a real second language heard) → undetermined (nothing detected) →
-    confused (detected, but no agreement and no tag mismatch) → agrees."""
+    (a real second language heard) → multilingual (#357: ≥2 HIGH-confidence
+    distinct chunk languages, e.g. The Beasts) → undetermined (nothing detected)
+    → confused (detected, but no agreement and no tag mismatch) → agrees."""
     if multitrack:
         return "multitrack"
     if mislabel:
         return "mislabel"
     if mixed:
         return "bilingual"
+    # #357: a would-be-confused split that is actually ≥2 HIGH-confidence distinct
+    # languages is multilingual (The Beasts), not confusion. Placed after the
+    # bilingual heuristic (a mixed 2-of-3 stays bilingual) but ahead of
+    # undetermined/confused so it is caught even when there is no plurality.
+    if multilingual_langs and len(multilingual_langs) >= 2:
+        return "multilingual"
     if not detect or not detect.get("language"):
         return "undetermined"
     if not detect.get("unanimous") and int(detect.get("n_agreeing") or 0) < 2:
@@ -259,7 +273,16 @@ class AudioAuditWalker:
         track_langs = self._track_langs(canonical_path)
         multitrack = len(track_langs) >= 2
         lang, _src, mixed, mislabel = resolve_source_language(detect, tag_lang, None, multitrack=multitrack)
-        status = _derive_status(detect, mixed, mislabel, multitrack)
+        # #357: recognise a confident-multilingual file (>=2 high-conf distinct
+        # chunk languages) from the per-chunk probabilities, so The Beasts is
+        # classified 'multilingual' rather than the false 'confused'/suspect.
+        from .config import settings
+        from .multilang import classify_high_conf_langs
+
+        multilingual_langs = classify_high_conf_langs(
+            (detect or {}).get("chunks_conf") or [], settings.multilang_chunk_min_prob
+        )
+        status = _derive_status(detect, mixed, mislabel, multitrack, multilingual_langs=multilingual_langs)
         detected_lang = (detect or {}).get("language")
         det = detect or {}
         self._store.upsert(
@@ -273,7 +296,7 @@ class AudioAuditWalker:
             mtime=mtime,
             track_languages=track_langs,
         )
-        if status in ("mislabel", "bilingual", "multitrack"):
+        if status in ("mislabel", "bilingual", "multitrack", "multilingual"):
             state.found += 1
         # Tier 2 feedback: a unanimous mislabel is high-confidence ground that
         # subarr HEARD a different language than the tag. Write a `whisper-robust`
@@ -298,3 +321,35 @@ class AudioAuditWalker:
                 )
             except Exception:  # best-effort — the audit row is the required part
                 pass
+        # #357: a confident-multilingual file is the ANSWER, not a mislabel —
+        # auto-record the ordered high-conf set so coverage surfaces it (and the
+        # override gate skips it). source stays auto (never `user`) so the user
+        # can still correct it. Mirrors the whisper-robust Tier-2 write above.
+        if status == "multilingual" and multilingual_langs and self._audio_lang is not None:
+            key = (canonical_path or "").lstrip("/")
+            try:
+                # #357: NEVER clobber a human verdict. A user correction lives in
+                # the verification store, but the walker's skip-guard keys on the
+                # audit-store mtime — so a re-audit after a mtime bump would re-run
+                # here. Without this guard it would silently overwrite the user's
+                # single-language (or zxx) correction back to auto-multilingual.
+                existing = self._audio_lang.get(key)
+                if existing is not None and "user" in (getattr(existing, "source", "") or "").lower():
+                    pass  # respect the user's (or series-intent) verdict
+                else:
+                    self._audio_lang.upsert(
+                        canonical_path=key,
+                        lang_code=multilingual_langs[0],  # first-of-set; singular consumers keep working
+                        source="auto-high-conf-multi",
+                        confidence=0.9,  # confident by construction (>=1 chunk >= T per lang)
+                        evidence={
+                            "via": "library-audit",
+                            "heard": list(det.get("languages_heard") or []),
+                            "multilingual": multilingual_langs,
+                            "tag_was": tag_lang,
+                        },
+                        lang_class="multi",
+                        lang_codes=multilingual_langs,
+                    )
+            except Exception:  # best-effort — the audit row is the required part
+                log.warning("multilingual auto-record failed for %s", scrub(key), exc_info=True)
