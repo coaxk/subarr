@@ -38,6 +38,8 @@ class VerifyRequest(BaseModel):
     source: str = "user"
     confidence: float = 1.0
     evidence: dict | None = None
+    lang_class: str = "single"  # #357: 'single' | 'multi'
+    lang_codes: list[str] | None = None  # #357: ordered set, only when multi
 
 
 @router.get("/verifications")
@@ -61,6 +63,8 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
         source=req.source,
         confidence=req.confidence,
         evidence=req.evidence,
+        lang_class=req.lang_class,  # #357
+        lang_codes=req.lang_codes,  # #357
     )
 
     # v1.1.1 #219 closer: propagate the user's audio-language verification
@@ -72,7 +76,8 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
     # the local verification still persists, the propagation outcome is
     # surfaced in the response so the UI can show what happened.
     propagation: dict[str, Any] = {"attempted": False}
-    if settings.sonarr_propagate_audio_lang and req.source == "user":
+    # #357: a multilingual verdict has no single language to push to Sonarr.
+    if settings.sonarr_propagate_audio_lang and req.source == "user" and req.lang_class != "multi":
         propagation = await _propagate_to_sonarr(
             request,
             canonical_path=req.canonical_path,

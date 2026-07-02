@@ -246,6 +246,28 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
   );
 }
 
+// #357: build the verification POST body from the bulk selection. Exported for
+// tests. 2+ languages -> a multilingual verdict (lang_class='multi' + the set);
+// a single pick stays single (zxx is just a single code). The caller spreads in
+// confidence/evidence.
+export function buildVerifyBody(canonicalPath, langs) {
+  const codes = (langs || []).filter(Boolean);
+  if (codes.length >= 2) {
+    return {
+      canonical_path: canonicalPath, lang_code: codes[0], source: 'user',
+      lang_class: 'multi', lang_codes: codes,
+    };
+  }
+  return { canonical_path: canonicalPath, lang_code: codes[0], source: 'user', lang_class: 'single' };
+}
+
+// #357: the glance lane surfaces auto-classified multilingual rows for a bulk
+// eyeball. Keys on the pending-review payload's source (store 'auto-high-conf-
+// multi') or the coverage display state ('multilingual').
+export function isAutoMultilingualRow(r) {
+  return r.audio_source === 'auto-high-conf-multi' || r.audio_source === 'multilingual';
+}
+
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
@@ -619,10 +641,11 @@ export function ReviewPage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
+            // #357: buildVerifyBody carries lang_class (+ lang_codes for a
+            // multilingual pick). bulkLang is single today; the builder is
+            // ready for a multi-select control without changing this path.
             body: JSON.stringify({
-              canonical_path: p,
-              lang_code: bulkLang,
-              source: 'user',
+              ...buildVerifyBody(p, [bulkLang]),
               confidence: 1.0,
               evidence: { bulk: true },
             }),
