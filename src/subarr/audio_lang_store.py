@@ -510,6 +510,24 @@ def resolve_audio_language_override(
     if verification is None:
         return None
 
+    # #357: multilingual + zxx files have no single source language to declare —
+    # let subgen self-detect per chunk rather than forward a wrong override.
+    if getattr(verification, "lang_class", "single") == "multi":
+        _log.info(
+            "%s: no override for %s — multilingual (lang_codes=%s); subgen self-detects",
+            caller,
+            scrub(canonical),
+            getattr(verification, "lang_codes", None),
+        )
+        return None
+    if (verification.lang_code or "").strip().lower() == "zxx":
+        _log.info(
+            "%s: no override for %s — zxx (no linguistic content); subgen self-detects",
+            caller,
+            scrub(canonical),
+        )
+        return None
+
     lang = (verification.lang_code or "").strip().lower()
     src = (verification.source or "").strip().lower()
     conf = float(getattr(verification, "confidence", 0.0) or 0.0)
