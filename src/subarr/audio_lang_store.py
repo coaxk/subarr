@@ -131,7 +131,10 @@ class AudioLangStore:
                     verified_by,
                     json.dumps(evidence) if evidence else None,
                     lang_class,
-                    json.dumps(lang_codes) if lang_codes else None,
+                    # #357: normalize set members symmetrically with the singular
+                    # lang_code (2-letter canonical), so the set can never drift
+                    # into a different format than lang_code regardless of caller.
+                    json.dumps([normalize_lang(c) or c.lower() for c in lang_codes]) if lang_codes else None,
                 ),
             )
 

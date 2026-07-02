@@ -29,4 +29,10 @@ describe('audioBadgeKind', () => {
   it('leaves a verified user file as user', () => {
     expect(audioBadgeKind({ audio_source: 'user' })).toBe('user');
   });
+
+  it('pins the frontend contract: multi wins if both signals somehow co-occur', () => {
+    // the backend never emits this combo, but the frontend deliberately prefers
+    // multilingual — lock it so a future backend regression is caught here.
+    expect(audioBadgeKind({ audio_source: 'user', audio_lang_codes: ['gl', 'es'] })).toBe('multilingual');
+  });
 });

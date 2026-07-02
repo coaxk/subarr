@@ -1286,7 +1286,18 @@ def _flag_mixed_language_series(items: list, dismissed_series: set[str] | None =
     for group in groups.values():
         foreign: set[str] = set()
         for it in group:
-            if it.audio_source in _HIGH_TRUST_AUDIO_SOURCES and it.audio_langs:
+            if it.audio_source == "multilingual" and it.audio_langs:
+                # #357: a multilingual episode contributes its first FOREIGN code,
+                # preserving the pre-#357 tally (it used to be a single whisper
+                # row). Folding the WHOLE set in would false-flag a genuinely
+                # multilingual series, so take just the primary foreign language.
+                code = next(
+                    (c for c in (normalize_lang(x) for x in it.audio_langs) if c and c not in ("und", "en")),
+                    None,
+                )
+                if code:
+                    foreign.add(code)
+            elif it.audio_source in _HIGH_TRUST_AUDIO_SOURCES and it.audio_langs:
                 code = normalize_lang(it.audio_langs[0])
                 if code and code not in ("und", "en"):
                     foreign.add(code)
@@ -1935,9 +1946,11 @@ async def build_coverage(
     # suppress their false suspect flag. After _refine so 'multilingual' wins.
     if audio_lang_store is not None:
         try:
-            _apply_multilingual_verifications(items, audio_lang_store.get_all_multi_as_lookup())
-        except Exception:  # noqa: BLE001 — never let this block a coverage build
-            pass
+            _multi_map = audio_lang_store.get_all_multi_as_lookup()
+        except Exception:  # noqa: BLE001 — a transient DB read must not block the build
+            log.warning("multilingual lookup failed; skipping suppression this build", exc_info=True)
+            _multi_map = None
+        _apply_multilingual_verifications(items, _multi_map)
     # #140: mis-grouped-series detection runs LAST — it reads the final
     # (refined) audio_source per episode. Dismissed series are read from the
     # store so known-legit multilingual shows stay quiet across walks.

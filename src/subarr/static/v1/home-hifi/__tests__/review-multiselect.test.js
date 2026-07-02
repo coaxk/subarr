@@ -19,6 +19,11 @@ describe('buildVerifyBody', () => {
   it('zxx single pick -> single zxx', () => {
     expect(buildVerifyBody('x.mkv', ['zxx']).lang_code).toBe('zxx');
   });
+
+  it('empty selection -> null (caller must skip)', () => {
+    expect(buildVerifyBody('x.mkv', [])).toBe(null);
+    expect(buildVerifyBody('x.mkv', [null, ''])).toBe(null);
+  });
 });
 
 describe('isAutoMultilingualRow', () => {

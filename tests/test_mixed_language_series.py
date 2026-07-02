@@ -69,6 +69,37 @@ def test_user_source_counts():
     assert _flag_mixed_language_series(items) == 1
 
 
+def _multi_ep(langs, *, sid=1, path="TV/Show", epnum="1x01"):
+    return CoverageItem(
+        media_type="episode",
+        title="Show",
+        canonical_path=path,
+        bazarr_sonarr_id=sid,
+        episode_number=epnum,
+        audio_langs=list(langs),
+        audio_source="multilingual",
+    )
+
+
+def test_multilingual_episode_still_contributes_its_foreign_language():
+    # #357: a multilingual episode contributes its PRIMARY foreign code to the
+    # mis-group tally (pre-#357 it was a single whisper row). A real mis-group —
+    # Korean multilingual eps + Russian eps — must not be hidden by the new state.
+    items = [_multi_ep(["ko", "en"], epnum="1x01"), _ep("Show", "rus", epnum="1x02", path="TV/Show")]
+    assert _flag_mixed_language_series(items) == 1
+
+
+def test_uniformly_multilingual_series_not_false_flagged():
+    # every episode is the SAME multilingual show (gl/es/fr) — must NOT flag as
+    # mis-grouped. Taking only the primary foreign code (not the whole set) is
+    # what avoids this false positive.
+    eps = [
+        _multi_ep(["gl", "es", "fr"], sid=2, epnum="1x01"),
+        _multi_ep(["gl", "es", "fr"], sid=2, epnum="1x02"),
+    ]
+    assert _flag_mixed_language_series(eps) == 0
+
+
 def test_normalizes_language_variants():
     # 'eng' must normalize to English (excluded); 'kor'/'ko' collapse to one.
     items = [

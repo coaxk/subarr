@@ -35,5 +35,17 @@ def test_absent_probability_degrades_to_none_confidence():
     assert out["unanimous"] is True
 
 
+def test_zero_probability_preserved_and_malformed_degrades():
+    resp = {
+        "aggregate": {"language": "en", "n_agreeing": 1, "n_total": 2},
+        "chunks": [
+            {"language": "en", "probability": 0.0},  # legit 0.0 must survive (not falsy->None)
+            {"language": "de", "probability": "oops"},  # malformed -> None, never raises
+        ],
+    }
+    out = parse_robust_detect(resp)
+    assert out["chunks_conf"] == [("en", 0.0), ("de", None)]
+
+
 def test_no_chunks_still_returns_none():
     assert parse_robust_detect({"aggregate": {"n_total": 0}, "chunks": []}) is None

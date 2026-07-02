@@ -76,8 +76,14 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
     # the local verification still persists, the propagation outcome is
     # surfaced in the response so the UI can show what happened.
     propagation: dict[str, Any] = {"attempted": False}
-    # #357: a multilingual verdict has no single language to push to Sonarr.
-    if settings.sonarr_propagate_audio_lang and req.source == "user" and req.lang_class != "multi":
+    # #357: a multilingual verdict has no single language to push to Sonarr, and
+    # zxx (no linguistic content) is not a language Sonarr should record.
+    if (
+        settings.sonarr_propagate_audio_lang
+        and req.source == "user"
+        and req.lang_class != "multi"
+        and lang != "zxx"
+    ):
         propagation = await _propagate_to_sonarr(
             request,
             canonical_path=req.canonical_path,

@@ -646,7 +646,11 @@ function HeaderCell({ children, w, right, center, tip }) {
 // open the review modal.
 // #357: pure classifier for the audio badge state. Exported for unit tests.
 // multilingual + zxx sit AHEAD of suspect so a confident multi-language answer
-// stops the false suspect alarm.
+// stops the false suspect alarm. Contract: the backend only ever emits
+// `audio_lang_codes` alongside `audio_source==='multilingual'` (they are written
+// together in coverage_engine._apply_multilingual_verifications, and a user
+// single-correction drops the row) — so the `codes.length>=2` clause is
+// belt-and-suspenders and can never override a genuine `user` single verdict.
 export function audioBadgeKind(r) {
   const codes = r.audio_lang_codes || [];
   const langs = r.audio_langs || [];

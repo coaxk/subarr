@@ -252,6 +252,7 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
 // confidence/evidence.
 export function buildVerifyBody(canonicalPath, langs) {
   const codes = (langs || []).filter(Boolean);
+  if (codes.length === 0) return null;  // empty selection -> caller must skip
   if (codes.length >= 2) {
     return {
       canonical_path: canonicalPath, lang_code: codes[0], source: 'user',

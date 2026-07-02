@@ -94,7 +94,11 @@ def parse_robust_detect(resp) -> dict | None:
     for c in raw_chunks:
         c_lang = c.get("language")
         prob = c.get("probability")
-        chunks_conf.append((c_lang, float(prob) if prob is not None else None))
+        try:
+            prob = float(prob) if prob is not None else None
+        except (TypeError, ValueError):
+            prob = None  # malformed probability -> below-threshold, never raises
+        chunks_conf.append((c_lang, prob))
     if not n_tot:
         return None
     return {

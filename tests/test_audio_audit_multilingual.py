@@ -81,6 +81,12 @@ class _FakeLangStore:
     def upsert(self, *, canonical_path, lang_code, **kw):
         self.rows[canonical_path] = {"lang_code": lang_code, **kw}
 
+    def get(self, canonical_path):
+        import types
+
+        r = self.rows.get(canonical_path)
+        return types.SimpleNamespace(**r) if r else None
+
 
 def _store(tmp_path):
     # Mirror the app: migrations own the schema (010_audio_audit.sql).
@@ -140,3 +146,24 @@ async def test_walker_tier2_auto_records_multilingual_set(tmp_path):
     assert row["lang_code"] == "gl"  # first-of-set, singular consumers keep working
     # a genuinely-confused file writes nothing.
     assert "confused.mkv" not in lang.rows
+
+
+@pytest.mark.asyncio
+async def test_auto_record_never_clobbers_a_user_verification(tmp_path):
+    # the confirm-model depends on user corrections sticking across re-audits
+    # (which key on the audit mtime, not the verification store) — auto must
+    # never overwrite a human verdict.
+    from subarr.audio_audit import AudioAuditWalker
+
+    s = _store(tmp_path)
+    lang = _FakeLangStore()
+    # user already corrected this file to single 'gl'
+    lang.rows["beasts.mkv"] = {"lang_code": "gl", "source": "user", "lang_class": "single"}
+    subgen = _FakeSubgen({"beasts.mkv": _split_conf([("gl", 0.91), ("es", 0.88), ("fr", 0.76)])})
+    worklist = [("beasts.mkv", "fr", 10.0)]
+    w = AudioAuditWalker(subgen, s, worklist=lambda: worklist, audio_lang=lang, to_subgen=_identity)
+    await w.start()
+    await w._task
+    # the user's single verdict must survive untouched.
+    assert lang.rows["beasts.mkv"]["source"] == "user"
+    assert lang.rows["beasts.mkv"]["lang_class"] == "single"
