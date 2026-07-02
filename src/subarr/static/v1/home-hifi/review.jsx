@@ -304,6 +304,18 @@ export function ReviewPage() {
   // #226: also declare a durable series/movie language rule so FUTURE
   // downloads (new episodes, re-grabbed movies) inherit the language.
   const [rememberFuture, setRememberFuture] = useState(true);
+  // #406: multilingual bulk mode. When on, the single <select> becomes a
+  // checkable language list and applyBulk submits the full set as a
+  // lang_class='multi' verdict. Series-level multilingual intent is out of
+  // scope (#357 non-goal), so "Remember for future" is disabled while on.
+  const [multilingualMode, setMultilingualMode] = useState(false);
+  const [bulkLangs, setBulkLangs] = useState([]);
+
+  const toggleBulkLang = useCallback((code) => {
+    setBulkLangs((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+    );
+  }, []);
 
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or
@@ -638,18 +650,15 @@ export function ReviewPage() {
       while (queue.length) {
         const p = queue.shift();
         try {
+          // #406: multilingual mode submits the full checked set; otherwise the
+          // single bulkLang. Empty selection -> builder returns null -> skip.
+          const verifyBody = buildVerifyBody(p, multilingualMode ? bulkLangs : [bulkLang]);
+          if (!verifyBody) { done += 1; setBulkProgress({ done, total: paths.length, errors }); continue; }
           const r = await fetch('/api/audio-lang/verifications', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            // #357: buildVerifyBody carries lang_class (+ lang_codes for a
-            // multilingual pick). bulkLang is single today; the builder is
-            // ready for a multi-select control without changing this path.
-            body: JSON.stringify({
-              ...buildVerifyBody(p, [bulkLang]),
-              confidence: 1.0,
-              evidence: { bulk: true },
-            }),
+            body: JSON.stringify({ ...verifyBody, confidence: 1.0, evidence: { bulk: true } }),
           });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           // Dispatch the verified event so the list updates incrementally.
@@ -669,7 +678,7 @@ export function ReviewPage() {
     // #226: if requested, declare one durable intent rule per distinct
     // series/movie in the selection. Best-effort — failures here never fail
     // the per-file bulk above (the primary action); they bump the error count.
-    if (rememberFuture) {
+    if (rememberFuture && !multilingualMode) {
       const prefixes = distinctSeriesPrefixes(paths, data?.items || []);
       for (const prefix of prefixes) {
         try {
@@ -692,7 +701,7 @@ export function ReviewPage() {
     clearSelection();
     // Refetch in case some verifies failed; ensures the list is honest.
     fetchPending({ silent: true });
-  }, [selAssignPaths, bulkLang, fetchPending, clearSelection, rememberFuture, data]);
+  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
@@ -944,28 +953,66 @@ export function ReviewPage() {
               <label style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
                 Assign audio language
               </label>
-              <select value={bulkLang}
-                      onChange={(e) => setBulkLang(e.target.value)}
-                      disabled={bulkRunning}
-                      aria-label="Audio language to assign"
+              {multilingualMode ? (
+                <div role="group" aria-label="Multilingual: select languages"
+                     style={{
+                       display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 420,
+                       maxHeight: 84, overflowY: 'auto', padding: '4px 6px',
+                       background: 'var(--bg-1)', border: 'var(--border)',
+                       borderRadius: 'var(--radius-md)',
+                     }}>
+                  {langPicks.map(([code, name]) => (
+                    <label key={code}
                       style={{
-                        height: 28, padding: '0 8px',
-                        background: 'var(--bg-1)', color: 'var(--fg-0)',
-                        border: 'var(--border)', borderRadius: 'var(--radius-md)',
-                        fontSize: 'var(--text-sm)',
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        fontSize: 'var(--text-2xs)', color: 'var(--fg-1)', cursor: 'pointer',
                       }}>
-                {langPicks.map(([code, name]) => (
-                  <option key={code} value={code}>{name} ({code})</option>
-                ))}
-              </select>
+                      <input type="checkbox"
+                        checked={bulkLangs.includes(code)}
+                        onChange={() => toggleBulkLang(code)}
+                        disabled={bulkRunning}
+                        style={{ accentColor: 'var(--violet-500)' }} />
+                      {name} ({code})
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <select value={bulkLang}
+                        onChange={(e) => setBulkLang(e.target.value)}
+                        disabled={bulkRunning}
+                        aria-label="Audio language to assign"
+                        style={{
+                          height: 28, padding: '0 8px',
+                          background: 'var(--bg-1)', color: 'var(--fg-0)',
+                          border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                          fontSize: 'var(--text-sm)',
+                        }}>
+                  {langPicks.map(([code, name]) => (
+                    <option key={code} value={code}>{name} ({code})</option>
+                  ))}
+                </select>
+              )}
               <label style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'pointer',
               }}
-                title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
-                <input type="checkbox" checked={rememberFuture}
-                  onChange={(e) => setRememberFuture(e.target.checked)}
+                title="Mark these files as multilingual (multiple audio languages in one file).">
+                <input type="checkbox" checked={multilingualMode}
+                  onChange={(e) => setMultilingualMode(e.target.checked)}
                   disabled={bulkRunning}
+                  style={{ accentColor: 'var(--violet-500)' }} />
+                Multilingual
+              </label>
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--text-xs)', color: 'var(--fg-1)',
+                cursor: multilingualMode ? 'not-allowed' : 'pointer',
+                opacity: multilingualMode ? 0.5 : 1,
+              }}
+                title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
+                <input type="checkbox" checked={rememberFuture && !multilingualMode}
+                  onChange={(e) => setRememberFuture(e.target.checked)}
+                  disabled={bulkRunning || multilingualMode}
                   style={{ accentColor: 'var(--violet-500)' }} />
                 Remember for future downloads
               </label>
