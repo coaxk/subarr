@@ -225,6 +225,10 @@ WHISPER_LANGUAGES: dict[str, str] = {
     "jw": "Javanese",
     "su": "Sundanese",
     "yue": "Cantonese",
+    # #357: user-applied only (Whisper cannot reliably emit it). For constructed
+    # gibberish / silent-film audio (Junk Head). Marking a file zxx suppresses
+    # the suspect flag and skips the subgen override.
+    "zxx": "No linguistic content",
 }
 
 
