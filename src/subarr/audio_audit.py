@@ -320,3 +320,25 @@ class AudioAuditWalker:
                 )
             except Exception:  # best-effort — the audit row is the required part
                 pass
+        # #357: a confident-multilingual file is the ANSWER, not a mislabel —
+        # auto-record the ordered high-conf set so coverage surfaces it (and the
+        # override gate skips it). source stays auto (never `user`) so the user
+        # can still correct it. Mirrors the whisper-robust Tier-2 write above.
+        if status == "multilingual" and multilingual_langs and self._audio_lang is not None:
+            try:
+                self._audio_lang.upsert(
+                    canonical_path=(canonical_path or "").lstrip("/"),
+                    lang_code=multilingual_langs[0],  # first-of-set; singular consumers keep working
+                    source="auto-high-conf-multi",
+                    confidence=0.9,  # confident by construction (>=1 chunk >= T per lang)
+                    evidence={
+                        "via": "library-audit",
+                        "heard": list(det.get("languages_heard") or []),
+                        "multilingual": multilingual_langs,
+                        "tag_was": tag_lang,
+                    },
+                    lang_class="multi",
+                    lang_codes=multilingual_langs,
+                )
+            except Exception:  # best-effort — the audit row is the required part
+                pass

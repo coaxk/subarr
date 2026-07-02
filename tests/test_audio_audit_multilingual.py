@@ -114,3 +114,29 @@ async def test_walker_classifies_high_conf_split_as_multilingual(tmp_path):
     await w._task
     assert s.get("beasts.mkv").status == "multilingual"
     assert s.get("confused.mkv").status == "confused"
+
+
+@pytest.mark.asyncio
+async def test_walker_tier2_auto_records_multilingual_set(tmp_path):
+    from subarr.audio_audit import AudioAuditWalker
+
+    s = _store(tmp_path)
+    lang = _FakeLangStore()
+    subgen = _FakeSubgen(
+        {
+            "beasts.mkv": _split_conf([("gl", 0.91), ("es", 0.88), ("fr", 0.76)]),
+            "confused.mkv": _split_conf([("en", 0.2), ("sr", 0.18), ("fr", 0.11)]),
+        }
+    )
+    worklist = [("beasts.mkv", "fr", 10.0), ("confused.mkv", "en", 10.0)]
+    w = AudioAuditWalker(subgen, s, worklist=lambda: worklist, audio_lang=lang, to_subgen=_identity)
+    await w.start()
+    await w._task
+    # The Beasts auto-recorded as the confident-multilingual set.
+    row = lang.rows["beasts.mkv"]
+    assert row["source"] == "auto-high-conf-multi"
+    assert row["lang_class"] == "multi"
+    assert row["lang_codes"] == ["gl", "es", "fr"]
+    assert row["lang_code"] == "gl"  # first-of-set, singular consumers keep working
+    # a genuinely-confused file writes nothing.
+    assert "confused.mkv" not in lang.rows
