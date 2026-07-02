@@ -16,6 +16,15 @@ import { useLanguagePicks } from './languages.mjs';
 const { useState, useEffect, useCallback, useMemo } = React;
 
 function FlagDot({ flag }) {
+  // #406: multilingual rows are auto-detected multi-language files — badge them
+  // with a distinct 🌐 chip, not the suspect/unknown status dot.
+  if (flag === 'multilingual') {
+    return (
+      <span title="Auto-detected multilingual audio — review or accept as detected"
+        aria-label="multilingual"
+        style={{ fontSize: 'var(--text-2xs)' }}>🌐</span>
+    );
+  }
   const kind = flag === 'suspect' ? 'warn' : 'muted';
   const tip = flag === 'suspect'
     ? "File metadata likely lies — claims English on a foreign show"
@@ -267,6 +276,35 @@ export function buildVerifyBody(canonicalPath, langs) {
 // multi') or the coverage display state ('multilingual').
 export function isAutoMultilingualRow(r) {
   return r.audio_source === 'auto-high-conf-multi' || r.audio_source === 'multilingual';
+}
+
+// #406: order the pending lane so auto-multilingual rows sink to the bottom —
+// they are already applied (not blocking), just up for an eyeball. Stable for
+// every other flag. Pure + non-mutating (returns a new array) so it is testable
+// and safe to call in render.
+export function sortPendingRows(rows) {
+  return (rows || [])
+    .map((r, i) => [r, i])
+    .sort((a, b) => {
+      const am = a[0].flag === 'multilingual' ? 1 : 0;
+      const bm = b[0].flag === 'multilingual' ? 1 : 0;
+      if (am !== bm) return am - bm;
+      return a[1] - b[1];  // stable
+    })
+    .map(([r]) => r);
+}
+
+// #406: "Accept (keep as detected)" — re-submit a multilingual row's OWN set as
+// a user verdict (source='user', lang_class='multi'). Distinct from the uniform
+// bulk-assign: each row carries its own lang_codes. A row missing lang_codes
+// (shouldn't happen) -> null so the caller skips it.
+export function acceptMultilingualBody(row) {
+  const codes = (row.lang_codes || []).filter(Boolean);
+  if (codes.length === 0) return null;
+  return {
+    canonical_path: row.file_canonical_path || row.canonical_path,
+    lang_code: codes[0], source: 'user', lang_class: 'multi', lang_codes: codes,
+  };
 }
 
 export function ReviewPage() {
@@ -564,11 +602,12 @@ export function ReviewPage() {
   // Filter + group by series.
   const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
-    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0 };
+    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0, multilingual: 0 };
     for (const it of allItems) {
       if (it.flag === 'suspect') counts.suspect += 1;
       else if (it.flag === 'unknown') counts.unknown += 1;
       else if (it.flag === 'track_mismatch') counts.track_mismatch += 1;
+      else if (it.flag === 'multilingual') counts.multilingual += 1;  // #406
     }
     const s = search.trim().toLowerCase();
     const filtered = allItems.filter((it) => {
@@ -599,6 +638,8 @@ export function ReviewPage() {
         const bn = b.episode_number || '';
         return an.localeCompare(bn, undefined, { numeric: true });
       });
+      // #406: within a group, auto-multilingual rows render last (low priority).
+      g.items = sortPendingRows(g.items);
     }
     const groups = Array.from(byTitle.values()).sort((a, b) =>
       a.title.localeCompare(b.title)
@@ -614,7 +655,7 @@ export function ReviewPage() {
   // ones, so split the current selection by flag — each half gets its own bulk
   // action (you can't assign a language to a track-mismatch, or swap a track on
   // a plain language row). Looked up against data.items, not the filtered view.
-  const { selTmItems, selAssignPaths } = useMemo(() => {
+  const { selTmItems, selAssignPaths, selMultiRows } = useMemo(() => {
     const items = data?.items || [];
     const sel = items.filter((it) => epSelection.has(it.file_canonical_path || it.canonical_path));
     return {
@@ -622,6 +663,8 @@ export function ReviewPage() {
       selAssignPaths: sel
         .filter((it) => it.flag !== 'track_mismatch')
         .map((it) => it.file_canonical_path || it.canonical_path),
+      // #406: multilingual rows selected for "Accept (keep as detected)".
+      selMultiRows: sel.filter((it) => it.flag === 'multilingual'),
     };
   }, [data, epSelection]);
 
@@ -703,11 +746,55 @@ export function ReviewPage() {
     fetchPending({ silent: true });
   }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data]);
 
+  // #406: "Accept (keep as detected)" — confirm each selected multilingual row's
+  // OWN detected set as a user verdict (source='user'). Per-row (each carries its
+  // own lang_codes), distinct from the uniform bulk-assign. Reuses the 4-worker
+  // progress pattern; rows missing lang_codes are skipped (builder returns null).
+  const acceptSelected = useCallback(async () => {
+    const rows = selMultiRows;
+    if (!rows.length) return;
+    setBulkRunning(true);
+    setBulkProgress({ done: 0, total: rows.length, errors: 0 });
+    let done = 0; let errors = 0;
+    const queue = rows.slice();
+    async function worker() {
+      while (queue.length) {
+        const row = queue.shift();
+        const body = acceptMultilingualBody(row);
+        const p = row.file_canonical_path || row.canonical_path;
+        if (!body) { done += 1; setBulkProgress({ done, total: rows.length, errors }); continue; }
+        try {
+          const r = await fetch('/api/audio-lang/verifications', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ ...body, confidence: 1.0, evidence: { accept_multi: true } }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          window.dispatchEvent(new CustomEvent('audio-lang-verified', {
+            detail: { file_canonical_path: p, lang_code: body.lang_code },
+          }));
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('accept multilingual failed for', p, e);
+          errors += 1;
+        }
+        done += 1;
+        setBulkProgress({ done, total: rows.length, errors });
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    setBulkRunning(false);
+    clearSelection();
+    fetchPending({ silent: true });
+  }, [selMultiRows, fetchPending, clearSelection]);
+
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
     { id: 'suspect', label: `suspect (${totalCounts.suspect})` },
     { id: 'unknown', label: `unknown (${totalCounts.unknown})` },
     { id: 'track_mismatch', label: `track mismatch (${totalCounts.track_mismatch})` },
+    { id: 'multilingual', label: `multilingual (${totalCounts.multilingual})` },  // #406
   ];
   const selectedCount = epSelection.size;
 
@@ -1047,6 +1134,21 @@ export function ReviewPage() {
                 title="Keep the current default track for each (don't ask again)"
                 onClick={() => dismissTrackBulk(selTmItems)}>
                 Dismiss all ({selTmItems.length})
+              </button>
+            </>
+          )}
+
+          {/* #406: selected multilingual rows — confirm each row's own detected
+              set as a user verdict so the lane empties as they are reviewed. */}
+          {selMultiRows.length > 0 && (
+            <>
+              <span style={{ color: 'var(--bg-5)' }}>·</span>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                🌐 {selMultiRows.length} multilingual
+              </span>
+              <button className="btn primary" onClick={acceptSelected} disabled={bulkRunning}
+                title="Confirm each selected file's detected language set as-is (marks them user-verified so they leave this list).">
+                {bulkRunning ? 'Applying…' : `Accept (keep as detected) (${selMultiRows.length})`}
               </button>
             </>
           )}
