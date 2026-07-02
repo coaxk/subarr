@@ -439,7 +439,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: `resolve_source_language` multilingual branch (arity preserved)
+## Task 4: audit-walker multilingual classification (REVISED during execution)
+
+> **⚠️ REVISED 2026-07-02 (supersedes the original Task 4 below).** Investigation during execution found the original plan targeted a dormant seam: nothing passes `min_prob` to `resolve_source_language`, and the real production engine that flags *The Beasts* `suspect / 1/3 agree` is the **audit walker** (`audio_audit._audit_one` → `_derive_status`), wired at `app.py:594`. Revised approach:
+> - Add a `multilingual` bucket to `_derive_status(detect, mixed, mislabel, multitrack, multilingual_langs=None)` — returns `"multilingual"` when `len(multilingual_langs) >= 2`, placed AFTER `mixed` (bilingual) and BEFORE the `undetermined`/`confused` checks so a would-be-confused high-confidence split (The Beasts) is caught, without regressing bilingual (Besa).
+> - In `_audit_one`, compute `multilingual_langs = classify_high_conf_langs(detect["chunks_conf"], settings.multilang_chunk_min_prob)` and pass it to `_derive_status`.
+> - `resolve_source_language` is left UNCHANGED (no `min_prob` seam). Existing `_split([...])` fixtures carry no per-chunk probability → classify returns `[]` → no regression.
+> - Files: `src/subarr/audio_audit.py` (`_derive_status` ~:86, `_audit_one` ~:254). Test: `tests/test_audio_audit_multilingual.py`.
+
+<details><summary>Original Task 4 (superseded — do not implement)</summary>
 
 **Files:**
 - Modify: `src/subarr/arena_service.py:49-86` (`resolve_source_language`)
@@ -566,6 +574,8 @@ git commit -m "#357 resolve_source_language confident-multilingual branch behind
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
+
+</details>
 
 ---
 
@@ -945,7 +955,11 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 7: Auto-record confident-multilingual verifications
+## Task 7: Auto-record confident-multilingual verifications (REVISED during execution)
+
+> **⚠️ REVISED 2026-07-02 (supersedes the original Task 7 below).** `verify_audio_language` has NO production caller (an unwired #90 stub) — extending it would be dead code. The live auto-record hook is the audit walker's Tier-2 block (`audio_audit._audit_one`, ~:283) which already writes `whisper-robust` verifications. Revised approach: in that same block, when `status == "multilingual"` and `self._audio_lang is not None`, upsert with `source="auto-high-conf-multi"`, `lang_class="multi"`, `lang_codes=multilingual_langs`, `lang_code=multilingual_langs[0]`, `confidence=0.9`, mirroring the existing `whisper-robust` write. Depends on Task 6 (store accepts `lang_class`/`lang_codes`). Files: `src/subarr/audio_audit.py`. Test: `tests/test_audio_audit_multilingual.py` (extends the Task 4 test with a `_FakeLangStore` accepting `**kw`).
+
+<details><summary>Original Task 7 (superseded — do not implement)</summary>
 
 **Files:**
 - Modify: `src/subarr/audio_lang_verify.py` (`verify_audio_language`)
@@ -1092,6 +1106,8 @@ git commit -m "#357 auto-record confident-multilingual verifications (source aut
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
+
+</details>
 
 ---
 
