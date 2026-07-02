@@ -62,6 +62,7 @@ class CoverageItem:
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
     embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
     audio_langs: list[str] = field(default_factory=list)
+    audio_lang_codes: list[str] | None = None  # #357: multilingual set (>=2 langs)
     suggest_bazarr_rescan: bool = False
     # Resolved file path (file-level, not series-dir; populated when
     # Sonarr's episode_file is fetched during enrichment)
@@ -188,6 +189,7 @@ class CoverageItem:
             # options) pre-selects the detected audio; internal item.audio_langs
             # stays the raw ffprobe tag for the suspect/cross-check logic.
             "audio_langs": [normalize_lang(l) or l for l in self.audio_langs],
+            "audio_lang_codes": self.audio_lang_codes,  # #357
             "suggest_bazarr_rescan": self.suggest_bazarr_rescan,
             "file_canonical_path": self.file_canonical_path,
             # #161 Phase 2: provenance label so every UI surface can show/filter
@@ -1190,6 +1192,33 @@ def _refine_audio_sources(items: list, verification_sources: dict) -> None:
             it.audio_source = _map(s)
 
 
+def _apply_multilingual_verifications(items: list, multi_verifications: dict[str, list[str]] | None) -> None:
+    """#357 post-pass: a confident-multilingual verdict (>=2 stored lang_codes)
+    is the ANSWER, not a mislabel. Surface the ordered set and suppress the false
+    suspect alarm. Runs AFTER _refine_audio_sources (which would otherwise remap
+    the 'auto-high-conf-multi' source to 'whisper'). Membership in the map
+    reflects the LATEST stored verdict — a user single-correction flips the row
+    back to lang_class='single' and drops it here — so priority is preserved."""
+    if not multi_verifications:
+        return
+    for it in items:
+        codes = multi_verifications.get(it.file_canonical_path)
+        if not codes or len(codes) < 2:
+            continue
+        it.audio_langs = list(codes)
+        it.audio_lang_codes = list(codes)
+        it.audio_source = "multilingual"
+        it.audio_label_suspect = False
+        it.audio_label_unknown = False
+        note = (
+            "multilingual audio ("
+            + "·".join(codes)
+            + ") - confident multi-language detection, not a mislabel"
+        )
+        if note not in it.audio_label_notes:
+            it.audio_label_notes.append(note)
+
+
 # #140: audio sources we trust enough to feed the mis-grouped detector. ffprobe
 # tags are deliberately excluded — they're the unreliable signal this check
 # exists to see past (subgen/Sonarr/Bazarr already trust the tag; we only
@@ -1902,6 +1931,13 @@ async def build_coverage(
 
     _disqualify_unsupported(items)
     _refine_audio_sources(items, verification_sources)
+    # #357: surface confident-multilingual files (>=2 stored lang_codes) and
+    # suppress their false suspect flag. After _refine so 'multilingual' wins.
+    if audio_lang_store is not None:
+        try:
+            _apply_multilingual_verifications(items, audio_lang_store.get_all_multi_as_lookup())
+        except Exception:  # noqa: BLE001 — never let this block a coverage build
+            pass
     # #140: mis-grouped-series detection runs LAST — it reads the final
     # (refined) audio_source per episode. Dismissed series are read from the
     # store so known-legit multilingual shows stay quiet across walks.
