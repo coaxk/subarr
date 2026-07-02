@@ -83,18 +83,31 @@ class AuditState:
         }
 
 
-def _derive_status(detect: dict | None, mixed: bool, mislabel: bool, multitrack: bool) -> str:
+def _derive_status(
+    detect: dict | None,
+    mixed: bool,
+    mislabel: bool,
+    multitrack: bool,
+    multilingual_langs: list[str] | None = None,
+) -> str:
     """Map the classifier's flags onto an audit bucket. Precedence:
     multitrack (the file is genuinely multi-track — the detect only saw one
     stream) → mislabel (Whisper unanimously disagrees with the tag) → bilingual
-    (a real second language heard) → undetermined (nothing detected) →
-    confused (detected, but no agreement and no tag mismatch) → agrees."""
+    (a real second language heard) → multilingual (#357: ≥2 HIGH-confidence
+    distinct chunk languages, e.g. The Beasts) → undetermined (nothing detected)
+    → confused (detected, but no agreement and no tag mismatch) → agrees."""
     if multitrack:
         return "multitrack"
     if mislabel:
         return "mislabel"
     if mixed:
         return "bilingual"
+    # #357: a would-be-confused split that is actually ≥2 HIGH-confidence distinct
+    # languages is multilingual (The Beasts), not confusion. Placed after the
+    # bilingual heuristic (a mixed 2-of-3 stays bilingual) but ahead of
+    # undetermined/confused so it is caught even when there is no plurality.
+    if multilingual_langs and len(multilingual_langs) >= 2:
+        return "multilingual"
     if not detect or not detect.get("language"):
         return "undetermined"
     if not detect.get("unanimous") and int(detect.get("n_agreeing") or 0) < 2:
@@ -259,7 +272,16 @@ class AudioAuditWalker:
         track_langs = self._track_langs(canonical_path)
         multitrack = len(track_langs) >= 2
         lang, _src, mixed, mislabel = resolve_source_language(detect, tag_lang, None, multitrack=multitrack)
-        status = _derive_status(detect, mixed, mislabel, multitrack)
+        # #357: recognise a confident-multilingual file (>=2 high-conf distinct
+        # chunk languages) from the per-chunk probabilities, so The Beasts is
+        # classified 'multilingual' rather than the false 'confused'/suspect.
+        from .config import settings
+        from .multilang import classify_high_conf_langs
+
+        multilingual_langs = classify_high_conf_langs(
+            (detect or {}).get("chunks_conf") or [], settings.multilang_chunk_min_prob
+        )
+        status = _derive_status(detect, mixed, mislabel, multitrack, multilingual_langs=multilingual_langs)
         detected_lang = (detect or {}).get("language")
         det = detect or {}
         self._store.upsert(
