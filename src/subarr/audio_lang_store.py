@@ -57,6 +57,8 @@ class AudioLangVerification:
     verified_at: float
     verified_by: str | None
     evidence: dict | None
+    lang_class: str = "single"  # #357: 'single' | 'multi'
+    lang_codes: list[str] | None = None  # #357: ordered set, only when multi
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,7 +69,22 @@ class AudioLangVerification:
             "verified_at": self.verified_at,
             "verified_by": self.verified_by,
             "evidence": self.evidence,
+            "lang_class": self.lang_class,
+            "lang_codes": self.lang_codes,
         }
+
+
+def _decode_lang_codes(raw: str | None) -> list[str] | None:
+    """#357: deserialise the lang_codes JSON array. Malformed -> None (treat as
+    single), logged, never crash (design error-handling rule)."""
+    if not raw:
+        return None
+    try:
+        val = json.loads(raw)
+    except (ValueError, TypeError):
+        logging.getLogger(__name__).warning("malformed lang_codes JSON; treating as single")
+        return None
+    return val if isinstance(val, list) else None
 
 
 class AudioLangStore:
@@ -90,16 +107,20 @@ class AudioLangStore:
         confidence: float = 1.0,
         verified_by: str | None = None,
         evidence: dict | None = None,
+        lang_class: str = "single",  # #357
+        lang_codes: list[str] | None = None,  # #357
     ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audio_lang_verifications "
-                "(canonical_path, lang_code, source, confidence, verified_at, verified_by, evidence) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "(canonical_path, lang_code, source, confidence, verified_at, verified_by, evidence, "
+                " lang_class, lang_codes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(canonical_path) DO UPDATE SET "
                 "  lang_code=excluded.lang_code, source=excluded.source, "
                 "  confidence=excluded.confidence, verified_at=excluded.verified_at, "
-                "  verified_by=excluded.verified_by, evidence=excluded.evidence",
+                "  verified_by=excluded.verified_by, evidence=excluded.evidence, "
+                "  lang_class=excluded.lang_class, lang_codes=excluded.lang_codes",
                 (
                     canonical_path,
                     # #358: canonical 2-letter ISO-639-1 (was raw .lower()).
@@ -109,6 +130,8 @@ class AudioLangStore:
                     time.time(),
                     verified_by,
                     json.dumps(evidence) if evidence else None,
+                    lang_class,
+                    json.dumps(lang_codes) if lang_codes else None,
                 ),
             )
 
@@ -116,7 +139,7 @@ class AudioLangStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT canonical_path, lang_code, source, confidence, "
-                "       verified_at, verified_by, evidence "
+                "       verified_at, verified_by, evidence, lang_class, lang_codes "
                 "FROM audio_lang_verifications WHERE canonical_path = ?",
                 (canonical_path,),
             ).fetchone()
@@ -129,6 +152,8 @@ class AudioLangStore:
                 verified_at=row[4],
                 verified_by=row[5],
                 evidence=json.loads(row[6]) if row[6] else None,
+                lang_class=row[7] or "single",  # #357
+                lang_codes=_decode_lang_codes(row[8]),  # #357
             )
         # #226: fall through to series intent — every episode of a
         # declared-language series inherits the declaration automatically.
@@ -160,6 +185,21 @@ class AudioLangStore:
             ).fetchall()
         return {r[0]: (normalize_lang(r[1]) or r[1]) for r in rows}  # #358
 
+    def get_all_multi_as_lookup(self) -> dict[str, list[str]]:
+        """#357: {canonical_path: lang_codes} for every lang_class='multi' row.
+        Read by build_coverage so multilingual files surface the set + skip the
+        suspect flag. Mirrors get_all_as_lookup()'s fast-path (no series-intent)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, lang_codes FROM audio_lang_verifications WHERE lang_class = 'multi'"
+            ).fetchall()
+        out: dict[str, list[str]] = {}
+        for path, raw in rows:
+            codes = _decode_lang_codes(raw)
+            if codes:
+                out[path] = codes
+        return out
+
     def get_all_sources_as_lookup(self) -> dict[str, str]:
         """Return {canonical_path: source} for all per-file verifications, so
         Coverage can show HOW each audio language was determined (user /
@@ -183,7 +223,7 @@ class AudioLangStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT canonical_path, lang_code, source, confidence, "
-                "       verified_at, verified_by, evidence "
+                "       verified_at, verified_by, evidence, lang_class, lang_codes "
                 "FROM audio_lang_verifications "
                 "ORDER BY verified_at DESC"
             ).fetchall()
@@ -198,6 +238,8 @@ class AudioLangStore:
                     verified_at=r[4],
                     verified_by=r[5],
                     evidence=json.loads(r[6]) if r[6] else None,
+                    lang_class=r[7] or "single",  # #357
+                    lang_codes=_decode_lang_codes(r[8]),  # #357
                 )
             )
         return out
