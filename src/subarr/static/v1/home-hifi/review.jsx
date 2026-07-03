@@ -660,6 +660,9 @@ export function ReviewPage() {
     const sel = items.filter((it) => epSelection.has(it.file_canonical_path || it.canonical_path));
     return {
       selTmItems: sel.filter((it) => it.flag === 'track_mismatch'),
+      // #406: multilingual rows are deliberately included here too, so the
+      // toolbar can RE-ASSIGN them (correct to single/different set) — they also
+      // appear in selMultiRows for the Accept action. One click fires one action.
       selAssignPaths: sel
         .filter((it) => it.flag !== 'track_mismatch')
         .map((it) => it.file_canonical_path || it.canonical_path),
@@ -706,7 +709,10 @@ export function ReviewPage() {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           // Dispatch the verified event so the list updates incrementally.
           window.dispatchEvent(new CustomEvent('audio-lang-verified', {
-            detail: { file_canonical_path: p, lang_code: bulkLang },
+            // #406: dispatch the ACTUAL assigned code (codes[0] in multi mode),
+            // not the single-select bulkLang — arena listens and would otherwise
+            // tag a live sweep with the wrong language.
+            detail: { file_canonical_path: p, lang_code: verifyBody.lang_code },
           }));
         } catch (e) {
           // eslint-disable-next-line no-console

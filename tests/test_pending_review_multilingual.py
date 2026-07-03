@@ -102,3 +102,48 @@ def test_suspect_row_unaffected(app_with_stub):
     row = next((it for it in items if it.get("canonical_path") == _SUSPECT_PATH), None)
     assert row is not None
     assert row["flag"] == "suspect"
+
+
+def test_track_mismatch_wins_over_auto_multilingual(app_with_stub):
+    # A row that is BOTH an auto-multi verdict AND a default-track mismatch must
+    # surface as track_mismatch (FIRST precedence), not multilingual — the two
+    # are orthogonal and track-mismatch needs the swap/dismiss action.
+    app = app_with_stub.app
+    app.state.audio_lang.upsert(
+        canonical_path=_AUTO_PATH,
+        lang_code="gl",
+        source="auto-high-conf-multi",
+        lang_class="multi",
+        lang_codes=["gl", "es"],
+    )
+    item = _multi_item(_AUTO_PATH)
+    item["default_track_mismatch"] = True
+    app.state.coverage_cache = _SnapCache([item])
+
+    items = app_with_stub.get(PENDING).json()["items"]
+    row = next((it for it in items if it.get("canonical_path") == _AUTO_PATH), None)
+    assert row is not None
+    assert row["flag"] == "track_mismatch"
+
+
+def test_auto_multilingual_bazarr_synthetic_none_file_path(app_with_stub):
+    # Bazarr-synthetic / series-level rows have file_canonical_path=None and are
+    # stored under canonical_path — the branch must fall back to the canonical key
+    # for BOTH the source check and the lang_codes lookup.
+    app = app_with_stub.app
+    app.state.audio_lang.upsert(
+        canonical_path=_AUTO_PATH,
+        lang_code="gl",
+        source="auto-high-conf-multi",
+        lang_class="multi",
+        lang_codes=["gl", "es"],
+    )
+    item = _multi_item(_AUTO_PATH)
+    item["file_canonical_path"] = None  # synthetic row, keyed only on canonical
+    app.state.coverage_cache = _SnapCache([item])
+
+    items = app_with_stub.get(PENDING).json()["items"]
+    row = next((it for it in items if it.get("canonical_path") == _AUTO_PATH), None)
+    assert row is not None
+    assert row["flag"] == "multilingual"
+    assert row["lang_codes"] == ["gl", "es"]

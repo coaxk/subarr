@@ -54,11 +54,15 @@ describe('sortPendingRows', () => {
     expect(out).toEqual(['a', 'c', 'e', 'b', 'd']);
   });
 
-  it('does not mutate the input array', () => {
-    const rows = [{ flag: 'multilingual' }, { flag: 'suspect' }];
-    const copy = rows.slice();
-    sortPendingRows(rows);
-    expect(rows).toEqual(copy);
+  it('does not mutate the input array (fresh reference, order preserved)', () => {
+    // input's natural order WOULD be reordered by the sort, so a mutating impl
+    // is detectable here.
+    const rows = [{ flag: 'multilingual', id: 1 }, { flag: 'suspect', id: 2 }];
+    const copy = rows.map((r) => ({ ...r }));
+    const out = sortPendingRows(rows);
+    expect(out).not.toBe(rows);          // new array reference
+    expect(rows).toEqual(copy);           // input untouched (still multi-first)
+    expect(out.map((r) => r.id)).toEqual([2, 1]);  // output sank multilingual last
   });
 });
 
