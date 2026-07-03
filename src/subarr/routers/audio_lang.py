@@ -662,6 +662,12 @@ async def pending_review(request: Request) -> dict[str, Any]:
     coverage end-to-end. Returns instantly (was 60-90s)."""
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
+    # #406: key the multilingual lane on the STORE source (not the snapshot's
+    # display audio_source, which reads 'multilingual' for BOTH auto and
+    # user-confirmed rows). Auto rows are surfaced for review; user rows are
+    # settled and excluded.
+    sources = audio_lang_store.get_all_sources_as_lookup()
+    multi_map = audio_lang_store.get_all_multi_as_lookup()
     # #170: apply the track-mismatch dismiss at READ time too. build_coverage
     # bakes it out only when it regenerates the snapshot; this endpoint reads the
     # cached snapshot, so without this a dismissed row reappears until the next
@@ -705,6 +711,15 @@ async def pending_review(request: Request) -> dict[str, Any]:
                 "mismatch_native_track_lang": it.get("mismatch_native_track_lang"),
                 "mismatch_native_audio_ordinal": it.get("mismatch_native_audio_ordinal"),
             }
+        # #406: an auto-classified multilingual verdict is stored (so it would
+        # otherwise hit the already-verified skip below) but is NOT settled —
+        # surface it for review. Keyed on the store source; user-confirmed
+        # multi (source=='user') is deliberately excluded.
+        elif (file_path and sources.get(file_path) == "auto-high-conf-multi") or (
+            canonical and sources.get(canonical) == "auto-high-conf-multi"
+        ):
+            flag = "multilingual"
+            extra = {"lang_codes": multi_map.get(file_path) or multi_map.get(canonical)}
         # Skip if already verified — check BOTH keys (bulk-verify stores under
         # file_canonical_path || canonical_path; Bazarr-synthetic / series-level
         # rows have a None file_canonical_path and are verified under canonical).

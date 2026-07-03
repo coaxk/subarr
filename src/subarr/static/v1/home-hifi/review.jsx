@@ -16,6 +16,15 @@ import { useLanguagePicks } from './languages.mjs';
 const { useState, useEffect, useCallback, useMemo } = React;
 
 function FlagDot({ flag }) {
+  // #406: multilingual rows are auto-detected multi-language files — badge them
+  // with a distinct 🌐 chip, not the suspect/unknown status dot.
+  if (flag === 'multilingual') {
+    return (
+      <span title="Auto-detected multilingual audio — review or accept as detected"
+        aria-label="multilingual"
+        style={{ fontSize: 'var(--text-2xs)' }}>🌐</span>
+    );
+  }
   const kind = flag === 'suspect' ? 'warn' : 'muted';
   const tip = flag === 'suspect'
     ? "File metadata likely lies — claims English on a foreign show"
@@ -269,6 +278,35 @@ export function isAutoMultilingualRow(r) {
   return r.audio_source === 'auto-high-conf-multi' || r.audio_source === 'multilingual';
 }
 
+// #406: order the pending lane so auto-multilingual rows sink to the bottom —
+// they are already applied (not blocking), just up for an eyeball. Stable for
+// every other flag. Pure + non-mutating (returns a new array) so it is testable
+// and safe to call in render.
+export function sortPendingRows(rows) {
+  return (rows || [])
+    .map((r, i) => [r, i])
+    .sort((a, b) => {
+      const am = a[0].flag === 'multilingual' ? 1 : 0;
+      const bm = b[0].flag === 'multilingual' ? 1 : 0;
+      if (am !== bm) return am - bm;
+      return a[1] - b[1];  // stable
+    })
+    .map(([r]) => r);
+}
+
+// #406: "Accept (keep as detected)" — re-submit a multilingual row's OWN set as
+// a user verdict (source='user', lang_class='multi'). Distinct from the uniform
+// bulk-assign: each row carries its own lang_codes. A row missing lang_codes
+// (shouldn't happen) -> null so the caller skips it.
+export function acceptMultilingualBody(row) {
+  const codes = (row.lang_codes || []).filter(Boolean);
+  if (codes.length === 0) return null;
+  return {
+    canonical_path: row.file_canonical_path || row.canonical_path,
+    lang_code: codes[0], source: 'user', lang_class: 'multi', lang_codes: codes,
+  };
+}
+
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
@@ -304,6 +342,18 @@ export function ReviewPage() {
   // #226: also declare a durable series/movie language rule so FUTURE
   // downloads (new episodes, re-grabbed movies) inherit the language.
   const [rememberFuture, setRememberFuture] = useState(true);
+  // #406: multilingual bulk mode. When on, the single <select> becomes a
+  // checkable language list and applyBulk submits the full set as a
+  // lang_class='multi' verdict. Series-level multilingual intent is out of
+  // scope (#357 non-goal), so "Remember for future" is disabled while on.
+  const [multilingualMode, setMultilingualMode] = useState(false);
+  const [bulkLangs, setBulkLangs] = useState([]);
+
+  const toggleBulkLang = useCallback((code) => {
+    setBulkLangs((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+    );
+  }, []);
 
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or
@@ -552,11 +602,12 @@ export function ReviewPage() {
   // Filter + group by series.
   const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
-    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0 };
+    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0, multilingual: 0 };
     for (const it of allItems) {
       if (it.flag === 'suspect') counts.suspect += 1;
       else if (it.flag === 'unknown') counts.unknown += 1;
       else if (it.flag === 'track_mismatch') counts.track_mismatch += 1;
+      else if (it.flag === 'multilingual') counts.multilingual += 1;  // #406
     }
     const s = search.trim().toLowerCase();
     const filtered = allItems.filter((it) => {
@@ -587,6 +638,8 @@ export function ReviewPage() {
         const bn = b.episode_number || '';
         return an.localeCompare(bn, undefined, { numeric: true });
       });
+      // #406: within a group, auto-multilingual rows render last (low priority).
+      g.items = sortPendingRows(g.items);
     }
     const groups = Array.from(byTitle.values()).sort((a, b) =>
       a.title.localeCompare(b.title)
@@ -602,14 +655,19 @@ export function ReviewPage() {
   // ones, so split the current selection by flag — each half gets its own bulk
   // action (you can't assign a language to a track-mismatch, or swap a track on
   // a plain language row). Looked up against data.items, not the filtered view.
-  const { selTmItems, selAssignPaths } = useMemo(() => {
+  const { selTmItems, selAssignPaths, selMultiRows } = useMemo(() => {
     const items = data?.items || [];
     const sel = items.filter((it) => epSelection.has(it.file_canonical_path || it.canonical_path));
     return {
       selTmItems: sel.filter((it) => it.flag === 'track_mismatch'),
+      // #406: multilingual rows are deliberately included here too, so the
+      // toolbar can RE-ASSIGN them (correct to single/different set) — they also
+      // appear in selMultiRows for the Accept action. One click fires one action.
       selAssignPaths: sel
         .filter((it) => it.flag !== 'track_mismatch')
         .map((it) => it.file_canonical_path || it.canonical_path),
+      // #406: multilingual rows selected for "Accept (keep as detected)".
+      selMultiRows: sel.filter((it) => it.flag === 'multilingual'),
     };
   }, [data, epSelection]);
 
@@ -638,23 +696,23 @@ export function ReviewPage() {
       while (queue.length) {
         const p = queue.shift();
         try {
+          // #406: multilingual mode submits the full checked set; otherwise the
+          // single bulkLang. Empty selection -> builder returns null -> skip.
+          const verifyBody = buildVerifyBody(p, multilingualMode ? bulkLangs : [bulkLang]);
+          if (!verifyBody) { done += 1; setBulkProgress({ done, total: paths.length, errors }); continue; }
           const r = await fetch('/api/audio-lang/verifications', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            // #357: buildVerifyBody carries lang_class (+ lang_codes for a
-            // multilingual pick). bulkLang is single today; the builder is
-            // ready for a multi-select control without changing this path.
-            body: JSON.stringify({
-              ...buildVerifyBody(p, [bulkLang]),
-              confidence: 1.0,
-              evidence: { bulk: true },
-            }),
+            body: JSON.stringify({ ...verifyBody, confidence: 1.0, evidence: { bulk: true } }),
           });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           // Dispatch the verified event so the list updates incrementally.
           window.dispatchEvent(new CustomEvent('audio-lang-verified', {
-            detail: { file_canonical_path: p, lang_code: bulkLang },
+            // #406: dispatch the ACTUAL assigned code (codes[0] in multi mode),
+            // not the single-select bulkLang — arena listens and would otherwise
+            // tag a live sweep with the wrong language.
+            detail: { file_canonical_path: p, lang_code: verifyBody.lang_code },
           }));
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -669,7 +727,7 @@ export function ReviewPage() {
     // #226: if requested, declare one durable intent rule per distinct
     // series/movie in the selection. Best-effort — failures here never fail
     // the per-file bulk above (the primary action); they bump the error count.
-    if (rememberFuture) {
+    if (rememberFuture && !multilingualMode) {
       const prefixes = distinctSeriesPrefixes(paths, data?.items || []);
       for (const prefix of prefixes) {
         try {
@@ -692,13 +750,57 @@ export function ReviewPage() {
     clearSelection();
     // Refetch in case some verifies failed; ensures the list is honest.
     fetchPending({ silent: true });
-  }, [selAssignPaths, bulkLang, fetchPending, clearSelection, rememberFuture, data]);
+  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data]);
+
+  // #406: "Accept (keep as detected)" — confirm each selected multilingual row's
+  // OWN detected set as a user verdict (source='user'). Per-row (each carries its
+  // own lang_codes), distinct from the uniform bulk-assign. Reuses the 4-worker
+  // progress pattern; rows missing lang_codes are skipped (builder returns null).
+  const acceptSelected = useCallback(async () => {
+    const rows = selMultiRows;
+    if (!rows.length) return;
+    setBulkRunning(true);
+    setBulkProgress({ done: 0, total: rows.length, errors: 0 });
+    let done = 0; let errors = 0;
+    const queue = rows.slice();
+    async function worker() {
+      while (queue.length) {
+        const row = queue.shift();
+        const body = acceptMultilingualBody(row);
+        const p = row.file_canonical_path || row.canonical_path;
+        if (!body) { done += 1; setBulkProgress({ done, total: rows.length, errors }); continue; }
+        try {
+          const r = await fetch('/api/audio-lang/verifications', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ ...body, confidence: 1.0, evidence: { accept_multi: true } }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          window.dispatchEvent(new CustomEvent('audio-lang-verified', {
+            detail: { file_canonical_path: p, lang_code: body.lang_code },
+          }));
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('accept multilingual failed for', p, e);
+          errors += 1;
+        }
+        done += 1;
+        setBulkProgress({ done, total: rows.length, errors });
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    setBulkRunning(false);
+    clearSelection();
+    fetchPending({ silent: true });
+  }, [selMultiRows, fetchPending, clearSelection]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
     { id: 'suspect', label: `suspect (${totalCounts.suspect})` },
     { id: 'unknown', label: `unknown (${totalCounts.unknown})` },
     { id: 'track_mismatch', label: `track mismatch (${totalCounts.track_mismatch})` },
+    { id: 'multilingual', label: `multilingual (${totalCounts.multilingual})` },  // #406
   ];
   const selectedCount = epSelection.size;
 
@@ -944,28 +1046,66 @@ export function ReviewPage() {
               <label style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
                 Assign audio language
               </label>
-              <select value={bulkLang}
-                      onChange={(e) => setBulkLang(e.target.value)}
-                      disabled={bulkRunning}
-                      aria-label="Audio language to assign"
+              {multilingualMode ? (
+                <div role="group" aria-label="Multilingual: select languages"
+                     style={{
+                       display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 420,
+                       maxHeight: 84, overflowY: 'auto', padding: '4px 6px',
+                       background: 'var(--bg-1)', border: 'var(--border)',
+                       borderRadius: 'var(--radius-md)',
+                     }}>
+                  {langPicks.map(([code, name]) => (
+                    <label key={code}
                       style={{
-                        height: 28, padding: '0 8px',
-                        background: 'var(--bg-1)', color: 'var(--fg-0)',
-                        border: 'var(--border)', borderRadius: 'var(--radius-md)',
-                        fontSize: 'var(--text-sm)',
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        fontSize: 'var(--text-2xs)', color: 'var(--fg-1)', cursor: 'pointer',
                       }}>
-                {langPicks.map(([code, name]) => (
-                  <option key={code} value={code}>{name} ({code})</option>
-                ))}
-              </select>
+                      <input type="checkbox"
+                        checked={bulkLangs.includes(code)}
+                        onChange={() => toggleBulkLang(code)}
+                        disabled={bulkRunning}
+                        style={{ accentColor: 'var(--violet-500)' }} />
+                      {name} ({code})
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <select value={bulkLang}
+                        onChange={(e) => setBulkLang(e.target.value)}
+                        disabled={bulkRunning}
+                        aria-label="Audio language to assign"
+                        style={{
+                          height: 28, padding: '0 8px',
+                          background: 'var(--bg-1)', color: 'var(--fg-0)',
+                          border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                          fontSize: 'var(--text-sm)',
+                        }}>
+                  {langPicks.map(([code, name]) => (
+                    <option key={code} value={code}>{name} ({code})</option>
+                  ))}
+                </select>
+              )}
               <label style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 fontSize: 'var(--text-xs)', color: 'var(--fg-1)', cursor: 'pointer',
               }}
-                title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
-                <input type="checkbox" checked={rememberFuture}
-                  onChange={(e) => setRememberFuture(e.target.checked)}
+                title="Mark these files as multilingual (multiple audio languages in one file).">
+                <input type="checkbox" checked={multilingualMode}
+                  onChange={(e) => setMultilingualMode(e.target.checked)}
                   disabled={bulkRunning}
+                  style={{ accentColor: 'var(--violet-500)' }} />
+                Multilingual
+              </label>
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--text-xs)', color: 'var(--fg-1)',
+                cursor: multilingualMode ? 'not-allowed' : 'pointer',
+                opacity: multilingualMode ? 0.5 : 1,
+              }}
+                title="Also save a rule so new episodes — and re-downloaded movies — of these titles inherit this language automatically. A per-file correction always overrides it.">
+                <input type="checkbox" checked={rememberFuture && !multilingualMode}
+                  onChange={(e) => setRememberFuture(e.target.checked)}
+                  disabled={bulkRunning || multilingualMode}
                   style={{ accentColor: 'var(--violet-500)' }} />
                 Remember for future downloads
               </label>
@@ -1000,6 +1140,21 @@ export function ReviewPage() {
                 title="Keep the current default track for each (don't ask again)"
                 onClick={() => dismissTrackBulk(selTmItems)}>
                 Dismiss all ({selTmItems.length})
+              </button>
+            </>
+          )}
+
+          {/* #406: selected multilingual rows — confirm each row's own detected
+              set as a user verdict so the lane empties as they are reviewed. */}
+          {selMultiRows.length > 0 && (
+            <>
+              <span style={{ color: 'var(--bg-5)' }}>·</span>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+                🌐 {selMultiRows.length} multilingual
+              </span>
+              <button className="btn primary" onClick={acceptSelected} disabled={bulkRunning}
+                title="Confirm each selected file's detected language set as-is (marks them user-verified so they leave this list).">
+                {bulkRunning ? 'Applying…' : `Accept (keep as detected) (${selMultiRows.length})`}
               </button>
             </>
           )}
