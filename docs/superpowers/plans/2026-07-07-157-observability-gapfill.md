@@ -862,21 +862,20 @@ async def test_clean_run_records_success():
 async def test_run_level_crash_records_failure():
     health = _FakeHealth()
 
-    # Force a run-level crash by making the worklist iteration explode: a
-    # non-iterable entry raises inside _run's tuple-unpack, which is a RUN-level
-    # (not per-file) failure caught by _run's outer except.
-    class _Boom(list):
-        def __iter__(self):
-            raise RuntimeError("run-level boom")
-
-    w = _walker(_Boom([("a.mkv", "en", 1.0)]), health=health)
+    # Force a RUN-level crash INSIDE _run (not in start()'s resolver, which
+    # eagerly materializes the worklist via list(self._worklist(scope) or [])
+    # and swallows resolution-time raises at audio_audit.py:164-171). A malformed
+    # 2-tuple sails through the resolver (it is iterable) then raises ValueError
+    # at _run's `for canonical_path, tag, mtime in worklist` unpack — OUTSIDE the
+    # per-file try — hitting _run's outer except → record_failure.
+    w = _walker([("a.mkv", "en")], health=health)  # 2-tuple -> unpack ValueError in _run
     state = await w.start(scope="coverage")
     await w._task
     assert state.status == "error"
     assert health.successes == []
     assert len(health.failures) == 1
     assert health.failures[0][0] == "audio-audit"
-    assert isinstance(health.failures[0][1], RuntimeError)
+    assert isinstance(health.failures[0][1], ValueError)
 
 
 @pytest.mark.asyncio
