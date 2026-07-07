@@ -8,6 +8,7 @@
 // and VACUUM INTO backup. Red-pill callout when the db-integrity task is red.
 
 import { apiFetch } from './api.jsx';
+import { formatRecentRow } from './log-helpers.mjs';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -292,6 +293,79 @@ function DbMaintenance({ dbIntegrityUnhealthy }) {
   );
 }
 
+// #157 gap-fill — recent WARN+ records from subarr's OWN log ring. Gives the
+// CONTEXT around a red task that the single last-traceback can't. Fed by
+// /api/logs/recent (the in-process LogRing snapshot).
+function RecentErrors() {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState({}); // id -> expanded
+
+  const load = useCallback(() => {
+    apiFetch('/api/logs/recent?level=WARNING&limit=200')
+      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+      .then((d) => setRows((d.records || []).map(formatRecentRow)))
+      .catch(() => setRows([]));
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
+
+  const levelColor = (lvl) =>
+    lvl === 'ERROR' || lvl === 'CRITICAL' ? 'var(--error-400, #f87171)'
+      : lvl === 'WARNING' ? 'var(--warn-500, #f59e0b)'
+      : 'var(--fg-3)';
+
+  return (
+    <section style={cardStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span className="label">Recent errors</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>
+          {rows == null ? 'loading…' : `${rows.length} WARN+`}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {(rows || []).slice().reverse().map((row, i) => {
+          const id = `${row.ts}-${i}`;
+          const isOpen = !!open[id];
+          return (
+            <React.Fragment key={id}>
+              <div onClick={() => row.hasTrace && setOpen((o) => ({ ...o, [id]: !o[id] }))}
+                style={{
+                  display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 10px',
+                  borderRadius: 'var(--radius-md)', cursor: row.hasTrace ? 'pointer' : 'default',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 12,
+                }}>
+                <span style={{ flex: 'none', width: 64, color: levelColor(row.level), fontWeight: 600 }}>
+                  {row.level}
+                </span>
+                <span style={{ flex: 'none', color: 'var(--fg-3)' }}>{timeAgo(row.ts)}</span>
+                <span style={{ flex: 'none', color: 'var(--violet-400)' }}>{row.logger}</span>
+                <span style={{ flex: 1, minWidth: 0, color: 'var(--fg-1)', wordBreak: 'break-all' }}>
+                  {row.message}
+                </span>
+                <span style={{ flex: 'none', width: 14, color: 'var(--fg-3)' }}>
+                  {row.hasTrace ? (isOpen ? '▾' : '▸') : ''}
+                </span>
+              </div>
+              {isOpen && row.hasTrace && (
+                <pre style={{
+                  margin: '0 0 8px 74px', padding: '10px 12px', background: '#0d0d10',
+                  border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11, lineHeight: 1.45,
+                  color: 'var(--fg-2)',
+                }}>{row.exc_text}</pre>
+              )}
+            </React.Fragment>
+          );
+        })}
+        {rows && rows.length === 0 && (
+          <div style={{ color: 'var(--fg-3)', padding: 12 }}>No recent warnings or errors.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function HealthPage() {
   const [tasks, setTasks] = useState(null);
   const [version, setVersion] = useState(null);
@@ -353,6 +427,8 @@ export function HealthPage() {
           A task is flagged unhealthy after 3 failed cycles in a row, or when it hasn't succeeded in 3x its normal interval. Click a failing task to see its last error.
         </div>
       </section>
+
+      <RecentErrors />
 
       <DbMaintenance dbIntegrityUnhealthy={dbIntegrityUnhealthy} />
     </main>

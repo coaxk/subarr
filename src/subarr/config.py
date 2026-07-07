@@ -104,6 +104,10 @@ class Settings:
     # #359: re-time finished .srt subtitles (extend over-CPS cues into gaps)
     # before aftercare/upload. Off by default until the params are arena-proven.
     retime_enabled: bool
+    # #157 gap-fill: verbose logging knob. When on, the root logger goes to
+    # DEBUG and the httpx/httpcore request loggers are UN-pinned from WARNING so
+    # request detail shows. Default off = today's INFO behaviour byte-for-byte.
+    debug: bool
     # #12: read the user's per-show selected audio language directly from
     # Plex metadata (funnel layer L2.6, below Tautulli-live). Adds Plex API
     # calls per coverage build, so OPT-IN. Default off; set
@@ -280,6 +284,9 @@ def load() -> Settings:
         # Opt out with SUBARR_RETIME_ENABLED=0.
         retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "1").strip().lower()
         in ("1", "true", "yes", "on"),
+        # #157 gap-fill: SUBARR_DEBUG verbose knob. Off by default; the logging
+        # setup (app.py) reads settings.debug to raise the root level to DEBUG.
+        debug=os.environ.get("SUBARR_DEBUG", "0").strip().lower() in ("1", "true", "yes", "on"),
         plex_audio_hints=os.environ.get("PLEX_AUDIO_HINTS", "0").strip().lower()
         in ("1", "true", "yes", "on"),
         vad_enabled=_env_or("SUBARR_VAD_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off"),

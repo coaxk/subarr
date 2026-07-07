@@ -3,6 +3,8 @@
 
 const { useState, useEffect, useRef, useMemo } = React;
 
+import { LOG_SOURCES } from './log-helpers.mjs';
+
 const LEVEL_COLORS = {
   ERROR: '#ef4444',
   WARN:  '#f59e0b',
@@ -10,36 +12,33 @@ const LEVEL_COLORS = {
   DEBUG: '#6b7280',
 };
 
-// #209 fix: the SSE feed is the subgen container log stream — every line
-// comes FROM subgen. Content-based source detection was misclassifying as
-// 'subarr' for lines that didn't happen to contain the word 'subgen'. Tag
-// everything 'subgen' since that's the actual source. When we later add
-// multi-container streaming the backend should pass the source explicitly.
-function classifyLine(line) {
+// Derive the level from the line text; the source is passed in (which stream
+// this line came from), not guessed from content (#209).
+function classifyLine(line, source) {
   let level = 'INFO';
   if (line.match(/\bERROR\b/i)) level = 'ERROR';
   else if (line.match(/\bWARN(?:ING)?\b/i)) level = 'WARN';
   else if (line.match(/\bDEBUG\b/i)) level = 'DEBUG';
-  return { source: 'subgen', level };
+  return { source, level };
 }
 
-// Backend currently only streams the subgen container log. Other sources
-// (subarr internal, bazarr, sonarr, …) aren't wired yet — show only the
-// one selector that actually corresponds to a live stream rather than
-// listing dead chips that filter to nothing.
-const SOURCES = ['subgen'];
+// #157 gap-fill: the two live streams — subgen (container log) and subarr
+// (subarr's own in-process ring). Single-select via the source switcher.
+const SOURCES = LOG_SOURCES;  // ['subgen', 'subarr'] — #157 gap-fill
 
 export function LogsPage() {
   const [lines, setLines] = useState([]);
   const [paused, setPaused] = useState(false);
   const [follow, setFollow] = useState(true);
-  const [sources, setSources] = useState(new Set(SOURCES));
   const [search, setSearch] = useState('');
   const [connected, setConnected] = useState(false);
   // #328: a server-sent docker-unavailable notice (subarr can't reach the
   // Docker socket to stream subgen's log). Holds the backend message; renders
   // a help panel instead of an endless "Connecting…".
   const [streamError, setStreamError] = useState(null);
+  // #157 gap-fill: which log to stream — 'subgen' (container) or 'subarr'
+  // (subarr's own in-process ring). The EventSource re-subscribes on change.
+  const [source, setSource] = useState('subgen');
   const bufRef = useRef([]);
   const flushTimer = useRef(null);
   const viewRef = useRef(null);
@@ -47,9 +46,13 @@ export function LogsPage() {
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   useEffect(() => {
+    setLines([]);          // #157: clear the view when switching source
+    bufRef.current = [];
+    setStreamError(null);
+    const endpoint = source === 'subarr' ? '/api/logs/subarr/events' : '/api/logs/events';
     let es;
     try {
-      es = new EventSource('/api/logs/events');
+      es = new EventSource(endpoint);
       es.onopen = () => { setConnected(true); setStreamError(null); };
       es.onerror = () => setConnected(false);
       // #328: subarr couldn't reach the Docker socket to stream subgen's log.
@@ -65,11 +68,14 @@ export function LogsPage() {
       // future generic events.
       const onLine = (e) => {
         const t = Date.now();
-        let text = e.data || '';
-        // Backend JSON-encodes the line; strip the wrapping quotes if so.
-        try { text = JSON.parse(text); } catch {}
-        const { source, level } = classifyLine(text);
-        bufRef.current.push({ t, text, source, level, id: t + '-' + Math.random() });
+        let payload = e.data || '';
+        try { payload = JSON.parse(payload); } catch {}
+        // subgen streams a raw string line; subarr streams a structured record.
+        const text = (payload && typeof payload === 'object')
+          ? `${payload.level || 'INFO'} ${payload.logger_name || ''} ${payload.message || ''}`.trim()
+          : String(payload);
+        const { source: src, level } = classifyLine(text, source);
+        bufRef.current.push({ t, text, source: src, level, id: t + '-' + Math.random() });
         if (!flushTimer.current) {
           flushTimer.current = setTimeout(() => {
             flushTimer.current = null;
@@ -87,7 +93,7 @@ export function LogsPage() {
       es.onmessage = onLine;  // belt-and-braces in case backend changes
     } catch {}
     return () => { try { es && es.close(); } catch {} };
-  }, []);
+  }, [source]);
 
   useEffect(() => {
     if (follow && viewRef.current) {
@@ -97,18 +103,8 @@ export function LogsPage() {
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return lines.filter(l =>
-      sources.has(l.source) && (!s || l.text.toLowerCase().includes(s))
-    );
-  }, [lines, sources, search]);
-
-  const toggleSource = (src) => {
-    setSources(prev => {
-      const next = new Set(prev);
-      if (next.has(src)) next.delete(src); else next.add(src);
-      return next;
-    });
-  };
+    return lines.filter(l => !s || l.text.toLowerCase().includes(s));
+  }, [lines, search]);
 
   const copyAll = () => {
     const text = filtered.map(l => l.text).join('\n');
@@ -123,7 +119,7 @@ export function LogsPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Logs</h1>
           <div style={{ marginTop: 4, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-            Live SSE stream from subarr + downstream services.
+            Live SSE stream — switch between subgen (container) and subarr (its own log).
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -143,9 +139,10 @@ export function LogsPage() {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {SOURCES.map(src => (
-          <button key={src} onClick={() => toggleSource(src)}
-            className={`chip ${sources.has(src) ? 'violet' : ''}`}
-            style={{ cursor: 'pointer', textTransform: 'lowercase' }}>
+          <button key={src} onClick={() => setSource(src)}
+            className={`chip ${source === src ? 'violet' : ''}`}
+            style={{ cursor: 'pointer', textTransform: 'lowercase' }}
+            aria-pressed={source === src}>
             {src}
           </button>
         ))}
