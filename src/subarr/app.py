@@ -117,6 +117,7 @@ from .crash_store import CrashStore
 from .data_persistence import check_data_persistence
 from .db_integrity import check_db_integrity
 from .error_store import ErrorStore
+from .log_ring import LogRing
 from .task_health import TaskHealthStore
 from .schedule_store import ScheduleStore
 from .scheduler import Scheduler
@@ -124,8 +125,14 @@ from .single_process import check_single_process
 from .subgen_client import SubgenClient
 
 
+# #157 gap-fill: the process-wide in-process log ring. Installed on the root
+# logger by _apply_logging; the logs router reads it. None until installed.
+LOG_RING: LogRing | None = None
+
+
 def _apply_logging(debug: bool) -> None:
-    """#157 gap-fill: configure logging levels from the SUBARR_DEBUG knob.
+    """#157 gap-fill: configure logging levels from the SUBARR_DEBUG knob AND
+    install the in-process LogRing on the root logger (idempotent).
 
     Off (default): today's behaviour byte-for-byte — root INFO, and the
     httpx/httpcore request loggers pinned to WARNING so the health/queue polls
@@ -135,6 +142,7 @@ def _apply_logging(debug: bool) -> None:
     On: root -> DEBUG and httpx/httpcore UN-pinned (left at INFO) so request
     detail shows for "go nuts locally" debugging.
     """
+    global LOG_RING
     root_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=root_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     # basicConfig is a no-op once a handler exists (e.g. after importlib.reload),
@@ -143,6 +151,14 @@ def _apply_logging(debug: bool) -> None:
     http_level = logging.INFO if debug else logging.WARNING
     logging.getLogger("httpx").setLevel(http_level)
     logging.getLogger("httpcore").setLevel(http_level)
+
+    # Install the LogRing exactly once (importlib.reload re-runs this module).
+    root = logging.getLogger()
+    if not any(isinstance(h, LogRing) for h in root.handlers):
+        LOG_RING = LogRing(level=logging.INFO)  # capture INFO+ so the live tail is useful
+        root.addHandler(LOG_RING)
+    else:
+        LOG_RING = next(h for h in root.handlers if isinstance(h, LogRing))
 
 
 _apply_logging(settings.debug)
