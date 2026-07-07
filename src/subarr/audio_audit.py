@@ -249,15 +249,26 @@ class AudioAuditWalker:
                 state.found,
                 len(state.errors),
             )
+            # #157 gap-fill: RUN-level supervision. A clean full run records a
+            # success on the unified Health roster. Best-effort (getattr guard),
+            # mirroring the 7 supervised loops — a missing store never fails a run.
+            _h = getattr(self, "_health", None)
+            if _h:
+                _h.record_success("audio-audit")
         except asyncio.CancelledError:
             state.status = "cancelled"
             state.finished_at = time.time()
             raise
-        except Exception as e:  # pragma: no cover - defensive
+        except Exception as e:
             log.exception("audio-audit failed: %s", e)
             state.status = "error"
             state.error = repr(e)
             state.finished_at = time.time()
+            # #157 gap-fill: a RUN-level crash (the outer drive, not a per-file
+            # error) surfaces on the Health roster. Best-effort.
+            _h = getattr(self, "_health", None)
+            if _h:
+                _h.record_failure("audio-audit", e)
 
     def _safe_busy(self) -> bool:
         try:

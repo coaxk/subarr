@@ -392,6 +392,10 @@ async def lifespan(app_: FastAPI):
         ("update-checker", 86400),
         ("subgen-watchdog", 30),
         ("queue-feeder", 5),  # #66/#116
+        # #157 gap-fill: opt-in foreground walker. expected_interval_s=None so
+        # the staleness branch never fires — an idle walker shows failures/streak
+        # WITHOUT a false "stale" alarm, and sits on the unified Health roster.
+        ("audio-audit", None),
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
     app_.state.runner = ScanRunner(
@@ -631,6 +635,7 @@ async def lifespan(app_: FastAPI):
         busy_check=_audit_busy,
         audio_lang=app_.state.audio_lang,
     )
+    app_.state.audio_audit._health = app_.state.task_health  # #157 supervision
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.pending.prune()  # #197: resolved walks 30d; pending never pruned
     app_.state.onboarding = OnboardingStore(settings.db_path)
