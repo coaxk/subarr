@@ -102,8 +102,10 @@ class LogRing(logging.Handler):
                 records = [
                     r for r in records if _LEVEL_ORDER.get(r.get("level", "INFO"), logging.INFO) >= threshold
                 ]
-        if limit is not None and limit >= 0:
-            records = records[-limit:]
+        if limit is not None:
+            # limit=0 means "newest 0" = nothing; records[-0:] would be the whole
+            # list, so guard it explicitly. None = no limit (all records).
+            records = records[-limit:] if limit > 0 else []
         return [dict(r) for r in records]
 
     # ── live fan-out (GET /api/logs/subarr/events) ────────────────────────

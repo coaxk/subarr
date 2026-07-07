@@ -301,7 +301,7 @@ function RecentErrors() {
   const [open, setOpen] = useState({}); // id -> expanded
 
   const load = useCallback(() => {
-    fetch('/api/logs/recent?level=WARNING&limit=200', { credentials: 'same-origin' })
+    apiFetch('/api/logs/recent?level=WARNING&limit=200')
       .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
       .then((d) => setRows((d.records || []).map(formatRecentRow)))
       .catch(() => setRows([]));

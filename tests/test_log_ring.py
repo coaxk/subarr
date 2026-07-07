@@ -57,6 +57,16 @@ def test_snapshot_honours_limit():
     assert [r["message"] for r in snap] == ["m4", "m5"]  # newest 2, chronological
 
 
+def test_snapshot_limit_zero_returns_empty():
+    # limit=0 means "newest 0" = nothing (guards the records[-0:]==whole-list
+    # footgun; both endpoints accept limit/tail=0). None still means all.
+    ring = LogRing(maxlen=10)
+    for i in range(4):
+        ring.emit(_record(msg=f"m{i}"))
+    assert ring.snapshot(limit=0) == []
+    assert len(ring.snapshot(limit=None)) == 4
+
+
 def test_emit_never_raises_on_bad_record():
     ring = LogRing(maxlen=10)
     # %-format mismatch: msg has a placeholder but no args -> getMessage() raises.
