@@ -7,6 +7,23 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-07-08
+
+**Automatic subtitle re-timing, on by default (#359).** subarr now post-processes every completed subtitle, extending cues that scroll past comfortable reading speed into the silent gap before the next line — so dialogue stays on screen long enough to actually read. Validated off-app across an 1801-subtitle corpus built from real subgen output: cues exceeding the critical 25 characters-per-second reading speed dropped from **22.9% to 5.2%**, and unreadable sub-second "flash" cues fell **77%**, with **zero new overlaps** (every extension is clamped to the available gap). It is idempotent and never shortens a cue or creates an overlap. On by default; opt out with `SUBARR_RETIME_ENABLED=0`.
+
+### Added
+- **Genuinely multilingual audio, represented honestly (#357).** A film like *As Bestas* (Galician + Spanish + French in one track) is no longer flagged as a mislabelled English file. subarr recognises confident multi-language audio from per-chunk detection and marks it *multilingual* instead of raising a false "suspect" alarm. Non-linguistic tracks (constructed gibberish, silent-film scores) can be tagged `zxx`. Multilingual and `zxx` files skip the single-language override sent to subgen, so it self-detects per chunk.
+- **Correct or accept multilingual verdicts in Review (#406).** Auto-classified multilingual files appear in Review with a 🌐 badge and their own filter tab: accept the detected language set as-is, or correct it with a multi-select picker. Settled verdicts never re-appear in the lane.
+- **subarr's own logs are visible (#157).** The Logs page gains a `subgen | subarr` source switcher to tail subarr's internal log live, and the Health page shows a "Recent errors" panel of recent warnings and errors with expandable tracebacks. The opt-in library audio-audit now reports run-level crashes on the Health roster like the other background tasks. A new `SUBARR_DEBUG=1` knob raises logging to DEBUG for local troubleshooting. All local-only — nothing new leaves your box.
+
+### Changed
+- **Audio languages are now canonical 2-letter ISO-639-1 (#358).** The audio-language model and the Review picker use 2-letter codes end to end (e.g. `en`, `ko`), normalising on read and write so a mixed 2-/3-letter history resolves consistently.
+
+### Fixed
+- **Graceful degradation when an integration client is recycled mid-request (#392, #393).** A Bazarr/Sonarr/Radarr/Plex/Ollama call that raced a client rebuild — or hit a client closed mid-flight — is now translated into a clean, retryable error instead of surfacing a raw `RuntimeError`.
+- **Manual "fill this gap" on a movie uploads straight to Bazarr (#394).** The manual movie-gap action now uploads the generated subtitle directly to the owning Bazarr instance, matching the episode path, instead of only nudging its scan-disk task.
+- Dependency bumps: `nvidia-ml-py`, `actions/setup-python`, `@playwright/test` (#398, #399, #400).
+
 ## [2.3.1] - 2026-06-28
 
 ### Fixed
