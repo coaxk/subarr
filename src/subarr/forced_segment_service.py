@@ -31,6 +31,7 @@ from .forced_segment import (
 )
 from .paths import PathOutsideRootError, canonical_to_fs
 from .subgen_client import SubgenClient, SubgenUnavailable
+from .subtitle_readability import parse_srt
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +99,11 @@ async def subgen_translate(subgen: SubgenClient, clip_path: str) -> str:
 # Either a sync fake or an async adapter is accepted — see _maybe_await).
 VadFn = Callable[..., "list[tuple[float, float]]"]
 ClipFn = Callable[..., None]
+# lid_fn(clip_path, subgen_clip_path|None, span) -> (lang|None, conf). subgen_path
+# is threaded so the real subgen_lid can select Branch A (path detect) vs B (upload).
 LidFn = Callable[
-    [str, "tuple[float, float]"], "Awaitable[tuple[str | None, float]] | tuple[str | None, float]"
+    [str, "str | None", "tuple[float, float]"],
+    "Awaitable[tuple[str | None, float]] | tuple[str | None, float]",
 ]
 TranslateFn = Callable[[str, "tuple[float, float]"], "Awaitable[str] | str"]
 # gate_fn(canonical) -> (qualifies, reason, duration_s, size)
@@ -146,22 +150,32 @@ class ForcedSegmentGenerator:
     async def process(self, canonical_path: str) -> dict:
         """Run the full pipeline for one file. Returns a summary dict
         {status, reason?, n_spans, total_ms}. status is one of: cached, skipped,
-        none, bailed, scanned, vad-unavailable, error. Never raises — records +
-        returns (best-effort; the walker/at-import hook must never crash)."""
+        none, bailed, scanned, vad-unavailable, exists, error. NEVER raises — a
+        traversal, disk, store, VAD or subgen failure is caught, LOGGED, recorded
+        and returned so the walker / at-import hook can never crash (#416)."""
         try:
-            fs_path = canonical_to_fs(canonical_path)
+            return await self._run(canonical_path)
         except PathOutsideRootError:
             # Path-containment (#13): a traversal/unresolvable canonical writes
             # nothing outside the media root and is surfaced, not swallowed.
             log.warning("forced-segment: unresolvable/traversal canonical %s", canonical_path)
             return {"status": "error", "reason": "unresolvable", "n_spans": 0, "total_ms": 0}
+        except Exception as e:  # noqa: BLE001 - best-effort: never crash the caller
+            log.warning("forced-segment: process failed for %s: %s", canonical_path, e, exc_info=True)
+            self._try_record_error(canonical_path)
+            return {"status": "error", "reason": "exception", "n_spans": 0, "total_ms": 0}
+
+    async def _run(self, canonical_path: str) -> dict:
+        fs_path = canonical_to_fs(canonical_path)  # may raise PathOutsideRootError (handled above)
         if not fs_path.exists():
             return {"status": "error", "reason": "missing", "n_spans": 0, "total_ms": 0}
 
-        mtime = fs_path.stat().st_mtime
-        # The gate resolves the authoritative (duration, size) from the stores;
-        # the cache is keyed on that size so a repeat run is a stable hit.
-        ok, reason, _dur, size = self._gate(canonical_path)
+        # Cache identity: mtime AND size come from the SAME source (stat) so the
+        # key is self-consistent across runs. The gate still resolves size but the
+        # cache never mixes it with a stat mtime.
+        st = fs_path.stat()
+        mtime, size = st.st_mtime, st.st_size
+        ok, reason, _dur, _gate_size = self._gate(canonical_path)
 
         # Idempotence: an unchanged (path, mtime, size) is never re-scanned.
         if self._store.get(canonical_path, mtime=mtime, size=size) is not None:
@@ -175,7 +189,7 @@ class ForcedSegmentGenerator:
         sidecar = fs_path.with_name(fs_path.stem + ".forced.en.srt")
         if sidecar.exists():
             self._store.upsert(
-                canonical_path=canonical_path, mtime=mtime, size=size, status="none", n_spans=0, total_ms=0
+                canonical_path=canonical_path, mtime=mtime, size=size, status="exists", n_spans=0, total_ms=0
             )
             return {"status": "skipped", "reason": "existing_forced", "n_spans": 0, "total_ms": 0}
 
@@ -235,7 +249,7 @@ class ForcedSegmentGenerator:
                 )
                 return {"status": "none", "n_spans": 0, "total_ms": 0}
 
-            cues = await self._build_cues(str(fs_path), classified, spans, tmp)
+            cues = await self._build_cues(str(fs_path), spans, tmp)
 
         srt = build_forced_srt(cues)
         if not srt.strip():
@@ -245,10 +259,18 @@ class ForcedSegmentGenerator:
             return {"status": "none", "n_spans": 0, "total_ms": 0}
 
         # Path-contained write (canonical_to_fs already guarded traversal); atomic
-        # replace so a partial write is never observed as the sidecar.
+        # replace so a partial write is never observed as the sidecar, and the
+        # scratch .tmp is cleaned up whether the replace succeeds or fails.
         tmp_out = sidecar.with_name(sidecar.name + ".tmp")
-        tmp_out.write_text(srt, encoding="utf-8")
-        os.replace(tmp_out, sidecar)
+        try:
+            tmp_out.write_text(srt, encoding="utf-8")
+            os.replace(tmp_out, sidecar)
+        finally:
+            if tmp_out.exists():
+                try:
+                    tmp_out.unlink()
+                except OSError:
+                    pass
         total_ms = sum(s.duration_ms for s in spans)
         self._store.upsert(
             canonical_path=canonical_path,
@@ -273,43 +295,37 @@ class ForcedSegmentGenerator:
                 classified.append(((s, e), True))  # over-flag on failure (completeness bias)
                 continue
             subgen_path = self._to_subgen(clip)
-            lang, conf = await self._lid_call(clip, subgen_path, (s, e))
+            # Thread subgen_path so the real subgen_lid can select Branch A (cheap
+            # path detect) over Branch B (upload); a sync fake ignores it. Both
+            # return shapes are normalised through _maybe_await.
+            lang, conf = await _maybe_await(self._lid(clip, subgen_path, (s, e)))
             one = classify_utterances([(s, e)], lambda _u, _l=lang, _c=conf: (_l, _c), self._params)
             classified.append(one[0])
         return classified
 
-    async def _lid_call(self, clip, subgen_path, span):
-        # Real wiring passes an async adapter (which uses subgen_path to pick
-        # Branch A/B); the test passes a sync lambda keyed off the span. Both are
-        # normalised through _maybe_await.
-        return await _maybe_await(self._lid(clip, span))
-
-    async def _build_cues(self, fs_path: str, classified: list, spans: "list[Span]", tmp) -> list:
-        """One cue per merged foreign span; its text is the translation of the
-        constituent foreign utterances, joined. Slice 1 emits one cue per span
-        (not per sub-cue), so a span that fuses two adjacent foreign utterances
-        carries both lines."""
-        foreign_utts = sorted([(s, e) for (s, e), is_f in classified if is_f])
+    async def _build_cues(self, fs_path: str, spans: "list[Span]", tmp) -> list:
+        """Translate each merged foreign span ONCE (the span clip) and unpack the
+        TIMESTAMPED SRT subgen returns into SEPARATE cues, each offset to absolute
+        file time by the span start. A long foreign scene therefore becomes many
+        readable cues, never one unreadable multi-minute subtitle. Clipping is
+        once per span (LID already clipped per utterance); a bad clip or empty
+        translation drops that span, never the file."""
         cues: list[tuple[int, int, str]] = []
-        n = 0
-        for sp in spans:
-            span_s, span_e = sp.start_ms / 1000.0, sp.end_ms / 1000.0
-            parts: list[str] = []
-            for us, ue in foreign_utts:
-                if us < span_s - 1e-6 or ue > span_e + 1e-6:
-                    continue
-                clip = os.path.join(tmp, f"tr-{n}.wav")
-                n += 1
-                try:
-                    self._clip(fs_path, us, ue, clip)
-                except Exception as exc:  # noqa: BLE001 - one bad clip drops that line, never fatal
-                    log.warning("forced-segment: translate clip failed at %.1fs: %s", us, exc)
-                    continue
-                text = await _maybe_await(self._translate(clip, (us, ue)))
-                if text and text.strip():
-                    parts.append(_srt_text_to_line(text))
-            if parts:
-                cues.append((sp.start_ms, sp.end_ms, " ".join(parts)))
+        for i, sp in enumerate(spans):
+            clip = os.path.join(tmp, f"tr-{i}.wav")
+            try:
+                self._clip(fs_path, sp.start_ms / 1000.0, sp.end_ms / 1000.0, clip)
+            except Exception as exc:  # noqa: BLE001 - one bad clip drops that span, never fatal
+                log.warning("forced-segment: translate clip failed for span %s: %s", sp, exc)
+                continue
+            text = await _maybe_await(self._translate(clip, (sp.start_ms / 1000.0, sp.end_ms / 1000.0)))
+            if not (text and text.strip()):
+                continue
+            for c in parse_srt(text):
+                start_ms = sp.start_ms + int(c.start_ms)
+                end_ms = sp.start_ms + int(c.end_ms)
+                cues.append((start_ms, end_ms, "\n".join(c.lines)))
+        cues.sort(key=lambda t: (t[0], t[1]))
         return cues
 
     def _to_subgen(self, clip_path: str) -> str | None:
@@ -318,6 +334,23 @@ class ForcedSegmentGenerator:
         if not self._subgen_scratch_prefix:
             return None
         return self._subgen_scratch_prefix.rstrip("/") + "/" + Path(clip_path).name
+
+    def _try_record_error(self, canonical_path: str) -> None:
+        """Record an 'error' verdict so an unexpected failure is surfaced in the
+        cache, not silent. Best-effort — recording an error must never itself
+        raise (the caller already logged the original)."""
+        try:
+            st = canonical_to_fs(canonical_path).stat()
+            self._store.upsert(
+                canonical_path=canonical_path,
+                mtime=st.st_mtime,
+                size=st.st_size,
+                status="error",
+                n_spans=0,
+                total_ms=0,
+            )
+        except Exception:  # noqa: BLE001 - the error path must never raise
+            pass
 
     def _record_aftercare_note(
         self, canonical_path: str, srt: str, spans: "list[Span]", total_ms: int
@@ -342,16 +375,3 @@ class ForcedSegmentGenerator:
             )
         except Exception as e:  # noqa: BLE001 - aftercare note must never break generation
             log.warning("forced-segment aftercare note failed for %s: %s", canonical_path, e)
-
-
-def _srt_text_to_line(text: str) -> str:
-    """subgen /asr returns a full SRT for the clip; collapse its cue text into a
-    single line for the merged span cue (slice 1 emits one cue per foreign span,
-    not per sub-cue). Strips indices/timestamps."""
-    lines = []
-    for raw in (text or "").splitlines():
-        s = raw.strip()
-        if not s or s.isdigit() or "-->" in s:
-            continue
-        lines.append(s)
-    return " ".join(lines)

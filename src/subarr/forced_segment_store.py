@@ -22,7 +22,16 @@ class ForcedSegmentScan:
     canonical_path: str
     mtime: float | None
     size: int | None
-    status: str  # scanned | none | bailed
+    # Verdicts written by ForcedSegmentGenerator.process:
+    #   scanned         >=1 forced span emitted (sidecar written)
+    #   none            qualified + scanned, no foreign scene found
+    #   bailed          mostly-foreign / mistagged audio (nothing emitted)
+    #   exists          a .forced.en.srt already on disk (no-clobber skip)
+    #   vad-unavailable VAD could not run (silero/onnxruntime missing)
+    #   error           an unexpected failure was caught and recorded
+    # ('cached' and 'skipped' are process RETURN statuses only — a cache hit
+    # returns 'cached' but the stored row keeps its original verdict above.)
+    status: str
     n_spans: int
     total_ms: int
     scanned_at: float

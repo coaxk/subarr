@@ -116,3 +116,4 @@ def test_clip_audio_builds_expected_ffmpeg_command(monkeypatch):
     assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "4.5"  # length = end - start
     assert "0:a:1" in cmd and "16000" in cmd and cmd[-1] == "/tmp/utt.wav"
     assert captured["kw"].get("check") is True
+    assert captured["kw"].get("timeout") == 120  # a hung ffmpeg must not block forever

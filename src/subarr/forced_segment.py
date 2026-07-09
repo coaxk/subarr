@@ -199,9 +199,11 @@ def clip_audio(fs_path: str, start_s: float, end_s: float, out_path: str, track:
     """Extract [start_s, end_s] of audio stream `track` -> 16 kHz mono wav at
     out_path (audio-only keeps the subgen upload tiny). Mirrors the arena
     sampler's ffmpeg invocation (arena_sampler._cut_clip): -ss/-t seek+length,
-    -map 0:a:N, -ar 16000 -ac 1, check=True with stderr captured. Raises
-    subprocess.CalledProcessError on ffmpeg failure — the orchestrator catches
-    per-utterance so one bad clip never aborts the file."""
+    -map 0:a:N, -ar 16000 -ac 1, check=True with stderr captured. A generous
+    timeout means a hung ffmpeg surfaces as a clip failure instead of blocking
+    forever (subarr's event-loop history). Raises subprocess.CalledProcessError
+    (or subprocess.TimeoutExpired) on ffmpeg failure — the orchestrator catches
+    per-clip so one bad clip never aborts the file."""
     length = max(0.0, end_s - start_s)
     cmd = [
         "ffmpeg",
@@ -223,4 +225,4 @@ def clip_audio(fs_path: str, start_s: float, end_s: float, out_path: str, track:
         "1",
         out_path,
     ]
-    subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
+    subprocess.run(cmd, check=True, stderr=subprocess.PIPE, timeout=120)

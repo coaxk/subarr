@@ -32,7 +32,9 @@ def gen(subarr_env, tmp_path):
             params=ForcedSegmentParams(min_span_s=2.0, merge_gap_s=1.0, mostly_foreign_fraction=0.6),
             vad_fn=lambda fs_path, track=0: utterances,
             clip_fn=lambda fs_path, s, e, out, track=0: None,  # no real ffmpeg
-            lid_fn=lambda clip_path, span: lid_map[span],
+            # LID is keyed on the utterance span; subgen_path threads Branch A/B.
+            lid_fn=lambda clip_path, subgen_path, span: lid_map[span],
+            # translate is called ONCE per merged span and returns a TIMESTAMPED SRT.
             translate_fn=lambda clip_path, span: translate_map[span],
             gate_fn=lambda canonical: (gate[0], gate[1], duration, 42),  # (ok, reason, duration_s, size)
         )
@@ -41,28 +43,66 @@ def gen(subarr_env, tmp_path):
     return make
 
 
+def _identity(canonical_path):
+    from subarr.paths import canonical_to_fs
+
+    st = canonical_to_fs(canonical_path).stat()
+    return st.st_mtime, st.st_size
+
+
 @pytest.mark.asyncio
 async def test_generates_forced_sidecar_for_a_foreign_scene(gen):
     from subarr.paths import canonical_to_fs
 
     utts = [(0.0, 60.0), (60.0, 63.0), (63.2, 66.0)]
+    # subgen /asr returns a TIMESTAMPED SRT for the whole span (relative to the
+    # clip start); the orchestrator must offset each cue to absolute file time
+    # and emit them as SEPARATE cues, never one fused 6s cue.
+    span_srt = "1\n00:00:00,000 --> 00:00:03,000\nCome with me\n\n2\n00:00:03,000 --> 00:00:06,000\nNow\n"
     g, store = gen(
         utterances=utts,
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9), (63.2, 66.0): ("fr", 0.9)},
-        translate_map={(60.0, 63.0): "Come with me", (63.2, 66.0): "Now"},
+        translate_map={(60.0, 66.0): span_srt},  # keyed on the MERGED span
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "scanned" and result["n_spans"] == 1
     sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
     assert sidecar.exists()
     body = sidecar.read_text(encoding="utf-8")
-    assert "00:01:00,000 --> 00:01:06,000" in body  # merged 60s..66s span, absolute time
-    assert "Come with me" in body and "Now" in body
-    # cache records the verdict keyed on mtime/size
-    assert (
-        store.get("TV/Show/ep.mkv", mtime=canonical_to_fs("TV/Show/ep.mkv").stat().st_mtime, size=42)
-        is not None
+    # TWO separate cues, each offset to the span absolute start (60s).
+    assert body.count("-->") == 2
+    assert "00:01:00,000 --> 00:01:03,000" in body and "Come with me" in body
+    assert "00:01:03,000 --> 00:01:06,000" in body and "Now" in body
+    # cache records the verdict keyed on stat mtime+size (same source).
+    mtime, size = _identity("TV/Show/ep.mkv")
+    assert store.get("TV/Show/ep.mkv", mtime=mtime, size=size) is not None
+
+
+@pytest.mark.asyncio
+async def test_long_span_emits_multiple_offset_cues(gen):
+    """A long foreign scene must become MULTIPLE readable cues, each offset by
+    the span start — not one unreadable multi-minute subtitle."""
+    from subarr.paths import canonical_to_fs
+
+    # English dominates so the file does not bail; one 60s foreign span at 300s.
+    utts = [(0.0, 300.0), (300.0, 360.0)]
+    span_srt = (
+        "1\n00:00:00,000 --> 00:00:04,000\nLine A\n\n"
+        "2\n00:00:10,000 --> 00:00:14,000\nLine B\n\n"
+        "3\n00:00:50,000 --> 00:00:54,000\nLine C\n"
     )
+    g, store = gen(
+        utterances=utts,
+        lid_map={(0.0, 300.0): ("en", 0.95), (300.0, 360.0): ("fr", 0.9)},
+        translate_map={(300.0, 360.0): span_srt},
+    )
+    result = await g.process("TV/Show/ep.mkv")
+    assert result["status"] == "scanned" and result["n_spans"] == 1
+    body = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").read_text(encoding="utf-8")
+    assert body.count("-->") == 3  # three separate cues, NOT one fused span cue
+    assert "00:05:00,000 --> 00:05:04,000" in body and "Line A" in body  # 0s + 300s
+    assert "00:05:10,000 --> 00:05:14,000" in body and "Line B" in body  # 10s + 300s
+    assert "00:05:50,000 --> 00:05:54,000" in body and "Line C" in body  # 50s + 300s
 
 
 @pytest.mark.asyncio
@@ -111,10 +151,11 @@ async def test_never_clobbers_an_existing_forced_sidecar(gen):
 @pytest.mark.asyncio
 async def test_cache_hit_skips_rescan(gen):
     utts = [(0.0, 60.0), (60.0, 63.0)]
+    span_srt = "1\n00:00:00,000 --> 00:00:03,000\nhi\n"
     g, store = gen(
         utterances=utts,
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9)},
-        translate_map={(60.0, 63.0): "hi"},
+        translate_map={(60.0, 63.0): span_srt},
     )
     first = await g.process("TV/Show/ep.mkv")
     assert first["status"] == "scanned"
@@ -124,14 +165,14 @@ async def test_cache_hit_skips_rescan(gen):
 
 # --- extra coverage for the load-bearing requirements the plan's own tests do
 # --- not exercise directly (req #2 disk-level no-clobber + path-containment,
-# --- req #4 vad-unavailable). ---
+# --- req #4 vad-unavailable, plus the review's never-raises guard). ---
 
 
 @pytest.mark.asyncio
 async def test_disk_level_no_clobber_when_gate_ok(gen):
     """Even when the gate passes, a .forced.en.srt already on disk is never
     overwritten (defence-in-depth over the gate's has_forced_sidecar): skip +
-    record, original bytes intact."""
+    record a distinct 'exists' status, original bytes intact."""
     from subarr.paths import canonical_to_fs
 
     sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
@@ -145,11 +186,9 @@ async def test_disk_level_no_clobber_when_gate_ok(gen):
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "skipped" and result["reason"] == "existing_forced"
     assert sidecar.read_text(encoding="utf-8") == "HUMAN-EDITED"
-    # recorded, not a silent no-op
-    assert (
-        store.get("TV/Show/ep.mkv", mtime=canonical_to_fs("TV/Show/ep.mkv").stat().st_mtime, size=42)
-        is not None
-    )
+    mtime, size = _identity("TV/Show/ep.mkv")
+    hit = store.get("TV/Show/ep.mkv", mtime=mtime, size=size)
+    assert hit is not None and hit.status == "exists"  # distinct, not misleading 'none'
 
 
 @pytest.mark.asyncio
@@ -172,5 +211,27 @@ async def test_vad_unavailable_is_recorded_and_logged_not_silent(gen, monkeypatc
     assert result["status"] == "vad-unavailable"
     assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").exists()
     assert any("VAD unavailable" in r.getMessage() for r in caplog.records)
-    hit = store.get("TV/Show/ep.mkv", mtime=canonical_to_fs("TV/Show/ep.mkv").stat().st_mtime, size=42)
+    mtime, size = _identity("TV/Show/ep.mkv")
+    hit = store.get("TV/Show/ep.mkv", mtime=mtime, size=size)
     assert hit is not None and hit.status == "vad-unavailable"  # recorded
+
+
+@pytest.mark.asyncio
+async def test_process_never_raises_on_internal_error(gen, caplog):
+    """The docstring promises 'never raises': an unexpected internal failure
+    (here VAD) is caught, LOGGED, recorded as 'error', and returned — the walker
+    / import hook must never crash."""
+
+    g, store = gen(utterances=[(0.0, 60.0)], lid_map={}, translate_map={})
+
+    def boom(_fs_path, track=0):
+        raise RuntimeError("VAD subsystem exploded")
+
+    g._vad = boom
+    with caplog.at_level(logging.WARNING, logger="subarr.forced_segment_service"):
+        result = await g.process("TV/Show/ep.mkv")  # must NOT raise
+    assert result["status"] == "error"
+    assert any("process failed" in r.getMessage() for r in caplog.records)
+    mtime, size = _identity("TV/Show/ep.mkv")
+    hit = store.get("TV/Show/ep.mkv", mtime=mtime, size=size)
+    assert hit is not None and hit.status == "error"  # recorded, not silent
