@@ -1,0 +1,124 @@
+"""#364 slice 1 — forced-segment detection: pure core + thin I/O helpers.
+
+subarr owns the detection intelligence; subgen stays a thin primitive. This
+module is deliberately split into a PURE core (utterance classification, span
+merge, mostly-foreign bail, the gate predicate, the SRT emitter — all unit-
+tested with no subgen and no audio) and thin I/O wrappers (VAD adapter, ffmpeg
+clip) that mirror the existing subarr subprocess/VAD patterns.
+
+All granularity/bias values are named, tunable ForcedSegmentParams — never magic
+numbers. Slice 1 is English-primary (primary_lang='en'); slice 3 generalises the
+gate to the file's real audio language.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Callable
+
+log = logging.getLogger(__name__)
+
+# A speech utterance is (start_s, end_s); a LID call returns (lang|None, confidence 0..1).
+Utterance = tuple[float, float]
+LidFn = Callable[[Utterance], "tuple[str | None, float]"]
+
+ENGLISH_TAGS = {"en", "eng"}
+
+
+@dataclass(frozen=True)
+class Span:
+    """A merged foreign span in absolute file time (milliseconds)."""
+
+    start_ms: int
+    end_ms: int
+
+    @property
+    def duration_ms(self) -> int:
+        return max(0, self.end_ms - self.start_ms)
+
+
+@dataclass(frozen=True)
+class ForcedSegmentParams:
+    # Detection granularity + bias. Opt-in feature, so thresholds bias toward
+    # OVER-flagging: a false positive costs a few GPU seconds + maybe a spurious
+    # cue; a false negative loses the scene the user turned this on for.
+    primary_lang: str = "en"  # slice 1: English-primary; slice 3 makes this the real audio lang
+    min_span_s: float = 2.5  # min-duration output floor (spoken-LID needs ~2-3s to be sure)
+    merge_gap_s: float = 1.5  # merge foreign spans separated by <= this so one convo is one cue-set
+    conf_floor: float = 0.5  # below this, LID is "uncertain"
+    over_flag_low_confidence: bool = True  # uncertain -> treat as foreign (completeness bias)
+    mostly_foreign_fraction: float = 0.5  # > this fraction of speech foreign => bail (not a forced case)
+    # Overlap tiling for a long continuous utterance that straddles a language
+    # switch (spec item 3): tile windows with ~50% stride so a boundary is never
+    # hidden at a window edge. 0 disables tiling (slice-1 default keeps it simple
+    # — VAD utterances are already pause-bounded; tiling is opt-in tuning).
+    max_utterance_s: float = 0.0
+    overlap_stride_s: float = 15.0
+
+
+def _is_english(lang: str | None, params: ForcedSegmentParams) -> bool:
+    return bool(lang) and lang.lower() in {params.primary_lang, "eng"} | ENGLISH_TAGS
+
+
+def classify_utterances(
+    utterances: list[Utterance], lid: LidFn, params: ForcedSegmentParams
+) -> list[tuple[Utterance, bool]]:
+    """Label each utterance foreign (True) / not (False). Foreign iff a
+    non-English language was detected at any confidence, OR (over-flag bias) the
+    LID was uncertain (confidence < conf_floor). Confident English is not
+    foreign."""
+    out: list[tuple[Utterance, bool]] = []
+    for utt in utterances:
+        lang, conf = lid(utt)
+        if lang is not None and not _is_english(lang, params):
+            foreign = True
+        elif params.over_flag_low_confidence and conf < params.conf_floor:
+            foreign = True  # uncertain -> suspect (bias to completeness)
+        else:
+            foreign = False
+        out.append((utt, foreign))
+    return out
+
+
+def foreign_fraction(classified: list[tuple[Utterance, bool]]) -> float:
+    """Foreign speech seconds / total speech seconds. 0.0 when there is no speech."""
+    total = sum(e - s for (s, e), _ in classified)
+    if total <= 0:
+        return 0.0
+    foreign = sum(e - s for (s, e), is_f in classified if is_f)
+    return foreign / total
+
+
+def is_mostly_foreign(classified: list[tuple[Utterance, bool]], params: ForcedSegmentParams) -> bool:
+    """True when more than mostly_foreign_fraction of speech is foreign — this is
+    a full-transcription / mistagged-audio situation, NOT a forced-segment case.
+    The orchestrator bails (emits nothing) and records the result."""
+    return foreign_fraction(classified) > params.mostly_foreign_fraction
+
+
+def merge_foreign_spans(classified: list[tuple[Utterance, bool]], params: ForcedSegmentParams) -> list[Span]:
+    """Foreign utterances -> merged Spans (absolute ms). Consecutive foreign
+    spans within merge_gap_s fuse; merged spans shorter than min_span_s are
+    dropped by the output floor."""
+    foreign = sorted([(s, e) for (s, e), is_f in classified if is_f])
+    if not foreign:
+        return []
+    merged: list[list[float]] = [list(foreign[0])]
+    for s, e in foreign[1:]:
+        if s - merged[-1][1] <= params.merge_gap_s:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    out: list[Span] = []
+    for s, e in merged:
+        if (e - s) >= params.min_span_s:
+            out.append(Span(start_ms=int(round(s * 1000)), end_ms=int(round(e * 1000))))
+    return out
+
+
+def assemble_foreign_spans(
+    utterances: list[Utterance], lid: LidFn, params: ForcedSegmentParams
+) -> list[Span]:
+    """Full pure pipeline: classify then merge. Convenience entry point."""
+    return merge_foreign_spans(classify_utterances(utterances, lid, params), params)
