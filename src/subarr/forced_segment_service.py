@@ -11,6 +11,7 @@ no audio, no ffmpeg, no real subgen.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import os
@@ -193,7 +194,9 @@ class ForcedSegmentGenerator:
             )
             return {"status": "skipped", "reason": "existing_forced", "n_spans": 0, "total_ms": 0}
 
-        utterances = self._vad(str(fs_path))
+        # Off-loop (#364 load-bearing): silero VAD is CPU-blocking — run it in a
+        # worker thread so a real scan never freezes the uvicorn event loop.
+        utterances = await asyncio.to_thread(self._vad, str(fs_path))
         if not utterances:
             # An empty utterance list is EITHER genuine silence OR VAD being
             # unavailable (no silero model / onnxruntime). #416: never a silent
@@ -263,8 +266,9 @@ class ForcedSegmentGenerator:
         # scratch .tmp is cleaned up whether the replace succeeds or fails.
         tmp_out = sidecar.with_name(sidecar.name + ".tmp")
         try:
-            tmp_out.write_text(srt, encoding="utf-8")
-            os.replace(tmp_out, sidecar)
+            # Off-loop (#364): file I/O + rename add up across a big walk.
+            await asyncio.to_thread(tmp_out.write_text, srt, encoding="utf-8")
+            await asyncio.to_thread(os.replace, tmp_out, sidecar)
         finally:
             if tmp_out.exists():
                 try:
@@ -289,7 +293,8 @@ class ForcedSegmentGenerator:
         for i, (s, e) in enumerate(utterances):
             clip = os.path.join(tmp, f"lid-{i}.wav")
             try:
-                self._clip(fs_path, s, e, clip)
+                # Off-loop (#364): ffmpeg subprocess is blocking.
+                await asyncio.to_thread(self._clip, fs_path, s, e, clip)
             except Exception as exc:  # noqa: BLE001 - a bad clip is over-flagged, never fatal
                 log.warning("forced-segment: LID clip failed at %.1fs: %s", s, exc)
                 classified.append(((s, e), True))  # over-flag on failure (completeness bias)
@@ -314,7 +319,8 @@ class ForcedSegmentGenerator:
         for i, sp in enumerate(spans):
             clip = os.path.join(tmp, f"tr-{i}.wav")
             try:
-                self._clip(fs_path, sp.start_ms / 1000.0, sp.end_ms / 1000.0, clip)
+                # Off-loop (#364): ffmpeg subprocess is blocking.
+                await asyncio.to_thread(self._clip, fs_path, sp.start_ms / 1000.0, sp.end_ms / 1000.0, clip)
             except Exception as exc:  # noqa: BLE001 - one bad clip drops that span, never fatal
                 log.warning("forced-segment: translate clip failed for span %s: %s", sp, exc)
                 continue
@@ -377,7 +383,6 @@ class ForcedSegmentGenerator:
             log.warning("forced-segment aftercare note failed for %s: %s", canonical_path, e)
 
 
-import asyncio
 import time as _time
 from dataclasses import dataclass, field
 from typing import Any
