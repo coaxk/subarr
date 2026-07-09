@@ -23,6 +23,8 @@ Two real subgen primitives were read in `src/subarr/subgen_client.py`:
 
 This plan **injects the LID function** into the orchestrator so both the detector and the orchestrator are testable *today* with fakes. Task 0 verifies which branch the live deployment needs and Task 7 ships **both** adapters, selecting Branch A when a scratch dir is configured and falling back to Branch B otherwise. **Translate always uploads (`/asr`), so it needs no shared fs.**
 
+**DECISION (controller, 2026-07-09): ship both, but Branch B is an honest, degraded fallback.** When the generator selects Branch B (no subgen-visible scratch configured), it MUST emit a **one-time WARNING per generator instance** making the cost explicit, e.g. `log.warning("forced-segment: LID is using the /asr upload path — this transcribes every utterance and is much slower than the cheap detect path. Configure a subgen-visible scratch dir (SUBARR_FORCED_SEGMENT_SCRATCH_SUBGEN) for the fast path, or wait for the local-LID upgrade (#364 slice 2).")`. Branch A stays the default whenever a scratch dir is set. Task 7 adds this warning (a module-level `_warned_branch_b` guard or a one-shot flag on the generator); its test asserts the warning fires once on the Branch-B path and not on Branch A.
+
 ---
 
 ## File Structure
