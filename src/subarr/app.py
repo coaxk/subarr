@@ -972,7 +972,7 @@ import secrets as _secrets  # noqa: E402
 from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
 
 from .security_headers import SecurityHeadersMiddleware  # noqa: E402
-from .auth import AuthGateMiddleware  # noqa: E402
+from .auth import AuthGateMiddleware, session_cookie_name as _session_cookie_name  # noqa: E402
 from .api_security import CsrfOriginMiddleware  # noqa: E402
 from .request_crash_capture import RequestCrashCaptureMiddleware  # noqa: E402
 
@@ -1016,7 +1016,9 @@ app.add_middleware(
 app.add_middleware(
     SessionMiddleware,
     secret_key=_session_secret,
-    session_cookie="subarr_session",
+    # #411: instance-distinct cookie name (derived from the secret) so two subarr
+    # copies on the same host don't clobber each other's login cookie.
+    session_cookie=_session_cookie_name(_session_secret),
     same_site=settings.cookie_samesite,
     https_only=(settings.cookie_samesite == "none"),
     max_age=14 * 24 * 3600,

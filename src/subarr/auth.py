@@ -40,6 +40,23 @@ import secrets
 log = logging.getLogger(__name__)
 
 
+def session_cookie_name(secret: str) -> str:
+    """#411: an instance-distinct session-cookie name, derived from the session
+    secret.
+
+    Browsers scope cookies by host, NOT by port (RFC 6265), so two subarr copies
+    on the same host (e.g. a TV stack and an Anime stack on one Unraid box,
+    different ports) share a cookie domain. With a fixed cookie name, logging into
+    the second copy overwrites the first copy's cookie, and the first then can't
+    verify it (different secret) and logs you out. Deriving the name from the
+    secret means separate copies (which have separate secrets) use separate
+    cookies and both stay logged in; copies that deliberately share
+    SUBARR_SESSION_SECRET share a login, which is fine. Stable for a given secret,
+    so restarts don't churn it."""
+    disc = hashlib.sha256((secret or "").encode()).hexdigest()[:8]
+    return f"subarr_session_{disc}"
+
+
 # Allowlist — paths that always bypass auth. Keep tight: just the
 # monitoring path. /static/* is allowlisted because the index.html
 # already requires auth, so static assets need to be reachable to
