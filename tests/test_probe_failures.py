@@ -45,3 +45,58 @@ def test_successful_probe_clears_failure(tmp_path):
         canonical_path="TV/X/a.mkv", mtime=1.0, size=100, result=ProbeResult(canonical_path="TV/X/a.mkv")
     )
     assert "TV/X/a.mkv" not in s.failed_paths()  # recovered → no longer failed
+
+
+# --- #416: eager-probe must surface WHY files errored, not just a count ---
+
+
+def test_summarize_probe_errors_categorizes_and_samples():
+    from subarr.probe_walker import _summarize_probe_errors
+
+    errs = [
+        {"path": "TV/A/e1.mkv", "error": "outside media root"},
+        {"path": "TV/A/e2.mkv", "error": "outside media root"},
+        {"path": "Movies/B.mkv", "error": "stat: [Errno 2] No such file or directory: '/x'"},
+    ]
+    s = _summarize_probe_errors(errs)
+    assert "2 outside-media-root" in s
+    assert "1 path-not-found" in s
+    assert "TV/A/e1.mkv" in s  # carries a concrete sample so it is diagnosable
+
+
+def test_summarize_probe_errors_empty():
+    from subarr.probe_walker import _summarize_probe_errors
+
+    assert _summarize_probe_errors([]) == ""
+
+
+def test_log_probe_error_summary_escalates_when_systemic(caplog):
+    import logging as _l
+
+    from subarr.probe_walker import WalkState, _log_probe_error_summary
+
+    st = WalkState("w1", "eager")
+    st.total_files = 4
+    st.errors = [{"path": f"p{i}.mkv", "error": "outside media root"} for i in range(4)]
+    with caplog.at_level(_l.WARNING, logger="subarr.probe_walker"):
+        _log_probe_error_summary("eager probe", st)
+    assert any(
+        r.levelno == _l.WARNING and "systemic" in r.getMessage() and "outside-media-root" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_log_probe_error_summary_info_when_sparse(caplog):
+    import logging as _l
+
+    from subarr.probe_walker import WalkState, _log_probe_error_summary
+
+    st = WalkState("w2", "eager")
+    st.total_files = 100
+    st.errors = [{"path": "p.mkv", "error": "stat: nope"}]
+    with caplog.at_level(_l.INFO, logger="subarr.probe_walker"):
+        _log_probe_error_summary("eager probe", st)
+    assert any(
+        "1 files errored" in r.getMessage() and "path-not-found" in r.getMessage() for r in caplog.records
+    )
+    assert not any(r.levelno >= _l.WARNING for r in caplog.records)
