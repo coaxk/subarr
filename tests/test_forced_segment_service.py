@@ -211,9 +211,11 @@ async def test_vad_unavailable_is_recorded_and_logged_not_silent(gen, monkeypatc
     assert result["status"] == "vad-unavailable"
     assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").exists()
     assert any("VAD unavailable" in r.getMessage() for r in caplog.records)
+    # Recorded (visible in summary), but NOT a cache hit — a transient verdict
+    # stays re-scannable so a later walk retries once the VAD model is pulled.
     mtime, size = _identity("TV/Show/ep.mkv")
-    hit = store.get("TV/Show/ep.mkv", mtime=mtime, size=size)
-    assert hit is not None and hit.status == "vad-unavailable"  # recorded
+    assert store.get("TV/Show/ep.mkv", mtime=mtime, size=size) is None
+    assert store.summary()["total_scanned"] == 1
 
 
 @pytest.mark.asyncio
@@ -232,6 +234,8 @@ async def test_process_never_raises_on_internal_error(gen, caplog):
         result = await g.process("TV/Show/ep.mkv")  # must NOT raise
     assert result["status"] == "error"
     assert any("process failed" in r.getMessage() for r in caplog.records)
+    # Recorded (visible in summary), but NOT a cache hit — a transient error
+    # stays re-scannable so a subgen outage mid-walk does not permanently skip.
     mtime, size = _identity("TV/Show/ep.mkv")
-    hit = store.get("TV/Show/ep.mkv", mtime=mtime, size=size)
-    assert hit is not None and hit.status == "error"  # recorded, not silent
+    assert store.get("TV/Show/ep.mkv", mtime=mtime, size=size) is None
+    assert store.summary()["total_scanned"] == 1

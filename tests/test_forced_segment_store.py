@@ -48,3 +48,20 @@ def test_upsert_replaces_prior_verdict(tmp_path):
     s.upsert(canonical_path="TV/S/ep.mkv", mtime=2.0, size=2, status="bailed", n_spans=0, total_ms=0)
     hit = s.get("TV/S/ep.mkv", mtime=2.0, size=2)
     assert hit.status == "bailed"
+
+
+def test_error_and_vad_unavailable_rows_are_rescannable(tmp_path):
+    # Transient verdicts (subgen down / VAD model not pulled yet) must NOT count
+    # as a cache hit, so the next walk re-scans without the file having to change.
+    # Terminal verdicts settle the (path, mtime, size) and DO hit.
+    s = _store(tmp_path)
+    s.upsert(canonical_path="TV/S/ep.mkv", mtime=100.0, size=42, status="error", n_spans=0, total_ms=0)
+    assert s.get("TV/S/ep.mkv", mtime=100.0, size=42) is None  # error -> re-scannable
+    s.upsert(
+        canonical_path="TV/S/ep.mkv", mtime=100.0, size=42, status="vad-unavailable", n_spans=0, total_ms=0
+    )
+    assert s.get("TV/S/ep.mkv", mtime=100.0, size=42) is None  # vad-unavailable -> re-scannable
+    # A later successful scan settles it: now it hits.
+    s.upsert(canonical_path="TV/S/ep.mkv", mtime=100.0, size=42, status="scanned", n_spans=1, total_ms=3000)
+    hit = s.get("TV/S/ep.mkv", mtime=100.0, size=42)
+    assert hit is not None and hit.status == "scanned"

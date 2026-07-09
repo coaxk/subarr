@@ -49,17 +49,26 @@ class ForcedSegmentScanStore:
         with self._lock:
             self._conn.close()
 
+    # Only TERMINAL verdicts count as a cache hit — the file is settled for this
+    # (path, mtime, size). Transient verdicts ('error', 'vad-unavailable') are a
+    # deliberate MISS so a subgen outage or an un-pulled VAD model auto-retries on
+    # the next walk without the file having to change. upsert still records ALL
+    # statuses (last outcome stays visible in summary()); only HIT lookup narrows.
+    _TERMINAL_STATUSES = ("scanned", "none", "bailed", "exists")
+
     def get(
         self, canonical_path: str, mtime: float | None = None, size: int | None = None
     ) -> ForcedSegmentScan | None:
         """Return the cached scan only if the supplied (mtime, size) still match
-        (mtime compared with a 1s tolerance, mirroring probe_store). Any mismatch
-        is a miss so the caller re-scans."""
+        (mtime compared with a 1s tolerance, mirroring probe_store) AND the stored
+        verdict is terminal. Any mismatch or a transient verdict is a miss so the
+        caller re-scans."""
+        placeholders = ", ".join("?" for _ in self._TERMINAL_STATUSES)
         with self._lock:
             row = self._conn.execute(
                 "SELECT canonical_path, mtime, size, status, n_spans, total_ms, scanned_at "
-                "FROM forced_segment_scans WHERE canonical_path = ?",
-                (canonical_path,),
+                f"FROM forced_segment_scans WHERE canonical_path = ? AND status IN ({placeholders})",
+                (canonical_path, *self._TERMINAL_STATUSES),
             ).fetchone()
         if not row:
             return None
