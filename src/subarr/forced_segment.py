@@ -138,3 +138,37 @@ def build_forced_srt(cues: list[tuple[int, int, str]]) -> str:
         lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
         built.append(Cue(index=0, start_ms=int(start_ms), end_ms=int(end_ms), lines=lines))
     return render_srt(built)
+
+
+# Runtime floor for the gate — a trivially short clip cannot hide a foreign scene
+# worth a sidecar. Named, not magic.
+GATE_MIN_RUNTIME_S = 120.0
+
+
+def qualifies_for_forced_segment(
+    *,
+    audio_langs: list[str] | None,
+    embedded_en: str | None,
+    lang_class: str | None,
+    has_forced_sidecar: bool,
+    duration_s: float | None,
+    params: ForcedSegmentParams,
+    min_runtime_s: float = GATE_MIN_RUNTIME_S,
+) -> tuple[bool, str]:
+    """Cheap pre-audio filters. Returns (qualifies, reason). A file qualifies iff:
+      - its audio is English-tagged (slice 1's primary-language assumption),
+      - it is NOT a #357 multilingual file (lang_class != 'multi'),
+      - it has NO existing forced English sub (embedded EN(forced) or a
+        .forced.en.srt sidecar) — don't redo work, don't clobber,
+      - it clears the runtime floor.
+    A full (non-forced) English sub does NOT disqualify — that is a different want."""
+    langs = {(lang or "").lower() for lang in (audio_langs or [])}
+    if not (langs & ({params.primary_lang} | ENGLISH_TAGS)):
+        return False, "not_english_audio"
+    if (lang_class or "single") == "multi":
+        return False, "multilingual"
+    if embedded_en == "EN(forced)" or has_forced_sidecar:
+        return False, "existing_forced"
+    if duration_s is not None and duration_s < min_runtime_s:
+        return False, "too_short"
+    return True, "ok"
