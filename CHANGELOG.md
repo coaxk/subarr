@@ -7,6 +7,14 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-07-09
+
+**Multi-copy logout fixed, and probe failures now explain themselves.** Two fixes from real-world reports on 2.4.0.
+
+### Fixed
+- **No more forced logout when running multiple subarr copies (#411).** Two copies on the same host (say a TV stack and an Anime stack on one box, on different ports) shared a single session cookie, because browsers scope cookies by host and ignore the port, so signing into the second copy logged you out of the first. The session cookie name is now unique per instance, so both stay logged in. You will be asked to log in once after upgrading, since the cookie name changes.
+- **Eager-probe failures are now diagnosable (#416).** When probing errored on every file, the log only showed a count and hid the actual reason (a path or permission mismatch caught before ffprobe ever ran). The run summary now reports the failure reason plus a sample, and escalates to a warning when the whole batch fails, which is the signature of a media-root or arr path-prefix misconfiguration.
+
 ## [2.4.0] - 2026-07-08
 
 **Automatic subtitle re-timing, on by default (#359).** subarr now post-processes every completed subtitle, extending cues that scroll past comfortable reading speed into the silent gap before the next line — so dialogue stays on screen long enough to actually read. Validated off-app across an 1801-subtitle corpus built from real subgen output: cues exceeding the critical 25 characters-per-second reading speed dropped from **22.9% to 5.2%**, and unreadable sub-second "flash" cues fell **77%**, with **zero new overlaps** (every extension is clamped to the available gap). It is idempotent and never shortens a cue or creates an overlap. On by default; opt out with `SUBARR_RETIME_ENABLED=0`.
