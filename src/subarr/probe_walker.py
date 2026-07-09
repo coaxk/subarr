@@ -29,6 +29,56 @@ log = logging.getLogger(__name__)
 WALK_CONCURRENCY = 4
 
 
+def _error_category(msg: str) -> str:
+    """Bucket a probe error string into a short, log-friendly category so a
+    100%-failure is diagnosable at a glance (#416)."""
+    m = (msg or "").lower()
+    if "outside media root" in m or "unknown library" in m:
+        return "outside-media-root"
+    if m.startswith("stat:") or "no such file" in m:
+        return "path-not-found"
+    if m.startswith("ffprobe") or "probe" in m:
+        return "ffprobe-failed"
+    return "other"
+
+
+def _summarize_probe_errors(errors: list[dict]) -> str:
+    """Compact breakdown of probe failures by reason + a small concrete sample,
+    for the run-summary log. Empty list -> "" (#416: the count alone was
+    undiagnosable — a user saw '400 errors' with no why)."""
+    if not errors:
+        return ""
+    from collections import Counter
+
+    cats = Counter(_error_category(e.get("error", "")) for e in errors)
+    breakdown = ", ".join(f"{n} {cat}" for cat, n in cats.most_common())
+    sample = "; ".join(f"{e.get('path', '?')}: {e.get('error', '?')}" for e in errors[:3])
+    return f"{breakdown} — e.g. {sample}"
+
+
+def _log_probe_error_summary(label: str, state: "WalkState") -> None:
+    """#416: surface WHY files errored (not just the count). Escalates to WARNING
+    when the failure is systemic (all/most files) — the signature of a config
+    problem like a path-prefix/mount mismatch or an unconfigured library — so it
+    is loud in the log instead of a silent 100%-failure."""
+    n = len(state.errors)
+    if not n:
+        return
+    detail = _summarize_probe_errors(state.errors)
+    if n >= max(1, state.total_files // 2):
+        log.warning(
+            "%s %s: %d/%d files errored (systemic — likely a media-root / arr path-prefix "
+            "mismatch or unconfigured library) — %s",
+            label,
+            state.id,
+            n,
+            state.total_files,
+            detail,
+        )
+    else:
+        log.info("%s %s: %d files errored — %s", label, state.id, n, detail)
+
+
 class WalkState:
     def __init__(self, walk_id: str, root_canonical: str):
         self.id = walk_id
@@ -183,6 +233,7 @@ class ProbeWalker:
                 state.probed,
                 len(state.errors),
             )
+            _log_probe_error_summary("probe walk", state)
         except asyncio.CancelledError:
             state.status = "cancelled"
             state.finished_at = time.time()
@@ -296,6 +347,7 @@ class ProbeWalker:
                 state.probed,
                 len(state.errors),
             )
+            _log_probe_error_summary("eager probe", state)
         except asyncio.CancelledError:
             state.status = "cancelled"
             state.finished_at = time.time()
