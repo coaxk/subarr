@@ -79,3 +79,40 @@ def test_mostly_foreign_bail_predicate():
     utts2 = [(0.0, 60.0), (60.0, 63.0)]
     lid2 = _lid({utts2[0]: ("en", 0.9), utts2[1]: ("fr", 0.9)})
     assert is_mostly_foreign(classify_utterances(utts2, lid2, p), p) is False
+
+
+def test_detect_utterances_wraps_vad(monkeypatch):
+    from subarr import forced_segment as fs
+
+    monkeypatch.setattr(fs, "_vad_speech_ranges", lambda path, track: [(1.0, 4.0), (5.0, 6.0)])
+    assert fs.detect_utterances("/media/x.mkv", track=0) == [(1.0, 4.0), (5.0, 6.0)]
+
+
+def test_detect_utterances_none_when_vad_unavailable(monkeypatch):
+    from subarr import forced_segment as fs
+
+    monkeypatch.setattr(fs, "_vad_speech_ranges", lambda path, track: None)
+    assert fs.detect_utterances("/media/x.mkv") == []
+
+
+def test_clip_audio_builds_expected_ffmpeg_command(monkeypatch):
+    from subarr import forced_segment as fs
+
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        captured["kw"] = kw
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    monkeypatch.setattr(fs.subprocess, "run", fake_run)
+    fs.clip_audio("/media/x.mkv", 12.5, 17.0, "/tmp/utt.wav", track=1)
+    cmd = captured["cmd"]
+    assert "-ss" in cmd and cmd[cmd.index("-ss") + 1] == "12.5"
+    assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "4.5"  # length = end - start
+    assert "0:a:1" in cmd and "16000" in cmd and cmd[-1] == "/tmp/utt.wav"
+    assert captured["kw"].get("check") is True

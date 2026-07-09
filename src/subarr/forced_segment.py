@@ -14,6 +14,7 @@ gate to the file's real audio language.
 from __future__ import annotations
 
 import logging
+import subprocess
 from dataclasses import dataclass
 from typing import Callable
 
@@ -174,3 +175,52 @@ def qualifies_for_forced_segment(
     if duration_s is not None and duration_s < min_runtime_s:
         return False, "too_short"
     return True, "ok"
+
+
+def _vad_speech_ranges(path: str, track: int) -> "list[Utterance] | None":
+    """Indirection point so tests can inject speech boundaries without a real
+    silero model. Delegates to the shipped VAD (vad.detect_speech_ranges returns
+    normalized, gap-merged, min-speech-filtered ranges, or None when VAD is
+    unavailable — no model pulled / onnxruntime missing)."""
+    from . import vad
+
+    return vad.detect_speech_ranges(path, track=track)
+
+
+def detect_utterances(fs_path: str, track: int = 0) -> list[Utterance]:
+    """VAD-segment the audio into speech utterances (start_s, end_s). Returns []
+    when VAD is unavailable — the orchestrator treats an empty utterance list as
+    'cannot detect' and records nothing rather than guessing."""
+    ranges = _vad_speech_ranges(fs_path, track)
+    return list(ranges) if ranges else []
+
+
+def clip_audio(fs_path: str, start_s: float, end_s: float, out_path: str, track: int = 0) -> None:
+    """Extract [start_s, end_s] of audio stream `track` -> 16 kHz mono wav at
+    out_path (audio-only keeps the subgen upload tiny). Mirrors the arena
+    sampler's ffmpeg invocation (arena_sampler._cut_clip): -ss/-t seek+length,
+    -map 0:a:N, -ar 16000 -ac 1, check=True with stderr captured. Raises
+    subprocess.CalledProcessError on ffmpeg failure — the orchestrator catches
+    per-utterance so one bad clip never aborts the file."""
+    length = max(0.0, end_s - start_s)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(start_s),
+        "-i",
+        fs_path,
+        "-t",
+        str(length),
+        "-map",
+        f"0:a:{track}",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        out_path,
+    ]
+    subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
