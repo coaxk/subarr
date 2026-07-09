@@ -122,3 +122,19 @@ def assemble_foreign_spans(
 ) -> list[Span]:
     """Full pure pipeline: classify then merge. Convenience entry point."""
     return merge_foreign_spans(classify_utterances(utterances, lid, params), params)
+
+
+def build_forced_srt(cues: list[tuple[int, int, str]]) -> str:
+    """(start_ms, end_ms, text) cues -> a forced SRT string, 1..N re-indexed,
+    absolute-timed. Reuses the shared Cue + render_srt so the wire format matches
+    every other subarr-emitted .srt. The `.forced` marker lives in the FILENAME
+    (<basename>.forced.en.srt), which Bazarr/Plex recognise — cue content is
+    plain. Blank/whitespace lines are stripped so an empty cue never renders."""
+    from .subtitle_readability import Cue
+    from .subtitle_retime import render_srt
+
+    built: list[Cue] = []
+    for start_ms, end_ms, text in cues:
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        built.append(Cue(index=0, start_ms=int(start_ms), end_ms=int(end_ms), lines=lines))
+    return render_srt(built)
