@@ -2229,6 +2229,28 @@ git commit -m "feat(364): Settings toggle for forced-segment deep-scan"
 
 If deferred, no commit — record the decision in the final report to the controller.
 
+- [x] **DECISION (executed 2026-07-10): DEFERRED — no declarative toggle list exists.**
+
+Investigation of `src/subarr/static/v1/home-hifi/settings.jsx` (2433 lines) found the
+settings surface hard-codes each toggle as a bespoke React component wired to its own
+dedicated backend endpoint (only two `<Toggle>` usages: the VAD toggle -> `/api/vad/config`
+and the telemetry toggle -> its own opt-in endpoint). There is NO declarative list keyed on
+config-field name that a one-liner extends, and `retime_enabled` (the plan's cited exemplar)
+is not surfaced in the settings UI at all. Adding a `forced_segment_enabled` toggle would
+require a new bespoke component, a generic settings-override endpoint for the UI to POST to,
+and an esbuild bundle rebuild + committing the regenerated ~MB bundle — non-trivial and
+bundle-churny, so it takes the plan's "Else -> DEFER" branch.
+
+**Manual verification note (until the visual toggle lands in a follow-up):** the backend is
+fully controllable without any UI. Enable by setting `SUBARR_FORCED_SEGMENT_ENABLED=1` in the
+service env (or POST it through the settings-override API — Task 5 registered it in
+`FIELD_ENV_VARS` + `_FIELD_COERCE`) and restart. Then confirm the control surface:
+`GET /api/forced-segment` returns `{state, summary}` (200), and
+`POST /api/forced-segment/start?scope=library` returns 202 with a running/done state;
+`POST /api/forced-segment/stop` returns 200. With the flag unset the feature is OFF and the
+at-import hook is a no-op (regression-proved by `tests/test_completion_retime.py` +
+`tests/test_config_forced_segment.py`).
+
 ---
 
 ### Task 13: Final verification — full suite, ruff, bundle
@@ -2276,7 +2298,7 @@ Do NOT push or open a PR. Report: tasks completed, full-suite result, ruff resul
 | Idempotence — `(canonical_path, mtime, size)` scan cache | Task 4 (store + migration 028), Task 8 (get/upsert) |
 | OFF by default — skip-English untouched | Task 5 (default off), Task 10 (gated hook), Task 13 Step 4 (regression proof) |
 | Surfacing — walker progress, Aftercare note, Health roster | Task 8 (`_record_aftercare_note`), Task 9 (state + `record_success`), Task 11 (Health register + router + summary) |
-| Settings toggle (minimal) | Task 12 (ship or defer-with-note) |
+| Settings toggle (minimal) | Task 12 — DEFERRED (no declarative toggle list; manual path: `SUBARR_FORCED_SEGMENT_ENABLED=1` / settings-override API + `/api/forced-segment` control endpoints) |
 | Testing — detector, SRT, gate, idempotence, orchestration, walker+hook, regression | Tasks 1–10 (each RED→GREEN), Task 13 |
 
 ## Name / type consistency (self-review)
