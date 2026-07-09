@@ -34,6 +34,14 @@ def test_non_english_is_foreign_at_any_confidence():
     assert classify_utterances([UTTS[0]], lid, p) == [(UTTS[0], True)]
 
 
+def test_primary_lang_is_case_insensitive_against_utterance_lang():
+    # slice-3 forward-compat: primary_lang set to the file's real audio language
+    # (e.g. "PT") must match "pt" utterances as primary (not foreign).
+    p = ForcedSegmentParams(primary_lang="PT")
+    lid = _lid({UTTS[0]: ("pt", 0.95)})
+    assert classify_utterances([UTTS[0]], lid, p) == [(UTTS[0], False)]
+
+
 def test_low_confidence_over_flags_to_foreign():
     p = ForcedSegmentParams(conf_floor=0.6, over_flag_low_confidence=True)
     lid = _lid({UTTS[0]: ("en", 0.2)})  # uncertain English -> over-flagged

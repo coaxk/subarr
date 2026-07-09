@@ -53,12 +53,12 @@ class ForcedSegmentParams:
     # switch (spec item 3): tile windows with ~50% stride so a boundary is never
     # hidden at a window edge. 0 disables tiling (slice-1 default keeps it simple
     # — VAD utterances are already pause-bounded; tiling is opt-in tuning).
-    max_utterance_s: float = 0.0
-    overlap_stride_s: float = 15.0
+    max_utterance_s: float = 0.0  # (declared for slice-2 overlap tiling; unused in slice 1)
+    overlap_stride_s: float = 15.0  # (declared for slice-2 overlap tiling; unused in slice 1)
 
 
 def _is_english(lang: str | None, params: ForcedSegmentParams) -> bool:
-    return bool(lang) and lang.lower() in {params.primary_lang, "eng"} | ENGLISH_TAGS
+    return bool(lang) and lang.lower() in {params.primary_lang.lower(), "eng"} | ENGLISH_TAGS
 
 
 def classify_utterances(
@@ -136,6 +136,8 @@ def build_forced_srt(cues: list[tuple[int, int, str]]) -> str:
     built: list[Cue] = []
     for start_ms, end_ms, text in cues:
         lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        if not lines:
+            continue  # an entirely-blank cue never emits a malformed empty block
         built.append(Cue(index=0, start_ms=int(start_ms), end_ms=int(end_ms), lines=lines))
     return render_srt(built)
 
