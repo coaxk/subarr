@@ -375,3 +375,127 @@ class ForcedSegmentGenerator:
             )
         except Exception as e:  # noqa: BLE001 - aftercare note must never break generation
             log.warning("forced-segment aftercare note failed for %s: %s", canonical_path, e)
+
+
+import asyncio
+import time as _time
+from dataclasses import dataclass, field
+from typing import Any
+
+# Trickle, never burst (mirrors audio_audit._PER_FILE_SLEEP_S / _BUSY_SLEEP_S).
+_PER_FILE_SLEEP_S = 1.0
+_BUSY_SLEEP_S = 5.0
+FORCED_SEGMENT_TASK = "forced-segment"
+
+
+@dataclass
+class WalkerState:
+    status: str = "running"  # running | done | cancelled | error
+    total: int = 0
+    processed: int = 0
+    found: int = 0  # files that produced >=1 forced span
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+    error: str | None = None
+    errors: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "total": self.total,
+            "processed": self.processed,
+            "found": self.found,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "error": self.error,
+            "errors": self.errors[:10],
+        }
+
+
+class ForcedSegmentWalker:
+    """Opt-in, throttled, GPU-polite, resumable deep-scan walker. Resumability is
+    delegated to the generator's scan cache (unchanged files return 'cached').
+    Supervised on the #157 Health roster as 'forced-segment'."""
+
+    def __init__(self, *, generator: "ForcedSegmentGenerator", worklist, busy_check=None):
+        self._gen = generator
+        self._worklist = worklist  # worklist(scope) -> [canonical_path, ...]
+        self._busy_check = busy_check
+        self._state: WalkerState | None = None
+        self._task: asyncio.Task | None = None
+
+    def get_state(self) -> WalkerState | None:
+        return self._state
+
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def _resolve_worklist(self, scope: str) -> list:
+        try:
+            return list(self._worklist(scope) or [])
+        except TypeError:
+            return list(self._worklist() or [])
+
+    async def start(self, scope: str = "library") -> WalkerState:
+        if self.is_running():
+            raise RuntimeError("forced-segment scan already running")
+        try:
+            worklist = await asyncio.to_thread(self._resolve_worklist, scope)
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("forced-segment: worklist resolution failed: %s", e)
+            worklist = []
+        state = WalkerState(total=len(worklist))
+        self._state = state
+        self._task = asyncio.create_task(self._run(state, worklist), name=FORCED_SEGMENT_TASK)
+        return state
+
+    async def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def aclose(self) -> None:
+        await self.stop()
+
+    def _safe_busy(self) -> bool:
+        try:
+            return bool(self._busy_check()) if self._busy_check is not None else False
+        except Exception:
+            return False
+
+    async def _run(self, state: WalkerState, worklist: list) -> None:
+        try:
+            for canonical_path in worklist:
+                while self._safe_busy():
+                    await asyncio.sleep(_BUSY_SLEEP_S)
+                try:
+                    result = await self._gen.process(canonical_path)
+                    if (result or {}).get("status") == "scanned":
+                        state.found += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - one bad file never aborts the run
+                    state.errors.append({"path": canonical_path, "error": repr(e)})
+                finally:
+                    state.processed += 1
+                await asyncio.sleep(_PER_FILE_SLEEP_S)
+            state.status = "done"
+            state.finished_at = _time.time()
+            _h = getattr(self, "_health", None)  # #157 supervision
+            if _h:
+                _h.record_success(FORCED_SEGMENT_TASK)
+        except asyncio.CancelledError:
+            state.status = "cancelled"
+            state.finished_at = _time.time()
+            raise  # cancel != failure — do NOT record_failure
+        except Exception as e:
+            log.exception("forced-segment walk failed: %s", e)
+            state.status = "error"
+            state.error = repr(e)
+            state.finished_at = _time.time()
+            _h = getattr(self, "_health", None)
+            if _h:
+                _h.record_failure(FORCED_SEGMENT_TASK, e)
