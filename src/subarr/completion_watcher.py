@@ -252,6 +252,7 @@ class CompletionWatcher:
         self._provenance.mark_completed(entry.id)
         self._run_retime(entry)
         self._run_aftercare(entry)
+        self._maybe_forced_segment(entry)  # #364: best-effort background deep-scan (never blocks)
         log.info("completion: %s (ledger #%d)", entry.canonical_path, entry.id)
         # v1.1-G: try direct multipart upload first (closes the loop
         # tightly + no race vs. Bazarr's filesystem scan). Falls back
@@ -464,6 +465,32 @@ class CompletionWatcher:
                 log.info("re-timed %s", entry.canonical_path)
         except Exception as e:  # noqa: BLE001 - re-timing must never break completion
             log.warning("re-time failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
+
+    def _maybe_forced_segment(self, entry) -> None:
+        """#364: if the feature is enabled and a generator is wired, schedule a
+        BACKGROUND forced-segment scan for this just-completed file. The
+        generator re-checks the gate + scan cache internally, so this hook only
+        schedules — it NEVER blocks completion and never raises. Best-effort:
+        LOG the reason on any miss (the #416 lesson — don't swallow silently)."""
+        runner = getattr(self, "_forced_segment", None)
+        if runner is None:
+            return
+        from .config import settings as _settings
+
+        if not _settings.forced_segment_enabled:
+            return
+        try:
+            import asyncio
+
+            asyncio.create_task(self._forced_segment_bg(entry.canonical_path))
+        except RuntimeError as e:
+            log.warning("forced-segment at-import: no running loop for %s: %s", entry.canonical_path, e)
+
+    async def _forced_segment_bg(self, canonical_path: str) -> None:
+        try:
+            await self._forced_segment.process(canonical_path)
+        except Exception as e:  # noqa: BLE001 - at-import scan must never break completion
+            log.warning("forced-segment at-import scan failed for %s: %s", canonical_path, e)
 
     def _find_srt_sidecar(self, video_canonical: str) -> str | None:
         """Locate the .srt subgen wrote next to the video. Subgen's default
