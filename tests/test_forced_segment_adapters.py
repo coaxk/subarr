@@ -32,11 +32,12 @@ async def test_translate_uploads_clip_and_returns_text(tmp_path):
         return httpx.Response(200, text="1\n00:00:00,000 --> 00:00:02,000\nHello\n")
 
     c = _subgen(h)
-    text = await subgen_translate(c, str(clip))
+    text, lang = await subgen_translate(c, str(clip))
     await c.aclose()
     assert seen["path"] == "/asr" and seen["task"] == "translate"
     assert "multipart/form-data" in seen["ct"]
     assert "Hello" in text
+    assert lang is None  # no X-Detected-Language header in this fake response
 
 
 @pytest.mark.asyncio

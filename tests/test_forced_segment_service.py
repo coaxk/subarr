@@ -3,6 +3,7 @@ and a fake gate-input resolver. No audio, no ffmpeg, no real subgen."""
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
 
@@ -48,6 +49,44 @@ def gen(subarr_env, tmp_path):
     return make
 
 
+@pytest.fixture
+def gen_factory(tmp_path):
+    """A leaner factory than `gen`: builds a ForcedSegmentGenerator directly with
+    sensible no-op fakes (vad/clip/lid/translate/gate), letting a test override
+    just the piece it cares about (e.g. translate_fn) for calling an internal
+    method like _build_cues directly, with no real ffmpeg/subgen/media root."""
+    from subarr import forced_segment_service as svc
+    from subarr.forced_segment import ForcedSegmentParams
+    from subarr.forced_segment_store import ForcedSegmentScanStore
+    from subarr.migrate import run_migrations
+
+    db = tmp_path / "gen_factory.db"
+    run_migrations(db)
+    store = ForcedSegmentScanStore(db)
+
+    def make(
+        *,
+        translate_fn=None,
+        lid_fn=None,
+        vad_fn=None,
+        clip_fn=None,
+        gate_fn=None,
+        params=None,
+    ):
+        return svc.ForcedSegmentGenerator(
+            subgen=object(),  # unused: LID/translate are injected below
+            scan_store=store,
+            params=params or ForcedSegmentParams(),
+            vad_fn=vad_fn or (lambda fs_path, track=0: []),
+            clip_fn=clip_fn or (lambda fs_path, s, e, out, track=0: None),  # no real ffmpeg
+            lid_fn=lid_fn or (lambda clip_path, subgen_path, span: (None, 0.0)),
+            translate_fn=translate_fn or (lambda clip_path, span: ("", None)),
+            gate_fn=gate_fn or (lambda canonical: (True, "ok", 3600.0, 42)),
+        )
+
+    return make
+
+
 def _identity(canonical_path):
     from subarr.paths import canonical_to_fs
 
@@ -67,7 +106,7 @@ async def test_generates_forced_sidecar_for_a_foreign_scene(gen):
     g, store = gen(
         utterances=utts,
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9), (63.2, 66.0): ("fr", 0.9)},
-        translate_map={(60.0, 66.0): span_srt},  # keyed on the MERGED span
+        translate_map={(60.0, 66.0): (span_srt, None)},  # keyed on the MERGED span; source lang unknown
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "scanned" and result["n_spans"] == 1
@@ -99,7 +138,7 @@ async def test_long_span_emits_multiple_offset_cues(gen):
     g, store = gen(
         utterances=utts,
         lid_map={(0.0, 300.0): ("en", 0.95), (300.0, 360.0): ("fr", 0.9)},
-        translate_map={(300.0, 360.0): span_srt},
+        translate_map={(300.0, 360.0): (span_srt, None)},
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "scanned" and result["n_spans"] == 1
@@ -145,7 +184,7 @@ async def test_never_clobbers_an_existing_forced_sidecar(gen):
     g, store = gen(
         utterances=[(0.0, 60.0), (60.0, 63.0)],
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9)},
-        translate_map={(60.0, 63.0): "hi"},
+        translate_map={(60.0, 63.0): ("hi", None)},
         gate=(False, "existing_forced"),
     )
     result = await g.process("TV/Show/ep.mkv")
@@ -160,7 +199,7 @@ async def test_cache_hit_skips_rescan(gen):
     g, store = gen(
         utterances=utts,
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9)},
-        translate_map={(60.0, 63.0): span_srt},
+        translate_map={(60.0, 63.0): (span_srt, None)},
     )
     first = await g.process("TV/Show/ep.mkv")
     assert first["status"] == "scanned"
@@ -210,7 +249,7 @@ async def test_disk_level_no_clobber_when_gate_ok(gen):
     g, store = gen(
         utterances=[(0.0, 60.0), (60.0, 63.0)],
         lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9)},
-        translate_map={(60.0, 63.0): "hi"},
+        translate_map={(60.0, 63.0): ("hi", None)},
         gate=(True, "ok"),  # gate passes; the DISK check must still block
     )
     result = await g.process("TV/Show/ep.mkv")
@@ -269,3 +308,39 @@ async def test_process_never_raises_on_internal_error(gen, caplog):
     mtime, size = _identity("TV/Show/ep.mkv")
     assert store.get("TV/Show/ep.mkv", mtime=mtime, size=size) is None
     assert store.summary()["total_scanned"] == 1
+
+
+# --- #364 slice 2 Task 4: translate-arbiter (drop false-positive spans) ---
+
+
+def test_build_cues_drops_span_whose_source_is_primary(gen_factory):
+    from subarr.forced_segment import Span
+
+    # subgen returns a TIMESTAMPED SRT (parse_srt requires real timestamp lines
+    # to unpack a cue, same as every other _build_cues test in this file) — a
+    # bare sentence would parse to zero cues regardless of the arbiter, so both
+    # branches return a minimal one-cue SRT to actually exercise the drop.
+    async def fake_translate(clip, span):
+        s0 = span[0]
+        if s0 < 10:
+            return ("1\n00:00:00,000 --> 00:00:01,000\nHola.\n", "es")
+        return ("1\n00:00:00,000 --> 00:00:01,000\nhello there\n", "en")
+
+    g = gen_factory(translate_fn=fake_translate)
+    spans = [Span(0, 4000), Span(20000, 24000)]
+    cues = asyncio.run(g._build_cues("/x.mkv", spans, "/tmp"))
+    texts = [t for _s, _e, t in cues]
+    assert any("Hola" in t for t in texts)
+    assert not any("hello there" in t for t in texts)
+
+
+def test_subgen_translate_returns_text_and_lang():
+    from subarr import forced_segment_service as svc
+
+    class FakeSubgen:
+        async def asr(self, *, local_file, task, return_language=False):
+            assert task == "translate" and return_language is True
+            return ("translated text", "es")
+
+    text, lang = asyncio.run(svc.subgen_translate(FakeSubgen(), "/clip.wav"))
+    assert text == "translated text" and lang == "es"
