@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 from subarr import lid
 
@@ -10,6 +9,7 @@ def test_labels_loaded_english_index_30():
 
 
 def test_softmax_topk_picks_max_and_english_prob():
+    np = pytest.importorskip("numpy")  # LID-backend dep; skipped on base CI
     labels = lid.load_labels()
     logits = np.full(95, -5.0, dtype=np.float32)
     logits[30] = 5.0  # English dominant
@@ -20,6 +20,7 @@ def test_softmax_topk_picks_max_and_english_prob():
 
 
 def test_verdict_reports_english_prob_even_when_foreign_wins():
+    np = pytest.importorskip("numpy")  # LID-backend dep; skipped on base CI
     labels = lid.load_labels()
     logits = np.full(95, -5.0, dtype=np.float32)
     de = labels.index("de")
