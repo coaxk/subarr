@@ -82,7 +82,7 @@ where = ["src"]
 # the frontend is silently missing in the wheel (404 at / + /static/*).
 # Caught 2026-05-27 after v1.1 deploy.
 [tool.setuptools.package-data]
-subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md"]
+subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md", "data/*.json"]
 
 [tool.pytest.ini_options]
 # Playwright suite lives at tests/e2e/ — JS/TS, not Python. Excluding
