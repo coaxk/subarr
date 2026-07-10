@@ -56,6 +56,18 @@ class ForcedSegmentScanStore:
     # statuses (last outcome stays visible in summary()); only HIT lookup narrows.
     _TERMINAL_STATUSES = ("scanned", "none", "bailed", "exists")
 
+    # Cache-HIT query. The IN (...) placeholders are a FIXED literal — one "?" per
+    # _TERMINAL_STATUSES plus the leading canonical_path — kept as a literal string
+    # (never an f-string) so it is provably injection-free (bandit B608). The guard
+    # below fails at import if the two ever drift, e.g. a 5th terminal status is
+    # added without widening the IN clause (which would silently drop cache hits).
+    _GET_SQL = (
+        "SELECT canonical_path, mtime, size, status, n_spans, total_ms, scanned_at "
+        "FROM forced_segment_scans WHERE canonical_path = ? AND status IN (?, ?, ?, ?)"
+    )
+    if _GET_SQL.count("?") != len(_TERMINAL_STATUSES) + 1:  # pragma: no cover
+        raise RuntimeError("forced_segment_store._GET_SQL placeholders out of sync with _TERMINAL_STATUSES")
+
     def get(
         self, canonical_path: str, mtime: float | None = None, size: int | None = None
     ) -> ForcedSegmentScan | None:
@@ -63,11 +75,9 @@ class ForcedSegmentScanStore:
         (mtime compared with a 1s tolerance, mirroring probe_store) AND the stored
         verdict is terminal. Any mismatch or a transient verdict is a miss so the
         caller re-scans."""
-        placeholders = ", ".join("?" for _ in self._TERMINAL_STATUSES)
         with self._lock:
             row = self._conn.execute(
-                "SELECT canonical_path, mtime, size, status, n_spans, total_ms, scanned_at "
-                f"FROM forced_segment_scans WHERE canonical_path = ? AND status IN ({placeholders})",
+                self._GET_SQL,
                 (canonical_path, *self._TERMINAL_STATUSES),
             ).fetchone()
         if not row:
