@@ -56,6 +56,13 @@ class ForcedSegmentParams:
     # — VAD utterances are already pause-bounded; tiling is opt-in tuning).
     max_utterance_s: float = 0.0  # (declared for slice-2 overlap tiling; unused in slice 1)
     overlap_stride_s: float = 15.0  # (declared for slice-2 overlap tiling; unused in slice 1)
+    # Slice 2 — local windowed LID (silero-lang95). silero is unreliable on short
+    # (<~10s) or non-speech audio, so we classify ~lid_window_s windows of speech,
+    # not raw utterances, and only trust CONFIDENT non-English verdicts. These are
+    # inert on the slice-1 subgen path (which still uses classify_utterances).
+    lid_window_s: float = 15.0  # target window for grouping utterances (spike-verified reliable floor)
+    lid_min_confidence: float = 0.5  # softmax floor for a foreign verdict (rejects silero noise)
+    lid_max_english_prob: float = 0.25  # reject "foreign" if English is still this plausible
 
 
 def _is_english(lang: str | None, params: ForcedSegmentParams) -> bool:
@@ -123,6 +130,65 @@ def assemble_foreign_spans(
 ) -> list[Span]:
     """Full pure pipeline: classify then merge. Convenience entry point."""
     return merge_foreign_spans(classify_utterances(utterances, lid, params), params)
+
+
+# --- Slice 2: windowed local-LID helpers (pure) -----------------------------
+# A window is (start_s, end_s, [utterance_index, ...]).
+Window = "tuple[float, float, list[int]]"
+
+
+def assemble_windows(utterances: list[Utterance], window_s: float) -> list[tuple[float, float, list[int]]]:
+    """Group pause-bounded speech utterances into ~window_s windows for LID.
+    Greedy: a window starts at an utterance and absorbs following utterances
+    while (utt.end - window_start) <= window_s; each utterance lands in exactly
+    one window (no straddling). A single utterance longer than window_s is its
+    own window — silero accepts variable length, and slice 2 does not tile
+    (overlap tiling is out of scope, see spec S8)."""
+    windows: list[tuple[float, float, list[int]]] = []
+    i = 0
+    n = len(utterances)
+    while i < n:
+        w_start = utterances[i][0]
+        idxs = [i]
+        j = i + 1
+        while j < n and (utterances[j][1] - w_start) <= window_s:
+            idxs.append(j)
+            j += 1
+        w_end = utterances[idxs[-1]][1]
+        windows.append((w_start, w_end, idxs))
+        i = j
+    return windows
+
+
+def window_is_foreign(
+    top_lang: str | None, top_prob: float, english_prob: float, params: ForcedSegmentParams
+) -> bool:
+    """The slice-2 gate: a window is foreign iff the top language is non-primary
+    AND confident (top_prob >= lid_min_confidence) AND English is implausible
+    (english_prob <= lid_max_english_prob). Everything else is treated as primary
+    — silero's low-confidence output is noise, so we do NOT over-flag on it."""
+    if top_lang is None or _is_english(top_lang, params):
+        return False
+    if top_prob < params.lid_min_confidence:
+        return False
+    if english_prob > params.lid_max_english_prob:
+        return False
+    return True
+
+
+def expand_window_verdicts(
+    utterances: list[Utterance],
+    windows: list[tuple[float, float, list[int]]],
+    window_foreign: list[bool],
+) -> list[tuple[Utterance, bool]]:
+    """Assign each utterance its containing window's foreign flag, producing the
+    same classified list slice-1's merge_foreign_spans / is_mostly_foreign
+    consume. Utterances are returned in original order."""
+    flag_by_idx: dict[int, bool] = {}
+    for (_s, _e, idxs), is_foreign in zip(windows, window_foreign):
+        for k in idxs:
+            flag_by_idx[k] = is_foreign
+    return [(utterances[k], flag_by_idx.get(k, False)) for k in range(len(utterances))]
 
 
 def build_forced_srt(cues: list[tuple[int, int, str]]) -> str:

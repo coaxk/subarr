@@ -649,7 +649,9 @@ async def lifespan(app_: FastAPI):
     # resolve clips, and slice 2's LOCAL LID model supersedes the subgen-LID
     # mechanism entirely — so we pass subgen_scratch_prefix=None (→ Branch B) and
     # don't expose a Branch-A selector that would only half-work.
+    from . import lid as _lid
     from .forced_segment import ForcedSegmentParams, qualifies_for_forced_segment
+    from .forced_segment_lid import LocalLidBackend
     from .forced_segment_service import (
         ForcedSegmentGenerator,
         ForcedSegmentWalker,
@@ -658,6 +660,22 @@ async def lifespan(app_: FastAPI):
     )
     from .forced_segment_store import ForcedSegmentScanStore
     from .media_probe import audio_lang_summary, english_track_summary
+
+    # #364 slice 2: prefer the local silero-lang95 backend over the per-utterance
+    # subgen LID path (Branch B) when the model is available. Guarded on
+    # forced_segment_enabled so a disabled install never triggers a model pull.
+    # One shared params instance keeps the LID gate, the merge/arbiter logic, and
+    # the gate predicate from ever desyncing.
+    _fs_params = ForcedSegmentParams()
+    _local_lid = None
+    # ensure_available() may do a blocking, checksum-verified model download on
+    # first enable — run it off the event loop so startup never freezes the single
+    # uvicorn loop (feedback_subarr-event-loop-blocking).
+    if settings.forced_segment_enabled and await asyncio.to_thread(_lid.ensure_available):
+        _local_lid = LocalLidBackend(params=_fs_params)
+        log.info("forced-segment: local silero-lang95 LID active")
+    elif settings.forced_segment_enabled:
+        log.info("forced-segment: silero-lang95 unavailable — using subgen LID fallback")
 
     app_.state.forced_segment_store = ForcedSegmentScanStore(settings.db_path)
 
@@ -707,19 +725,20 @@ async def lifespan(app_: FastAPI):
             lang_class=lang_class,
             has_forced_sidecar=has_sidecar,
             duration_s=duration_s,
-            params=ForcedSegmentParams(),
+            params=_fs_params,
         )
         return ok, reason, duration_s, size
 
     app_.state.forced_segment_gen = ForcedSegmentGenerator(
         subgen=app_.state.subgen,
         scan_store=app_.state.forced_segment_store,
-        params=ForcedSegmentParams(),
+        params=_fs_params,
         lid_fn=_fs_lid,
         translate_fn=_fs_translate,
         gate_fn=_fs_gate,
         aftercare_store=getattr(app_.state, "aftercare", None),
         subgen_scratch_prefix=None,  # #364 slice 1: Branch B only (see above)
+        local_lid=_local_lid,  # #364 slice 2: local silero-lang95 backend, or None
     )
     app_.state.forced_segment = ForcedSegmentWalker(
         generator=app_.state.forced_segment_gen,

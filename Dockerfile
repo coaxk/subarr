@@ -32,7 +32,11 @@ COPY src/ ./src/
 # safetensors + huggingface_hub on top of [vad]'s onnxruntime/numpy — ~MBs,
 # NO torch). The ~1.9GB LaBSE ONNX model is NOT baked; it's pulled into the
 # HF cache on first QE use. Until then the judge stays structural-only.
-RUN pip install --no-cache-dir ".[vad,qe-onnx]"
+# #364 slice 2: also bake the local spoken-LID runtime ([lid] is the same
+# onnxruntime/numpy pair as [vad], listed separately so it can diverge later).
+# The small silero-lang95 model is NOT baked; pulled + checksum-verified lazily
+# on first forced-segment scan, same opt-in pattern as [vad]'s silero VAD model.
+RUN pip install --no-cache-dir ".[vad,qe-onnx,lid]"
 
 # #237: non-root runtime. Create a default subarr user/group (1000:1000,
 # overridable at runtime via PUID/PGID by the entrypoint). HF_HOME moves the QE

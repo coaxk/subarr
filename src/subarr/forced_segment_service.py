@@ -23,6 +23,7 @@ from .arena import parse_robust_detect
 from .forced_segment import (
     ForcedSegmentParams,
     Span,
+    _is_english,
     build_forced_srt,
     classify_utterances,
     clip_audio,
@@ -85,14 +86,18 @@ async def subgen_lid(
         return None, 0.0
 
 
-async def subgen_translate(subgen: SubgenClient, clip_path: str) -> str:
-    """Transcribe+translate one foreign span clip to English text (uploads the
-    clip; no shared fs needed). Returns '' if subgen produced nothing."""
+async def subgen_translate(subgen: SubgenClient, clip_path: str) -> "tuple[str, str | None]":
+    """Transcribe+translate one foreign span clip to English text AND report the
+    detected SOURCE language (subgen computes it before translating; free here).
+    The source language is the arbiter: a span whose source is the primary
+    language was a local-LID false positive and is dropped upstream. Returns
+    ('', None) if subgen produced nothing."""
     try:
-        return await subgen.asr(local_file=clip_path, task="translate") or ""
+        text, lang = await subgen.asr(local_file=clip_path, task="translate", return_language=True)
+        return (text or ""), (lang or None)
     except SubgenUnavailable as e:
         log.warning("forced-segment translate failed for a clip: %s", e)
-        return ""
+        return "", None
 
 
 # Injectable signatures (LID/translate take a clip path + the source span so the
@@ -106,7 +111,10 @@ LidFn = Callable[
     [str, "str | None", "tuple[float, float]"],
     "Awaitable[tuple[str | None, float]] | tuple[str | None, float]",
 ]
-TranslateFn = Callable[[str, "tuple[float, float]"], "Awaitable[str] | str"]
+TranslateFn = Callable[
+    [str, "tuple[float, float]"],
+    "Awaitable[tuple[str, str | None]] | tuple[str, str | None]",
+]
 # gate_fn(canonical) -> (qualifies, reason, duration_s, size)
 GateFn = Callable[[str], "tuple[bool, str, float | None, int | None]"]
 
@@ -134,6 +142,7 @@ class ForcedSegmentGenerator:
         gate_fn: GateFn,
         aftercare_store=None,
         subgen_scratch_prefix: str | None = None,
+        local_lid=None,
     ):
         self._subgen = subgen
         self._store = scan_store
@@ -147,6 +156,7 @@ class ForcedSegmentGenerator:
         # When set, clips are written under a subgen-visible scratch mount so LID
         # can use the cheap path-based detect_language_robust (Task 0 Branch A).
         self._subgen_scratch_prefix = subgen_scratch_prefix
+        self._local_lid = local_lid  # slice-2 windowed backend; None -> slice-1 subgen _classify
 
     async def process(self, canonical_path: str) -> dict:
         """Run the full pipeline for one file. Returns a summary dict
@@ -229,7 +239,10 @@ class ForcedSegmentGenerator:
             return {"status": "none", "reason": "no_speech", "n_spans": 0, "total_ms": 0}
 
         with tempfile.TemporaryDirectory(prefix="forced-seg-") as tmp:
-            classified = await self._classify(str(fs_path), utterances, tmp)
+            if self._local_lid is not None:
+                classified = await self._local_lid.classify(str(fs_path), utterances, tmp)
+            else:
+                classified = await self._classify(str(fs_path), utterances, tmp)
             # BAIL BEFORE MERGE: a mostly-foreign file must never collapse into
             # one giant "forced" span (that is exactly the case we reject).
             if is_mostly_foreign(classified, self._params):
@@ -328,7 +341,18 @@ class ForcedSegmentGenerator:
             except Exception as exc:  # noqa: BLE001 - one bad clip drops that span, never fatal
                 log.warning("forced-segment: translate clip failed for span %s: %s", sp, exc)
                 continue
-            text = await _maybe_await(self._translate(clip, (sp.start_ms / 1000.0, sp.end_ms / 1000.0)))
+            text, source_lang = await _maybe_await(
+                self._translate(clip, (sp.start_ms / 1000.0, sp.end_ms / 1000.0))
+            )
+            # Arbiter: silero over-flags; if subgen's translate detected the source
+            # as the primary language, this span was a false positive — drop it.
+            if source_lang is not None and _is_english(source_lang, self._params):
+                log.info(
+                    "forced-segment: span %s source=%s == primary — dropped (LID false positive)",
+                    sp,
+                    source_lang,
+                )
+                continue
             if not (text and text.strip()):
                 continue
             for c in parse_srt(text):
