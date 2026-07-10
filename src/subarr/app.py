@@ -642,11 +642,13 @@ async def lifespan(app_: FastAPI):
     app_.state.audio_audit._health = app_.state.task_health  # #157 supervision
 
     # #364: forced-segment deep-scan pipeline (opt-in; OFF by default). Store +
-    # generator + walker + at-import hook. LID/translate are bound to the subgen
-    # client; Branch A (subgen-visible scratch) is selected when
-    # SUBARR_FORCED_SEGMENT_SCRATCH_SUBGEN is set, else Branch B upload.
-    import os as _os
-
+    # generator + walker + at-import hook. LID + translate are bound to the subgen
+    # client. Slice 1 ships Branch B ONLY (clip uploaded to subgen /asr for LID):
+    # it works for every deployment (co-located OR remote subgen, no shared fs).
+    # The cheap path-based Branch A needs subgen-visible-scratch plumbing to
+    # resolve clips, and slice 2's LOCAL LID model supersedes the subgen-LID
+    # mechanism entirely — so we pass subgen_scratch_prefix=None (→ Branch B) and
+    # don't expose a Branch-A selector that would only half-work.
     from .forced_segment import ForcedSegmentParams, qualifies_for_forced_segment
     from .forced_segment_service import (
         ForcedSegmentGenerator,
@@ -658,13 +660,11 @@ async def lifespan(app_: FastAPI):
     from .media_probe import audio_lang_summary, english_track_summary
 
     app_.state.forced_segment_store = ForcedSegmentScanStore(settings.db_path)
-    _fs_scratch_subgen = _os.environ.get("SUBARR_FORCED_SEGMENT_SCRATCH_SUBGEN") or None
 
     async def _fs_lid(clip_path, subgen_clip_path, _span):
-        # subgen_clip_path is threaded by the generator (_to_subgen maps the clip
-        # onto _fs_scratch_subgen). Non-None => Branch A (cheap path detect);
-        # None => Branch B (upload). Forward it verbatim so Branch A is actually
-        # selected whenever a scratch dir is configured — never forced to Branch B.
+        # subgen_clip_path is always None in slice 1 (scratch prefix disabled) ->
+        # subgen_lid takes the Branch B upload path. Kept in the signature so
+        # slice 2 can re-enable the cheap path without a wiring change.
         return await subgen_lid(app_.state.subgen, clip_path, subgen_clip_path=subgen_clip_path)
 
     async def _fs_translate(clip_path, _span):
@@ -719,7 +719,7 @@ async def lifespan(app_: FastAPI):
         translate_fn=_fs_translate,
         gate_fn=_fs_gate,
         aftercare_store=getattr(app_.state, "aftercare", None),
-        subgen_scratch_prefix=_fs_scratch_subgen,
+        subgen_scratch_prefix=None,  # #364 slice 1: Branch B only (see above)
     )
     app_.state.forced_segment = ForcedSegmentWalker(
         generator=app_.state.forced_segment_gen,
