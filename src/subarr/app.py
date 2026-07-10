@@ -86,6 +86,7 @@ from .routers import (
     providers as r_providers,
     vision as r_vision,
     enrichment as r_enrichment,
+    forced_segment as r_forced_segment,
     gpu,
     home as r_home,
     instances as r_instances,
@@ -396,6 +397,9 @@ async def lifespan(app_: FastAPI):
         # the staleness branch never fires — an idle walker shows failures/streak
         # WITHOUT a false "stale" alarm, and sits on the unified Health roster.
         ("audio-audit", None),
+        # #364: opt-in deep-scan walker. expected_interval_s=None (event-driven,
+        # never "stale") — sits on the unified Health roster like audio-audit.
+        ("forced-segment", None),
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
     app_.state.runner = ScanRunner(
@@ -636,6 +640,95 @@ async def lifespan(app_: FastAPI):
         audio_lang=app_.state.audio_lang,
     )
     app_.state.audio_audit._health = app_.state.task_health  # #157 supervision
+
+    # #364: forced-segment deep-scan pipeline (opt-in; OFF by default). Store +
+    # generator + walker + at-import hook. LID + translate are bound to the subgen
+    # client. Slice 1 ships Branch B ONLY (clip uploaded to subgen /asr for LID):
+    # it works for every deployment (co-located OR remote subgen, no shared fs).
+    # The cheap path-based Branch A needs subgen-visible-scratch plumbing to
+    # resolve clips, and slice 2's LOCAL LID model supersedes the subgen-LID
+    # mechanism entirely — so we pass subgen_scratch_prefix=None (→ Branch B) and
+    # don't expose a Branch-A selector that would only half-work.
+    from .forced_segment import ForcedSegmentParams, qualifies_for_forced_segment
+    from .forced_segment_service import (
+        ForcedSegmentGenerator,
+        ForcedSegmentWalker,
+        subgen_lid,
+        subgen_translate,
+    )
+    from .forced_segment_store import ForcedSegmentScanStore
+    from .media_probe import audio_lang_summary, english_track_summary
+
+    app_.state.forced_segment_store = ForcedSegmentScanStore(settings.db_path)
+
+    async def _fs_lid(clip_path, subgen_clip_path, _span):
+        # subgen_clip_path is always None in slice 1 (scratch prefix disabled) ->
+        # subgen_lid takes the Branch B upload path. Kept in the signature so
+        # slice 2 can re-enable the cheap path without a wiring change.
+        return await subgen_lid(app_.state.subgen, clip_path, subgen_clip_path=subgen_clip_path)
+
+    async def _fs_translate(clip_path, _span):
+        return await subgen_translate(app_.state.subgen, clip_path)
+
+    def _fs_gate(canonical: str):
+        # Resolve gate inputs from stores already built above. Cheap: probe cache
+        # (audio + duration + embedded-forced), audio-lang store (#357 lang_class),
+        # and a disk check for an existing .forced.en.srt sidecar.
+        from .paths import PathOutsideRootError as _PORE
+        from .paths import canonical_to_fs as _c2fs
+
+        pr = None
+        try:
+            pr = app_.state.probe_store.get(canonical)
+        except Exception:
+            pr = None
+        audio_langs = audio_lang_summary(pr) if pr is not None else []
+        embedded_en = english_track_summary(pr) if pr is not None else None
+        duration_s = getattr(pr, "duration_s", None) if pr is not None else None
+        size = None
+        has_sidecar = False
+        try:
+            fs = _c2fs(canonical)
+            if fs.exists():
+                size = fs.stat().st_size
+                has_sidecar = fs.with_name(fs.stem + ".forced.en.srt").exists()
+        except (_PORE, OSError):
+            pass
+        lang_class = "single"
+        try:
+            v = app_.state.audio_lang.get(canonical.lstrip("/"))
+            if v is not None:
+                lang_class = getattr(v, "lang_class", "single")
+        except Exception:
+            lang_class = "single"
+        ok, reason = qualifies_for_forced_segment(
+            audio_langs=audio_langs,
+            embedded_en=embedded_en,
+            lang_class=lang_class,
+            has_forced_sidecar=has_sidecar,
+            duration_s=duration_s,
+            params=ForcedSegmentParams(),
+        )
+        return ok, reason, duration_s, size
+
+    app_.state.forced_segment_gen = ForcedSegmentGenerator(
+        subgen=app_.state.subgen,
+        scan_store=app_.state.forced_segment_store,
+        params=ForcedSegmentParams(),
+        lid_fn=_fs_lid,
+        translate_fn=_fs_translate,
+        gate_fn=_fs_gate,
+        aftercare_store=getattr(app_.state, "aftercare", None),
+        subgen_scratch_prefix=None,  # #364 slice 1: Branch B only (see above)
+    )
+    app_.state.forced_segment = ForcedSegmentWalker(
+        generator=app_.state.forced_segment_gen,
+        worklist=lambda scope="library": [c for c, _mt in _walk_all_library_files()],
+        busy_check=_audit_busy,  # reuse the arena-busy check (GPU-polite)
+    )
+    app_.state.forced_segment._health = app_.state.task_health  # #157 supervision
+    app_.state.watcher._forced_segment = app_.state.forced_segment_gen  # at-import hook
+
     app_.state.pending = PendingStore(settings.db_path)
     app_.state.pending.prune()  # #197: resolved walks 30d; pending never pruned
     app_.state.onboarding = OnboardingStore(settings.db_path)
@@ -898,6 +991,10 @@ async def lifespan(app_: FastAPI):
         except (AttributeError, Exception):
             pass
         try:
+            await app_.state.forced_segment.aclose()
+        except (AttributeError, Exception):
+            pass
+        try:
             await app_.state.arena.aclose()  # cancel + await in-flight sweeps before store close
         except (AttributeError, Exception):
             pass
@@ -939,6 +1036,10 @@ async def lifespan(app_: FastAPI):
         app_.state.probe_store.close()
         try:
             app_.state.audio_audit_store.close()
+        except (AttributeError, Exception):
+            pass
+        try:
+            app_.state.forced_segment_store.close()
         except (AttributeError, Exception):
             pass
         app_.state.pending.close()
@@ -1060,6 +1161,7 @@ app.include_router(r_sidecar.router)
 app.include_router(r_vad.router)
 app.include_router(r_arena.router)
 app.include_router(r_audio_audit.router)
+app.include_router(r_forced_segment.router)
 app.include_router(r_aftercare.router)
 app.include_router(r_subgen_setup.router)
 

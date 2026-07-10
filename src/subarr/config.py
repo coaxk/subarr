@@ -104,6 +104,11 @@ class Settings:
     # #359: re-time finished .srt subtitles (extend over-CPS cues into gaps)
     # before aftercare/upload. Off by default until the params are arena-proven.
     retime_enabled: bool
+    # #364: opt-in "Deep-scan English files for foreign scenes" — drives the
+    # forced-segment walker + the at-import hook. OFF by default so the skip-
+    # English optimisation is byte-for-byte unchanged for everyone who does not
+    # opt in. Set SUBARR_FORCED_SEGMENT_ENABLED=1 to enable.
+    forced_segment_enabled: bool
     # #157 gap-fill: verbose logging knob. When on, the root logger goes to
     # DEBUG and the httpx/httpcore request loggers are UN-pinned from WARNING so
     # request detail shows. Default off = today's INFO behaviour byte-for-byte.
@@ -283,6 +288,9 @@ def load() -> Settings:
         # min_cue_ms=1000) cuts critical-CPS cues 22.9%->5.2% with zero new overlaps.
         # Opt out with SUBARR_RETIME_ENABLED=0.
         retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "1").strip().lower()
+        in ("1", "true", "yes", "on"),
+        # #364: default OFF (opt-in GPU-spending pipeline).
+        forced_segment_enabled=os.environ.get("SUBARR_FORCED_SEGMENT_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on"),
         # #157 gap-fill: SUBARR_DEBUG verbose knob. Off by default; the logging
         # setup (app.py) reads settings.debug to raise the root level to DEBUG.
@@ -492,6 +500,7 @@ FIELD_ENV_VARS: dict[str, str] = {
     "plex_audio_hints": "PLEX_AUDIO_HINTS",
     "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
     "retime_enabled": "SUBARR_RETIME_ENABLED",
+    "forced_segment_enabled": "SUBARR_FORCED_SEGMENT_ENABLED",
     "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
     "subgen_webhook_enabled": "SUBARR_SUBGEN_WEBHOOK_ENABLED",
 }
@@ -524,6 +533,7 @@ _FIELD_COERCE = {
     "sonarr_propagate_audio_lang": _coerce_bool,
     "plex_partial_scan_enabled": _coerce_bool,
     "subgen_webhook_enabled": _coerce_bool,
+    "forced_segment_enabled": _coerce_bool,
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
