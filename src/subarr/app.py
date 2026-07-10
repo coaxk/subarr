@@ -664,9 +664,15 @@ async def lifespan(app_: FastAPI):
     # #364 slice 2: prefer the local silero-lang95 backend over the per-utterance
     # subgen LID path (Branch B) when the model is available. Guarded on
     # forced_segment_enabled so a disabled install never triggers a model pull.
+    # One shared params instance keeps the LID gate, the merge/arbiter logic, and
+    # the gate predicate from ever desyncing.
+    _fs_params = ForcedSegmentParams()
     _local_lid = None
-    if settings.forced_segment_enabled and _lid.ensure_available():
-        _local_lid = LocalLidBackend(params=ForcedSegmentParams())
+    # ensure_available() may do a blocking, checksum-verified model download on
+    # first enable — run it off the event loop so startup never freezes the single
+    # uvicorn loop (feedback_subarr-event-loop-blocking).
+    if settings.forced_segment_enabled and await asyncio.to_thread(_lid.ensure_available):
+        _local_lid = LocalLidBackend(params=_fs_params)
         log.info("forced-segment: local silero-lang95 LID active")
     elif settings.forced_segment_enabled:
         log.info("forced-segment: silero-lang95 unavailable — using subgen LID fallback")
@@ -719,14 +725,14 @@ async def lifespan(app_: FastAPI):
             lang_class=lang_class,
             has_forced_sidecar=has_sidecar,
             duration_s=duration_s,
-            params=ForcedSegmentParams(),
+            params=_fs_params,
         )
         return ok, reason, duration_s, size
 
     app_.state.forced_segment_gen = ForcedSegmentGenerator(
         subgen=app_.state.subgen,
         scan_store=app_.state.forced_segment_store,
-        params=ForcedSegmentParams(),
+        params=_fs_params,
         lid_fn=_fs_lid,
         translate_fn=_fs_translate,
         gate_fn=_fs_gate,

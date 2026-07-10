@@ -30,6 +30,31 @@ def test_verdict_reports_english_prob_even_when_foreign_wins():
     assert 0.0 < en_prob < top_prob
 
 
+def test_session_is_cached(monkeypatch):
+    # classify_samples runs once per window; the ONNX session must be built once
+    # and reused, not reconstructed per call. Inject a fake onnxruntime module so
+    # this runs without the real runtime (not installed in CI's .[dev] env).
+    import sys
+    import types
+
+    calls = {"n": 0}
+
+    class FakeSession:
+        def __init__(self, path, providers=None):
+            calls["n"] += 1
+
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.InferenceSession = FakeSession
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+    lid._session.cache_clear()
+    a = lid._session("model-x")
+    b = lid._session("model-x")
+    assert a is b
+    assert calls["n"] == 1
+    lid._session.cache_clear()
+
+
 def test_pull_model_verifies_checksum(tmp_path, monkeypatch):
     monkeypatch.setenv("SUBARR_LID_MODEL_PATH", str(tmp_path / "m.onnx"))
     good = b"fake-onnx-bytes"

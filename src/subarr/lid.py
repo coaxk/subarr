@@ -128,6 +128,17 @@ def _verdict_from_logits(logits, labels: list[str]) -> "tuple[str, float, float]
 _SR = 16000
 
 
+@lru_cache(maxsize=1)
+def _session(model_path: str):
+    """Build the ONNX session once and reuse it. classify_samples runs once per
+    ~15s window (hundreds per film); a fresh InferenceSession per call would
+    re-parse/validate the graph from disk every time and eat the round-trip
+    savings this whole slice exists to gain."""
+    import onnxruntime as ort
+
+    return ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+
+
 def classify_samples(samples) -> "tuple[str, float, float] | None":
     """Classify a 16 kHz mono float32 waveform -> (top_lang, top_prob,
     english_prob), or None when unavailable / on any inference error."""
@@ -135,9 +146,8 @@ def classify_samples(samples) -> "tuple[str, float, float] | None":
         return None
     try:
         import numpy as np
-        import onnxruntime as ort
 
-        sess = ort.InferenceSession(_model_path(), providers=["CPUExecutionProvider"])
+        sess = _session(_model_path())
         x = np.asarray(samples, dtype=np.float32).reshape(1, -1)
         (logits,) = sess.run(["output"], {"input": x})
         return _verdict_from_logits(logits[0], load_labels())
