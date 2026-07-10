@@ -11,15 +11,20 @@ import pytest
 
 @pytest.fixture
 def gen(subarr_env, tmp_path):
-    # subarr_env sets SUBARR_MEDIA_ROOT to a tmp media root with TV/Show/ep.mkv.
-    from subarr import config, paths
+    # subarr_env sets SUBARR_MEDIA_ROOT to a tmp media root with TV/Show/ep.mkv,
+    # and already reloads config+paths (coordinated with the rest of the app,
+    # incl. routers) under that env. Reloading paths AGAIN here would re-mint
+    # PathOutsideRootError and desync modules subarr_env re-bound but we don't
+    # (e.g. routers.queue), leaking into later tests
+    # (reference_subarr-test-module-reload). So only reload forced_segment_service
+    # — the one module subarr_env doesn't know about — to re-bind it to the
+    # already-reloaded paths.
+    from subarr import config
     from subarr import forced_segment_service as svc
     from subarr.forced_segment import ForcedSegmentParams
     from subarr.forced_segment_store import ForcedSegmentScanStore
     from subarr.migrate import run_migrations
 
-    importlib.reload(config)
-    importlib.reload(paths)
     importlib.reload(svc)
     db = config.settings.db_path
     run_migrations(db)
