@@ -69,3 +69,41 @@ async def test_hook_noop_when_not_wired(subarr_env, monkeypatch):
     # must not raise
     w._maybe_forced_segment(_Entry())
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_at_import_task_is_retained_and_released(subarr_env, monkeypatch):
+    """The at-import fire-and-forget scan must be held on a strong reference so
+    the GC cannot cancel a long scan (VAD -> per-utterance LID -> translate)
+    mid-flight and silently drop the .forced.en.srt. It is released on
+    completion so the set does not leak."""
+    from subarr import config, completion_watcher
+
+    monkeypatch.setenv("SUBARR_FORCED_SEGMENT_ENABLED", "1")
+    importlib.reload(config)
+    importlib.reload(completion_watcher)
+    w = completion_watcher.CompletionWatcher()
+
+    gate = asyncio.Event()
+
+    class _BlockingGen:
+        def __init__(self):
+            self.started = False
+
+        async def process(self, canonical_path):
+            self.started = True
+            await gate.wait()
+
+    w._forced_segment = _BlockingGen()
+    w._maybe_forced_segment(_Entry())
+    await asyncio.sleep(0)  # let the task start and block on the event
+    # Held on a strong ref while running so a GC pass cannot cancel it.
+    assert len(w._forced_segment_tasks) == 1
+    assert w._forced_segment.started is True
+
+    # Release: finish the scan; the done-callback discards the ref.
+    tasks = list(w._forced_segment_tasks)
+    gate.set()
+    await asyncio.gather(*tasks)
+    await asyncio.sleep(0)  # let the done-callback run
+    assert w._forced_segment_tasks == set()

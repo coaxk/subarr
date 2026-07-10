@@ -90,6 +90,12 @@ class CompletionWatcher:
         self._interval_s = interval_s
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # #364: strong refs to in-flight at-import forced-segment scans. CPython
+        # keeps only a WEAK ref to a bare create_task, so a long scan (VAD ->
+        # per-utterance LID -> translate) can be GC-cancelled mid-flight and the
+        # .forced.en.srt silently never lands. Hold each task here; the
+        # done-callback discards it (see _maybe_forced_segment).
+        self._forced_segment_tasks: set = set()
         # #161 P3: scan-disk task id cached PER Bazarr instance (key = base_url).
         self._bazarr_task_ids: dict[str, str] = {}
         # Cached caps. When /queue is missing (vanilla subgen), the
@@ -169,6 +175,11 @@ class CompletionWatcher:
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
+        # #364: best-effort cancel any in-flight at-import forced-segment scans
+        # so a shutdown never leaves them dangling. Don't await (stop() does not
+        # await other tasks); the done-callback empties the set as they unwind.
+        for t in list(self._forced_segment_tasks):
+            t.cancel()
 
     async def _loop(self) -> None:
         log.info("completion watcher started (interval=%ds)", self._interval_s)
@@ -482,7 +493,11 @@ class CompletionWatcher:
         try:
             import asyncio
 
-            asyncio.create_task(self._forced_segment_bg(entry.canonical_path))
+            # Retain a strong ref (GC-safe) and release it on completion so a
+            # long at-import scan can never be silently cancelled mid-flight.
+            t = asyncio.create_task(self._forced_segment_bg(entry.canonical_path))
+            self._forced_segment_tasks.add(t)
+            t.add_done_callback(self._forced_segment_tasks.discard)
         except RuntimeError as e:
             log.warning("forced-segment at-import: no running loop for %s: %s", entry.canonical_path, e)
 

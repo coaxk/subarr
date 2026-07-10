@@ -172,16 +172,20 @@ class ForcedSegmentGenerator:
             return {"status": "error", "reason": "missing", "n_spans": 0, "total_ms": 0}
 
         # Cache identity: mtime AND size come from the SAME source (stat) so the
-        # key is self-consistent across runs. The gate still resolves size but the
-        # cache never mixes it with a stat mtime.
+        # key is self-consistent across runs and independent of the gate.
         st = fs_path.stat()
         mtime, size = st.st_mtime, st.st_size
-        ok, reason, _dur, _gate_size = self._gate(canonical_path)
 
-        # Idempotence: an unchanged (path, mtime, size) is never re-scanned.
+        # Idempotence FIRST (before the gate): an unchanged (path, mtime, size)
+        # is never re-scanned. Checking the cache ahead of the gate means a
+        # resume walk over a mostly-cached library skips the gate's probe_store
+        # read + canonical_to_fs + stat + sidecar .exists + audio_lang read for
+        # every already-scanned file. size comes from stat above, not the gate
+        # return, so this check never depends on running the gate.
         if self._store.get(canonical_path, mtime=mtime, size=size) is not None:
             return {"status": "cached", "n_spans": 0, "total_ms": 0}
 
+        ok, reason, _dur, _gate_size = self._gate(canonical_path)
         if not ok:
             return {"status": "skipped", "reason": reason, "n_spans": 0, "total_ms": 0}
 

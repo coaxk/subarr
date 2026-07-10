@@ -168,6 +168,31 @@ async def test_cache_hit_skips_rescan(gen):
     assert second["status"] == "cached"
 
 
+@pytest.mark.asyncio
+async def test_cache_hit_skips_gate(gen):
+    """A resume walk over an already-scanned file must NOT recompute the gate
+    (probe_store read + canonical_to_fs + stat + sidecar .exists + audio_lang):
+    the (canonical, mtime, size) cache check runs BEFORE the gate. The cache key
+    takes size from stat, not the gate return, so the check never depends on it."""
+    g, store = gen(utterances=[(0.0, 60.0)], lid_map={}, translate_map={})
+    # Pre-seed a terminal 'scanned' row keyed on the file's real stat identity.
+    mtime, size = _identity("TV/Show/ep.mkv")
+    store.upsert(
+        canonical_path="TV/Show/ep.mkv", mtime=mtime, size=size, status="scanned", n_spans=1, total_ms=0
+    )
+
+    gate_calls = []
+
+    def recording_gate(canonical):
+        gate_calls.append(canonical)
+        return (True, "ok", 3600.0, size)
+
+    g._gate = recording_gate
+    result = await g.process("TV/Show/ep.mkv")
+    assert result["status"] == "cached"
+    assert gate_calls == []  # the gate was NOT run on a cache hit
+
+
 # --- extra coverage for the load-bearing requirements the plan's own tests do
 # --- not exercise directly (req #2 disk-level no-clobber + path-containment,
 # --- req #4 vad-unavailable, plus the review's never-raises guard). ---
