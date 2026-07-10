@@ -142,6 +142,7 @@ class ForcedSegmentGenerator:
         gate_fn: GateFn,
         aftercare_store=None,
         subgen_scratch_prefix: str | None = None,
+        local_lid=None,
     ):
         self._subgen = subgen
         self._store = scan_store
@@ -155,6 +156,7 @@ class ForcedSegmentGenerator:
         # When set, clips are written under a subgen-visible scratch mount so LID
         # can use the cheap path-based detect_language_robust (Task 0 Branch A).
         self._subgen_scratch_prefix = subgen_scratch_prefix
+        self._local_lid = local_lid  # slice-2 windowed backend; None -> slice-1 subgen _classify
 
     async def process(self, canonical_path: str) -> dict:
         """Run the full pipeline for one file. Returns a summary dict
@@ -237,7 +239,10 @@ class ForcedSegmentGenerator:
             return {"status": "none", "reason": "no_speech", "n_spans": 0, "total_ms": 0}
 
         with tempfile.TemporaryDirectory(prefix="forced-seg-") as tmp:
-            classified = await self._classify(str(fs_path), utterances, tmp)
+            if self._local_lid is not None:
+                classified = await self._local_lid.classify(str(fs_path), utterances, tmp)
+            else:
+                classified = await self._classify(str(fs_path), utterances, tmp)
             # BAIL BEFORE MERGE: a mostly-foreign file must never collapse into
             # one giant "forced" span (that is exactly the case we reject).
             if is_mostly_foreign(classified, self._params):

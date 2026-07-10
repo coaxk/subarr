@@ -68,6 +68,14 @@ qe-onnx = [
     "safetensors>=0.4,<1.0",
     "huggingface_hub>=0.20,<2.0",
 ]
+# #364 slice 2: local spoken-LID (silero-lang95). onnxruntime + numpy only
+# (already present via [vad]) — NO torch. The small model is pulled lazily +
+# checksum-verified on first use; the 95-language label map is committed. Baked
+# into the image like [vad].
+lid = [
+    "onnxruntime>=1.16,<2.0",
+    "numpy>=1.24,<3.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

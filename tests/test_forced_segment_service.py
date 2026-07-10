@@ -31,7 +31,7 @@ def gen(subarr_env, tmp_path):
     run_migrations(db)
     store = ForcedSegmentScanStore(db)
 
-    def make(*, utterances, lid_map, translate_map, gate=(True, "ok"), duration=3600.0):
+    def make(*, utterances, lid_map, translate_map, gate=(True, "ok"), duration=3600.0, local_lid=None):
         g = svc.ForcedSegmentGenerator(
             subgen=object(),  # unused: LID/translate are injected below
             scan_store=store,
@@ -43,6 +43,7 @@ def gen(subarr_env, tmp_path):
             # translate is called ONCE per merged span and returns a TIMESTAMPED SRT.
             translate_fn=lambda clip_path, span: translate_map[span],
             gate_fn=lambda canonical: (gate[0], gate[1], duration, 42),  # (ok, reason, duration_s, size)
+            local_lid=local_lid,
         )
         return g, store
 
@@ -344,3 +345,42 @@ def test_subgen_translate_returns_text_and_lang():
 
     text, lang = asyncio.run(svc.subgen_translate(FakeSubgen(), "/clip.wav"))
     assert text == "translated text" and lang == "es"
+
+
+# --- #364 slice 2 Task 5: wire local_lid (windowed backend) into the generator ---
+
+
+@pytest.mark.asyncio
+async def test_generator_uses_local_lid_when_present(gen):
+    """When a local_lid backend is injected, _run must call its .classify()
+    instead of the per-utterance subgen _classify (which uses lid_fn). All
+    utterances classify as English (outcome 'none') so the test only needs to
+    assert WHICH path ran, not the merge/translate machinery downstream."""
+    utts = [(0.0, 60.0), (60.0, 63.0)]
+
+    calls = {"local": 0}
+
+    class FakeLocal:
+        async def classify(self, fs_path, utterances, tmp):
+            calls["local"] += 1
+            return [(u, False) for u in utterances]  # all English -> 'none' outcome
+
+    lid_calls = {"n": 0}
+
+    def counting_lid(clip_path, subgen_path, span):
+        lid_calls["n"] += 1
+        return ("fr", 0.9)  # would force a foreign span if this path ran
+
+    g, store = gen(
+        utterances=utts,
+        lid_map={u: ("fr", 0.9) for u in utts},
+        translate_map={},
+        local_lid=FakeLocal(),
+    )
+    g._lid = counting_lid  # overwrite after construction to detect any fallback use
+
+    result = await g.process("TV/Show/ep.mkv")
+
+    assert calls["local"] == 1  # local backend was used
+    assert lid_calls["n"] == 0  # per-utterance subgen lid_fn was NOT called
+    assert result["status"] == "none"  # all-English classification -> no forced spans
