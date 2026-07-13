@@ -10,11 +10,14 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # track the default so subgen stops transcribing a dub into double-translated subs.
 # `apt-get upgrade` pulls base-image security patches between python:3.12-slim
 # rebuilds — the trivy gate fails on fixable HIGH/CRITICAL CVEs in base
-# packages (first hit: CVE-2026-45447 in libssl3t64, fixed in deb13u2 while
-# the base still shipped u1). Patch-don't-suppress, same as subarr-subgen.
+# packages (first hit: CVE-2026-45447 in libssl3t64; then CVE-2026-40393 in
+# libgbm1, a transitive ffmpeg dep). Install FIRST, THEN upgrade, so the upgrade
+# also patches ffmpeg/mkvtoolnix's transitive deps to +debNuN — upgrading before
+# the install left those freshly-pulled deps at the unpatched base version.
+# Patch-don't-suppress, same as subarr-subgen.
 RUN apt-get update \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix passwd util-linux \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
