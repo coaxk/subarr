@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .data_persistence import apply_journal_mode
+
 
 SCAN_STATUS_PENDING = "pending"
 SCAN_STATUS_RUNNING = "running"
@@ -102,7 +104,7 @@ class ScanStore:
         self._path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
 
     def close(self) -> None:

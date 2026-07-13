@@ -52,6 +52,8 @@ from typing import Any
 
 import httpx
 
+from .data_persistence import apply_journal_mode
+
 log = logging.getLogger(__name__)
 
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
@@ -328,7 +330,7 @@ class UpdateChecker:
     def states(self) -> list[UpdateState]:
         """All cached product states, sorted by product name."""
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
+        apply_journal_mode(conn, self._db_path)  # #291: boot-order-independent WAL
         try:
             rows = conn.execute(
                 "SELECT product, repo, current_version, latest_version, "
@@ -364,7 +366,7 @@ class UpdateChecker:
         set keeps the page honest. Returns the count of orphan rows removed."""
         keep = set(self._products.keys())
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(conn, self._db_path)
         try:
             # Resolve orphans in Python and delete each by exact product = ? —
             # fully parameterized, no dynamic IN-clause SQL. The tracked set is
@@ -525,7 +527,7 @@ class UpdateChecker:
         missed: list[dict[str, Any]] | None = None,
     ) -> None:
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
+        apply_journal_mode(conn, self._db_path)  # #291: boot-order-independent WAL
         try:
             conn.execute(
                 "INSERT INTO update_checks "
@@ -562,7 +564,7 @@ class UpdateChecker:
     def _write_error(self, product: str, repo: str, error: str) -> None:
         """Update last_error WITHOUT clearing prior successful poll data."""
         conn = sqlite3.connect(str(self._db_path), isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")  # #291: boot-order-independent WAL
+        apply_journal_mode(conn, self._db_path)  # #291: boot-order-independent WAL
         try:
             existing = conn.execute(
                 "SELECT 1 FROM update_checks WHERE product = ?",

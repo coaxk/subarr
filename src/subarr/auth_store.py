@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .data_persistence import apply_journal_mode
+
 
 # DDL for the session-secret table, duplicated from migration 021 so the
 # import-time bootstrap below can run BEFORE run_migrations (the SessionMiddleware
@@ -34,7 +36,7 @@ def load_or_create_session_secret(db_path) -> str | None:
     try:
         conn = sqlite3.connect(str(db_path))
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            apply_journal_mode(conn, db_path)
             conn.execute(_AUTH_SECRET_DDL)
             row = conn.execute("SELECT secret FROM auth_secret WHERE id = 1").fetchone()
             if row is not None:
@@ -56,7 +58,7 @@ class AuthStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
 
     def get_or_create_secret(self) -> str:
         """The session-signing secret, generated once and persisted so sessions

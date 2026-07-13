@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .aftercare import AftercareEvaluation
+from .data_persistence import apply_journal_mode
 
 # Latest-per-path: the most recently INSERTED row for a path (monotonic id
 # avoids the equal-timestamp ambiguity MAX(completed_at) had). The full query
@@ -43,7 +44,7 @@ class AfterCareStore:
             isolation_level=None,
         )
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
 
     def prune(self, days: int = 365) -> int:

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .data_persistence import apply_journal_mode
 from .paths import VIDEO_EXTS
 
 log = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ class CoverageCache:
             check_same_thread=False,
             isolation_level=None,
         )
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
         self._cached: CachedSnapshot | None = None
         # Coordination flags: tells the refresh task whether a manual

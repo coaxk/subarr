@@ -86,6 +86,21 @@ def data_dir_network_fs(db_path: Path) -> str | None:
         return None
 
 
+def apply_journal_mode(conn, db_path) -> str:
+    """Set the SQLite journal mode appropriate to where `/data` lives: WAL on
+    local disk (fast, allows concurrent readers), but a rollback journal
+    (TRUNCATE) on a network filesystem, where WAL's shared-memory index is a
+    known corruption vector (#291). Container-gated via `data_dir_network_fs`,
+    so local and dev installs (and anything not in a container) keep WAL exactly
+    as before — only a network-FS `/data` flips to TRUNCATE. Returns the mode
+    applied. Two literal PRAGMAs, no interpolation."""
+    if data_dir_network_fs(Path(db_path)):
+        conn.execute("PRAGMA journal_mode=TRUNCATE")
+        return "TRUNCATE"
+    conn.execute("PRAGMA journal_mode=WAL")
+    return "WAL"
+
+
 def data_dir_is_ephemeral(db_path: Path) -> bool | None:
     """True  → /data is the container's writable layer (NOT persisted).
     False → /data is a real mount (safe).

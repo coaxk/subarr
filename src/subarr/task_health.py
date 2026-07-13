@@ -22,6 +22,8 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
+
 log = logging.getLogger(__name__)
 
 # Security: tracebacks are served (unauth-reachable on a no-auth install) via
@@ -108,7 +110,7 @@ class TaskHealthStore:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
         # #157 P2: optional callable(exc) -> None. record_failure feeds every
         # supervised-loop exception to it (CrashStore.record), making this the
