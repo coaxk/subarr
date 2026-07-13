@@ -27,7 +27,7 @@ def main() -> int:
     limit = args.limit or None  # 0 -> gather everything
     corpus = corpus_from_audit_store(args.db, limit=limit)
     if not corpus:
-        print("empty corpus — nothing to sweep", file=sys.stderr)
+        print("empty corpus - nothing to sweep", file=sys.stderr)
         return 1
 
     print(format_report(multilang_sweep(corpus, t_grid()), prob_distribution(corpus)))
