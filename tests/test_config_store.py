@@ -179,3 +179,33 @@ def test_credential_flush_rebuilds_instances(subarr_env, monkeypatch):
     inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
     assert inst0.url == "http://newsonarr:8989"
     assert inst0.api_key == "newkey"
+
+
+def test_wizard_persists_credentials_across_restart(subarr_env, monkeypatch, tmp_path):
+    # The config-loss bug (field report): the setup wizard applied credentials to
+    # the running Settings so they worked live, but never persisted them, so they
+    # vanished on the next restart. The wizard must write them to the store too.
+    import importlib
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    for v in ("SONARR_URL", "SONARR_API_KEY", "BAZARR_URL", "BAZARR_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    from subarr import config
+    from subarr import config_store as cs
+
+    importlib.reload(config)
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings(
+        {
+            "sonarr_url": "http://newsonarr:8989",
+            "sonarr_api_key": "sk",
+            "bazarr_url": "http://newbazarr:6767",
+            "bazarr_api_key": "bk",
+        }
+    )
+    ov = cs.load_overrides()
+    assert ov.get("sonarr_url") == "http://newsonarr:8989"
+    assert ov.get("sonarr_api_key") == "sk"
+    assert ov.get("bazarr_url") == "http://newbazarr:6767"
+    assert ov.get("bazarr_api_key") == "bk"
