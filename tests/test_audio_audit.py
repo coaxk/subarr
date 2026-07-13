@@ -326,6 +326,31 @@ async def test_walker_classifies_mislabel_bilingual_agrees(tmp_path):
     assert state.found == 2  # mislabel + bilingual
 
 
+@pytest.mark.asyncio
+async def test_walker_persists_chunks_conf(tmp_path):
+    """#407 Task 2: _audit_one passes parse_robust_detect's chunks_conf through
+    to the store, so per-chunk probabilities survive the audit walk (not just
+    the store layer, which Task 1 already covers)."""
+    from subarr.audio_audit import AudioAuditWalker
+
+    s = _store(tmp_path)
+    resp = {
+        "aggregate": {"language": "gl", "n_agreeing": 1, "n_total": 3},
+        "chunks": [
+            {"language": "gl", "probability": 0.94},
+            {"language": "es", "probability": 0.88},
+            {"language": "fr", "probability": 0.71},
+        ],
+    }
+    subgen = _FakeSubgen({"multi.mkv": resp})
+    worklist = [("multi.mkv", "en", 10.0)]
+    w = AudioAuditWalker(subgen, s, worklist=lambda: worklist, to_subgen=_identity)
+    await (await w.start(), w._task)[-1]
+    f = s.get("multi.mkv")
+    assert f is not None
+    assert f.chunks_conf == [["gl", 0.94], ["es", 0.88], ["fr", 0.71]]
+
+
 class _FakeLangStore:
     """Records Tier 2 auto-verifications the walker writes."""
 
