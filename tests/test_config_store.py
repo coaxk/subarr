@@ -209,3 +209,25 @@ def test_wizard_persists_credentials_across_restart(subarr_env, monkeypatch, tmp
     assert ov.get("sonarr_api_key") == "sk"
     assert ov.get("bazarr_url") == "http://newbazarr:6767"
     assert ov.get("bazarr_api_key") == "bk"
+
+
+def test_wizard_persist_failure_does_not_undo_live_apply(subarr_env, monkeypatch, tmp_path):
+    # Regression: persist is best-effort and SEPARATE from the live apply — a
+    # save_override failure must never prevent the wizard's in-memory apply or
+    # the instance/library rebuild.
+    import importlib
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.delenv("SONARR_URL", raising=False)
+    monkeypatch.delenv("SONARR_API_KEY", raising=False)
+    from subarr import config
+    from subarr import config_store as cs
+
+    importlib.reload(config)
+    monkeypatch.setattr(cs, "save_override", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings({"sonarr_url": "http://s:8989", "sonarr_api_key": "k"})
+    assert config.settings.sonarr_url == "http://s:8989"  # live apply survived
+    inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
+    assert inst0.url == "http://s:8989"  # rebuild ran despite the persist failure
