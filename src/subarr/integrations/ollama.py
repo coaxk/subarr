@@ -56,6 +56,25 @@ def _is_vision_capable(model_name: str) -> bool:
     return any(n.startswith(f) for f in _VISION_FAMILIES)
 
 
+def _match_configured_model(installed: list[str], cfg: str) -> str | None:
+    """Return the installed model matching an EXPLICIT OLLAMA_VISION_MODEL,
+    tolerant of the optional :tag suffix: a bare `qwen2.5vl` matches installed
+    `qwen2.5vl:7b`, while a tagged `qwen2.5vl:7b` matches only that exact tag.
+    The user opting in beats the vision allowlist — a valid vision model we have
+    not hardcoded still resolves. None if the configured model is not installed."""
+    if not cfg:
+        return None
+    cfg = cfg.strip().lower()
+    for name in installed:
+        if name.lower() == cfg:
+            return name  # exact (tagged) match
+    if ":" not in cfg:  # config gave no tag -> match any tag of that base name
+        for name in installed:
+            if name.lower().split(":", 1)[0] == cfg:
+                return name
+    return None
+
+
 class OllamaClient:
     def __init__(
         self,
@@ -208,12 +227,15 @@ class OllamaClient:
             self._vision_model_resolved = ""
             return None
         cfg = self._vision_model_config.strip().lower()
-        # Path 1: explicit name AND installed
+        # Path 1: explicit model that is installed. Tag-tolerant, and the user's
+        # explicit choice beats the allowlist — a valid vision model we have not
+        # hardcoded (a newer/custom one) still resolves. This is the #232 fix for
+        # "no vision-capable models installed" when the user DID configure one.
         if cfg and cfg != "auto":
-            for name in installed:
-                if name.lower() == cfg:
-                    self._vision_model_resolved = name
-                    return name
+            match = _match_configured_model(installed, cfg)
+            if match:
+                self._vision_model_resolved = match
+                return match
         # Path 2: auto-pick first vision-capable installed model
         # Prefer in the order of _VISION_FAMILIES (best-fit first)
         for family in _VISION_FAMILIES:

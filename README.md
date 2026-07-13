@@ -300,6 +300,81 @@ Most setups run one Sonarr, one Radarr, one Bazarr. But some people run **separa
 
 Nothing here is required: if one stack covers you, skip it entirely. Like libraries, multi-instance is additive and existing installs upgrade with zero migration.
 
+## Environment variables
+
+Set only the ones for services you use. subarr reads these at boot; most also become UI-editable after first run, and values you change in the UI persist in `/data/subarr-overrides.json`.
+
+### Connections
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBGEN_URL` | `http://subgen:9000` | subgen (Whisper) endpoint subarr drives. Core. |
+| `BAZARR_URL` / `BAZARR_API_KEY` | `http://bazarr:6767` / — | Bazarr endpoint + key; subarr's gaps/coverage mirrors Bazarr's wanted list. Core. |
+| `SONARR_URL` / `SONARR_API_KEY` | `http://sonarr:8989` / — | Series metadata, original language, mediainfo. |
+| `RADARR_URL` / `RADARR_API_KEY` | `http://radarr:7878` / — | Movie metadata. |
+| `PLEX_URL` / `PLEX_TOKEN` | your Plex URL / — | Targeted library refresh after a sub lands. |
+| `TAUTULLI_URL` / `TAUTULLI_API_KEY` | `http://tautulli:8181` / — | Audio-track hints from your Plex history. |
+| `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint (optional AI features). |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Text model for Ollama tasks. |
+| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Vision model; independent of `OLLAMA_MODEL`. |
+
+### Paths and path mapping
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBARR_MEDIA_ROOT` | `/media/library` | subarr's media root = the Default library. |
+| `SUBGEN_MEDIA_PREFIX` | `/media` | Prefix subgen sees media at (path translation to subgen). |
+| `ARR_PATH_PREFIX` | `/data/Media/` | Prefix Sonarr/Radarr report files under (path translation). |
+| `PLEX_PATH_PREFIX` | — | Prefix Plex sees paths under. Set this if you get "No Plex Section". |
+| `SUBARR_DB_PATH` | `/data/subarr.db` | SQLite DB. Must be on a persistent, local (non-network) volume. |
+
+### Plex
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PLEX_SECTION` | `all` | Fallback section; subarr auto-discovers the right section per path. |
+| `PLEX_PARTIAL_SCAN_ENABLED` | `1` | Targeted per-folder refresh vs full scan. |
+| `PLEX_AUDIO_HINTS` | `0` | Use Plex/Tautulli audio-track picks as an audio-language hint. |
+
+### Feature toggles
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBARR_RETIME_ENABLED` | `1` | Auto re-timing of generated subs for readability. Opt out with `0`. |
+| `SUBARR_VAD_ENABLED` | `1` | silero VAD for speech-aware clip selection. |
+| `SUBARR_FORCED_SEGMENT_ENABLED` | `0` | Experimental forced-segment generation. Off by default. |
+| `SONARR_PROPAGATE_AUDIO_LANG` | `0` | Write verified audio language back to Sonarr. Opt-in. |
+| `SUBARR_SUBGEN_WEBHOOK_ENABLED` | `1` | Accept subgen completion webhooks. |
+| `SUBARR_MULTILANG_CHUNK_MIN_PROB` | `0.5` | Confidence threshold for multilingual audio detection. |
+
+### Auth and security
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBARR_USER` / `SUBARR_PASS` | — | Bootstrap login; otherwise set in the first-run wizard. |
+| `SUBARR_SESSION_SECRET` | auto | Session signing secret; auto-generated and persisted if unset. |
+| `SUBARR_API_KEY` | — | Static API key for programmatic access. |
+| `SUBARR_AUTH_DISABLED` | `0` | Disable auth (trusted LAN / reverse-proxy auth only). |
+| `SUBARR_AUTH_RESET` | `0` | Reset stored credentials on boot. |
+| `SUBARR_CSRF_PROTECTION` | `1` | CSRF protection. |
+| `SUBARR_COOKIE_SAMESITE` | `lax` | Session cookie SameSite policy. |
+| `SUBARR_TRUSTED_PROXIES` | — | Reverse-proxy IPs to trust for the real client IP. |
+| `SUBARR_LOGIN_ALLOWLIST` | — | IP allowlist for login. |
+| `SUBARR_LOGIN_MAX_ATTEMPTS` / `SUBARR_LOGIN_WINDOW_S` | `5` / `300` | Login rate-limit (attempts / window seconds). |
+
+### Server and ops
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBARR_PORT` | `9922` | HTTP port. |
+| `SUBARR_DEBUG` | `0` | Verbose debug logging. |
+| `SUBARR_ARENA_RETENTION_DAYS` | `30` | Tuning-lab arena run retention. |
+| `SUBARR_COVERAGE_REFRESH_MIN_INTERVAL_S` | `120` | Min seconds between coverage rebuilds. |
+| `SUBARR_VAD_DIR` / `SUBARR_LID_DIR` | beside DB | Override VAD / LID model directories. |
+| `NVIDIA_SMI_PATH` | — | Path to `nvidia-smi` for the GPU card. |
+| `SUBGEN_CONTAINER` / `SUBGEN_COMPOSE_PATH` | `subgen` / path | subgen container name + compose path for guided setup. |
+| `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup. |
+
 ## Known limitations (v2.2)
 
 Transparent before you install.

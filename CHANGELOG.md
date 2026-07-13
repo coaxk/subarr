@@ -7,6 +7,20 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-07-14
+
+**Your configuration stops getting lost.** A patch fixing a sporadic config-loss bug, plus two issues reported on the 2.4.0 release thread.
+
+### Fixed
+- **Integrations configured in the setup wizard now survive a restart.** The first-run wizard applied your Sonarr/Radarr/Bazarr/Plex credentials to the running app (so they worked immediately and Test Connection passed) but never wrote them to disk, so on the next container restart they reverted to "unconfigured" and had to be re-entered. The wizard now persists what it configures, below your env vars, like the rest of the settings. (subgen, Ollama and library settings were unaffected because they already persisted through other paths.)
+- **Configuration no longer disappears "from time to time".** The UI settings store (`/data/subarr-overrides.json`) did an unlocked read-modify-write and treated any read hiccup as empty. Two saves landing together could drop each other's keys, and a single transient or corrupt read could overwrite the whole file with just one setting. Saves are now serialised, a save never overwrites a file it could not read (a transient error aborts and retries cleanly; a corrupt file is preserved as `.corrupt-<timestamp>`), and writes are fsynced.
+- **"File is no longer on disk" no longer hides a real subgen error.** A `POST /batch` that subgen answers with 403 Forbidden (or 401/500) was bucketed as "file removed". subarr now surfaces the real status, so a 403 reads as "subgen rejected the request; check its auth or API key, or a reverse proxy in front of subgen", and the actual problem is visible.
+- **An explicit `OLLAMA_VISION_MODEL` is trusted even for a newer model.** Vision capability was decided against a hardcoded list of model families, so a valid vision model you configured yourself could be reported as "no vision-capable models installed". subarr now trusts an explicitly configured, installed model (tag tolerant) regardless of the list. `OLLAMA_MODEL` (text) and `OLLAMA_VISION_MODEL` (vision) remain independent.
+- **`/data` on a network filesystem is now flagged on the Health page.** SQLite over NFS or SMB risks sporadic database corruption, and the warning was previously buried in a single log line. It now appears as a visible Health item advising you to keep `/data` on local disk (media can stay on the NAS).
+
+### Added
+- **A complete environment-variables reference in the README.** Every variable subarr reads, grouped by purpose with defaults, replacing values that were scattered through prose.
+
 ## [2.4.1] - 2026-07-09
 
 **Multi-copy logout fixed, and probe failures now explain themselves.** Two fixes from real-world reports on 2.4.0.

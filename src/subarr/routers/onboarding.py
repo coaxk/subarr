@@ -725,13 +725,27 @@ def _apply_progress_to_settings(progress: dict[str, Any]) -> None:
                 # Settings is a frozen dataclass — plain setattr raises
                 # FrozenInstanceError. object.__setattr__ bypasses the
                 # freeze for this deliberate runtime patch.
-                object.__setattr__(settings, settings_attr, coerce(progress[src_key]))
+                value = coerce(progress[src_key])
+                object.__setattr__(settings, settings_attr, value)
                 if settings_attr in LIBRARY_DEFINING_FIELDS:
                     libs_dirty = True
                 if settings_attr in INSTANCE_DEFINING_FIELDS:
                     instances_dirty = True
             except Exception as e:
                 log.warning("settings flush: %s=%r failed: %s", settings_attr, progress[src_key], e)
+                continue
+            # Config-loss fix (field report): persist the wizard value below env so
+            # a UI-configured integration survives a restart. The original only
+            # patched the running Settings (the v1.0 docstring above assumed the
+            # operator would pin env vars), so wizard-only users silently lost
+            # their arr/plex/bazarr creds on the next container recreate. SEPARATE
+            # + best-effort: a persist failure must NEVER undo the live apply above.
+            try:
+                from .. import config_store
+
+                config_store.save_override(settings_attr, value)
+            except Exception as e:
+                log.warning("settings persist: %s failed: %s", settings_attr, e)
 
     # #285: a flushed media_root / arr_path_prefix changes the scalars
     # libraries[0] is derived from — re-derive the library list so path

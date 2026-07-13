@@ -156,3 +156,29 @@ async def test_reset_vision_cache_after_pull():
 def test_families_default_preference():
     assert len(_VISION_FAMILIES) >= 5
     assert _VISION_FAMILIES[0] == "qwen2.5vl"
+
+
+# --- #232 field fix (r/Softwarr bm256i #4): explicit vision model not in the
+# --- allowlist, or with a bare (untagged) name, must still resolve ---
+@pytest.mark.asyncio
+async def test_resolve_trusts_explicit_non_allowlist_model():
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="mistral-small3.1")
+    c.installed_models = AsyncMock(return_value=["qwen2.5:7b", "mistral-small3.1:latest"])
+    assert await c.resolve_vision_model() == "mistral-small3.1:latest"
+
+
+@pytest.mark.asyncio
+async def test_resolve_explicit_bare_name_matches_tagged_install():
+    c = OllamaClient(base_url="http://ollama:11434", model="qwen2.5:7b", vision_model="qwen2.5vl")
+    c.installed_models = AsyncMock(return_value=["qwen2.5vl:7b"])
+    assert await c.resolve_vision_model() == "qwen2.5vl:7b"
+
+
+def test_match_configured_model_tag_tolerance():
+    from subarr.integrations.ollama import _match_configured_model
+
+    inst = ["qwen2.5:7b", "myvision:q4"]
+    assert _match_configured_model(inst, "myvision") == "myvision:q4"  # bare -> any tag
+    assert _match_configured_model(inst, "myvision:q4") == "myvision:q4"  # exact
+    assert _match_configured_model(inst, "myvision:8b") is None  # tagged, wrong tag
+    assert _match_configured_model(inst, "absent") is None

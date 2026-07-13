@@ -25,6 +25,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 TASK_NAME = "data-persistence"
+NETWORK_FS_TASK = "data-network-fs"
 
 # Filesystem types where WAL mode is a known corruption vector.
 _NETWORK_FS_TYPES = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.glusterfs", "fuse.rclone"}
@@ -102,6 +103,35 @@ def data_dir_is_ephemeral(db_path: Path) -> bool | None:
         return os.stat(data_dir).st_dev == os.stat("/").st_dev
     except Exception:
         return None
+
+
+def check_network_fs(db_path: Path, health) -> str | None:
+    """Surface a network-FS `/data` on the Health page (not just a log line):
+    SQLite over NFS/SMB is a corruption vector that sporadically loses history +
+    verifications, which is easy to miss buried in logs. Returns the fstype (or
+    None). Never raises — best-effort, boot continues."""
+    fstype = data_dir_network_fs(db_path)
+    try:
+        health.register(NETWORK_FS_TASK, expected_interval_s=None)
+        if fstype:
+            from .db_integrity import DatabaseCorruptionError  # reuse a loud, visible error type
+
+            err = DatabaseCorruptionError(
+                f"/data is on a {fstype} network filesystem. SQLite over NFS/SMB/CIFS risks "
+                f"sporadic database corruption — history, verifications and config can be lost. "
+                f"Mount a LOCAL-disk volume at /data (keep media on the NAS, keep /data local)."
+            )
+            health.record_failure(NETWORK_FS_TASK, err, expected_interval_s=None)
+            log.error(
+                "DATA NETWORK-FS WARNING: /data is on a %s filesystem — SQLite over a network FS "
+                "risks corruption. Mount a local-disk volume at /data.",
+                fstype,
+            )
+        else:
+            health.record_success(NETWORK_FS_TASK, expected_interval_s=None)
+    except Exception:
+        log.debug("network-fs health record failed", exc_info=True)
+    return fstype
 
 
 def check_data_persistence(db_path: Path, health) -> bool | None:

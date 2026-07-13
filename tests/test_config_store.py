@@ -30,6 +30,73 @@ def test_corrupt_store_is_ignored(tmp_path, monkeypatch):
     assert cs.load_overrides() == {}  # never raises on a garbage file
 
 
+def test_concurrent_saves_do_not_lose_keys(tmp_path, monkeypatch):
+    # The data-loss bug: unlocked read-modify-write lets two concurrent saves each
+    # read the file and write back a dict missing the other's key.
+    import threading
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    n = 40
+    barrier = threading.Barrier(n)
+
+    def worker(i):
+        barrier.wait()  # maximize contention
+        cs.save_override(f"k{i}", i)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert cs.load_overrides() == {f"k{i}": i for i in range(n)}  # nothing lost
+
+
+def test_save_does_not_clobber_present_but_unreadable_file(tmp_path, monkeypatch):
+    import pytest
+
+    p = tmp_path / "ov.json"
+    p.write_text('{"sonarr_api_key": "keep-me", "bazarr_url": "http://b"}', encoding="utf-8")
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(p))
+    from subarr import config_store as cs
+
+    real_read = cs.Path.read_text
+
+    def boom(self, *a, **k):
+        if self.name == "ov.json":
+            raise OSError("stale NFS handle")  # transient read failure
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(cs.Path, "read_text", boom)
+    with pytest.raises(cs.ConfigStoreError):
+        cs.save_override("subgen_url", "http://s")  # must abort, not overwrite
+    monkeypatch.setattr(cs.Path, "read_text", real_read)  # restore reads, keep the env override
+    # the existing config survived untouched
+    assert cs.load_overrides() == {"sonarr_api_key": "keep-me", "bazarr_url": "http://b"}
+
+
+def test_corrupt_file_is_preserved_not_discarded(tmp_path, monkeypatch):
+    p = tmp_path / "ov.json"
+    p.write_text("{ garbage not json", encoding="utf-8")
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(p))
+    from subarr import config_store as cs
+
+    assert cs.load_overrides() == {}  # still fail-soft
+    backups = list(tmp_path.glob("ov.json.corrupt-*"))
+    assert len(backups) == 1 and "garbage" in backups[0].read_text("utf-8")
+
+
+def test_write_is_fsynced(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    calls = []
+    monkeypatch.setattr(cs.os, "fsync", lambda fd: calls.append(fd))
+    cs.save_override("k", 1)
+    assert calls  # fsynced before the atomic replace
+
+
 def test_file_override_applies_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
     monkeypatch.delenv("SUBARR_VAD_ENABLED", raising=False)
@@ -112,3 +179,55 @@ def test_credential_flush_rebuilds_instances(subarr_env, monkeypatch):
     inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
     assert inst0.url == "http://newsonarr:8989"
     assert inst0.api_key == "newkey"
+
+
+def test_wizard_persists_credentials_across_restart(subarr_env, monkeypatch, tmp_path):
+    # The config-loss bug (field report): the setup wizard applied credentials to
+    # the running Settings so they worked live, but never persisted them, so they
+    # vanished on the next restart. The wizard must write them to the store too.
+    import importlib
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    for v in ("SONARR_URL", "SONARR_API_KEY", "BAZARR_URL", "BAZARR_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    from subarr import config
+    from subarr import config_store as cs
+
+    importlib.reload(config)
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings(
+        {
+            "sonarr_url": "http://newsonarr:8989",
+            "sonarr_api_key": "sk",
+            "bazarr_url": "http://newbazarr:6767",
+            "bazarr_api_key": "bk",
+        }
+    )
+    ov = cs.load_overrides()
+    assert ov.get("sonarr_url") == "http://newsonarr:8989"
+    assert ov.get("sonarr_api_key") == "sk"
+    assert ov.get("bazarr_url") == "http://newbazarr:6767"
+    assert ov.get("bazarr_api_key") == "bk"
+
+
+def test_wizard_persist_failure_does_not_undo_live_apply(subarr_env, monkeypatch, tmp_path):
+    # Regression: persist is best-effort and SEPARATE from the live apply — a
+    # save_override failure must never prevent the wizard's in-memory apply or
+    # the instance/library rebuild.
+    import importlib
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.delenv("SONARR_URL", raising=False)
+    monkeypatch.delenv("SONARR_API_KEY", raising=False)
+    from subarr import config
+    from subarr import config_store as cs
+
+    importlib.reload(config)
+    monkeypatch.setattr(cs, "save_override", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    from subarr.routers.onboarding import _apply_progress_to_settings
+
+    _apply_progress_to_settings({"sonarr_url": "http://s:8989", "sonarr_api_key": "k"})
+    assert config.settings.sonarr_url == "http://s:8989"  # live apply survived
+    inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
+    assert inst0.url == "http://s:8989"  # rebuild ran despite the persist failure

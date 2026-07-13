@@ -119,6 +119,11 @@ async def vision_status(request: Request) -> dict[str, Any]:
     ollama.reset_vision_cache()
     resolved = await ollama.resolve_vision_model()
     vision_caps = [m for m in installed if any(m.lower().startswith(f) for f in _VISION_FAMILIES)]
+    # An explicitly-configured, installed vision model counts even if it is not
+    # in the allowlist (user opt-in) — otherwise the UI wrongly says "no
+    # vision-capable models installed" for a perfectly good newer model.
+    if resolved and resolved not in vision_caps:
+        vision_caps.append(resolved)
     return {
         "ollama_configured": True,
         "vision_model_config": ollama.vision_model_config,
