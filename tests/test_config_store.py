@@ -30,6 +30,73 @@ def test_corrupt_store_is_ignored(tmp_path, monkeypatch):
     assert cs.load_overrides() == {}  # never raises on a garbage file
 
 
+def test_concurrent_saves_do_not_lose_keys(tmp_path, monkeypatch):
+    # The data-loss bug: unlocked read-modify-write lets two concurrent saves each
+    # read the file and write back a dict missing the other's key.
+    import threading
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    n = 40
+    barrier = threading.Barrier(n)
+
+    def worker(i):
+        barrier.wait()  # maximize contention
+        cs.save_override(f"k{i}", i)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert cs.load_overrides() == {f"k{i}": i for i in range(n)}  # nothing lost
+
+
+def test_save_does_not_clobber_present_but_unreadable_file(tmp_path, monkeypatch):
+    import pytest
+
+    p = tmp_path / "ov.json"
+    p.write_text('{"sonarr_api_key": "keep-me", "bazarr_url": "http://b"}', encoding="utf-8")
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(p))
+    from subarr import config_store as cs
+
+    real_read = cs.Path.read_text
+
+    def boom(self, *a, **k):
+        if self.name == "ov.json":
+            raise OSError("stale NFS handle")  # transient read failure
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(cs.Path, "read_text", boom)
+    with pytest.raises(cs.ConfigStoreError):
+        cs.save_override("subgen_url", "http://s")  # must abort, not overwrite
+    monkeypatch.setattr(cs.Path, "read_text", real_read)  # restore reads, keep the env override
+    # the existing config survived untouched
+    assert cs.load_overrides() == {"sonarr_api_key": "keep-me", "bazarr_url": "http://b"}
+
+
+def test_corrupt_file_is_preserved_not_discarded(tmp_path, monkeypatch):
+    p = tmp_path / "ov.json"
+    p.write_text("{ garbage not json", encoding="utf-8")
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(p))
+    from subarr import config_store as cs
+
+    assert cs.load_overrides() == {}  # still fail-soft
+    backups = list(tmp_path.glob("ov.json.corrupt-*"))
+    assert len(backups) == 1 and "garbage" in backups[0].read_text("utf-8")
+
+
+def test_write_is_fsynced(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    calls = []
+    monkeypatch.setattr(cs.os, "fsync", lambda fd: calls.append(fd))
+    cs.save_override("k", 1)
+    assert calls  # fsynced before the atomic replace
+
+
 def test_file_override_applies_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
     monkeypatch.delenv("SUBARR_VAD_ENABLED", raising=False)
