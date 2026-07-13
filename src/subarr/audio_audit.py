@@ -306,6 +306,7 @@ class AudioAuditWalker:
             n_total=det.get("n_total"),
             mtime=mtime,
             track_languages=track_langs,
+            chunks_conf=(detect or {}).get("chunks_conf"),
         )
         if status in ("mislabel", "bilingual", "multitrack", "multilingual"):
             state.found += 1
