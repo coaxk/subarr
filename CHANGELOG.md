@@ -7,7 +7,7 @@ breaking config changes.
 
 ## [Unreleased]
 
-## [2.4.2] - 2026-07-13
+## [2.4.2] - 2026-07-14
 
 **Your configuration stops getting lost.** A patch fixing a sporadic config-loss bug, plus two issues reported on the 2.4.0 release thread.
 
