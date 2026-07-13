@@ -8,10 +8,28 @@ GET  /api/forced-segment         progress + scan-cache summary
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from .. import config, config_store, vad
 
 router = APIRouter(prefix="/api/forced-segment", tags=["forced-segment"])
 
 _SCOPES = ("coverage", "library")
+
+
+class ForcedSegmentConfig(BaseModel):
+    enabled: bool
+
+
+def _toggle_status() -> dict:
+    """What the Settings UI needs to render the toggle: is it switched on,
+    is it operator-pinned via env (locked in the UI), and is the VAD
+    hard-prerequisite available."""
+    return {
+        "enabled": bool(getattr(config.settings, "forced_segment_enabled", False)),
+        "env_controlled": config.env_is_set("forced_segment_enabled"),
+        "vad_available": vad.vad_available(),
+    }
 
 
 @router.post("/start", status_code=202)
@@ -48,4 +66,17 @@ async def get_scan(request: Request) -> dict:
     return {
         "state": state.to_dict() if state is not None else None,
         "summary": store.summary() if store is not None else {},
+        **_toggle_status(),
     }
+
+
+@router.post("/config")
+def set_config(body: ForcedSegmentConfig) -> dict:
+    """Persist the enable/disable choice (survives restart via #112) and patch
+    the running Settings so it takes effect immediately. If the operator pinned
+    SUBARR_FORCED_SEGMENT_ENABLED, env stays authoritative live (we still
+    persist the preference, but env wins on reload)."""
+    config_store.save_override("forced_segment_enabled", body.enabled)
+    if not config.env_is_set("forced_segment_enabled"):
+        object.__setattr__(config.settings, "forced_segment_enabled", body.enabled)
+    return _toggle_status()

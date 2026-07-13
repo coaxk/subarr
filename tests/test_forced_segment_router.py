@@ -36,3 +36,51 @@ def test_app_registers_forced_segment_roster_and_walker(app_with_stub):
     assert getattr(app.state, "forced_segment_store", None) is not None
     assert getattr(app.state, "forced_segment_gen", None) is not None
     assert app.state.watcher._forced_segment is app.state.forced_segment_gen
+
+
+def test_get_forced_segment_exposes_toggle_fields(app_with_stub):
+    body = app_with_stub.get("/api/forced-segment").json()
+    assert {"enabled", "env_controlled", "vad_available"} <= body.keys()
+    assert "state" in body and "summary" in body
+    assert isinstance(body["vad_available"], bool)
+
+
+def test_config_toggle_persists_and_live_applies(app_with_stub, tmp_path, monkeypatch):
+    from subarr import config, config_store as cs
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.delenv("SUBARR_FORCED_SEGMENT_ENABLED", raising=False)
+    prior = config.settings.forced_segment_enabled
+    try:
+        r = app_with_stub.post("/api/forced-segment/config", json={"enabled": True})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["enabled"] is True
+        assert body["env_controlled"] is False
+        assert config.settings.forced_segment_enabled is True
+        assert cs.load_overrides().get("forced_segment_enabled") is True
+    finally:
+        object.__setattr__(config.settings, "forced_segment_enabled", prior)
+
+
+def test_config_toggle_env_pinned_persists_but_env_wins(app_with_stub, tmp_path, monkeypatch):
+    from subarr import config, config_store as cs
+
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.setenv("SUBARR_FORCED_SEGMENT_ENABLED", "0")
+    prior = config.settings.forced_segment_enabled
+    try:
+        r = app_with_stub.post("/api/forced-segment/config", json={"enabled": True})
+        assert r.status_code == 200
+        assert r.json()["env_controlled"] is True
+        assert config.settings.forced_segment_enabled == prior
+        assert cs.load_overrides().get("forced_segment_enabled") is True
+    finally:
+        object.__setattr__(config.settings, "forced_segment_enabled", prior)
+
+
+def test_get_vad_available_reflects_vad(app_with_stub, monkeypatch):
+    from subarr import vad
+
+    monkeypatch.setattr(vad, "vad_available", lambda: True)
+    assert app_with_stub.get("/api/forced-segment").json()["vad_available"] is True
