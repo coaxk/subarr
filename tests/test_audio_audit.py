@@ -79,6 +79,41 @@ def test_upsert_roundtrips_track_languages(tmp_path):
     assert s.get("TV/X/a.mkv").to_dict()["track_languages"] == []
 
 
+def test_upsert_round_trips_chunks_conf(tmp_path):
+    s = _store(tmp_path)
+    s.upsert(
+        canonical_path="lib::/a.mkv",
+        tag_lang="en",
+        detected_lang="gl",
+        status="multilingual",
+        languages_heard=["gl", "es"],
+        n_agreeing=2,
+        n_total=3,
+        mtime=1.0,
+        track_languages=None,
+        chunks_conf=[("gl", 0.94), ("es", 0.88), ("fr", 0.71)],
+    )
+    f = s.get("lib::/a.mkv")
+    assert f.chunks_conf == [["gl", 0.94], ["es", 0.88], ["fr", 0.71]]  # JSON round-trip -> lists
+    assert f.to_dict()["chunks_conf"] == [["gl", 0.94], ["es", 0.88], ["fr", 0.71]]
+
+
+def test_chunks_conf_defaults_to_none_when_absent(tmp_path):
+    s = _store(tmp_path)
+    s.upsert(
+        canonical_path="lib::/b.mkv",
+        tag_lang="en",
+        detected_lang="en",
+        status="agrees",
+        languages_heard=["en"],
+        n_agreeing=3,
+        n_total=3,
+        mtime=1.0,
+        track_languages=None,
+    )
+    assert s.get("lib::/b.mkv").chunks_conf is None
+
+
 def test_upsert_replaces_existing(tmp_path):
     s = _store(tmp_path)
     s.upsert(
