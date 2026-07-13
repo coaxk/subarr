@@ -83,3 +83,45 @@ def test_scan_flows_through_feeder_to_subgen(app_with_stub):
 
 def test_scan_status_unknown_returns_404(app_with_stub):
     assert app_with_stub.get("/api/scan/does-not-exist").status_code == 404
+
+
+# --- subgen /batch outcome classification (bug #2: 403 misreported as file-removed) ---
+def test_batch_403_is_auth_error_not_file_removed():
+    from subarr.scan_runner import classify_batch_outcome
+    from subarr.scan_store import PATH_STATUS_ERROR
+
+    status, err = classify_batch_outcome(403, {})
+    assert status == PATH_STATUS_ERROR
+    assert "403" in err and "subgen" in err.lower()
+
+
+def test_batch_401_is_auth_error():
+    from subarr.scan_runner import classify_batch_outcome
+    from subarr.scan_store import PATH_STATUS_ERROR
+
+    status, _ = classify_batch_outcome(401, {})
+    assert status == PATH_STATUS_ERROR
+
+
+def test_batch_200_walked_zero_is_empty():
+    from subarr.scan_runner import classify_batch_outcome
+    from subarr.scan_store import PATH_STATUS_EMPTY
+
+    status, err = classify_batch_outcome(200, {"walked": 0, "queued": 0})
+    assert status == PATH_STATUS_EMPTY and err == ""
+
+
+def test_batch_500_is_error_not_empty():
+    from subarr.scan_runner import classify_batch_outcome
+    from subarr.scan_store import PATH_STATUS_ERROR
+
+    status, err = classify_batch_outcome(500, {})
+    assert status == PATH_STATUS_ERROR and "500" in err
+
+
+def test_batch_200_queued_is_ok():
+    from subarr.scan_runner import classify_batch_outcome
+    from subarr.scan_store import PATH_STATUS_OK
+
+    status, _ = classify_batch_outcome(200, {"walked": 3, "queued": 2})
+    assert status == PATH_STATUS_OK

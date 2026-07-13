@@ -33,6 +33,52 @@ from .subgen_client import SubgenCapabilities, SubgenClient, SubgenUnavailable
 log = logging.getLogger(__name__)
 
 
+def classify_batch_outcome(status_code: int, body) -> "tuple[str, str]":
+    """Map a subgen POST /batch (status_code, body) to (path_status, error).
+
+    A non-200 response carries no `walked` field, so the old `walked == 0`
+    catch-all mislabeled auth/permission failures (401/403) and server errors
+    (500) as "file removed / no longer on disk". EMPTY now requires a genuine
+    200-walked-nothing (or a 404 for the path); 401/403 surface as an auth error
+    that tells the user subgen rejected the write; any other non-200 is an error.
+    """
+    walked = body.get("walked", 0) if isinstance(body, dict) else 0
+    queued = body.get("queued", 0) if isinstance(body, dict) else 0
+    skipped = body.get("skipped", 0) if isinstance(body, dict) else 0
+    already_q = body.get("already_in_queue", 0) if isinstance(body, dict) else 0
+    if status_code == 200 and walked > 0 and queued > 0:
+        return PATH_STATUS_OK, ""
+    if status_code == 200 and walked > 0 and queued == 0 and skipped > 0:
+        # Subgen walked but skipped everything (target sub exists, audio-lang
+        # match, or another should_skip branch). NOT an error; /batch gives a
+        # single counter without per-file reasons (queue.py infers where it can).
+        reasons = []
+        if skipped:
+            reasons.append(
+                f"subgen skipped {skipped} — reason not in /batch response "
+                f"(target sub exists, audio-lang match, or other skip rule). "
+                f"See subgen logs for the per-file reason; queue.py infers "
+                f"sub_exists vs audio_lang where possible."
+            )
+        if already_q:
+            reasons.append(f"{already_q} already in queue")
+        if body.get("no_audio", 0):
+            reasons.append(f"{body.get('no_audio', 0)} no audio")
+        if body.get("pending_language_detect", 0):
+            reasons.append(f"{body.get('pending_language_detect', 0)} pending lang detect")
+        return PATH_STATUS_SKIPPED, ("; ".join(reasons) if reasons else "skipped")
+    if status_code == 200 and walked > 0 and queued == 0 and already_q > 0:
+        return PATH_STATUS_OK, ""  # already in subgen's queue — it'll process
+    if status_code in (401, 403):
+        return PATH_STATUS_ERROR, (
+            f"subgen rejected POST /batch ({status_code}) — check subgen auth / API key, "
+            f"or a reverse proxy in front of subgen blocking write requests"
+        )
+    if status_code == 404 or (status_code == 200 and walked == 0):
+        return PATH_STATUS_EMPTY, ""  # subgen walked and found nothing = file gone
+    return PATH_STATUS_ERROR, f"unexpected subgen response: {status_code}"
+
+
 class CompatModeError(RuntimeError):
     """The detected subgen build doesn't support a capability subarr's
     scan flow needs. Surfaces a clear UI message instead of a vague
@@ -200,57 +246,9 @@ class ScanRunner:
                 )
                 result.subgen_status_code = status_code
                 result.subgen_body = body
-                walked = body.get("walked", 0) if isinstance(body, dict) else 0
-                queued = body.get("queued", 0) if isinstance(body, dict) else 0
-                skipped = body.get("skipped", 0) if isinstance(body, dict) else 0
-                if status_code == 200 and walked > 0 and queued > 0:
-                    result.status = PATH_STATUS_OK
-                elif status_code == 200 and walked > 0 and queued == 0 and skipped > 0:
-                    # Subgen walked the path but skipped everything — could be
-                    # SKIP_IF_TARGET_SUBTITLES_EXIST (embedded sub already
-                    # present), SKIP_IF_AUDIO_LANGUAGES match, or one of the
-                    # other should_skip_file branches. NOT an error.
-                    #
-                    # GAP: subgen's /batch returns a single "skipped" counter
-                    # without per-file reasons. The actual cause is only in
-                    # subgen's logs. queue.py does a filesystem heuristic to
-                    # promote "unknown" → "sub_exists" when an .srt sits next
-                    # to the file; everything else stays "unknown" (likely
-                    # audio_lang). A subgen-side patch to emit a per-reason
-                    # count would close this — see _path_outcome_chip docstring.
-                    result.status = PATH_STATUS_SKIPPED
-                    reasons = []
-                    pending_detect = body.get("pending_language_detect", 0)
-                    already_q = body.get("already_in_queue", 0)
-                    no_audio = body.get("no_audio", 0)
-                    if skipped:
-                        reasons.append(
-                            f"subgen skipped {skipped} — reason not in /batch "
-                            f"response (target sub exists, audio-lang match, "
-                            f"or other skip rule). See subgen logs for the "
-                            f"per-file reason; queue.py infers sub_exists "
-                            f"vs audio_lang where possible."
-                        )
-                    if already_q:
-                        reasons.append(f"{already_q} already in queue")
-                    if no_audio:
-                        reasons.append(f"{no_audio} no audio")
-                    if pending_detect:
-                        reasons.append(f"{pending_detect} pending lang detect")
-                    result.error = "; ".join(reasons) if reasons else "skipped"
-                elif (
-                    status_code == 200
-                    and walked > 0
-                    and queued == 0
-                    and (body.get("already_in_queue", 0) > 0)
-                ):
-                    # Already in subgen's queue — treat as OK; it'll process.
-                    result.status = PATH_STATUS_OK
-                elif status_code == 404 or walked == 0:
-                    result.status = PATH_STATUS_EMPTY
-                else:
-                    result.status = PATH_STATUS_ERROR
-                    result.error = f"unexpected subgen response: {status_code}"
+                result.status, _batch_err = classify_batch_outcome(status_code, body)
+                if _batch_err:
+                    result.error = _batch_err
             except SubgenUnavailable as e:
                 result.status = PATH_STATUS_ERROR
                 result.error = str(e)
