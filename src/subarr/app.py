@@ -363,18 +363,11 @@ async def lifespan(app_: FastAPI):
     # all verifications/intents lost + a fresh telemetry id). Verdict cached
     # for the telemetry data_persistent signal. None = unknown (not a container).
     app_.state.data_persistent = check_data_persistence(settings.db_path, app_.state.task_health)
-    # #291: advisory warning — WAL over NFS/SMB risks corruption; log only,
-    # not a hard failure (the setup may be fine, e.g. NFS with local locking).
-    from .data_persistence import data_dir_network_fs
+    # #291: /data on a network FS (NFS/SMB) risks SQLite corruption — surface it
+    # on the Health page (not just a log line), where users actually see it.
+    from .data_persistence import check_network_fs
 
-    _net_fs = data_dir_network_fs(settings.db_path)
-    if _net_fs is not None:
-        log.warning(
-            "NFS/network-FS WARNING: /data is on a %s filesystem. "
-            "SQLite WAL mode over network filesystems risks corruption. "
-            "Recommend mounting a local-disk volume at /data.",
-            _net_fs,
-        )
+    app_.state.data_network_fs = check_network_fs(settings.db_path, app_.state.task_health)
     # #204: exactly one subarr process per database. The handle must live on
     # app.state — the flock dies with it. Second worker / second container on
     # the same /data → red Health task + loud log (we warn, never brick boot).

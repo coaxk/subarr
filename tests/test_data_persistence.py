@@ -114,3 +114,32 @@ def test_install_age_grows_with_created_at(subarr_env, tmp_path):
     conn.close()
     age = col.build_payload().to_dict()["install_age_days"]
     assert 9.5 <= age <= 10.5
+
+
+def test_check_network_fs_records_failure_when_network(subarr_env, tmp_path, monkeypatch):
+    from subarr import data_persistence
+    from subarr.migrate import run_migrations
+    from subarr.task_health import TaskHealthStore
+
+    db = tmp_path / "h.db"
+    run_migrations(db)
+    health = TaskHealthStore(db)
+    monkeypatch.setattr(data_persistence, "data_dir_network_fs", lambda p: "nfs4")
+    assert data_persistence.check_network_fs(db, health) == "nfs4"
+    states = {s.task_name: s for s in health.states()}
+    assert states["data-network-fs"].last_error_type is not None
+
+
+def test_check_network_fs_success_when_local(subarr_env, tmp_path, monkeypatch):
+    from subarr import data_persistence
+    from subarr.migrate import run_migrations
+    from subarr.task_health import TaskHealthStore
+
+    db = tmp_path / "h.db"
+    run_migrations(db)
+    health = TaskHealthStore(db)
+    monkeypatch.setattr(data_persistence, "data_dir_network_fs", lambda p: None)
+    assert data_persistence.check_network_fs(db, health) is None
+    states = {s.task_name: s for s in health.states()}
+    assert states["data-network-fs"].last_success_at is not None
+    assert states["data-network-fs"].last_error_type is None
