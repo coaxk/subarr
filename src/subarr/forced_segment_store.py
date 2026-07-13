@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
+
 
 @dataclass(frozen=True)
 class ForcedSegmentScan:
@@ -41,7 +43,7 @@ class ForcedSegmentScanStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
 

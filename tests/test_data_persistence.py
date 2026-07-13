@@ -143,3 +143,31 @@ def test_check_network_fs_success_when_local(subarr_env, tmp_path, monkeypatch):
     states = {s.task_name: s for s in health.states()}
     assert states["data-network-fs"].last_success_at is not None
     assert states["data-network-fs"].last_error_type is None
+
+
+def test_apply_journal_mode_wal_on_local(monkeypatch):
+    from subarr import data_persistence
+
+    monkeypatch.setattr(data_persistence, "data_dir_network_fs", lambda p: None)
+    calls = []
+
+    class _C:
+        def execute(self, sql):
+            calls.append(sql)
+
+    assert data_persistence.apply_journal_mode(_C(), "/data/x.db") == "WAL"
+    assert calls == ["PRAGMA journal_mode=WAL"]
+
+
+def test_apply_journal_mode_truncate_on_network(monkeypatch):
+    from subarr import data_persistence
+
+    monkeypatch.setattr(data_persistence, "data_dir_network_fs", lambda p: "nfs4")
+    calls = []
+
+    class _C:
+        def execute(self, sql):
+            calls.append(sql)
+
+    assert data_persistence.apply_journal_mode(_C(), "/mnt/nas/x.db") == "TRUNCATE"
+    assert calls == ["PRAGMA journal_mode=TRUNCATE"]

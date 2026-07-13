@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
 from .media_probe import AudioStream, ProbeResult, SubtitleStream
 
 
@@ -33,7 +34,7 @@ class ProbeStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
 
     def close(self) -> None:

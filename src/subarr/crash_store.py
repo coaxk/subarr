@@ -19,6 +19,8 @@ import threading
 import time
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
+
 log = logging.getLogger(__name__)
 
 # Worker contract: object keys are validated strings, max 64 chars, max 64
@@ -67,7 +69,7 @@ class CrashStore:
     def _connect(self) -> sqlite3.Connection:
         # #291: WAL is persistent but re-issue so this store is boot-order-independent.
         conn = sqlite3.connect(str(self._path), isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(conn, self._path)
         return conn
 
     def record(self, exc: BaseException, when: float | None = None) -> None:

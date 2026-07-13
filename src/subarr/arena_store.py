@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .data_persistence import apply_journal_mode
+
 log = logging.getLogger(__name__)
 
 # [#146] How many distinct *real* spoken languages a recipe must have data in
@@ -133,7 +135,7 @@ class ArenaStore:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._lock = threading.Lock()
 
     def save(self, run: ArenaRun) -> None:

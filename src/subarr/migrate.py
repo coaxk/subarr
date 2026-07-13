@@ -37,6 +37,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
+
 log = logging.getLogger(__name__)
 
 
@@ -73,8 +75,8 @@ class MigrationRunner:
             conn.execute(
                 "PRAGMA busy_timeout=5000"
             )  # #291: a concurrent migrator (dev --reload) WAITS for the lock instead of erroring "database is locked"
-            conn.execute(
-                "PRAGMA journal_mode=WAL"
+            apply_journal_mode(
+                conn, self._db_path
             )  # #291 NIT: we rely on WAL's default synchronous=NORMAL — do NOT set synchronous=OFF (permits corruption on power loss)
             conn.execute("PRAGMA foreign_keys=ON")
             self._ensure_version_table(conn)

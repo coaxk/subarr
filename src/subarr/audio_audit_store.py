@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .data_persistence import apply_journal_mode
+
 # The actionable buckets — the ones a user can do something about. `agrees`
 # (tag matches what was heard), `confused` (Whisper couldn't agree with itself),
 # and `undetermined` (no detection) are informational, not surfaced as findings.
@@ -62,7 +64,7 @@ class AudioAuditStore:
             check_same_thread=False,
             isolation_level=None,
         )
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        apply_journal_mode(self._conn, db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
 
