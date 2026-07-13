@@ -1423,6 +1423,23 @@ function OllamaVisionCard() {
 }
 
 
+// #364 forced-segment toggle: pure render-decision helper (unit-tested).
+export function deriveForcedSegmentToggle(status) {
+  const s = status || {};
+  const envLocked = !!s.env_controlled;
+  return {
+    checked: !!s.enabled,
+    disabled: envLocked,
+    hint: envLocked
+      ? 'Locked by SUBARR_FORCED_SEGMENT_ENABLED (env wins)'
+      : 'Persists across restarts',
+    warning: s.enabled && s.vad_available === false
+      ? 'Requires the speech-detection (VAD) model — enable Speech-aware audio above first, or scans will find nothing.'
+      : null,
+  };
+}
+
+
 // #111 speech-aware audio (silero VAD). Polls /api/vad/status; the enable
 // toggle persists via /api/vad/config (#112 config layer), and the ~2MB
 // model is pulled on demand via /api/vad/pull-model. When off or
@@ -1526,6 +1543,67 @@ function SpeechAudioCard() {
       )}
       {pull?.error && <div style={{ padding: 10, color: '#ef4444', fontSize: 'var(--text-sm)' }}>Download failed: {pull.error}</div>}
       {pull?.done && <div style={{ padding: 10, color: '#22c55e', fontSize: 'var(--text-sm)' }}>Model ready — speech detection active.</div>}
+    </SectionCard>
+  );
+}
+
+
+// #364 forced-segment deep-scan enable toggle. Polls /api/forced-segment; the
+// switch persists via /api/forced-segment/config (#112 layer) and live-applies
+// unless env-pinned. VAD is a hard prerequisite (warn-but-allow).
+function ForcedSegmentCard() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const refetch = async () => {
+    try {
+      const r = await fetch('/api/forced-segment', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setStatus(await r.json());
+    } catch (e) { setStatus({ error: e.message }); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { refetch(); }, []);
+
+  const view = deriveForcedSegmentToggle(status);
+
+  const toggle = async () => {
+    if (!status || view.disabled || busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch('/api/forced-segment/config', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !status.enabled }),
+      });
+      if (r.ok) {
+        const next = await r.json();
+        setStatus((prev) => ({ ...prev, ...next }));
+      }
+    } finally { setBusy(false); }
+  };
+
+  const muted = { fontSize: 'var(--text-sm)', color: 'var(--fg-2)' };
+  if (loading) return <SectionCard label="Foreign-scene deep-scan"><div style={muted}>Checking…</div></SectionCard>;
+  if (status?.error) return <SectionCard label="Foreign-scene deep-scan"><div style={muted}>Could not query: {status.error}</div></SectionCard>;
+
+  return (
+    <SectionCard label="Foreign-scene deep-scan" action={<button className="btn sm" onClick={refetch}>Refresh</button>}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+        Deep-scans your English media for short foreign-language scenes and writes a scoped
+        <code> .forced.en.srt</code> covering just those scenes. GPU-spending and opt-in — off by
+        default.
+      </div>
+      <Row label="Enabled" hint={view.hint}
+        control={<Toggle on={view.checked} busy={busy || view.disabled} onToggle={toggle} />} />
+      {view.warning && (
+        <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.20)', borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+          {view.warning}
+        </div>
+      )}
     </SectionCard>
   );
 }
@@ -1757,6 +1835,7 @@ function SystemPanel() {
       </SectionCard>
 
       <SpeechAudioCard />
+      <ForcedSegmentCard />
 
       <SectionCard label="Onboarding">
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
