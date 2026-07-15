@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
@@ -28,6 +30,7 @@ import httpx
 from subarr import config, lid
 from subarr.forced_segment import assemble_windows, clip_audio, detect_utterances
 from subarr.forced_segment_lid import _read_wav_f32
+from subarr.paths import PathOutsideRootError, canonical_to_fs
 from subarr.lid_tune import (
     conf_grid,
     en_grid,
@@ -37,31 +40,6 @@ from subarr.lid_tune import (
     sweep,
 )
 
-# Sonarr originalLanguage name -> acceptable audio-track ISO tag variants
-# (iso639-2/B, iso639-2/T, and iso639-1). English is the negative class.
-LANG_TAGS: dict[str, set[str]] = {
-    "english": {"eng", "en"},
-    "french": {"fre", "fra", "fr"},
-    "spanish": {"spa", "es"},
-    "italian": {"ita", "it"},
-    "german": {"ger", "deu", "de"},
-    "polish": {"pol", "pl"},
-    "dutch": {"dut", "nld", "nl"},
-    "danish": {"dan", "da"},
-    "swedish": {"swe", "sv"},
-    "norwegian": {"nor", "nob", "nno", "no"},
-    "japanese": {"jpn", "ja"},
-    "serbian": {"srp", "sr"},
-    "finnish": {"fin", "fi"},
-    "russian": {"rus", "ru"},
-    "korean": {"kor", "ko"},
-    "portuguese": {"por", "pt"},
-    "hebrew": {"heb", "he", "iw"},
-    "turkish": {"tur", "tr"},
-    "icelandic": {"isl", "ice", "is"},
-    "romanian": {"rum", "ron", "ro"},
-    "czech": {"cze", "ces", "cs"},
-}
 _ENGLISH_TAGS = {"eng", "en"}
 
 
@@ -125,12 +103,19 @@ def extract_records(
     streams = probe_audio_streams(fs_path)
     if not streams:
         return []
-    idx = select_audio_stream(streams, expected_tags)
-    if idx is None:
-        return []  # ambiguous multi-track, no tag match -> skip to keep labels clean
-    sel_tag = (streams[idx].get("lang") or "").lower()
-    if truth == "foreign" and sel_tag in _ENGLISH_TAGS:
-        return []  # foreign show but the selected track is an English dub -> skip
+    tags = {t.lower() for t in expected_tags}
+    tag_match = next((s["index"] for s in streams if (s.get("lang") or "").lower() in tags), None)
+    if truth == "foreign":
+        # audit-confirmed foreign file (subarr heard this language): prefer a
+        # correctly-tagged track, else trust the default track.
+        idx = tag_match if tag_match is not None else 0
+    else:  # english negative: require eng tag or a single untagged track; never a foreign dub
+        idx = select_audio_stream(streams, expected_tags)
+        if idx is None:
+            return []
+        sel_tag = (streams[idx].get("lang") or "").lower()
+        if sel_tag and sel_tag not in _ENGLISH_TAGS:
+            return []  # selected track is tagged non-English -> skip to keep labels clean
 
     dur = _duration_s(fs_path)
     if dur <= 0:
@@ -196,67 +181,121 @@ def _episodefile_path(url: str, key: str, series_id: int, arr_prefix: str, media
     return fs if os.path.exists(fs) else None
 
 
-def build_corpus(english_shows: int, foreign_per_lang: int) -> list[tuple[str, str, int, str]]:
-    """-> list of (truth, lang_key, series_id, title) picks."""
+# ISO-639-1 (audit detected_lang) -> acceptable audio-track tag variants.
+ISO_TAGS: dict[str, set[str]] = {
+    "en": {"eng", "en"},
+    "fr": {"fre", "fra", "fr"},
+    "de": {"ger", "deu", "de"},
+    "es": {"spa", "es"},
+    "it": {"ita", "it"},
+    "ja": {"jpn", "ja"},
+    "nl": {"dut", "nld", "nl"},
+    "ru": {"rus", "ru"},
+    "bg": {"bul", "bg"},
+    "no": {"nor", "nob", "nno", "no"},
+    "sv": {"swe", "sv"},
+    "hr": {"hrv", "hr"},
+    "cs": {"cze", "ces", "cs"},
+    "da": {"dan", "da"},
+    "pl": {"pol", "pl"},
+    "fi": {"fin", "fi"},
+    "sr": {"srp", "sr"},
+    "ko": {"kor", "ko"},
+    "pt": {"por", "pt"},
+    "tr": {"tur", "tr"},
+    "he": {"heb", "he", "iw"},
+}
+
+
+def foreign_corpus_from_audit(db_path: str, per_lang_cap: int) -> list[tuple[str, str, str, str]]:
+    """-> (fs_path, "foreign", iso_lang, title) from audit rows where subarr's
+    HEARD language agrees with the track tag (status='agrees', tag==detected).
+    Gold-standard labels: mislabel / bilingual / multitrack / confused are
+    excluded by construction. Caps per language so one language can't dominate."""
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT canonical_path, detected_lang FROM audio_lang_audit "
+            "WHERE status='agrees' AND tag_lang IS NOT NULL AND detected_lang IS NOT NULL "
+            "AND lower(tag_lang)=lower(detected_lang)"
+        ).fetchall()
+    finally:
+        conn.close()
+    by_lang: dict[str, list[str]] = defaultdict(list)
+    for canonical, detected in rows:
+        lang = (detected or "").lower()
+        if lang in ("en", "eng", "english"):
+            continue  # english is the negative class, sourced from Sonarr separately
+        by_lang[lang].append(canonical)
+    out: list[tuple[str, str, str, str]] = []
+    for lang, paths in sorted(by_lang.items()):
+        for canonical in paths[:per_lang_cap]:
+            try:
+                fs = str(canonical_to_fs(canonical))
+            except (PathOutsideRootError, ValueError, OSError):
+                continue
+            if os.path.exists(fs):
+                title = canonical.split("/")[1] if "/" in canonical else canonical
+                out.append((fs, "foreign", lang, title))
+    return out
+
+
+def english_corpus_from_sonarr(
+    n_shows: int, arr_prefix: str, media_root: str
+) -> list[tuple[str, str, str, str]]:
+    """-> (fs_path, "english", "en", title) for the most-populated English shows.
+    The audio-lang audit does not walk English content, so English negatives come
+    from Sonarr (English-original shows are reliably English audio)."""
     url, key = _sonarr()
     series = httpx.get(f"{url}/api/v3/series", headers={"X-Api-Key": key}, timeout=60).json()
-    english, by_lang = [], {}
+    english = []
     for sh in series:
         lang = ((sh.get("originalLanguage") or {}).get("name") or "").lower()
         files = (sh.get("statistics") or {}).get("episodeFileCount", 0) or 0
-        if files <= 0:
-            continue
-        if lang == "english":
+        if lang == "english" and files > 0:
             english.append((files, sh["id"], sh.get("title", "?")))
-        elif lang in LANG_TAGS:
-            by_lang.setdefault(lang, []).append((files, sh["id"], sh.get("title", "?")))
     english.sort(reverse=True)
-    picks = [("english", "english", sid, t) for _, sid, t in english[:english_shows]]
-    for lang, shows in sorted(by_lang.items()):
-        shows.sort(reverse=True)
-        for _, sid, t in shows[:foreign_per_lang]:
-            picks.append(("foreign", lang, sid, t))
-    return picks
+    out: list[tuple[str, str, str, str]] = []
+    for _, sid, title in english[:n_shows]:
+        fs = _episodefile_path(url, key, sid, arr_prefix, media_root)
+        if fs:
+            out.append((fs, "english", "en", title))
+    return out
 
 
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "pilot"
     if mode == "full":
-        english_shows, foreign_per_lang, workers = 60, 3, 10
+        n_english, per_lang_cap, workers = 60, 30, 10
     else:  # pilot
-        english_shows, foreign_per_lang, workers = 5, 1, 6
+        n_english, per_lang_cap, workers = 8, 3, 6
 
     if not lid.lid_available():
         print("LID model not available; run lid.ensure_available() first", file=sys.stderr)
         sys.exit(1)
 
     s = config.settings
-    url, key = _sonarr()
     arr_prefix = str(s.arr_path_prefix).rstrip("/")
     media_root = str(s.media_root).rstrip("/")
+    db_path = str(getattr(s, "db_path", None) or "/data/subarr.db")
 
-    picks = build_corpus(english_shows, foreign_per_lang)
+    foreign = foreign_corpus_from_audit(db_path, per_lang_cap)
+    english = english_corpus_from_sonarr(n_english, arr_prefix, media_root)
+    jobs = english + foreign  # each: (fs_path, truth, iso_lang, title)
     print(
-        f"[corpus] {len(picks)} shows "
-        f"({sum(1 for p in picks if p[0] == 'english')} english, "
-        f"{sum(1 for p in picks if p[0] == 'foreign')} foreign) | mode={mode}",
+        f"[corpus] {len(english)} english + {len(foreign)} foreign files "
+        f"(foreign langs: {sorted({lang for _, _, lang, _ in foreign})}) | mode={mode}",
         file=sys.stderr,
     )
-
-    # resolve one episode path per show
-    jobs = []
-    for truth, lang_key, sid, title in picks:
-        fs = _episodefile_path(url, key, sid, arr_prefix, media_root)
-        if fs:
-            jobs.append((fs, truth, lang_key, title))
-        else:
-            print(f"[skip] no readable episode: {title}", file=sys.stderr)
 
     records: list[dict] = []
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {
-            ex.submit(extract_records, fs, truth, lang_key, LANG_TAGS[lang_key]): (title, lang_key)
+            ex.submit(extract_records, fs, truth, lang_key, ISO_TAGS.get(lang_key, {lang_key})): (
+                title,
+                lang_key,
+            )
             for fs, truth, lang_key, title in jobs
         }
         for fut in as_completed(futs):
