@@ -60,6 +60,7 @@ class PlexClient:
     CircuitBreaker to short-circuit calls when Plex is down/flapping."""
 
     name = "plex"
+    type = "plex"
 
     def __init__(
         self,
@@ -258,6 +259,14 @@ class PlexClient:
             "plex_path": scan_dir,
             "plex_status": r.status_code,
         }
+
+    async def refresh_for_file(self, subarr_file: str) -> dict:
+        """MediaServer protocol name for the per-file targeted refresh."""
+        return await self.partial_scan(subarr_file)
+
+    async def full_refresh(self) -> dict:
+        """MediaServer protocol name for the full library refresh."""
+        return await self.full_scan()
 
     async def status(self) -> dict:
         """Liveness + version probe for /api/integrations/health. Hits Plex
