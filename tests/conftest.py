@@ -622,6 +622,12 @@ def _make_integration_bundle(
             from subarr.integrations.plex import PlexClient
 
             self.plex = PlexClient(base_url="", token="", default_section="all")
+            # #71 Slice 2a: same treatment for Jellyfin — unconfigured stub so
+            # bundle.aclose() (which now closes self.jellyfin too) has a real
+            # client to call, and .is_configured() is False for skipped paths.
+            from subarr.integrations.jellyfin import JellyfinClient
+
+            self.jellyfin = JellyfinClient(base_url="", api_key="")
 
     return _StubBundle
 

@@ -286,6 +286,18 @@ class IntegrationBundle:
             media_root=str(settings.media_root),
         )
 
+        # #71 Slice 2a: Jellyfin sibling to Plex. Constructed unconditionally
+        # (mirrors Plex); .is_configured() reflects whether JELLYFIN_* is set
+        # so callers degrade gracefully if Jellyfin isn't in use.
+        from .integrations.jellyfin import JellyfinClient
+
+        self.jellyfin = JellyfinClient(
+            base_url=settings.jellyfin_url,
+            api_key=settings.jellyfin_api_key,
+            path_prefix=settings.jellyfin_path_prefix,
+            media_root=str(settings.media_root),
+        )
+
     def client_for(self, service: str, instance_id: str | None):
         """Resolve a client by (service, instance id). Empty/unknown id falls
         back to instance 0 — the single-stack invariant."""
@@ -322,15 +334,15 @@ class IntegrationBundle:
 
     @property
     def media_servers(self) -> list:
-        """All constructed media-server clients (currently just Plex). Callers
-        fan out over this and filter on is_configured(). Slice 2 appends
-        Jellyfin when JELLYFIN_* is set."""
-        return [self.plex]
+        """All constructed media-server clients (Plex + Jellyfin). Callers
+        fan out over this and filter on is_configured()."""
+        return [self.plex, self.jellyfin]
 
     async def aclose(self) -> None:
         closers = [c.aclose() for pool in self._clients.values() for c in pool.values()]
         closers.append(self.tautulli.aclose())
         closers.append(self.plex.aclose())
+        closers.append(self.jellyfin.aclose())
         await asyncio.gather(*closers, return_exceptions=True)
 
 
