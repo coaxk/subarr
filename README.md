@@ -265,7 +265,7 @@ Once a verification exists, every downstream submission carries it through an ev
 
 **Do I need Tautulli?** No, but you get NOW PLAYING boost, just-imported boost, and per-user language profiles if you have it. Without Tautulli the scheduler still works, it just has one fewer priority signal.
 
-**Will this work with Jellyfin / Emby?** Not yet — a candidate if there's demand. Open a feature request.
+**Will this work with Jellyfin?** Yes. Add Jellyfin in Settings (URL + API key) and it runs alongside Plex — a landed subtitle refreshes both. Emby isn't supported yet; open a feature request if you want it.
 
 ## Multiple media locations (libraries)
 
@@ -390,7 +390,7 @@ Transparent before you install.
 - Multi-episode disc images (a single `.iso` holding a whole season) can't be probed per-episode, so they're surfaced in a distinct "Couldn't analyze" (unsupported) bucket rather than becoming verified gaps or sitting in "Analyzing" forever. Standard per-episode files are unaffected.
 - SQLite only. No Postgres backend.
 - Single-host. Workers / multi-host are an explicit non-goal until users ask.
-- Jellyfin / Emby are not yet supported.
+- Emby is not yet supported (Jellyfin is — it coexists with Plex, subtitles fan out to both).
 - Compose example uses bind mounts. Named volumes work but you lose the "same path Bazarr and subgen see" sanity.
 
 ## Backing up your data
@@ -530,7 +530,7 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 - **Provider success leaderboard**: aggregate Bazarr per-provider history across opt-in installs into a global ranking. Closes "which subtitle providers actually deliver?", a long-standing Bazarr feature request.
 - **The federated tuning loop**: cross-install kwargs aggregation ranked by verification outcomes, and **"use community-best for &lt;language&gt;"** one-click adoption. The reference-free quality judge it was gated on now ships (LaBSE cross-lingual adequacy, validated).
-- **First-class media-server integration**: Jellyfin / Emby backends alongside Plex.
+- **Emby media-server backend**: alongside the shipped Plex + Jellyfin support (Jellyfin coexists with Plex today; Emby lands on demand).
 
 ## The subgen patch story
 
