@@ -38,15 +38,17 @@ class JellyfinClient:
         )
         self._breaker = breaker or CircuitBreaker(name=self.name)
         self._path_index: dict[str, str] | None = None  # jellyfin Path -> itemId
+        self._auto_prefix: str | None = None  # cached auto-detected prefix ("" = none found)
 
     def is_configured(self) -> bool:
         return bool(self._base_url and self._api_key)
 
-    def translate_path(self, subarr_path: str) -> str:
-        if not self._path_prefix or not self._media_root:
+    def translate_path(self, subarr_path: str, prefix: str | None = None) -> str:
+        p = self._path_prefix if prefix is None else prefix
+        if not p or not self._media_root:
             return subarr_path
         if subarr_path.startswith(self._media_root):
-            return self._path_prefix + subarr_path[len(self._media_root) :]
+            return p + subarr_path[len(self._media_root) :]
         return subarr_path
 
     async def _request(self, method: str, path: str, params: dict | None = None) -> httpx.Response:
@@ -95,8 +97,35 @@ class JellyfinClient:
             item_id = self._path_index.get(jf_path)
         return item_id
 
+    async def library_locations(self) -> list[str]:
+        libs = await self.libraries()
+        return [p for lib in libs for p in (lib.get("paths") or [])]
+
+    async def _effective_prefix(self, sample_subarr_path: str) -> str:
+        """Explicit JELLYFIN_PATH_PREFIX wins; else derive from library locations
+        (cached); else identity. Cached "" means 'derived nothing, use identity'."""
+        if self._path_prefix:
+            return self._path_prefix
+        if self._auto_prefix is not None:
+            return self._auto_prefix
+        from .media_server import derive_path_prefix
+
+        derived = None
+        try:
+            derived = derive_path_prefix(await self.library_locations(), self._media_root, sample_subarr_path)
+        except Exception as e:  # noqa: BLE001
+            log.warning("jellyfin: path-prefix auto-detect failed: %s", e)
+        self._auto_prefix = derived or ""
+        log.info(
+            "jellyfin: path-prefix %s (media_root=%s)",
+            f"auto-detected {derived!r}" if derived else "auto-detect found none; using identity",
+            self._media_root,
+        )
+        return self._auto_prefix
+
     async def refresh_for_file(self, subarr_file: str) -> dict:
-        jf_path = self.translate_path(subarr_file)
+        prefix = await self._effective_prefix(subarr_file)
+        jf_path = self.translate_path(subarr_file, prefix)
         item_id = await self._find_item_id(jf_path)
         if item_id is None:
             log.warning("jellyfin: no item matched %s (path-prefix mismatch or not indexed)", jf_path)
