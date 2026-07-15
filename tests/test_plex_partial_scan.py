@@ -296,3 +296,71 @@ async def test_aclose_closes_underlying_client():
     assert not c._client.is_closed, "client should be open before aclose()"
     await c.aclose()
     assert c._client.is_closed, "client must be closed after aclose()"
+
+
+# ── #71 slice 1 task 3: completion-watcher hook fans out over media_servers ──
+
+
+@pytest.mark.asyncio
+async def test_refresh_fans_out_and_isolates_a_failing_server(subarr_env, media_root):
+    """The completion-watcher's post-write refresh hook must fan out over
+    every configured media server (not just Plex) and isolate a failing
+    server so it never blocks the others."""
+    from types import SimpleNamespace
+
+    from subarr.completion_watcher import CompletionWatcher
+    from subarr.paths import canonical_to_fs
+
+    class Srv:
+        def __init__(self, boom: bool):
+            self.type = "x"
+            self.boom = boom
+            self.got: str | None = None
+
+        def is_configured(self) -> bool:
+            return True
+
+        async def refresh_for_file(self, subarr_file: str) -> dict:
+            if self.boom:
+                raise RuntimeError("server down")
+            self.got = subarr_file
+            return {"triggered": True}
+
+    bad, good = Srv(boom=True), Srv(boom=False)
+    bundle = SimpleNamespace(media_servers=[bad, good])
+    w = CompletionWatcher(provenance=None, bundle_provider=lambda: bundle)
+
+    canonical = "TV/Show/ep.mkv"
+    await w._maybe_plex_partial_scan(canonical)
+
+    assert good.got == str(canonical_to_fs(canonical)), "good server should receive the resolved fs path"
+    assert bad.got is None, "the failing server's raise must not have reached the caller"
+
+
+@pytest.mark.asyncio
+async def test_refresh_still_fires_for_directly_injected_single_plex(subarr_env, media_root):
+    """Backward compat: the pre-#71 direct-injection wiring (no bundle_provider,
+    just plex=...) must still fan out over its single-element [plex] list —
+    i.e. the single-Plex case stays behavior-preserving."""
+    from subarr.completion_watcher import CompletionWatcher
+    from subarr.paths import canonical_to_fs
+
+    class Srv:
+        def __init__(self):
+            self.type = "plex"
+            self.got = None
+
+        def is_configured(self):
+            return True
+
+        async def refresh_for_file(self, subarr_file):
+            self.got = subarr_file
+            return {"triggered": True}
+
+    plex = Srv()
+    w = CompletionWatcher(provenance=None, plex=plex)
+
+    canonical = "TV/Show/ep.mkv"
+    await w._maybe_plex_partial_scan(canonical)
+
+    assert plex.got == str(canonical_to_fs(canonical))

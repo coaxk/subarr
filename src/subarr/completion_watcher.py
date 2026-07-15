@@ -121,6 +121,12 @@ class CompletionWatcher:
     def _plex(self):
         return self._bundle_provider().plex if self._bundle_provider else self._plex_direct
 
+    @property
+    def _media_servers(self):
+        if self._bundle_provider:
+            return self._bundle_provider().media_servers
+        return [self._plex_direct] if self._plex_direct else []
+
     def _bazarr_for(self, canonical_path: str):
         """#161 P3: the Bazarr client for the instance that owns this row's
         library (instance 0 when single-stack / unbound). Falls back to the
@@ -394,42 +400,34 @@ class CompletionWatcher:
             return False
 
     async def _maybe_plex_partial_scan(self, video_canonical: str) -> None:
-        """v1.1.1: best-effort Plex partial-scan trigger. Plex sees the file
-        at its own mount path (translated via PLEX_PATH_PREFIX if set); we
-        pass the resolved subarr-side full path to the client which handles
-        translation + section discovery.
+        """#71: best-effort media-server refresh trigger, fanned out over every
+        CONFIGURED media server (Plex today; Jellyfin/Emby join via
+        media_servers in later slices). Each server sees the file at its own
+        mount path (translated internally by that server's client); we pass
+        the resolved subarr-side full path and the fan-out handles the rest.
 
-        Disabled cleanly when (a) no plex client wired, (b) PLEX_PARTIAL_SCAN_ENABLED=0,
-        (c) Plex unconfigured. All failures log.warning and return — never
-        raises into the completion loop."""
-        if self._plex is None:
+        Disabled cleanly when (a) no media server wired/configured, (b)
+        PLEX_PARTIAL_SCAN_ENABLED=0. A single failing server never blocks the
+        others (refresh_file_on_all is best-effort) and never raises into the
+        completion loop."""
+        servers = [s for s in self._media_servers if s and s.is_configured()]
+        if not servers:
             return
         from .config import settings as _settings
 
         if not _settings.plex_partial_scan_enabled:
             return
-        if not self._plex.is_configured():
-            return
         try:
             # #134: library-aware resolve (@slug/ heads).
             subarr_full = str(canonical_to_fs(video_canonical))
         except PathOutsideRootError:
-            log.warning("plex partial-scan skipped: unresolvable canonical %s", video_canonical)
+            log.warning("media-server refresh skipped: unresolvable canonical %s", video_canonical)
             return
-        try:
-            result = await self._plex.partial_scan(subarr_full)
-            log.info(
-                "plex partial-scan fired: section=%s path=%s (ledger entry: %s)",
-                result.get("section"),
-                result.get("plex_path"),
-                video_canonical,
-            )
-        except IntegrationError as e:
-            log.warning(
-                "plex partial-scan failed for %s: %s (will be picked up by Plex's next periodic scan)",
-                video_canonical,
-                e,
-            )
+        from .integrations.media_server import refresh_file_on_all
+
+        results = await refresh_file_on_all(servers, subarr_full)
+        for r in results:
+            log.info("media-server refresh fired: %s (ledger entry: %s)", r, video_canonical)
 
     def _run_aftercare(self, entry) -> None:
         """#156: judge the produced subtitle and record the result. Best-effort
