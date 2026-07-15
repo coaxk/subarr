@@ -302,13 +302,19 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
     from .integrations import _probe
 
     bundle = state.integrations
-    probes = await asyncio.gather(
+    probe_coros = [
         _probe("bazarr", bundle.bazarr, "bazarr_badges"),
         _probe("sonarr", bundle.sonarr),
         _probe("radarr", bundle.radarr),
         _probe("plex", bundle.plex),
         _probe("tautulli", bundle.tautulli),
-    )
+    ]
+    # Jellyfin is optional (Plex-only installs are common) — only probe/tile
+    # it when configured, so an unconfigured install doesn't get a dead
+    # "not configured" tile cluttering the dashboard.
+    if bundle.jellyfin.is_configured():
+        probe_coros.append(_probe("jellyfin", bundle.jellyfin))
+    probes = await asyncio.gather(*probe_coros)
     out = [_to_tile(p) for p in probes]
 
     # Add subgen tile from cached caps.

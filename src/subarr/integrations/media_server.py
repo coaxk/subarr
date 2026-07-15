@@ -39,3 +39,24 @@ async def refresh_file_on_all(servers, subarr_file: str) -> list[dict]:
         except Exception as e:  # noqa: BLE001 -- a failing server must not abort the loop
             log.warning("media-server refresh failed on %s: %s", getattr(srv, "type", "?"), e)
     return results
+
+
+def derive_path_prefix(locations: list[str], media_root: str, sample_subarr_path: str) -> str | None:
+    """Derive the path prefix P such that translate_path yields the server's own
+    path: P + sample[len(media_root):] lands under one of the server's library
+    `locations`. Returns None when no location aligns (caller falls back to
+    identity, which is correct for identical mounts)."""
+    media_root = (media_root or "").rstrip("/")
+    if not media_root or not sample_subarr_path.startswith(media_root):
+        return None
+    rel = sample_subarr_path[len(media_root) :]
+    parts = [p for p in rel.split("/") if p]
+    if not parts:
+        return None
+    first = parts[0]
+    for loc in locations:
+        locn = (loc or "").rstrip("/")
+        if locn.endswith("/" + first):
+            prefix = locn[: -len("/" + first)]
+            return prefix if prefix and prefix != media_root else None
+    return None

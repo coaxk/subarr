@@ -85,3 +85,60 @@ async def test_status_reads_system_info(monkeypatch):
 
     monkeypatch.setattr(c, "_request", fake_request)
     assert (await c.status())["version"] == "10.11.11"
+
+
+@pytest.mark.asyncio
+async def test_auto_detects_prefix_when_explicit_empty(monkeypatch):
+    # No explicit prefix; server library at /media/TV -> derive /media, match item, refresh
+    c = JellyfinClient(base_url="http://jf:8096", api_key="k", path_prefix="", media_root="/media/library")
+    calls = []
+
+    async def fake_request(method, path, params=None):
+        calls.append((method, path))
+        if path == "/Library/VirtualFolders":
+            return _Resp([{"Name": "Shows", "Locations": ["/media/TV"]}])
+        if path == "/Items":
+            return _Resp({"Items": [{"Path": "/media/TV/Show/ep.mkv", "Id": "id1"}]})
+        return _Resp({})
+
+    monkeypatch.setattr(c, "_request", fake_request)
+    out = await c.refresh_for_file("/media/library/TV/Show/ep.mkv")
+    assert out["triggered"] is True and out["item_id"] == "id1"
+
+
+@pytest.mark.asyncio
+async def test_explicit_prefix_wins_no_autodetect(monkeypatch):
+    c = JellyfinClient(
+        base_url="http://jf:8096", api_key="k", path_prefix="/media", media_root="/media/library"
+    )
+    fetched = {"libs": 0}
+
+    async def fake_request(method, path, params=None):
+        if path == "/Library/VirtualFolders":
+            fetched["libs"] += 1
+            return _Resp([])
+        if path == "/Items":
+            return _Resp({"Items": [{"Path": "/media/TV/Show/ep.mkv", "Id": "id1"}]})
+        return _Resp({})
+
+    monkeypatch.setattr(c, "_request", fake_request)
+    out = await c.refresh_for_file("/media/library/TV/Show/ep.mkv")
+    assert out["triggered"] is True
+    assert fetched["libs"] == 0  # explicit prefix -> never fetched libraries
+
+
+@pytest.mark.asyncio
+async def test_effective_prefix_is_cached(monkeypatch):
+    c = JellyfinClient(base_url="http://jf:8096", api_key="k", path_prefix="", media_root="/media/library")
+    fetched = {"libs": 0}
+
+    async def fake_request(method, path, params=None):
+        if path == "/Library/VirtualFolders":
+            fetched["libs"] += 1
+            return _Resp([{"Name": "Shows", "Locations": ["/media/TV"]}])
+        return _Resp({"Items": []})
+
+    monkeypatch.setattr(c, "_request", fake_request)
+    await c._effective_prefix("/media/library/TV/x.mkv")
+    await c._effective_prefix("/media/library/TV/y.mkv")
+    assert fetched["libs"] == 1  # derived once, cached
