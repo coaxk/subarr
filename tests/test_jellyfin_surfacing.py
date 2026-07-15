@@ -35,3 +35,34 @@ def test_health_includes_jellyfin(app_with_stub):
     r = app_with_stub.get("/api/integrations/health")
     names = {i["name"] for i in r.json().get("integrations", [])}
     assert "jellyfin" in names
+
+
+# ─── Slice 2c, Task 4 (#71): Home dashboard tile ─────────────────────
+#
+# The dashboard tile list (/api/home/dashboard) is a DIFFERENT probe set
+# from /api/integrations/health above — it must NOT show a jellyfin tile
+# for Plex-only installs (no dead "not configured" tile clutter), but
+# MUST show one once Jellyfin is configured.
+
+
+def test_dashboard_omits_jellyfin_tile_when_unconfigured(app_with_stub):
+    r = app_with_stub.get("/api/home/dashboard?fresh=true")
+    assert r.status_code == 200
+    names = {i["name"] for i in r.json().get("integrations", [])}
+    assert "jellyfin" not in names
+
+
+def test_dashboard_includes_jellyfin_tile_when_configured(app_with_stub, monkeypatch):
+    app = app_with_stub.app
+    jellyfin = app.state.integrations.jellyfin
+    monkeypatch.setattr(jellyfin, "is_configured", lambda: True)
+
+    async def fake_status():
+        return {"version": "10.11.11", "server_name": "test-jf"}
+
+    monkeypatch.setattr(jellyfin, "status", fake_status)
+
+    r = app_with_stub.get("/api/home/dashboard?fresh=true")
+    assert r.status_code == 200
+    names = {i["name"] for i in r.json().get("integrations", [])}
+    assert "jellyfin" in names
