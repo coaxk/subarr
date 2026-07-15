@@ -338,6 +338,104 @@ async def test_refresh_fans_out_and_isolates_a_failing_server(subarr_env, media_
 
 
 @pytest.mark.asyncio
+async def test_partial_scan_auto_detects_prefix_when_empty():
+    """#71 slice 2c task 3: PLEX_PATH_PREFIX unset -> derive the prefix from
+    Plex's own section Location paths (mirrors JellyfinClient). The derived
+    prefix must be applied to translate_path AND to section discovery so the
+    right numeric section id is still found."""
+    captured: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        if req.url.path == "/library/sections":
+            return httpx.Response(200, text=SECTIONS_XML)
+        if req.url.path.startswith("/library/sections/") and req.url.path.endswith("/refresh"):
+            return httpx.Response(200, text="")
+        return httpx.Response(404)
+
+    c = PlexClient(
+        base_url="http://plex.test:32400",
+        token="testtoken",
+        default_section="all",
+        path_prefix="",  # explicit prefix unset -> must auto-detect
+        media_root="/media/library",
+    )
+    c._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await c.partial_scan("/media/library/TV/Foo/S01E01.srt")
+
+    assert result["triggered"] is True
+    assert result["section"] == "3"  # TV Shows
+    # Auto-derived prefix ("/data/Media") applied, same as if it had been set explicitly.
+    assert result["plex_path"] == "/data/Media/TV/Foo"
+    refresh_req = next(r for r in captured if r.url.path.endswith("/refresh"))
+    assert refresh_req.url.params["path"] == "/data/Media/TV/Foo"
+
+
+@pytest.mark.asyncio
+async def test_effective_prefix_caches_auto_detect_across_calls():
+    """The derived prefix must be cached on the instance (self._auto_prefix)
+    so repeat scans do not re-list sections just to re-derive the prefix."""
+    section_list_calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/library/sections":
+            section_list_calls["n"] += 1
+            return httpx.Response(200, text=SECTIONS_XML)
+        if req.url.path.startswith("/library/sections/") and req.url.path.endswith("/refresh"):
+            return httpx.Response(200, text="")
+        return httpx.Response(404)
+
+    c = PlexClient(
+        base_url="http://plex.test:32400",
+        token="testtoken",
+        default_section="all",
+        path_prefix="",
+        media_root="/media/library",
+    )
+    c._client = httpx.AsyncClient(
+        base_url="http://plex.test:32400",
+        transport=httpx.MockTransport(handler),
+    )
+
+    prefix1 = await c._effective_prefix("/media/library/TV/Foo/S01E01.srt")
+    prefix2 = await c._effective_prefix("/media/library/TV/Foo/S01E02.srt")
+
+    assert prefix1 == "/data/Media"
+    assert prefix2 == "/data/Media"
+    assert c._auto_prefix == "/data/Media"
+    # sections() is called once for prefix derivation (then cached on
+    # self._auto_prefix); it may separately be called again for section
+    # discovery inside partial_scan, but _effective_prefix itself must not
+    # re-list sections on the second call.
+    assert section_list_calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_effective_prefix_explicit_prefix_skips_auto_detect():
+    """Explicit PLEX_PATH_PREFIX must win outright -- _effective_prefix must
+    not even call sections() to attempt auto-detection."""
+    c = PlexClient(
+        base_url="http://plex.test:32400",
+        token="t",
+        default_section="all",
+        path_prefix="/data/Media",  # explicit -- must short-circuit
+        media_root="/media/library",
+    )
+
+    async def boom(refresh: bool = False):
+        raise AssertionError("sections() must not be called when an explicit prefix is set")
+
+    c.sections = boom  # type: ignore[method-assign]
+
+    prefix = await c._effective_prefix("/media/library/TV/Foo/S01E01.srt")
+    assert prefix == "/data/Media"
+
+
+@pytest.mark.asyncio
 async def test_refresh_still_fires_for_directly_injected_single_plex(subarr_env, media_root):
     """Backward compat: the pre-#71 direct-injection wiring (no bundle_provider,
     just plex=...) must still fan out over its single-element [plex] list —
