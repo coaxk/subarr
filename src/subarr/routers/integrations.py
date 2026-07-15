@@ -43,6 +43,7 @@ _CREDENTIAL_FIELDS: dict[str, dict[str, tuple[str, type]]] = {
     "tautulli": {"url": ("tautulli_url", str), "api_key": ("tautulli_api_key", str)},
     # Plex authenticates with a token rather than an X-Api-Key header.
     "plex": {"url": ("plex_url", str), "token": ("plex_token", str)},
+    "jellyfin": {"url": ("jellyfin_url", str), "api_key": ("jellyfin_api_key", str)},
     "subgen": {"url": ("subgen_url", str)},
     "ollama": {"url": ("ollama_url", str), "model": ("ollama_model", str)},
 }
@@ -286,6 +287,7 @@ async def integrations_health(request: Request) -> dict[str, Any]:
         _probe("sonarr", integrations.sonarr),
         _probe("radarr", integrations.radarr),
         _probe("plex", integrations.plex),
+        _probe("jellyfin", integrations.jellyfin),
         _probe("tautulli", integrations.tautulli),
     ]
     if ollama is not None:

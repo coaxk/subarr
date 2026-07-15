@@ -159,6 +159,7 @@ const CREDENTIAL_SCHEMA = {
   radarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   tautulli: [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   plex:     [{ key: 'url', label: 'URL', secret: false }, { key: 'token', label: 'Plex token', secret: true }],
+  jellyfin: [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   subgen:   [{ key: 'url', label: 'URL', secret: false }],
   ollama:   [{ key: 'url', label: 'URL', secret: false }, { key: 'model', label: 'Model', secret: false }],
 };
@@ -408,7 +409,7 @@ function Stat({ label, value, color }) {
 }
 
 // ─── Integrations rail ───────────────────────────────────────────
-const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'plex', 'tautulli', 'subgen', 'ollama'];
+const INTEGRATION_ORDER = ['bazarr', 'sonarr', 'radarr', 'plex', 'jellyfin', 'tautulli', 'subgen', 'ollama'];
 
 // Friendly labels for integration badges. Source endpoints often
 // return terse keys (Bazarr's /api/badges: 'episodes' actually means
