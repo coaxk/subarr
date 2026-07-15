@@ -3,8 +3,6 @@ import pytest
 from subarr.integrations.media_server import MediaServer
 from subarr.integrations.plex import PlexClient
 
-pytestmark = pytest.mark.asyncio
-
 
 def _client():
     return PlexClient(
@@ -22,6 +20,7 @@ def test_plex_client_satisfies_media_server_protocol():
     assert c.type == "plex"
 
 
+@pytest.mark.asyncio
 async def test_refresh_for_file_delegates_to_partial_scan(monkeypatch):
     c = _client()
     calls = {}
@@ -35,6 +34,7 @@ async def test_refresh_for_file_delegates_to_partial_scan(monkeypatch):
     assert calls["path"] == "/media/library/TV/x.mkv" and out["triggered"] is True
 
 
+@pytest.mark.asyncio
 async def test_full_refresh_delegates_to_full_scan(monkeypatch):
     c = _client()
 
