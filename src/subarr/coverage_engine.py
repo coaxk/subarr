@@ -320,6 +320,13 @@ class IntegrationBundle:
     def bazarr(self, client):
         self._clients["bazarr"][""] = client
 
+    @property
+    def media_servers(self) -> list:
+        """All constructed media-server clients (currently just Plex). Callers
+        fan out over this and filter on is_configured(). Slice 2 appends
+        Jellyfin when JELLYFIN_* is set."""
+        return [self.plex]
+
     async def aclose(self) -> None:
         closers = [c.aclose() for pool in self._clients.values() for c in pool.values()]
         closers.append(self.tautulli.aclose())
