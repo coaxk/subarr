@@ -140,6 +140,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      # Expire the Dockerfile's apt layer daily. Without this the GHA cache
+      # serves a stale layer and we scan (and ship) packages that Debian has
+      # already patched — see the APT_REFRESH comment in the Dockerfile.
+      - id: aptdate
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - name: build image (no push)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -147,6 +152,8 @@ jobs:
           load: true
           tags: subarr:scan
           cache-from: type=gha
+          build-args: |
+            APT_REFRESH=${{ steps.aptdate.outputs.date }}
       # The table-format invocation is the actual PR gate. Why not the
       # SARIF one? In format=sarif mode, trivy-action internally scans
       # with "all severities" to populate the GitHub code-scanning UI,

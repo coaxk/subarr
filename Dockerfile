@@ -15,7 +15,17 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # also patches ffmpeg/mkvtoolnix's transitive deps to +debNuN — upgrading before
 # the install left those freshly-pulled deps at the unpatched base version.
 # Patch-don't-suppress, same as subarr-subgen.
-RUN apt-get update \
+#
+# APT_REFRESH exists because the GHA layer cache would otherwise serve this
+# layer for days: neither `update` nor `upgrade` re-runs on a cache hit, so a
+# security patch that Debian has already published silently never lands and we
+# ship a known-fixed CVE (caught by the trivy gate on libtiff CVE-2026-12912,
+# fixed in +deb13u3 while the cached layer still had u2). CI passes the current
+# UTC date, so this layer expires once a day and every scan + published image
+# gets current packages. Referenced in the RUN so the value actually busts it.
+ARG APT_REFRESH=0
+RUN echo "apt-refresh=${APT_REFRESH}" \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix passwd util-linux \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
