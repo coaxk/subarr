@@ -155,6 +155,7 @@ async def test_connection(service: str, body: TestRequest, request: Request) -> 
         "subgen": _test_subgen,
         "ollama": _test_ollama,
         "plex": _test_plex,
+        "jellyfin": _test_jellyfin,
     }
     handler = handlers.get(svc)
     if handler is None:
@@ -300,6 +301,29 @@ async def _test_plex(body: TestRequest) -> dict[str, Any]:
         "detail": f"Plex {version or 'connected'}",
         "error": None,
     }
+
+
+async def _test_jellyfin(body: TestRequest) -> dict[str, Any]:
+    """Probe Jellyfin's /System/Info/Public via JellyfinClient.status(). API key
+    rides in `api_key`. aclose() the throwaway client even on failure so the test
+    path never leaks a connection pool."""
+    from ..integrations.jellyfin import JellyfinClient
+
+    key = body.api_key or body.token or ""
+    c = JellyfinClient(base_url=body.url, api_key=key)
+    if not c.is_configured():
+        return {
+            "ok": False,
+            "version": None,
+            "detail": None,
+            "error": "Jellyfin URL and API key are both required",
+        }
+    try:
+        status = await c.status()
+    finally:
+        await c.aclose()
+    version = status.get("version")
+    return {"ok": True, "version": version, "detail": f"Jellyfin {version or 'connected'}", "error": None}
 
 
 async def _test_ollama(body: TestRequest) -> dict[str, Any]:
