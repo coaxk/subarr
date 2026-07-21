@@ -25,6 +25,14 @@ A one-time deep sweep of the major/critical subsystems is tracked in memory
 (`reference_subarr-review-program`). Each area gets a scoped multi-lens review like #279, producing a
 triaged findings list. Auth is reserved for a single final ultra pass once the non-ultra areas are clear.
 
+## Releases
+
+`docs/release-procedure.md` is the source of truth. Two traps it exists to stop:
+the version lives in **both** `pyproject.toml` and `src/subarr/__init__.py`, and
+the container build's `APT_REFRESH` arg is load-bearing (without it the GHA layer
+cache serves a stale apt layer and security patches never reach the image).
+Always verify the published artifact, not just a green workflow.
+
 ## Solo-repo merge
 
 Branch protection is bypassed with `gh pr merge <NN> --squash --admin --delete-branch` (solo repo).

@@ -74,6 +74,36 @@ The `release.yml` workflow fires on the tag push and runs (in order):
    - `:latest` (only when the same SHA is also on main, which it
      will be for any tag cut from main HEAD)
 
+Before tagging, also:
+
+- Add the `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`. `release.yml`
+  derives the GitHub Release title from its first bolded phrase via
+  `scripts/changelog_section.py`. **An empty title blanks the #203 update
+  nudge fleet-wide**, so dry-run it first:
+  `python scripts/changelog_section.py vX.Y.Z --body-out /tmp/notes.md`
+- Refresh the README badges (status version + the real passing count from a
+  local full run — the *passing* count, not the collected one).
+
+### 1b. Verify the published artifact
+
+The workflow going green is not the same as the image being correct. After
+`release.yml` completes, check the thing users actually pull:
+
+```bash
+# multi-arch present?
+docker manifest inspect ghcr.io/coaxk/subarr:1.2.0 | grep architecture
+
+# does it report its own version correctly? (the 2.3.1 trap)
+docker run --rm --entrypoint python ghcr.io/coaxk/subarr:1.2.0 \
+  -c "import subarr; print(subarr.__version__)"
+
+# did the security patches actually land? (the APT_REFRESH trap, below)
+docker run --rm --entrypoint dpkg ghcr.io/coaxk/subarr:1.2.0 -l | grep libssl
+```
+
+Announcements go out at this point, once the image is confirmed pullable —
+not at `:stable` promotion, which is a separate and quieter step.
+
 ### 2. Soak
 
 A new release lives at `:1.2.0` / `:latest` for at least **7 days**
@@ -138,6 +168,24 @@ If something serious surfaces AFTER promotion:
 
 For subgen-side yanks (the patch quilt itself), see
 [subarr-subgen RELEASES.md](https://github.com/coaxk/subarr-subgen/blob/main/RELEASES.md).
+
+## Build invariants (do not "clean these up")
+
+**`ARG APT_REFRESH` in the Dockerfile, and the `APT_REFRESH=<UTC date>`
+build-arg in `security.yml` + `release.yml`, are load-bearing.** Both container
+builds use `cache-from: type=gha`. Without a value that changes daily, the apt
+layer is a cache hit for days, so neither `apt-get update` nor
+`apt-get upgrade -y` re-runs and **Debian security patches silently never reach
+the published image**. The `echo "apt-refresh=${APT_REFRESH}"` line looks like
+dead weight; it is what makes the arg actually invalidate the layer.
+
+Found 2026-07-21 via trivy on libtiff CVE-2026-12912: the cached layer held
+`+deb13u2` while `+deb13u3` had been published. The earlier Mesa fix only
+worked by accident, because reordering the `RUN` changed its text.
+
+Symptom to recognise: trivy fails on a CVE that is *fixed upstream*, and a
+local `docker build` of the same Dockerfile installs the patched version fine.
+That gap between local and CI is the cache, not the CVE.
 
 ## Why this procedure
 
