@@ -176,19 +176,36 @@ def _stub_plex_online(app, version="1.40.0.0"):
     p.status = fake_status
 
 
+def _stub_jellyfin_online(app, version="10.11.11"):
+    """#71: Jellyfin sibling to _stub_plex_online — the test bundle stubs
+    Jellyfin as unconfigured; configure it + stub its status() (also inline
+    httpx, not the MockTransport the other clients get) so it reports online
+    for the health probe."""
+    j = app.state.integrations.jellyfin
+    j._base_url = "http://jellyfin.test:8096"
+    j._api_key = "test-api-key"
+
+    async def fake_status():
+        return {"version": version, "server_name": "test-server"}
+
+    j.status = fake_status
+
+
 @pytest.mark.integrations_stub(**_ALL_STUB)
 def test_integrations_health_all_up(app_with_stub):
     _stub_plex_online(app_with_stub.app)
+    _stub_jellyfin_online(app_with_stub.app)
     r = app_with_stub.get("/api/integrations/health")
     assert r.status_code == 200
     by_name = {it["name"]: it for it in r.json()["integrations"]}
-    assert {"bazarr", "sonarr", "radarr", "tautulli", "plex"} <= set(by_name)
+    assert {"bazarr", "sonarr", "radarr", "tautulli", "plex", "jellyfin"} <= set(by_name)
     for name in by_name:
         assert by_name[name]["online"] is True, f"{name}: {by_name[name]}"
     assert by_name["bazarr"]["version"] == "1.5.6"
     assert by_name["bazarr"]["badges"]["episodes"] == 2
     assert by_name["sonarr"]["version"] == "4.0.17.2967"
     assert by_name["plex"]["version"] == "1.40.0.0"
+    assert by_name["jellyfin"]["version"] == "10.11.11"
 
 
 @pytest.mark.integrations_stub(**_ALL_STUB)

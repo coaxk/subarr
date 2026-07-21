@@ -265,7 +265,7 @@ Once a verification exists, every downstream submission carries it through an ev
 
 **Do I need Tautulli?** No, but you get NOW PLAYING boost, just-imported boost, and per-user language profiles if you have it. Without Tautulli the scheduler still works, it just has one fewer priority signal.
 
-**Will this work with Jellyfin / Emby?** Not yet — a candidate if there's demand. Open a feature request.
+**Will this work with Jellyfin?** Yes. Add Jellyfin in Settings (URL + API key) and it runs alongside Plex — a landed subtitle refreshes both. Emby isn't supported yet; open a feature request if you want it.
 
 ## Multiple media locations (libraries)
 
@@ -313,6 +313,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SONARR_URL` / `SONARR_API_KEY` | `http://sonarr:8989` / — | Series metadata, original language, mediainfo. |
 | `RADARR_URL` / `RADARR_API_KEY` | `http://radarr:7878` / — | Movie metadata. |
 | `PLEX_URL` / `PLEX_TOKEN` | your Plex URL / — | Targeted library refresh after a sub lands. |
+| `JELLYFIN_URL` / `JELLYFIN_API_KEY` | your Jellyfin URL / — | Targeted library refresh after a sub lands. Optional; coexists with Plex (subtitles fan out to both). Create the key in Jellyfin Dashboard → API Keys. |
 | `TAUTULLI_URL` / `TAUTULLI_API_KEY` | `http://tautulli:8181` / — | Audio-track hints from your Plex history. |
 | `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint (optional AI features). |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | Text model for Ollama tasks. |
@@ -325,7 +326,8 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_MEDIA_ROOT` | `/media/library` | subarr's media root = the Default library. |
 | `SUBGEN_MEDIA_PREFIX` | `/media` | Prefix subgen sees media at (path translation to subgen). |
 | `ARR_PATH_PREFIX` | `/data/Media/` | Prefix Sonarr/Radarr report files under (path translation). |
-| `PLEX_PATH_PREFIX` | — | Prefix Plex sees paths under. Set this if you get "No Plex Section". |
+| `PLEX_PATH_PREFIX` | — | Prefix Plex sees paths under. Set this if you get "No Plex Section". Auto-detected from Plex's own sections when unset; set only to override. |
+| `JELLYFIN_PATH_PREFIX` | — | Prefix Jellyfin sees paths under, when different from `SUBARR_MEDIA_ROOT`. Auto-detected from Jellyfin's own libraries when unset; set only to override. |
 | `SUBARR_DB_PATH` | `/data/subarr.db` | SQLite DB. Must be on a persistent, local (non-network) volume. |
 
 ### Plex
@@ -374,6 +376,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `NVIDIA_SMI_PATH` | — | Path to `nvidia-smi` for the GPU card. |
 | `SUBGEN_CONTAINER` / `SUBGEN_COMPOSE_PATH` | `subgen` / path | subgen container name + compose path for guided setup. |
 | `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup. |
+| `SUBARR_TELEMETRY_ENDPOINT` | `https://telemetry.subarr.com/v1/ping` | Anonymous telemetry receiver (see [Telemetry](#telemetry)). Set to empty to opt out. |
 
 ## Known limitations (v2.2)
 
@@ -387,7 +390,7 @@ Transparent before you install.
 - Multi-episode disc images (a single `.iso` holding a whole season) can't be probed per-episode, so they're surfaced in a distinct "Couldn't analyze" (unsupported) bucket rather than becoming verified gaps or sitting in "Analyzing" forever. Standard per-episode files are unaffected.
 - SQLite only. No Postgres backend.
 - Single-host. Workers / multi-host are an explicit non-goal until users ask.
-- Jellyfin / Emby are not yet supported.
+- Emby is not yet supported (Jellyfin is — it coexists with Plex, subtitles fan out to both).
 - Compose example uses bind mounts. Named volumes work but you lose the "same path Bazarr and subgen see" sanity.
 
 ## Backing up your data
@@ -527,7 +530,7 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 - **Provider success leaderboard**: aggregate Bazarr per-provider history across opt-in installs into a global ranking. Closes "which subtitle providers actually deliver?", a long-standing Bazarr feature request.
 - **The federated tuning loop**: cross-install kwargs aggregation ranked by verification outcomes, and **"use community-best for &lt;language&gt;"** one-click adoption. The reference-free quality judge it was gated on now ships (LaBSE cross-lingual adequacy, validated).
-- **First-class media-server integration**: Jellyfin / Emby backends alongside Plex.
+- **Emby media-server backend**: alongside the shipped Plex + Jellyfin support (Jellyfin coexists with Plex today; Emby lands on demand).
 
 ## The subgen patch story
 

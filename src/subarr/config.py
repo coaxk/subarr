@@ -85,6 +85,15 @@ class Settings:
     # view before issuing /library/sections/{id}/refresh?path=. Leave empty
     # when both containers mount the same path (common case).
     plex_path_prefix: str
+    # #71: Jellyfin media-server backend (fan-out alternative to Plex).
+    # Empty by default — Jellyfin is unconfigured until an operator sets
+    # JELLYFIN_URL/JELLYFIN_API_KEY (mirrors plex_token's off-by-default).
+    jellyfin_url: str
+    jellyfin_api_key: str
+    # Filesystem prefix Jellyfin sees the media tree at, when different from
+    # subarr's media_root. Mirrors plex_path_prefix. Leave empty when both
+    # containers mount the same path (common case).
+    jellyfin_path_prefix: str
     # v1.1.1: master toggle for partial-scan-on-sidecar-write. Default on;
     # set PLEX_PARTIAL_SCAN_ENABLED=0 to fall back to whatever scan cadence
     # Plex's own scheduler runs at.
@@ -278,6 +287,9 @@ def load() -> Settings:
         plex_token=os.environ.get("PLEX_TOKEN", ""),
         plex_section=_env_or("PLEX_SECTION", "all"),
         plex_path_prefix=os.environ.get("PLEX_PATH_PREFIX", ""),
+        jellyfin_url=os.environ.get("JELLYFIN_URL", ""),
+        jellyfin_api_key=os.environ.get("JELLYFIN_API_KEY", ""),
+        jellyfin_path_prefix=os.environ.get("JELLYFIN_PATH_PREFIX", ""),
         plex_partial_scan_enabled=_env_or("PLEX_PARTIAL_SCAN_ENABLED", "1").strip().lower()
         not in ("0", "false", "no", "off"),
         subgen_webhook_enabled=_env_or("SUBARR_SUBGEN_WEBHOOK_ENABLED", "1").strip().lower()
@@ -494,6 +506,10 @@ FIELD_ENV_VARS: dict[str, str] = {
     # is treated as unset and the UI write is honoured.
     "plex_url": "PLEX_URL",
     "plex_token": "PLEX_TOKEN",
+    # #71: Jellyfin creds are UI-editable from the outset, same as Plex.
+    "jellyfin_url": "JELLYFIN_URL",
+    "jellyfin_api_key": "JELLYFIN_API_KEY",
+    "jellyfin_path_prefix": "JELLYFIN_PATH_PREFIX",
     # #111/#112: UI-settable toggles. Listed here so env_is_set() lets an
     # explicit env var override a persisted UI choice (env > file > default).
     "vad_enabled": "SUBARR_VAD_ENABLED",
@@ -551,6 +567,10 @@ _FIELD_COERCE = {
     "plex_url": str,
     "plex_token": str,
     "subgen_url": str,
+    # #71: Jellyfin creds, same UI-editable/persisted treatment as Plex.
+    "jellyfin_url": str,
+    "jellyfin_api_key": str,
+    "jellyfin_path_prefix": str,
 }
 
 

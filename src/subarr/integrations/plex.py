@@ -60,6 +60,7 @@ class PlexClient:
     CircuitBreaker to short-circuit calls when Plex is down/flapping."""
 
     name = "plex"
+    type = "plex"
 
     def __init__(
         self,
@@ -98,20 +99,58 @@ class PlexClient:
         # restart — per-show audio prefs are stable.
         self._show_index: dict[str, str] | None = None
         self._audio_hint_cache: dict[str, str | None] = {}
+        # #71 slice 2c: cached auto-detected prefix ("" = derive attempted,
+        # found nothing -> use identity). None = not attempted yet.
+        self._auto_prefix: str | None = None
 
     def is_configured(self) -> bool:
         return bool(self._base_url and self._token)
 
-    def translate_path(self, subarr_path: str) -> str:
+    def translate_path(self, subarr_path: str, prefix: str | None = None) -> str:
         """Translate a subarr-side absolute path (e.g. /media/library/TV/X.srt)
-        into the path Plex sees. Identity translation when PLEX_PATH_PREFIX
-        is unset or matches subarr's media_root."""
-        if not self._path_prefix or not self._media_root:
+        into the path Plex sees. Identity translation when the effective
+        prefix is unset or matches subarr's media_root.
+
+        `prefix` overrides the configured PLEX_PATH_PREFIX (used by
+        partial_scan/refresh_for_file to apply an auto-detected prefix
+        without mutating the explicit config)."""
+        p = self._path_prefix if prefix is None else prefix
+        if not p or not self._media_root:
             return subarr_path
         if subarr_path.startswith(self._media_root):
-            return self._path_prefix + subarr_path[len(self._media_root) :]
+            return p + subarr_path[len(self._media_root) :]
         # Unknown root — return as-is and let Plex's section matcher decide.
         return subarr_path
+
+    async def library_locations(self) -> list[str]:
+        """Flatten every section's Location paths — used as the candidate
+        set for path-prefix auto-detection."""
+        secs = await self.sections()
+        return [p for s in secs for p in (s.get("paths") or [])]
+
+    async def _effective_prefix(self, sample_subarr_path: str) -> str:
+        """Explicit PLEX_PATH_PREFIX wins; else derive from Plex's own
+        section Location paths (cached); else identity. Mirrors
+        JellyfinClient._effective_prefix. Cached "" means 'derived nothing,
+        use identity'."""
+        if self._path_prefix:
+            return self._path_prefix
+        if self._auto_prefix is not None:
+            return self._auto_prefix
+        from .media_server import derive_path_prefix
+
+        derived = None
+        try:
+            derived = derive_path_prefix(await self.library_locations(), self._media_root, sample_subarr_path)
+        except Exception as e:  # noqa: BLE001
+            log.warning("plex: path-prefix auto-detect failed: %s", e)
+        self._auto_prefix = derived or ""
+        log.info(
+            "plex: path-prefix %s (media_root=%s)",
+            f"auto-detected {derived!r}" if derived else "auto-detect found none; using identity",
+            self._media_root,
+        )
+        return self._auto_prefix
 
     # ── #290: central transport helper ───────────────────────────────────────
 
@@ -228,7 +267,7 @@ class PlexClient:
         discovered automatically when PLEX_SECTION is "all"."""
         if not self.is_configured():
             raise IntegrationError("plex not configured")
-        plex_path = self.translate_path(subarr_file_path)
+        plex_path = self.translate_path(subarr_file_path, await self._effective_prefix(subarr_file_path))
         # Plex expects a directory; pass the parent of the file.
         scan_dir = str(PurePosixPath(plex_path).parent)
         # Resolve section: explicit numeric setting wins, else discover.
@@ -258,6 +297,14 @@ class PlexClient:
             "plex_path": scan_dir,
             "plex_status": r.status_code,
         }
+
+    async def refresh_for_file(self, subarr_file: str) -> dict:
+        """MediaServer protocol name for the per-file targeted refresh."""
+        return await self.partial_scan(subarr_file)
+
+    async def full_refresh(self) -> dict:
+        """MediaServer protocol name for the full library refresh."""
+        return await self.full_scan()
 
     async def status(self) -> dict:
         """Liveness + version probe for /api/integrations/health. Hits Plex
