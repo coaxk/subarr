@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v2.2-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-1159_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v2.5-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-1696_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -15,33 +15,19 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 2.3
+## New in 2.5
 
-**Run separate Sonarr/Radarr/Bazarr stacks.** The headline is multi-instance: run a dedicated **anime** Sonarr + Bazarr alongside your main TV/movie stack (or any split you like), bind libraries per-instance, and subarr tracks each independently — every read merges across stacks and every writeback routes to the instance that owns the row. Plus movie subtitles now upload straight to the owning Bazarr, and the GPU card works out-of-the-box on WSL2-Docker. Fully additive — single-stack installs are byte-identical and upgrade with zero migration. See [Multiple stacks (instances)](#multiple-stacks-instances) and the [changelog](CHANGELOG.md).
+**Jellyfin, beside Plex.** subarr now refreshes Jellyfin the same way it has always refreshed Plex: when a subtitle lands, the owning item gets refreshed so the sub shows up without waiting for a scheduled scan. Point subarr at both and it fans out to both — Plex users lose nothing, Jellyfin users stop scanning manually, and mixed households are a supported setup rather than a compromise. Configure it in Settings → Integrations or with `JELLYFIN_URL` / `JELLYFIN_API_KEY`.
 
-## New in 2.2
+- **No path mapping to work out.** subarr reads your server's own library locations and derives the path prefix itself, for **both** Jellyfin and Plex. The old "No Plex Section" trap where you had to hand-set `PLEX_PATH_PREFIX` is gone. Explicit env vars still win if you set them.
+- **Foreign-language scenes in English media get their own forced subtitle.** A film that drops into Russian for a scene now gets a `.forced.en.srt` covering just those segments, instead of nothing or a full transcription. Detection runs locally (a small ONNX language-ID model, no torch, no cloud) and validated on 1706 real windows from a live library. Off by default — turn it on under Settings → Rules, or `SUBARR_FORCED_SEGMENT_ENABLED=1`.
+- **SQLite stays intact on a network share.** If `/data` lands on NFS or SMB, subarr now picks a journal mode that survives it instead of using WAL, which is unsafe over network filesystems. Local installs are unchanged. Keeping `/data` on local disk is still the recommendation, and the Health page still says so.
 
-Filling more gaps, finding more controls, and a deep reliability pass. Non-breaking — upgrades transparently.
-
-- **Blacklist a bad sub without leaving subarr.** When a provider sub is broken, blacklist it from Aftercare or the Library tree and Bazarr stops re-fetching that release. A shared panel shows the file's Bazarr download history and blacklists the offending provider sub through Bazarr's own API.
-- **Transcribe a full sub on forced-only files.** A file whose only English sub is *forced* (foreign-dialogue-only) used to sit in a "subgen will skip" bucket. Now each row has a **Transcribe full sub** button that generates a complete subtitle for just that file, without flipping subgen's global forced-subs setting. Needs the matching subgen image (`ghcr.io/coaxk/subarr-subgen:2026.05.3-r10`+); older subgen keeps the old guidance.
-- **Per-title ignore.** Tell subarr "I don't want subs here" inline on a Library row or from Review — suppress a whole show or a single file.
-- **A home for the scattered controls.** A new **Other subtitle controls** card on the Rules page signposts every force/ignore/language control to where it lives, so you can find them as a set.
-- **Back up your database on demand.** A Health-page card writes a clean, defragmented, timestamped copy and runs a deep integrity check — with a callout that nudges you to back up before changes if integrity ever looks off.
-- **The UI no longer freezes under load.** A dogfood-reported stall traced to per-poll filesystem work on the event loop; that work moved off-loop and a stall monitor stays in. Plus durability, Plex-client, queue-reconciliation, telemetry, and auth hardening from heavy real-world use. Full list in the [changelog](CHANGELOG.md).
-
-## New in 2.0
-
-A security-hardening + activation release. The two headline changes are breaking for some deployments — see [Upgrading](#upgrading-to-20) below.
-
-- **Authentication is on by default.** subarr's API can drive Sonarr, Bazarr, and subgen, so a default install no longer ships wide open. First launch creates an admin account, then it's a normal login + signed session cookie. Recovery is built in (env override, `SUBARR_AUTH_RESET=1`, or `docker exec subarr python -m subarr.cli reset-auth`), failed logins are rate-limited, and you can mint named **managed API keys** for scripts. Already authenticating at a reverse proxy? `SUBARR_AUTH_DISABLED=1` hands auth back to it. Full detail under [Security → Authentication](#authentication).
-- **Runs as a non-root user.** The container drops to `PUID`/`PGID` (default `1000:1000`); its entrypoint starts as root only long enough to fix ownership of **its own data dir** (never your media library) and grant docker-socket access, then drops privileges before the app runs. `PUID`/`PGID` are now real, not decorative. Hardened-compose users need a small `cap_add` set — see [Hardened deployment](#hardened-deployment-optional).
-- **Pause/resume the schedule from the dashboard.** The "Next scheduled run" card gains a Pause/Resume button next to Run now — halt or restart automation without opening Rules.
-- **You land on a populated dashboard.** Finishing onboarding now auto-runs the first coverage walk (when an arr is configured), with a clear empty-state as the safety net for anyone who still lands walk-less.
-
-*Previously: guided subgen setup, aftercare score-explainers, and documented Swagger/OpenAPI at `/docs` in 1.6; multi-library, arm64 images, and fleet crash telemetry in 1.5; Job Aftercare and queue authority in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+*Previously: automatic subtitle re-timing on by default, plus honestly-represented multilingual audio, in 2.4; separate Sonarr/Radarr/Bazarr stacks — multi-instance — in 2.3, see [Multiple stacks (instances)](#multiple-stacks-instances); Bazarr-parity blacklist / forced / per-title-ignore controls in 2.2; authentication on by default and a non-root container in 2.0 (see [Upgrading](#upgrading-to-20)); guided subgen setup and Swagger/OpenAPI at `/docs` in 1.6; multi-library and arm64 images in 1.5; Job Aftercare in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
 
 ### Upgrading to 2.0
+
+Kept here because 2.0 is the only release with breaking changes. Skip it if you are already on 2.x — every release since upgrades transparently.
 
 - **You'll see a one-time login screen.** Create an admin account on first launch after upgrading. Installs that already set `SUBARR_USER`/`SUBARR_PASS` or `SUBARR_API_KEY` are **not** forced into setup — those keep working. Locked out? `SUBARR_AUTH_RESET=1`, the env pair, or `docker exec subarr python -m subarr.cli reset-auth`. Behind a reverse proxy that authenticates? `SUBARR_AUTH_DISABLED=1`.
 - **Hardened-compose users:** the container now runs non-root and reconciles ownership of **its own data dir** at boot — the volume holding `SUBARR_DB_PATH` (default `/data`), **never the media library** (a separate mount subarr treats as foreign data you own). Add `cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]` alongside your `cap_drop: [ALL]` and set `PUID`/`PGID` to the uid that owns that data dir **and** your media mounts (subarr writes sidecars there). See [Hardened deployment](#hardened-deployment-optional). The LaBSE QE cache lives under the data dir (`<data>/.cache/huggingface`) — drop any old `/root/.cache` mount.
@@ -57,6 +43,7 @@ A security-hardening + activation release. The two headline changes are breaking
 - **We don't parrot the metadata, we verify it.** Subarr listens to the actual audio and tells a mislabeled track from a bilingual one from "genuinely unsure", then offers a one-click fix that flows back into coverage. Beside Bazarr, never instead of it.
 - **Tune Whisper to your hardware.** The Tuning Lab sweeps recipe variants against your live subgen, a validated judge ranks them, and a per-language leaderboard surfaces the dependable default for each language.
 - **Don't burn GPU on content nobody watches.** Scheduled walks with backpressure. Tautulli playback signal influences priority.
+- **Your media server sees the sub immediately.** Plex and Jellyfin both get a targeted refresh of the item a subtitle just landed on. Configure either, or both — path mapping is auto-detected.
 - **Provenance ledger.** Which provider gave you which sub, when, why. Survives re-search runs.
 - **Embedded subs are first-class.** SDH, forced, PGS, full, all distinguished, not collapsed.
 
@@ -168,7 +155,7 @@ Subarr's value compounds with: multi-language libraries, three or more Bazarr pr
 | Aftercare | **(1.4)** Post-transcription quality review: every finished job is judged for failures + readability and surfaced (page + header pill + dashboard panel) with a country flag, language, source tag, composite score, and a legend. Requeue from the row, or **blacklist a bad provider sub (2.2)** straight to Bazarr. Flags problems, never a confident grade |
 | Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification. **(2.2)** An "Other subtitle controls" card signposts every force / ignore / language control to the page where it lives |
 | Tuning Lab | Config arena: sweep Whisper recipes against your live subgen, judged by a validated tournament judge across multiple strata clips. Per-language herd view, global recipe leaderboard, and an Audio language issues panel surfacing mislabeled / bilingual / multi-track files from on-demand sweeps and the opt-in library-wide scan |
-| Settings | Per-language Whisper kwargs, **in-app integration editing** (URLs + API keys + Plex token, test-connection + live apply, env-set fields stay read-only), integrations health, system actions, telemetry transparency panel showing the exact JSON last sent. **Speech-aware audio:** enable/disable + download the silero model |
+| Settings | Per-language Whisper kwargs, **in-app integration editing** (URLs + API keys, Plex token, **Jellyfin API key (2.5)**, test-connection + live apply, env-set fields stay read-only), integrations health, system actions, telemetry transparency panel showing the exact JSON last sent. **Speech-aware audio:** enable/disable + download the silero model |
 
 ### About ollama (optional, recommended)
 
@@ -378,7 +365,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup. |
 | `SUBARR_TELEMETRY_ENDPOINT` | `https://telemetry.subarr.com/v1/ping` | Anonymous telemetry receiver (see [Telemetry](#telemetry)). Set to empty to opt out. |
 
-## Known limitations (v2.2)
+## Known limitations (v2.5)
 
 Transparent before you install.
 
@@ -491,7 +478,7 @@ The Settings panel shows the current vs latest version per product with release 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
-  <img alt="subarr sits between your stack's inputs and subgen: Bazarr's wanted-list, Sonarr/Radarr file paths, library files on disk, and Tautulli/Plex hints feed into subarr — scheduler, probe-gate (ffprobe), coverage, queue — which coordinates transcription out to subgen (Whisper), the written .srt, and a Plex library refresh." src="docs/architecture.png" width="850">
+  <img alt="subarr sits between your stack's inputs and subgen: Bazarr's wanted-list, Sonarr/Radarr file paths, library files on disk, and Tautulli/Plex hints feed into subarr — scheduler, probe-gate (ffprobe), coverage, queue — which coordinates transcription out to subgen (Whisper), the written .srt, and a media-server library refresh (Plex, Jellyfin, or both)." src="docs/architecture.png" width="850">
 </picture>
 
 **How it runs.** subarr is a long-running service with its own scheduler — it reads Bazarr's wanted list and walks your library on a cadence you set (and on demand from the UI). You don't wire it into Sonarr/Radarr as a custom script or trigger it manually; it just runs beside them.
@@ -515,16 +502,14 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## Roadmap
 
-**v2.2 (this release):**
+**v2.5 (this release):**
 
-- **Blacklist a bad provider sub** (shipped): from Aftercare or the Library tree, straight to Bazarr, so it stops re-fetching the same broken release.
-- **Transcribe forced-only files** (shipped): a per-file full-sub override on forced-only files, without flipping subgen's global forced-subs setting (needs `subarr-subgen` r10+).
-- **Per-title ignore** (shipped): suppress a whole show or a single file, inline on Library or Review.
-- **Subtitle-controls hub** (shipped): one card on the Rules page that signposts every force / ignore / language control to where it lives.
-- **On-demand database backup + integrity check** (shipped): from the Health page.
-- **Reliability pass** (shipped): event-loop UI-freeze fix, database durability, Plex-client circuit breaker, queue reconciliation, telemetry + auth hardening.
+- **Jellyfin media-server backend** (shipped): targeted item refresh when a sub lands, coexisting with Plex — configure either or both.
+- **Path-prefix auto-detect** (shipped): subarr derives the prefix from the server's own library locations, for Jellyfin and Plex alike. Explicit env vars still override.
+- **Forced subtitles for foreign scenes** (shipped): local, no-torch language ID over English media produces a `.forced.en.srt` for the foreign segments. Off by default.
+- **Network-filesystem-safe SQLite journal mode** (shipped): `/data` on NFS or SMB no longer runs WAL.
 
-*Previously: security hardening, non-root container, and activation (2.0); guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
+*Previously: automatic subtitle re-timing and honest multilingual audio (2.4); multi-instance stacks (2.3); Bazarr-parity blacklist / forced / ignore controls (2.2); security hardening, non-root container, and activation (2.0); guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
 
 **Later** — still on the list:
 
