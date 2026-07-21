@@ -7,6 +7,22 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-21
+
+**Jellyfin, beside Plex (#71).** subarr now refreshes Jellyfin the same way it has always refreshed Plex: when a subtitle lands, the owning item is refreshed so the sub appears without waiting for a scheduled scan. Configure either server, or both, and a landed subtitle fans out to every configured server. Plex behaviour is unchanged; existing installs upgrade with no migration and no config change.
+
+### Added
+- **Jellyfin media-server support (#71).** Add Jellyfin under Settings -> Integrations (URL + API key from Jellyfin Dashboard -> API Keys), or set `JELLYFIN_URL` / `JELLYFIN_API_KEY`. It gets a Settings card with Test Connection and live apply, a health dot on the Integrations tiles, and a dashboard tile, exactly like every other integration. Plex and Jellyfin coexist: one of each, both refreshed, and a failure on one never blocks the other. Under the hood both sit behind a single media-server interface, which is what makes adding Emby later a contained change rather than a rewrite.
+- **Path prefixes are auto-detected, for Jellyfin and Plex (#71).** subarr reads the server's own library locations and works out the prefix itself, so the long-standing "No Plex Section" trap that required hand-setting `PLEX_PATH_PREFIX` is gone. `PLEX_PATH_PREFIX` and `JELLYFIN_PATH_PREFIX` still win when you set them explicitly.
+- **Forced subtitles for foreign scenes inside English media (#364).** A film that drops into Russian or Japanese for a scene now gets a `.forced.en.srt` covering just those segments, instead of either nothing or a full transcription. Language identification runs locally on a small ONNX model (no torch, no cloud, roughly 2MB, fetched and checksum-verified on first use), and the detection thresholds were validated against 1706 windows extracted from a real library before shipping. Off by default: enable it under Settings -> Rules, or with `SUBARR_FORCED_SEGMENT_ENABLED=1`.
+
+### Fixed
+- **SQLite no longer runs WAL on a network filesystem (#16).** WAL journaling is unsafe over NFS and SMB and risks database corruption. When `/data` resolves to a network mount, subarr now selects a journal mode that survives it. Local installs are unaffected and keep WAL. Keeping `/data` on local disk remains the recommendation, and the Health page still says so.
+- **Published images now carry current Debian security patches.** The container build cached its apt layer across runs, so `apt-get update` and `apt-get upgrade` could go days without re-running and a patch Debian had already published never reached the image. The layer now expires daily in CI, so every scan and every published image installs current packages. Caught by the trivy gate on libtiff CVE-2026-12912.
+
+### Changed
+- **Per-chunk audio-language probabilities are recorded (#407).** The audio-language audit now stores the per-chunk confidence behind each verdict, with a read-only inspector for sweeping the multilingual threshold against real data. Internal tooling, no UI change; it exists so future threshold changes are evidence-led rather than guessed.
+
 ## [2.4.2] - 2026-07-14
 
 **Your configuration stops getting lost.** A patch fixing a sporadic config-loss bug, plus two issues reported on the 2.4.0 release thread.
