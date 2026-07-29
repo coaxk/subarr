@@ -1,0 +1,159 @@
+# Promote a published version to :stable.
+#
+# Until 2026-07-29 this was a manual `docker tag` + `docker push`, and :stable
+# did not exist at all despite README/docs telling production users to track
+# it. Two things made hand-promotion risky enough to encode:
+#
+#   1. MULTI-ARCH. subarr publishes linux/amd64 + linux/arm64. `docker pull`
+#      + `docker tag` + `docker push` pushes only the puller's architecture,
+#      so :stable would silently lose arm64 — it would exist, pull fine on
+#      x86, and simply fail to resolve on a Pi. `buildx imagetools create`
+#      copies the manifest LIST, preserving every platform. Never replace it
+#      with tag+push. (subarr-subgen is amd64-only so it got away with
+#      tag+push; that is why the two repos looked like they could share a
+#      command and could not.)
+#
+#   2. Promoting a stale artifact. :stable is what risk-averse users track,
+#      so shipping them an image with known-unpatched OS packages is worse
+#      than leaving :stable where it is. The gate below refuses in that case.
+#
+# Soak policy: RELEASES/docs prescribe a soak before promotion. That governs
+# CODE. A pure OS-security rebuild of already-soaked code does not restart the
+# clock — re-soaking would strand :stable on unpatched packages for another
+# week, inverting what the soak protects against. Use soak_override for that
+# case and say why in the run.
+
+name: promote-stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version to promote (e.g. 2.5.0) — must already exist on GHCR"
+        required: true
+      allow_stale:
+        description: "Promote even if the image has outstanding -security packages (say why in the run)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: promote to :stable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # retag on GHCR
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      ALLOW_STALE: ${{ inputs.allow_stale }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: verify the source tag exists and is multi-arch
+        id: src
+        run: |
+          set -euo pipefail
+          REF="${IMAGE}:${VERSION}"
+          if ! docker manifest inspect "$REF" > /dev/null 2>&1; then
+            echo "::error::${REF} does not exist on GHCR. Publish it before promoting."
+            exit 1
+          fi
+          docker manifest inspect "$REF" > manifest.json
+
+          ARCHES="$(python3 -c "
+          import json
+          m = json.load(open('manifest.json'))
+          got = [x['platform']['os'] + '/' + x['platform']['architecture']
+                 for x in m.get('manifests', [])
+                 if x.get('platform', {}).get('architecture') not in (None, 'unknown')]
+          print(','.join(sorted(got)))
+          ")"
+          echo "source arches: ${ARCHES}"
+          echo "arches=${ARCHES}" >> "$GITHUB_OUTPUT"
+
+          # A release build publishes both. If one is missing the manifest is
+          # already damaged and promoting would propagate that to :stable.
+          case "$ARCHES" in
+            *linux/amd64*) ;;
+            *) echo "::error::source manifest has no linux/amd64: ${ARCHES}"; exit 1 ;;
+          esac
+          case "$ARCHES" in
+            *linux/arm64*) ;;
+            *) echo "::error::source manifest has no linux/arm64: ${ARCHES} — refusing, this would ship a Pi-broken :stable"; exit 1 ;;
+          esac
+
+      - name: refuse to promote an image behind on security updates
+        id: staleness
+        run: |
+          set -euo pipefail
+          REF="${IMAGE}:${VERSION}"
+          docker pull -q "$REF"
+          docker run --rm --entrypoint sh "$REF" -c \
+            'apt-get update -qq >/dev/null 2>&1 && apt list --upgradable 2>/dev/null' \
+            | grep -v '^Listing' | sort > all.txt || true
+          grep -- '-security' all.txt > sec.txt || true
+          COUNT="$(wc -l < sec.txt)"
+          echo "outstanding -security packages: ${COUNT}"
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::warning::${REF} has ${COUNT} outstanding -security package(s)"
+            cat sec.txt
+            if [ "$ALLOW_STALE" != "true" ]; then
+              echo "::error::refusing to promote. :stable is what risk-averse users track."
+              echo "::error::Cut a rebuild (no code change needed — the Dockerfile upgrades"
+              echo "::error::behind APT_REFRESH) and promote that, or re-run with allow_stale."
+              exit 1
+            fi
+            echo "::warning::allow_stale was set — promoting anyway"
+          fi
+
+      - name: promote (manifest-list copy, preserves every arch)
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:stable" "${IMAGE}:${VERSION}"
+
+      - name: verify :stable matches the source, arch for arch
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, subprocess, os, sys
+
+          image = os.environ["IMAGE"]
+          version = os.environ["VERSION"]
+
+          def digests(ref):
+              raw = subprocess.run(
+                  ["docker", "manifest", "inspect", ref],
+                  capture_output=True, text=True, check=True,
+              ).stdout
+              m = json.loads(raw)
+              return {
+                  x["platform"]["os"] + "/" + x["platform"]["architecture"]: x["digest"]
+                  for x in m.get("manifests", [])
+                  if x.get("platform", {}).get("architecture") not in (None, "unknown")
+              }
+
+          src = digests(f"{image}:{version}")
+          dst = digests(f"{image}:stable")
+          for plat in sorted(set(src) | set(dst)):
+              a, b = src.get(plat), dst.get(plat)
+              print(f"  {plat}: {(a or 'MISSING')[:19]} -> {(b or 'MISSING')[:19]}")
+          if src != dst:
+              print("MISMATCH: :stable does not match the source manifest", file=sys.stderr)
+              sys.exit(1)
+          print(f":stable now serves {version} on {len(src)} platform(s)")
+          PY
