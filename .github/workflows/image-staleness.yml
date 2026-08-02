@@ -1,0 +1,142 @@
+# Weekly staleness detector for the PUBLISHED image.
+#
+# The problem it solves: security.yml's trivy job builds a FRESH image and
+# scans that. A fresh build picks up whatever Debian published this morning,
+# so it is green almost by construction. Meanwhile users pull
+# ghcr.io/coaxk/subarr:latest, which was built whenever we last cut a release
+# and never changes afterwards. Releases are tag-driven and infrequent, so
+# that image can sit for weeks accumulating unpatched packages while every
+# scan stays green.
+#
+# Ported from coaxk/subarr-subgen, where this exact detector caught the
+# published image 7 days behind with 11 outstanding security packages
+# (subarr-subgen#33) on its first scheduled run.
+#
+# This job inspects the ARTIFACT instead of a rebuild: pull the published
+# image, ask apt what is upgradable, and report anything from a -security
+# pocket. It deliberately does NOT rebuild or republish — silently changing
+# what :latest contains under an unchanged tag is the "artifact is not the
+# tag" trap in reverse. A human cuts the next release when it justifies one.
+#
+# POCKET NAMING: subarr is Debian (python:3.12-slim -> trixie), so security
+# updates render as `pkg/trixie-security`; subarr-subgen is Ubuntu, where they
+# render as `pkg/jammy-security`. The `-security` substring matches both.
+# Plain `trixie`/`stable` and `trixie-updates` entries are ordinary updates,
+# NOT security, and are deliberately excluded — verified against the live
+# image's sources.list.d (deb.debian.org/debian-security, Suites:
+# trixie-security).
+#
+# Sticky issue: one issue per episode, close it after cutting the release and
+# the next occurrence opens fresh.
+
+name: image-staleness
+
+on:
+  schedule:
+    # Fridays 07:00 UTC. Staggered away from security.yml (Mon 07:00) and away
+    # from subarr-subgen's own staleness run (Thu 07:00), so a bad week does
+    # not deliver both reports at once.
+    - cron: "0 7 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: published image OS package staleness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # open/update the sticky report
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      IMAGE: ghcr.io/coaxk/subarr:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: inspect the published image
+        id: inspect
+        run: |
+          set -euo pipefail
+          docker pull -q "$IMAGE"
+
+          BUILT="$(docker inspect "$IMAGE" --format '{{.Created}}')"
+          BUILT_EPOCH="$(date -u -d "$BUILT" +%s)"
+          AGE_DAYS=$(( ( $(date -u +%s) - BUILT_EPOCH ) / 86400 ))
+          echo "built=$BUILT" >> "$GITHUB_OUTPUT"
+          echo "age_days=$AGE_DAYS" >> "$GITHUB_OUTPUT"
+
+          # `apt list --upgradable` needs fresh lists; the image strips them.
+          # --entrypoint sh so this does not boot subarr.
+          docker run --rm --entrypoint sh "$IMAGE" -c \
+            'apt-get update -qq >/dev/null 2>&1 && apt list --upgradable 2>/dev/null' \
+            | grep -v '^Listing' | sort > all.txt || true
+
+          grep -- '-security' all.txt > sec.txt || true
+          echo "total=$(wc -l < all.txt)" >> "$GITHUB_OUTPUT"
+          echo "security=$(wc -l < sec.txt)" >> "$GITHUB_OUTPUT"
+
+          # Printed unconditionally: a silent run is ambiguous (genuinely clean
+          # vs the probe broke), so this line is what proves the check ran.
+          echo "image is $AGE_DAYS days old; $(wc -l < all.txt) upgradable, $(wc -l < sec.txt) from -security"
+
+      - name: report if behind
+        if: steps.inspect.outputs.security != '0'
+        # Env indirection rather than inline ${{ }} in the script: an
+        # expression expanded directly into `run:` becomes shell code
+        # (template injection). Same practice as release.yml. (zizmor)
+        env:
+          BUILT: ${{ steps.inspect.outputs.built }}
+          AGE_DAYS: ${{ steps.inspect.outputs.age_days }}
+          TOTAL: ${{ steps.inspect.outputs.total }}
+          SECURITY: ${{ steps.inspect.outputs.security }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The published image users pull is behind on OS security updates."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Built | ${BUILT} |"
+            echo "| Age | ${AGE_DAYS} days |"
+            echo "| Upgradable packages | ${TOTAL} |"
+            echo "| From a -security pocket | **${SECURITY}** |"
+            echo
+            echo "This is not a trivy finding. security.yml builds a fresh image and scans"
+            echo "that, so it stays green while the artifact on GHCR ages. These are packages"
+            echo "with published fixes that the running image does not have."
+            echo
+            echo "<details><summary>Security-pocket packages</summary>"
+            echo
+            echo '```'
+            cat sec.txt
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "**Action:** cut a patch release when this looks worth it. The Dockerfile"
+            echo "already runs \`apt-get upgrade -y\` behind APT_REFRESH, so a rebuild picks"
+            echo "these up with no code change. An OS-security refresh is a rebuild, not a"
+            echo "feature release: bump the version so the artifact is identifiable, and the"
+            echo "soak does not restart (the code is unchanged; only packages moved)."
+            echo
+            echo "Deliberately not auto-rebuilt: published versions are immutable, and quietly"
+            echo "changing what \`:latest\` contains under the same tag defeats the point."
+            echo
+            echo "Close this issue once the release is cut; the next occurrence opens a fresh one."
+            echo
+            echo "Run: ${RUN_URL}"
+          } > body.md
+
+          bash scripts/sticky-issue.sh \
+            "${GITHUB_REPOSITORY}" \
+            "image-staleness" \
+            "Published image is behind on OS security updates" \
+            "body.md" \
+            "image-staleness,low-priority" \
+            "still behind as of $(date -u +%Y-%m-%d): ${SECURITY} security-pocket package(s), image ${AGE_DAYS} days old"
