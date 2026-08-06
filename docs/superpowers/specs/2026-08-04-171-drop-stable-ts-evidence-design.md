@@ -21,9 +21,48 @@ overstate the risk:
 
 | Claim in #171 | Reality |
 |---|---|
-| "`CUSTOM_REGROUP` is the knob our entire regroup investment rides on" | subarr's source has **3 references, all comments** — none functional. The arena sweeps `SUBGEN_KWARGS`, not regroup. The regroup tuning lives baked in our subgen image. |
+| "`CUSTOM_REGROUP` is the knob our entire regroup investment rides on" | **CONFIRMED.** An initial grep of `subarr/src` found only comments and wrongly suggested the risk was overstated — the dependency lives in the **subgen image**, not subarr. See "The regroup dependency is real" below. |
 | Branch is 14 commits (8 Jun) | **44 commits** ahead of main, actively developed (latest work is refining the segmenter's gap-split heuristics) |
 | Replacement is knob-less | Exposes `MAX_LINE_LENGTH=42`, `GAP_SPLIT_SECS=0.4`, `MAX_SEGMENT_SECS=5.0` — semantically meaningful subtitle parameters, and **sweepable by the Tuning Lab** in a way a stable-ts DSL string never was |
+
+### The regroup dependency is real (corrected 2026-08-04)
+
+`docker/Dockerfile` in subarr-subgen bakes it as an image default:
+
+```
+ENV CUSTOM_REGROUP="cm_sp=.* /。/?/？_sg=.5_mg=.3++84_p=.3+.7+1.5_sl=42++++++1"
+```
+
+This is **"v2-strongpad"**, which won the #168 regroup arena (4 audio languages x
+6 configs, full files) and held on held-out languages (de/sr) at **median CPS
+~13-15, %>25 CPS ~8-14%, zero sub-0.5s micro-cues**. Patches `0001` and `0017`
+thread it into `args['regroup']`.
+
+The #359 retimer spec states the dependency plainly: *"our entire current CPS
+control is `CUSTOM_REGROUP` ... a stable-ts-only regroup config"*, and calls
+lever 2 **"#171-entangled"**.
+
+**Two things make this less alarming than it sounds:**
+
+1. **The immune lever already exists and was built on purpose.** The #359 retimer
+   was specified as *"100% #171-immune — operates on the final SRT; agnostic to
+   how cues were produced (stable-ts regroup or Netflix segmenter)"*. It shipped
+   in 2.4.0. The mitigation predates the crisis.
+2. **The new segmenter targets the same design point.** strongpad carries
+   `sl=42`; the new segmenter defaults to `MAX_LINE_LENGTH=42`, and strongpad's
+   `84` is two 42-char lines. Same objective, different mechanism — which is a
+   reason to expect the gap may be small, not a reason to assume it.
+
+**This sharpens the study question to:** can the retimer *alone* carry the CPS
+load that strongpad + retimer currently carry *together*? That is precisely the
+arm 2 vs arm 3 post-retime comparison below, so the three-arm design is
+unchanged — only this justification needed correcting.
+
+⚠️ **Do not conflate the two existing baselines.** #168 reports %>25 CPS ~8-14%
+(subgen-side, strongpad, pre-retimer). #359 reports 22.9% → 5.2% (subarr-side
+retimer, different corpus). They measure different stages on different material
+and are **not** comparable. Phase 2 must establish its own baseline on its own
+corpus rather than borrowing either number.
 
 Also established:
 - On the branch: `CUSTOM_REGROUP`, `WORD_LEVEL_HIGHLIGHT`, `stable_whisper` are all **0 occurrences**. On current main they are 5 / — / 4. The knobs are gone, not renamed.
@@ -56,6 +95,16 @@ Pre-registering this so the result is not rationalised after the numbers land.
 advertises; those flags are the actual contract. A patch conflicting is
 uninteresting (context drift is normal sync work). A capability having nowhere
 to live is the veto.
+
+**Plus one non-flag capability that the corrected premise surfaced:** the
+`CUSTOM_REGROUP` consumption seam (patches `0001`/`0017` setting
+`args['regroup']`). It advertises no flag because subarr never calls it directly
+— it is an image default — but it is our source-side CPS control and it is
+**known GONE** on the branch (`regroup` is a stable-ts concept; the branch has 0
+occurrences of `stable_whisper`). It is listed in the audit for completeness with
+its verdict pre-known; it does **not** trigger the veto, because the #359 retimer
+is the deliberate immune replacement and Phase 2 exists to measure whether that
+replacement suffices.
 
 The 16 flags live subgen currently advertises:
 
@@ -112,11 +161,16 @@ Runs only if Phase 1 clears the veto.
 |---|---|---|
 | 1. vanilla-old | upstream `main` (2026.07.3), unpatched | what upstream produces today |
 | 2. vanilla-new | `refactor/drop-stable-ts`, unpatched | **the segmenter change alone** (vs arm 1) |
-| 3. patched-old | our shipped `2026.07.3-r1` | ship reference — what users get now |
+| 3. patched-old | our shipped `2026.07.3-r1` | ship reference — what users get now, **including strongpad** |
 
 Arm 1 vs 2 is the honest segmenter comparison, with our tuning held out of it.
-Arm 3 vs 1 is a **built-in control**: it shows what our patches actually buy. If
-that delta is ~zero, that is a finding in its own right and worth reporting.
+Arm 3 vs 1 is a **built-in control**: it shows what strongpad plus our other
+patches actually buy. If that delta is ~zero, that is a finding in its own right
+— it would mean strongpad stopped earning its keep some time ago.
+
+**Arm 2 vs arm 3, post-retime, is the decision.** It asks the sharpened question
+directly: can the retimer alone carry the CPS load that strongpad + retimer
+currently carry together?
 
 Comparing arm 2 against arm 3 alone would conflate "new segmenter" with "lost our
 tuning" and make the new base look worse than it is. That is why there are three
