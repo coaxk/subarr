@@ -356,6 +356,56 @@ flag is genuinely absent from every patch (a real and interesting finding worth
 recording), or the parser has a hole (a bug to fix before Task 3). Say which, with the
 grep that proves it.
 
+- [ ] **Step 4c: Make Step 4b permanent — guard the allowlist against drift**
+
+Step 4b is a one-time manual check. `ADVERTISED_CAPABILITIES` is a hand-captured
+snapshot, and nothing re-derives it. If a future patch renames or drops one of the 16
+literals, `capabilities_added_by_patch` stops finding it, `build_capability_map`
+silently omits it, and Task 5's `.get(cap, [])` returns `[]` — **indistinguishable from
+"no patch ever provided this"**. Wire the check up as a test so it cannot rot:
+
+```python
+PATCHES_DIR = Path(__file__).resolve().parent.parent / "patches"
+
+
+def test_every_advertised_capability_is_provided_by_a_real_patch():
+    patch_files = sorted(PATCHES_DIR.glob("*.patch"))
+    assert patch_files, f"no patch files found under {PATCHES_DIR}"
+
+    provided: set[str] = set()
+    for path in patch_files:
+        provided |= capabilities_added_by_patch(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+
+    missing = ADVERTISED_CAPABILITIES - provided
+    assert not missing, (
+        f"advertised capabilities with no patch provider: {sorted(missing)}"
+    )
+```
+
+Two details that are the whole point of the test, not incidental:
+
+- **Resolve `patches/` from `__file__`, never the cwd.** A cwd-relative glob run from
+  elsewhere silently matches nothing, the union is empty, and the subset check passes
+  vacuously. The `assert patch_files` line exists so that failure is loud.
+- **Name the missing capabilities in the message.** Whoever trips this in six months
+  needs to know *which* flag vanished.
+
+⚠️ **Watch this test fail before trusting it.** Temporarily add
+`"not_a_real_capability"` to the frozenset, re-run, and confirm you get
+`advertised capabilities with no patch provider: ['not_a_real_capability']`. Then
+remove it. A guard nobody has seen fail is not a guard.
+
+Also record, next to the frozenset, what this guard does **not** cover: a brand-new
+capability a patch adds that never gets added to the allowlist. That direction still
+needs a human to recapture the list from a live image.
+
+And note the **17th** audit row there too — `CUSTOM_REGROUP` advertises no flag at all
+(patches `0001`/`0017` set it via `args['regroup'] = ...`, a dict assignment the regex
+never matches by design), so it is handled by hand in Task 6 Step 4. Without that
+comment, Task 5's author reads `ADVERTISED_CAPABILITIES` as the entire surface.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -371,6 +421,24 @@ git commit -m "feat(#171): restrict the map to the 16 advertised capabilities"
 **What a "seam" is:** the upstream symbol a patch attaches to. Concretely, the function name in a hunk header (`@@ -580,6 +580,7 @@ def queue_status():` → `queue_status`) and any upstream function the patch's added lines call. If none of a capability's seams exist on the branch, the capability has nowhere to live.
 
 **Why hunk headers:** `git diff` puts the enclosing function in the hunk header, which is exactly "where this patch attaches" without needing to parse Python.
+
+**Pre-verified 2026-08-06 — this approach actually works on our patches.** The whole
+task rests on an assumption worth checking before building on it: that our patch files
+carry function context in their hunk headers at all. If they did not, `seams_for_patch`
+would return empty for every patch, every capability would fall to `GONE_CANDIDATE`,
+and the audit would look catastrophic while measuring nothing.
+
+Measured across `patches/*.patch`: **101 of 129 hunk headers carry a `def`/`class`
+context**, and the symbols are genuine subgen ones — `queue_status` (18), `asr` (10,
+as `async def asr(`), `transcribe_existing` (8), `batch` (7), `asr_task_worker` (7),
+`gen_subtitles_queue` (5), `NewFileHandler` (5), `DeduplicatedQueue` (5),
+`runtime_config` (4).
+
+The remaining 28 anchor at module level (e.g. `subgen_version = '2026.06.4'`) and
+correctly contribute no seam. That is by design, not a miss — but note the
+consequence: a capability provided *only* by module-level hunks gets an empty seam set
+and therefore `GONE_CANDIDATE` in Task 4, which is the intended escalate-to-a-human
+path rather than a silent pass.
 
 **Files:**
 - Modify: `scripts/capability_audit.py`
@@ -444,7 +512,7 @@ def seams_for_patch(patch_text: str) -> set[str]:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd /mnt/c/Projects/subarr-subgen && python -m pytest tests/test_capability_audit.py -v`
-Expected: PASS, 12 passed
+Expected: PASS, 13 passed
 
 - [ ] **Step 5: Commit**
 
@@ -535,7 +603,7 @@ def classify_capability(seams: set[str], branch_symbols: set[str]) -> Verdict:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd /mnt/c/Projects/subarr-subgen && python -m pytest tests/test_capability_audit.py -v`
-Expected: PASS, 16 passed
+Expected: PASS, 17 passed
 
 - [ ] **Step 5: Commit**
 
@@ -687,7 +755,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd /mnt/c/Projects/subarr-subgen && python -m pytest tests/test_capability_audit.py -v`
-Expected: PASS, 20 passed
+Expected: PASS, 21 passed
 
 - [ ] **Step 5: Generate the report against the real branch**
 
@@ -698,7 +766,27 @@ python scripts/capability_audit.py > docs/drop-stable-ts-capability-audit-2026-0
 cat docs/drop-stable-ts-capability-audit-2026-08-04.md
 ```
 
-Expected: a 16-row table, a branch SHA (`7997624` unless the branch moved), and a `VETO:` line. **Sanity check before continuing:** `ignore_forced_subtitles` should show no providing patches — it is inherited from upstream, not added by us. If every capability comes back PORTABLE, be suspicious and confirm `extract_branch_symbols` actually parsed the branch file rather than an empty string — an empty symbol set would make everything GONE, and a symbol set containing everything would make everything PORTABLE.
+Expected: a 16-row table, a branch SHA (`7997624` unless the branch moved), and a `VETO:` line.
+
+**Sanity check before continuing:** all 16 capabilities should have at least one
+providing patch. This was verified in Task 2 Step 4b: 34 patches, **16/16 attributed,
+none unattributed**.
+
+⚠️ An earlier draft of this plan claimed `ignore_forced_subtitles` would show *no*
+providing patch, being "inherited from upstream". That is wrong, and it would have
+sent you hunting a non-existent bug. It conflates two different things: the **variable**
+`ignore_forced_subtitles` is indeed upstream's (6 occurrences in the pinned `subgen.py`),
+but the **capability flag** that advertises it is ours, added by
+`0022-runtime-config-endpoint.patch:73`. The flag is the contract subarr negotiates
+against, so it is correctly attributed to us.
+
+If every capability comes back PORTABLE, be suspicious and confirm `extract_branch_symbols` actually parsed the branch file rather than an empty string — an empty symbol set would make everything GONE, and a symbol set containing everything would make everything PORTABLE.
+
+⚠️ **A PORTABLE here is a name match, not a clean bill of health.** `classify_capability`
+only asks whether a seam *name* still exists on the branch; it cannot see whether the
+insertion point inside that function survived. Do not read this table as "these are
+fine" — the three veto capabilities get a mandatory manual read in **Task 6 Step 0**
+regardless of what this column says.
 
 - [ ] **Step 6: Commit**
 
@@ -716,6 +804,41 @@ git commit -m "feat(#171): generate the mechanical capability audit report"
 
 **Files:**
 - Modify: `docs/drop-stable-ts-capability-audit-2026-08-04.md`
+
+- [ ] **Step 0: Manually confirm the three VETO capabilities — whatever the script said**
+
+⚠️ **Do this even when all three come back PORTABLE. Especially then.**
+
+`classify_capability` returns PORTABLE when `seams & branch_symbols` is non-empty —
+a **purely nominal** test. A name surviving does not mean the seam is usable: the
+branch can keep `def asr(...)` while rewriting the body our patch inserts into, and
+the script cannot tell those apart. So PORTABLE means *"a name matched"*, not
+*"this can be re-ported"*.
+
+Left alone, this plan escalates asymmetrically. `GONE_CANDIDATE` is explicitly
+"absence of evidence, escalate to a human" — but PORTABLE is accepted on a name
+match with nobody looking, and PORTABLE is the answer that lets Phase 2 spend GPU
+time. The reassuring verdict must not be the unexamined one.
+
+The whole audit collapses to one bit: does the veto fire. Three capabilities decide
+it. Checking three by hand is cheap; being wrong about them is not.
+
+For each of `per_request_kwargs`, `asr_arena`, `runtime_config`, open the actual
+seam on the branch and confirm the *insertion point* still exists, not just the name:
+
+```bash
+cd /mnt/c/Projects/subarr-subgen
+# What does our patch actually attach to? Read the hunk, not just its header.
+grep -n -A15 "^@@" patches/<the providing patch>.patch | head -60
+# Now read that same function AS IT EXISTS ON THE BRANCH, in full.
+git -C upstream show FETCH_HEAD:subgen.py | sed -n '/^\(async \)\?def <seam>/,/^\(async \)\?def /p'
+```
+
+Record each one under the `## Manual pass` heading using the same shape as Step 2,
+with **Mechanical said:** PORTABLE and a **Found:** line that names the surviving
+insertion point and its line number. If the function survives in name only and the
+structure our patch needs is gone, say so and treat it as GONE — that fires the veto
+and is a legitimate result.
 
 - [ ] **Step 1: For each GONE_CANDIDATE, search the branch for an equivalent seam**
 
