@@ -62,6 +62,29 @@ is a stop condition, not a footnote.
 delta in the primary metric is not comfortably smaller than 2pp, the corpus is too
 small and must grow. Sizing is decided by that measurement, not by taste.
 
+### Corpus composition — fixed 2026-08-07, before any arm was run
+
+**`--per-band 14`, all four bands, 56 clips.**
+
+The dry run over the live library found **1085 candidates** with a usable sibling
+subtitle track, banded: sparse 88, normal 787, dense 196, **very_dense 14**.
+
+`very_dense` has only 14 candidates in the entire library, so it is the binding
+constraint. All bands are capped at 14 to keep the corpus **balanced** rather than
+letting `normal` (787 available) dominate a study whose whole subject is how a
+segmenter behaves under load.
+
+⚠️ **This is deliberately a decision about balance, not size.** Fast-speech material
+is exactly where a segmentation change is most likely to surface, so a corpus that is
+70% `normal` would be least informative precisely where it matters most. If the noise
+calibration shows 56 clips is too few to resolve 2pp, the correct response is to
+**lengthen the clips or add bands**, *not* to quietly refill from `normal` — that
+would change what the study measures while appearing to only change its size.
+
+⚠️ **Locked before any metric was seen.** If this composition is revisited later, the
+reason must be recorded here and the calibration re-run, because a corpus chosen after
+glimpsing results is not a pre-registered corpus.
+
 ---
 
 ## The arms
