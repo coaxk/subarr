@@ -1,0 +1,5 @@
+{
+  "queue_endpoint": "absent (unpatched upstream, as expected for arms 1 and 2)",
+  "task": "transcribe",
+  "clip_count": 36
+}

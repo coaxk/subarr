@@ -36,11 +36,23 @@ DEFAULT_OUT = "study/out"
 
 def server_config(client: httpx.Client, url: str) -> dict:
     """Record what the server actually is, so the report can prove the arms
-    differed only where intended."""
-    r = client.get(f"{url}/queue", timeout=30)
+    differed only where intended.
+
+    ``/queue`` is OUR endpoint -- patch 0007 adds it. Arms 1 and 2 are
+    unpatched upstream and do not have it, so its absence is expected there and
+    must not abort the run. It is also a useful signal in itself: a 404 here
+    confirms the arm really is unpatched rather than a mislabelled image.
+    """
+    try:
+        r = client.get(f"{url}/queue", timeout=30)
+    except Exception as exc:
+        return {"queue_endpoint": f"unreachable: {exc}"}
+    if r.status_code == 404:
+        return {"queue_endpoint": "absent (unpatched upstream, as expected for arms 1 and 2)"}
     r.raise_for_status()
     q = r.json()
     return {
+        "queue_endpoint": "present (patched build)",
         "version": q.get("version"),
         "model": q.get("model"),
         "compute_type": q.get("compute_type"),
