@@ -26,7 +26,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from subarr.study.corpus import DensityBand, band_for_cues_per_minute, stratify
+from subarr.study.corpus import (
+    DensityBand,
+    band_for_cues_per_minute,
+    stratify_eligible,
+)
 from subarr.subtitle_readability import parse_srt
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".ts", ".webm", ".mov"}
@@ -240,9 +244,32 @@ def main() -> int:
         print(f"  {band.value:11s} {counts.get(band, 0)}")
 
     items = [(str(c.video), c.cues_per_minute) for c in candidates]
-    picked_keys = stratify(items, per_band=args.per_band)
     by_video = {str(c.video): c for c in candidates}
+
+    # Length-check at PICK time, not at extraction time. Picking blind and
+    # letting ffmpeg refuse leaves the band silently under quota -- 5 of the 14
+    # very_dense candidates turned out to be 33-second sample files posing as
+    # episodes, which took that band to 9 of 14 without anything failing loudly.
+    needed = args.offset_seconds + args.clip_seconds
+    rejected: list[tuple[str, float]] = []
+
+    def long_enough(video: str) -> bool:
+        dur = probe_duration_seconds(Path(video))
+        if dur is None or dur < needed:
+            rejected.append((video, dur or 0.0))
+            return False
+        return True
+
+    picked_keys = stratify_eligible(items, per_band=args.per_band, eligible=long_enough)
     picks = [by_video[video] for video, _ in picked_keys]
+
+    if rejected:
+        print(
+            f"\nrejected {len(rejected)} candidate(s) too short for a "
+            f"{args.clip_seconds:.0f}s clip at offset {args.offset_seconds:.0f}s:"
+        )
+        for video, dur in rejected:
+            print(f"  {dur:8.1f}s  {Path(video).name}")
 
     print(f"\npicked {len(picks)} clip(s):")
     for c in picks:
