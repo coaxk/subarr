@@ -1,4 +1,4 @@
-from subarr.study.metrics import SrtMetrics, metrics_for_srt
+from subarr.study.metrics import ArmSample, SrtMetrics, metrics_for_srt, sample_for_srt
 
 # Cue 1: 10 chars in 10s  -> 1 CPS, fine.
 # Cue 2: 60 chars in 2s   -> 30 CPS, ABOVE the 25 critical threshold.
@@ -49,3 +49,28 @@ def test_metrics_are_a_plain_comparable_record():
     a, b = metrics_for_srt(SRT), metrics_for_srt(SRT)
     assert a == b
     assert isinstance(a, SrtMetrics)
+
+
+def test_sample_carries_both_stages_and_they_can_differ():
+    srt = """1
+00:00:00,000 --> 00:00:02,000
+{sixty}
+
+2
+00:00:20,000 --> 00:00:22,000
+short
+""".replace("{sixty}", "x" * 60)
+    s = sample_for_srt("clip01", srt)
+    assert isinstance(s, ArmSample)
+    assert s.clip == "clip01"
+    assert s.pre.over_25_cps == 1
+    assert s.post.cue_count == s.pre.cue_count
+
+
+def test_post_stage_is_the_retimed_text_not_the_original():
+    srt = """1
+00:00:00,000 --> 00:00:02,000
+{sixty}
+""".replace("{sixty}", "x" * 60)
+    s = sample_for_srt("c", srt)
+    assert s.post_srt != s.pre_srt

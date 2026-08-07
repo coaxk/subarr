@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from subarr.subtitle_readability import analyze_srt, parse_srt
+from subarr.subtitle_retime import retime_srt
 
 
 @dataclass(frozen=True)
@@ -37,4 +38,32 @@ def metrics_for_srt(text: str) -> SrtMetrics:
         cue_count=len(parse_srt(text)),
         over_25_cps=sum(1 for i in report.issues if i.kind == "cps" and i.severity == "critical"),
         overlaps=sum(1 for i in report.issues if i.kind == "overlap"),
+    )
+
+
+@dataclass(frozen=True)
+class ArmSample:
+    """One clip's result for one arm, measured at both stages."""
+
+    clip: str
+    pre_srt: str
+    post_srt: str
+    pre: SrtMetrics
+    post: SrtMetrics
+
+
+def sample_for_srt(clip: str, srt_text: str) -> ArmSample:
+    """Measure one subtitle file before and after the retimer.
+
+    Both stages are required. The retimer is segmenter-agnostic and runs
+    downstream of subgen, so measuring only raw output would overstate the cost
+    of adopting a new segmenter -- and the gate is defined post-retime.
+    """
+    post = retime_srt(srt_text)
+    return ArmSample(
+        clip=clip,
+        pre_srt=srt_text,
+        post_srt=post,
+        pre=metrics_for_srt(srt_text),
+        post=metrics_for_srt(post),
     )
