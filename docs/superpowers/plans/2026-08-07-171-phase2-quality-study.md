@@ -647,6 +647,35 @@ cannot be told from noise.
 ⚠️ Report the measured delta whatever it is. A calibration that is quietly skipped
 because it was inconvenient turns the entire study into an unfalsifiable claim.
 
+### RESULT — measured 2026-08-07: **0.00pp**
+
+| stage | run 1 | run 2 | delta |
+|---|---|---|---|
+| pre-retime, cues over 25 CPS | 9.08% | 9.08% | **+0.00pp** |
+| post-retime, cues over 25 CPS | 2.78% | 2.78% | **+0.00pp** |
+| overlaps | 0 | 0 | 0 |
+
+1652 cues over 36 clips, both runs. **Corpus resolves the gate**, by a wide margin.
+
+**All 36 SRTs are byte-identical between the two runs.** The runs genuinely executed
+separately — different mtimes (17:40:33 vs 17:59:04) and different wall times (17.2 min
+vs 25.6 min), so this is not a skipped run or a directory compared with itself.
+
+⚠️ **This falsifies a premise in the design.** The spec assumed "Whisper is not
+bit-deterministic, so before comparing arms, run arm 3 twice". For *this* configuration
+it is bit-deterministic: `temperature` begins at 0.0 with `beam_size: 5`, so it is beam
+search at temperature zero with fixed VAD parameters, on identical audio and hardware.
+The temperature fallback ladder never engaged on this corpus.
+
+**What that buys:** any difference later observed between arms is **signal, not
+variance**. There is no noise floor to clear.
+
+⚠️ **What it does NOT establish.** Determinism was measured for **arm 3 only**. Arms 1
+and 2 are different builds, and arm 2 in particular carries a different segmenter and
+different kwargs handling. Before arm 2 vs arm 3 decides anything, **run arm 2 twice as
+well** and confirm the same. Assuming determinism transfers across builds would be
+exactly the kind of unexamined premise this calibration just overturned.
+
 ---
 
 ## Task 6: Build arms 1 and 2, then run all three
