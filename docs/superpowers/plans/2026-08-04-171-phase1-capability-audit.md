@@ -524,7 +524,55 @@ git commit -m "feat(#171): extract patch seams from hunk headers"
 
 ---
 
-## Task 4: Classify each capability against the branch
+## ⛔ Tasks 4 and 5 below are SUPERSEDED — read this first
+
+**The name-matching classifier specified below does not work.** It was replaced on
+2026-08-06 after review, with the user's approval, by a **per-hunk applicability probe**.
+The original text is kept because the reasoning matters, but do not implement it.
+
+Three findings killed it, each verified directly against the repo:
+
+1. **Its alarm is unreachable.** Of the upstream symbols our patches attach to, the
+   number the branch removed is **zero**:
+   `(all_seams ∩ base_symbols) − branch_symbols == ∅`. `GONE_CANDIDATE` — the verdict
+   that fires the veto — cannot occur on this data. The tool would emit 16 green rows
+   and a report reading *"no seam lost"* **by construction**, whatever upstream did.
+
+2. **Name survival is the wrong measurement.** `args.update(kwargs)` goes **3 → 0**
+   between base and branch, while every enclosing function name survives.
+   `asr_task_worker` still exists, so `asr_arena` and `per_request_kwargs` both score
+   PORTABLE — on a function whose `args` dict was deleted and replaced by `fw_kwargs`.
+
+3. **The one genuinely dead capability is invisible to it.** On the branch, `regroup`
+   survives only as a comment and inside `_STABLE_TS_KWARGS` — the **strip-list**, i.e.
+   explicitly filtered out before reaching faster-whisper. Zero live uses. That is
+   `CUSTOM_REGROUP`, excluded from the classifier by design because it is set via
+   `args['regroup']` rather than a flag literal.
+
+Two corrections made before this were real but did not rescue it. Partitioning seams
+against the pinned base is **correct and retained in spirit** (it fixes a spurious
+`runtime_config` veto caused by 4 of 27 seams — `queue_status`, `runtime_config`,
+`detect_language_robust`, `detect_language_robust_task` — being functions *our own*
+patches create, `queue_status` by `0007`). Transitive resolution was **rejected**: all
+7 affected capabilities collapse to one identical answer resting partly on `webui`, a
+proximity label whose own hunk fails on the branch.
+
+**The replacement, implemented as the new Tasks 4 and 5:** split every patch into
+individual hunks and ask `git apply --check` whether each still applies — against the
+pinned base and against the branch. A hunk that **applies to base and fails on branch**
+is a real, localized break. A trial run found **11 such hunks** the classifier called
+PORTABLE, in `asr_task_worker`, `gen_subtitles`, and `detect_language_task`.
+A hunk that fails on *base* too is **inconclusive**, not broken — it depends on earlier
+patches in the stack — so the probe yields a **lower bound**, which is the honest
+direction for a veto instrument to err.
+
+`seams_for_patch` (Task 3) is **retained as a triage index**, not the verdict.
+`CUSTOM_REGROUP` becomes a **hard-coded GONE row in the report body**, not a source
+comment — it is the single real seam loss and the tool must not be able to omit it.
+
+---
+
+## Task 4 (SUPERSEDED): Classify each capability against the branch
 
 **The three verdicts, and why the middle one is the default:**
 
@@ -615,7 +663,7 @@ git commit -m "feat(#171): classify capabilities, never guessing NATIVE"
 
 ---
 
-## Task 5: Wire the CLI and generate the mechanical report
+## Task 5 (SUPERSEDED): Wire the CLI and generate the mechanical report
 
 **Files:**
 - Modify: `scripts/capability_audit.py`
@@ -795,6 +843,97 @@ cd /mnt/c/Projects/subarr-subgen
 git add scripts/capability_audit.py tests/test_capability_audit.py docs/drop-stable-ts-capability-audit-2026-08-04.md
 git commit -m "feat(#171): generate the mechanical capability audit report"
 ```
+
+---
+
+## Task 4 (REVISED): Split patches into individually appliable hunks
+
+The pure half of the probe. No git here — splitting and reconstruction only, so it can
+be tested without a checkout. Matches how the rest of this file is built: pure
+functions tested, a thin `main()` does the IO.
+
+**Files:** modify `scripts/capability_audit.py`, `tests/test_capability_audit.py`
+
+Adds `Hunk` (a `NamedTuple` of `patch`, `file`, `header`, `body`), `hunks_of(patch_name,
+patch_text) -> list[Hunk]`, and `hunk_as_patch(h) -> str` which reconstructs a
+standalone patch `git apply` accepts.
+
+Two details carry the weight:
+
+- **Track the target file from `+++ b/<path>`.** `0021` touches `entrypoint.sh`;
+  probing that against `subgen.py` is a category error. Real split: 128 `subgen.py`
+  hunks + 1 `entrypoint.sh` = **129**, matching the independently established count.
+- **Bound each body by the header's declared counts**, not by scanning for the next
+  line that looks like a boundary. Both counts are optional (`@@ -5 +5 @@` means one
+  line a side).
+
+⚠️ **A backstop is required, and its test must be separate.** A hand-edited patch can
+declare more lines than it supplies; unresolved counts then walk through the next
+hunk's header and swallow it, losing that hunk. Break out of the body loop on any line
+matching the hunk-header regex — safe because every real body line starts with `" "`,
+`"+"`, `"-"`, or `"\"`, never `@@` at column 0.
+
+⚠️ **Do not let the backstop hide a broken fixture.** The first draft of this task's
+`TWO_HUNKS` fixture declared `@@ -10,3 +10,4 @@` over a body of 2 old / 3 new lines.
+The count-bounding test passed — *on the backstop path*, not on the counts. Removing
+the backstop showed `hunks_of` returning **1 hunk** with hunk 2's header eaten. Give
+the backstop its own test with a deliberately malformed patch, and verify the count
+test passes with the backstop commented out.
+
+**Known limitation, deliberately not coded around:** the backstop only catches an
+overrun that hits another `@@`. One that runs into a `--- a/<file>` / `+++ b/<file>`
+pair is consumed as content (those start with `-`/`+`), mis-attributing later hunks to
+the wrong file. Cannot occur here — all 129 hunks have exact counts — so it is recorded
+in a comment rather than defended against.
+
+---
+
+## Task 5 (REVISED): Probe every hunk against base and branch, then report
+
+**Files:** modify `scripts/capability_audit.py`; create (generated)
+`docs/drop-stable-ts-capability-audit-2026-08-04.md`
+
+**The probe.** Materialise two pristine trees — `HEAD:subgen.py` (pinned base) and
+`FETCH_HEAD:subgen.py` (branch) — and run `git apply --check` on each reconstructed
+single hunk against each. Three outcomes per hunk:
+
+| base | branch | meaning |
+|---|---|---|
+| applies | applies | **INTACT** — the branch did not disturb this edit |
+| applies | fails | **BROKEN_BY_BRANCH** — real, localized evidence |
+| fails | — | **INCONCLUSIVE** — depends on earlier patches in the stack; judged by a human, never counted as broken |
+
+⚠️ **INCONCLUSIVE is not a failure and must never be reported as one.** A hunk failing
+on base means the probe cannot see it standalone, not that anything is wrong. Roughly
+three quarters of hunks are expected here (patch `0009` alone was 6 of 8), because the
+stack is sequential. This makes the probe a **lower bound** on breakage — the honest
+direction for a veto instrument to err.
+
+**Rolling up to capabilities.** For each of the 16, union the hunks of its providing
+patches. Any `BROKEN_BY_BRANCH` hunk means that capability needs a real rewrite, not a
+context re-port.
+
+⚠️ **`build_capability_map` under-counts providers, one-directionally.** It maps a
+capability to the patches adding its *flag literal*; implementation patches that never
+touch the literal are invisible. `runtime_config` maps to `0022` alone, though `0027`
+and `0029` also carry its seam. The bias always shrinks the evidence set, i.e. pushes
+toward under-reporting breakage. State this in the report rather than pretending the
+rollup is complete.
+
+**The report** must carry, per capability: providing patches, hunk counts by outcome,
+and the specific broken hunks with their headers. Plus:
+
+- A hard-coded **`CUSTOM_REGROUP` — GONE** row. It advertises no flag and the tool
+  cannot derive it; on the branch `regroup` appears only in a comment and in
+  `_STABLE_TS_KWARGS`, the strip-list. It is the single genuine seam loss, and a report
+  that can omit it is worthless.
+- An explicit statement that INCONCLUSIVE hunks were not counted as breakage.
+- The branch SHA.
+
+**Sanity checks before accepting the output:** if *zero* hunks are BROKEN_BY_BRANCH,
+suspect the branch tree was not materialised (the trial run found 11). If *every* hunk
+is broken, suspect the base tree instead. Confirm `asr_task_worker`, `gen_subtitles`,
+and `detect_language_task` appear among the breaks — those are known-good ground truth.
 
 ---
 
