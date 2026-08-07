@@ -80,14 +80,37 @@ No arm ran locally-modified code. Upstream shipped the `fw_kwargs` fix (McCloudS
 
 `sparse_05_Steppenwolf (2024)` is excluded from all arms so the comparison runs over an identical 35.
 
-**Arm 1 — upstream's current shipping stable-ts path — crashes on it, reproducibly:**
+**Arm 1 crashes on it, reproducibly.** Arm 2 and arm 3 handle the same clip without incident.
+
+The crash is **not in subgen and not in stable-ts** — it is in faster-whisper:
 
 ```
+File "/subgen/subgen.py", line 1089, in asr_task_worker
+  result = model.transcribe(...)
+File "stable_whisper/whisper_word_level/faster_whisper.py", line 155, in faster_transcribe
+File "stable_whisper/non_whisper/transcribe.py", line 343, in transcribe_any
+File "faster_whisper/transcribe.py", line 1590, in add_word_timestamps
+File "faster_whisper/transcribe.py", line 1744, in find_alignment
+  jump_times = time_indices[jumps] / self.tokens_per_second
 IndexError: boolean index did not match indexed array along axis 0;
 size of axis is 0 but size of corresponding boolean axis is 1
 ```
 
-Arm 2 and arm 3 both handle the same clip without incident. So upstream's *current* release has a crash the new branch has already fixed — a point in the branch's favour that the gate does not capture, and worth reporting upstream separately.
+It is the **word-timestamps alignment path**, reached through stable-ts's `transcribe_any` wrapper.
+
+⚠️ **Deliberately NOT reported upstream. The trigger is not characterised.** Three
+hypotheses were tested and two are refuted:
+
+| hypothesis | test | result |
+|---|---|---|
+| corrupt or unreadable file | arms 2 and 3 transcribe it fine | **refuted** |
+| `CUSTOM_REGROUP` / regroup path | arm 3's own image with `CUSTOM_REGROUP` cleared | **refuted** — still succeeds |
+| near-silence (clip is -39.7 dB mean) | four *quieter* clips, down to -47.8 dB, all pass on arm 1 | **refuted** |
+
+That leaves one reproducing file out of 36, a stack trace in a third-party library, and
+no account of what actually triggers it. Filing that would be an anecdote, not a bug
+report — and it would go to the wrong project. Recorded here; revisit if a second
+instance appears.
 
 ---
 
