@@ -1,4 +1,13 @@
-from subarr.study.metrics import ArmSample, SrtMetrics, metrics_for_srt, sample_for_srt
+from subarr.study.metrics import (
+    ArmResult,
+    ArmSample,
+    GateVerdict,
+    SrtMetrics,
+    aggregate,
+    evaluate_gate,
+    metrics_for_srt,
+    sample_for_srt,
+)
 
 # Cue 1: 10 chars in 10s  -> 1 CPS, fine.
 # Cue 2: 60 chars in 2s   -> 30 CPS, ABOVE the 25 critical threshold.
@@ -74,3 +83,47 @@ def test_post_stage_is_the_retimed_text_not_the_original():
 """.replace("{sixty}", "x" * 60)
     s = sample_for_srt("c", srt)
     assert s.post_srt != s.pre_srt
+
+
+def _sample(clip, cue_count, over, overlaps):
+    m = SrtMetrics(cue_count=cue_count, over_25_cps=over, overlaps=overlaps)
+    return ArmSample(clip=clip, pre_srt="", post_srt="", pre=m, post=m)
+
+
+def test_aggregate_pools_cues_rather_than_averaging_per_file_shares():
+    # A 1-cue file and a 99-cue file must not carry equal weight -- averaging
+    # per-file shares would let one short clip dominate the primary metric.
+    r = aggregate("arm2", [_sample("a", 1, 1, 0), _sample("b", 99, 0, 0)])
+    assert isinstance(r, ArmResult)
+    assert r.cue_count == 100
+    assert r.over_25_cps_share == 0.01
+
+
+def test_gate_passes_when_within_two_points_and_no_new_overlaps():
+    ref = aggregate("arm3", [_sample("a", 100, 5, 0)])
+    cand = aggregate("arm2", [_sample("a", 100, 7, 0)])
+    assert evaluate_gate(candidate=cand, reference=ref).passed is True
+
+
+def test_gate_fails_when_cps_share_exceeds_the_two_point_tolerance():
+    ref = aggregate("arm3", [_sample("a", 100, 5, 0)])
+    cand = aggregate("arm2", [_sample("a", 100, 8, 0)])
+    assert evaluate_gate(candidate=cand, reference=ref).passed is False
+
+
+def test_any_new_overlap_is_a_hard_fail_even_with_better_cps():
+    # Strictly better CPS, one new overlap. The retimer guarantees zero new
+    # overlaps; a segmenter that produces them is disqualified outright.
+    ref = aggregate("arm3", [_sample("a", 100, 20, 0)])
+    cand = aggregate("arm2", [_sample("a", 100, 1, 1)])
+    v = evaluate_gate(candidate=cand, reference=ref)
+    assert v.passed is False
+    assert "overlap" in v.reason.lower()
+
+
+def test_verdict_states_the_measured_numbers_not_just_a_boolean():
+    ref = aggregate("arm3", [_sample("a", 100, 5, 0)])
+    cand = aggregate("arm2", [_sample("a", 100, 7, 0)])
+    v = evaluate_gate(candidate=cand, reference=ref)
+    assert isinstance(v, GateVerdict)
+    assert "5.0" in v.reason and "7.0" in v.reason
