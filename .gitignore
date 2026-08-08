@@ -38,3 +38,10 @@ node_modules/
 
 # Local scratch: aftercare/regroup tuning baselines (#168 comparison snapshots)
 .aftercare-baseline-*.json
+
+# Phase 2 study (#171): regenerable media, never commit.
+# clips/ is 3.3 GB of extracted video and audio/ 269 MB of derived wav -- both
+# rebuild from the library via scripts/phase2_corpus.py plus the manifest.
+# out/ IS committed: the SRTs are the study's evidence and are small.
+study/clips/
+study/audio/

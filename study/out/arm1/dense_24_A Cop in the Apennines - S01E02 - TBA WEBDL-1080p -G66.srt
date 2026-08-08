@@ -1,0 +1,331 @@
+1
+00:00:00,920 --> 00:00:01,600
+Una...
+
+2
+00:00:01,600 --> 00:00:01,780
+Chi?
+
+3
+00:00:04,420 --> 00:00:06,360
+Condannato per spaccio.
+
+4
+00:00:12,120 --> 00:00:12,720
+Grazie.
+
+5
+00:00:12,810 --> 00:00:15,060
+Ora scusami ma ho una riunione con la giunta.
+
+6
+00:00:17,420 --> 00:00:17,780
+Allora vado.
+
+7
+00:00:18,420 --> 00:00:19,040
+Grazie.
+
+8
+00:00:19,860 --> 00:00:20,540
+Prego.
+
+9
+00:00:48,460 --> 00:00:49,860
+Grazie.
+
+10
+00:01:05,000 --> 00:01:05,320
+Grazie.
+
+11
+00:01:06,960 --> 00:01:07,540
+Buongiorno, Simona.
+
+12
+00:01:09,020 --> 00:01:09,660
+Buongiorno, commissario.
+
+13
+00:01:10,420 --> 00:01:11,400
+Posso farle una domanda?
+
+14
+00:01:11,700 --> 00:01:14,060
+Sì, certo, ma state ancora indagando?
+
+15
+00:01:14,180 --> 00:01:15,500
+Credevo che il caso fosse risolto.
+
+16
+00:01:15,540 --> 00:01:16,540
+No, no, no, è risolto, sì, sì.
+
+17
+00:01:16,640 --> 00:01:17,520
+Ma mi chiedevo...
+
+18
+00:01:18,060 --> 00:01:20,180
+Lei lavora qui al bar perché in agenzia c'è suo marito,
+
+19
+00:01:20,220 --> 00:01:20,460
+vero?
+
+20
+00:01:20,960 --> 00:01:21,280
+Sì.
+
+21
+00:01:21,800 --> 00:01:23,780
+Sì, è un precisetti, un rompiballe.
+
+22
+00:01:24,240 --> 00:01:24,560
+Immaginavo.
+
+23
+00:01:25,360 --> 00:01:26,700
+Sì, però lo amo, commissario.
+
+24
+00:01:26,880 --> 00:01:29,380
+Quindi non si metta strani idee in testa che non ce n'è.
+
+25
+00:01:29,540 --> 00:01:29,780
+Lo so.
+
+26
+00:01:30,710 --> 00:01:32,060
+Ma lei l'ha mai letto,
+
+27
+00:01:32,060 --> 00:01:34,170
+lo zen e l'arte del corteggiamento?
+
+28
+00:01:35,200 --> 00:01:35,760
+No.
+
+29
+00:01:36,220 --> 00:01:36,610
+Ma è interessante.
+
+30
+00:01:37,660 --> 00:01:40,100
+Parla del corteggiare senza uno scopo pratico,
+
+31
+00:01:40,740 --> 00:01:41,400
+come pur'arte.
+
+32
+00:01:42,400 --> 00:01:43,120
+Omaggio alla bellezza.
+
+33
+00:01:43,560 --> 00:01:46,660
+E sfida al vero mostro la paura del rifiuto.
+
+34
+00:01:47,380 --> 00:01:49,300
+Dice per esempio che prendere un duo di picche
+
+35
+00:01:49,400 --> 00:01:51,820
+da una donna come lei rafforza l'autostima.
+
+36
+00:01:52,360 --> 00:01:54,060
+Perché vuol dire che hai puntato al massimo.
+
+37
+00:01:55,320 --> 00:01:57,340
+Che bella parlantina, potrebbe vendere caso.
+
+38
+00:01:58,340 --> 00:01:59,780
+Comunque è curioso questo libro.
+
+39
+00:02:00,000 --> 00:02:00,720
+Lo leggerò.
+
+40
+00:02:00,780 --> 00:02:01,950
+Beh, prima devo scriverlo.
+
+41
+00:02:03,080 --> 00:02:04,020
+Ci diamo del tu?
+
+42
+00:02:05,620 --> 00:02:07,340
+Tu sei matto, commissario.
+
+43
+00:02:08,300 --> 00:02:09,240
+Non ti illudere, eh.
+
+44
+00:02:09,300 --> 00:02:11,340
+È più facile che un gatto faccia le uova.
+
+45
+00:02:12,870 --> 00:02:13,580
+Cosa hai detto?
+
+46
+00:02:13,740 --> 00:02:14,740
+È più facile che?
+
+47
+00:02:15,440 --> 00:02:17,040
+Che un gatto faccia le uova.
+
+48
+00:02:17,380 --> 00:02:17,600
+Le uova.
+
+49
+00:02:20,080 --> 00:02:20,940
+Cacchio, le uova.
+
+50
+00:02:21,640 --> 00:02:22,400
+Le uova.
+
+51
+00:02:22,840 --> 00:02:23,320
+Fosco!
+
+52
+00:02:23,460 --> 00:02:24,280
+Le uova!
+
+53
+00:02:25,340 --> 00:02:26,140
+Sono qua, commissà.
+
+54
+00:02:30,900 --> 00:02:31,340
+Buongiorno.
+
+55
+00:02:32,260 --> 00:02:33,360
+Ancora domande, maresciallo?
+
+56
+00:02:33,580 --> 00:02:35,380
+No, volevo solo scusarmi per averla sospettata.
+
+57
+00:02:36,260 --> 00:02:37,100
+Comunque un commissario.
+
+58
+00:02:37,380 --> 00:02:38,080
+Tu cosa fai ancora qua?
+
+59
+00:02:39,200 --> 00:02:40,680
+Vai a interrogare Tempesta, su.
+
+60
+00:02:40,960 --> 00:02:41,640
+Su cosa?
+
+61
+00:02:42,440 --> 00:02:43,420
+Cosa sarebbe, non cosa.
+
+62
+00:02:43,580 --> 00:02:43,900
+Su...
+
+63
+00:02:43,900 --> 00:02:46,460
+Devi scoprire chi gli vende il pinot.
+
+64
+00:02:46,640 --> 00:02:48,440
+Perché, vuole un calice di vino questa sera?
+
+65
+00:02:50,260 --> 00:02:50,700
+Vado.
+
+66
+00:02:52,900 --> 00:02:56,060
+Un paio di domande e se mi offre un caffè avrei da fagliere.
+
+67
+00:02:56,200 --> 00:02:58,160
+Ma come uomo, non come maresciallo.
+
+68
+00:03:01,360 --> 00:03:02,240
+Hum.
+
+69
+00:03:03,160 --> 00:03:03,920
+Uhm...
+
+70
+00:03:12,440 --> 00:03:13,140
+Comunque...
+
+71
+00:03:25,440 --> 00:03:26,320
+Buona, buona serata.
+
+72
+00:03:26,320 --> 00:03:26,540
+Tu...
+
+73
+00:03:27,190 --> 00:03:27,320
+No, non stai così.
+
+74
+00:03:27,340 --> 00:03:27,480
+T redist HIS.
+
+75
+00:03:27,480 --> 00:03:29,120
+T ve ldies, sì.
+
+76
+00:03:40,400 --> 00:03:41,640
+Cosa dovevi chiedermi?
+
+77
+00:03:43,060 --> 00:03:45,860
+Ma perché mi guarda con tutto quel verde negli occhi?
+
+78
+00:03:48,960 --> 00:03:50,260
+Perché mamma fa occhio verde.
+
+79
+00:03:50,500 --> 00:03:50,860
+Ah.
+
+80
+00:03:51,800 --> 00:03:54,340
+Se faceva nero, guardava nero.
+
+81
+00:03:55,240 --> 00:03:55,920
+Giusto.
+
+82
+00:03:57,200 --> 00:03:59,880
+Ma quando guarda me, mi sembra ci sia più verde.
+
+83
+00:04:00,000 --> 00:04:00,100
+Bene.

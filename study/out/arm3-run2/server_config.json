@@ -1,0 +1,27 @@
+{
+  "version": "2026.07.3",
+  "model": "large-v3",
+  "compute_type": "float16",
+  "patch_rev": "v4.21",
+  "release_tag": "v2026.07.3-r1",
+  "capabilities": {
+    "audio_language_override": true,
+    "detect_language_track": true,
+    "async_config": true,
+    "per_request_kwargs": true,
+    "per_request_task": true,
+    "asr_arena": true,
+    "asr_vanilla_base": true,
+    "asr_detected_language": true,
+    "queue_cancel": true,
+    "robust_language_detection": true,
+    "curated_language_prompts": true,
+    "safe_decode_preset": true,
+    "ignore_forced_subtitles": true,
+    "runtime_config": true,
+    "concurrent_transcriptions": 1,
+    "request_ignore_forced": true
+  },
+  "task": "transcribe",
+  "clip_count": 36
+}
