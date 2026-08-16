@@ -13,7 +13,7 @@ import { AudioReviewModal } from './coverage.jsx';
 import { distinctSeriesPrefixes } from './lang-rules-util.mjs';
 import { useLanguagePicks } from './languages.mjs';
 
-const { useState, useEffect, useCallback, useMemo } = React;
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
 function FlagDot({ flag }) {
   // #406: multilingual rows are auto-detected multi-language files — badge them
@@ -271,26 +271,6 @@ export function buildVerifyBody(canonicalPath, langs) {
   return { canonical_path: canonicalPath, lang_code: codes[0], source: 'user', lang_class: 'single' };
 }
 
-// #457: the bulk-assign confirmation must name the codes that will ACTUALLY be
-// submitted. It interpolated the single-select `bulkLang` even in multilingual
-// mode, so a user picking en+ja was asked to confirm "fr" -- whatever stale
-// value the single dropdown was sitting on. The submission was already correct;
-// only the dialog lied, which is the worse way round, because that prompt is the
-// user's last chance to stop a wrong bulk writeback to Sonarr and Bazarr.
-//
-// #406 fixed this same class a few lines below for the dispatched event and did
-// not touch the dialog. Deriving both from one array is what prevents a third.
-export function bulkAssignConfirmText(codes, fileCount) {
-  const list = (codes || []).filter(Boolean);
-  if (list.length === 0) return null;  // nothing selected -> caller must not prompt
-  const files = `${fileCount} file${fileCount === 1 ? '' : 's'}`;
-  const quoted = list.map((c) => `"${c}"`).join(', ');
-  const noun = list.length === 1 ? 'audio language' : 'audio languages';
-  return `Assign ${quoted} as the ${noun} for ${files}?`
-    + `\n\nEach file will be saved locally, pushed to Sonarr's per-file language record, `
-    + `and Bazarr will be triggered to re-sync. The selected rows will leave this list once verified.`;
-}
-
 // #357: the glance lane surfaces auto-classified multilingual rows for a bulk
 // eyeball. Keys on the pending-review payload's source (store 'auto-high-conf-
 // multi') or the coverage display state ('multilingual').
@@ -327,11 +307,37 @@ export function acceptMultilingualBody(row) {
   };
 }
 
-// #448: the endpoint used to hard-cap at 200 with no way past it, so a library
-// with 538 rows showed 200 and hid the rest silently. 1000 covers realistic
-// libraries while staying one bounded request; anything beyond it is surfaced
-// in the UI rather than dropped on the floor.
-const REVIEW_FETCH_LIMIT = 1000;
+// P3: build the /api/audio-lang/pending-review query string for server-side
+// search + page slicing. The server validates these (search max_length=200,
+// limit 1..500, offset >= 0) and applies search before slicing. Exported for
+// tests. Empty search is omitted so the URL stays clean.
+export function buildReviewQuery({ search = '', flag = 'all', limit = 200, offset = 0 }) {
+  const q = new URLSearchParams();
+  const s = (search || '').trim();
+  if (s) q.set('search', s);
+  if (flag && flag !== 'all') q.set('flag', flag);
+  q.set('limit', String(limit));
+  q.set('offset', String(offset));
+  return q.toString();
+}
+
+// P3: derive pagination facts from the server's TRUTHFUL total (`count` is the
+// total matching rows, not the page length) and the current page. Exported for
+// tests. hasNext/hasPrev drive the disabled boundaries of the page controls.
+export function computePagination({ count = 0, limit = 200, offset = 0 }) {
+  const total = Math.max(0, count || 0);
+  const size = Math.max(1, limit || 1);
+  const totalPages = Math.max(1, Math.ceil(total / size));
+  return {
+    total,
+    totalPages,
+    pageNumber: Math.floor(offset / size) + 1,
+    shownStart: total === 0 ? 0 : offset + 1,
+    shownEnd: Math.min(offset + size, total),
+    hasPrev: offset > 0,
+    hasNext: offset + size < total,
+  };
+}
 
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
@@ -356,7 +362,17 @@ export function ReviewPage() {
     return () => clearInterval(id);
   }, []);
   const [filter, setFilter] = useState('all');
+  // P3: server-side search + pagination. `search` is the live input value;
+  // `debouncedSearch` is the term that actually drives the request (see the
+  // debounce effect below). `limit` is the page size and `offset` the current
+  // page's starting row into the server's searched set.
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [limit, setLimit] = useState(200);
+  const [offset, setOffset] = useState(0);
+  // P3-S4: a request sequence token so a stale response (from an older query or
+  // page) can never overwrite a newer one — the fetch guard in fetchPending.
+  const fetchSeq = useRef(0);
   // Selection: file_canonical_path (or canonical_path) for each ticked episode.
   const [epSelection, setEpSelection] = useState(() => new Set());
   // Series-level expansion state.
@@ -381,29 +397,72 @@ export function ReviewPage() {
     );
   }, []);
 
+  // P3: debounce the server search so typing doesn't fire a request per
+  // keystroke. When the term settles, reset to page 1 (a new search starts at
+  // the top of the results).
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setDebouncedSearch(search);
+      setOffset(0);
+    }, 250);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  // P3-S3: epSelection is page-scoped (keyed on file_canonical_path||canonical_path).
+  // Changing the search text changes which rows are visible, so drop any stale
+  // selection the moment the query text changes (not only once it settles).
+  useEffect(() => {
+    setEpSelection(new Set());
+  }, [search]);
+
+  // P3-S3: a filter-pill transition changes the visible set on the same page
+  // too — clear the stale page-scoped selection so the bulk bar never targets
+  // rows that are no longer visible.
+  useEffect(() => {
+    setEpSelection(new Set());
+  }, [filter]);
+
+  // Selection is intentionally page-scoped; navigating to another page must
+  // not leave a bulk-action bar referring to rows that are no longer visible.
+  useEffect(() => {
+    setEpSelection(new Set());
+  }, [offset]);
+
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or
     // user-initiated Refresh click) sets `isRefetching` so the existing
     // list stays visible with a small spinner — no blank-and-redraw.
+    // P3-S4: claim a fresh sequence token; a stale response (an older query or
+    // page) that resolves later must not clobber the newer one.
+    const seq = ++fetchSeq.current;
     setIsRefetching(true);
     const startedAt = Date.now();
     try {
-      // #448: this page groups rows by title and filters them client-side, so
-      // server-side paging would split groups across pages and make the search
-      // box only ever search the current page -- worse than the truncation it
-      // would fix. Instead fetch a large window and tell the user plainly when
-      // there is still more (see the notice below the toolbar).
-      const r = await fetch(`/api/audio-lang/pending-review?limit=${REVIEW_FETCH_LIMIT}`, {
+      const q = buildReviewQuery({ search: debouncedSearch, flag: filter, limit, offset });
+      const r = await fetch(`/api/audio-lang/pending-review?${q}`, {
         credentials: 'same-origin',
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData(await r.json());
+      const payload = await r.json();
+      const items = payload?.items || [];
+      if (seq !== fetchSeq.current) return;  // a newer query/page won the race
+      // P3-S2: empty-last-page recovery — if rows were deleted between fetches
+      // so this page is now past the end, step back to the previous valid page
+      // and refetch instead of leaving a blank invalid page. Guarded by the
+      // seq check above so a stale empty response can't step the offset back
+      // while a newer fetch is in flight. The offset change below re-triggers
+      // fetchPending via the query effect.
+      if (items.length === 0 && (payload?.count || 0) > 0 && offset > 0) {
+        setOffset(Math.max(0, offset - limit));
+        return;
+      }
+      setData(payload);
       setError(null);
       setLastRefreshedAt(Date.now());
     } catch (e) {
       // On refetch error, KEEP the stale data visible. The error banner
       // surfaces below the list. Only blank on first-paint failure.
-      setError(e);
+      if (seq === fetchSeq.current) setError(e);
     } finally {
       // Minimum 350ms display so a sub-100ms fetch is still perceptible.
       // Below ~300ms the human eye registers the spinner as a flicker,
@@ -411,10 +470,12 @@ export function ReviewPage() {
       const elapsed = Date.now() - startedAt;
       const padding = Math.max(0, 350 - elapsed);
       if (padding > 0) await new Promise(resolve => setTimeout(resolve, padding));
-      setIsRefetching(false);
-      setLoading(false);
+      if (seq === fetchSeq.current) {
+        setIsRefetching(false);
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [debouncedSearch, filter, limit, offset]);
 
   useEffect(() => {
     fetchPending();
@@ -633,22 +694,18 @@ export function ReviewPage() {
   // Filter + group by series.
   const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
     const allItems = data?.items || [];
-    const counts = { all: allItems.length, suspect: 0, unknown: 0, track_mismatch: 0, multilingual: 0 };
-    for (const it of allItems) {
-      if (it.flag === 'suspect') counts.suspect += 1;
-      else if (it.flag === 'unknown') counts.unknown += 1;
-      else if (it.flag === 'track_mismatch') counts.track_mismatch += 1;
-      else if (it.flag === 'multilingual') counts.multilingual += 1;  // #406
-    }
-    const s = search.trim().toLowerCase();
-    const filtered = allItems.filter((it) => {
-      if (filter !== 'all' && it.flag !== filter) return false;
-      if (s) {
-        const hay = `${it.title || ''} ${it.episode_number || ''} ${(it.file_canonical_path || it.canonical_path || '').toLowerCase()}`;
-        if (!hay.toLowerCase().includes(s)) return false;
-      }
-      return true;
-    });
+    const countsByFlag = data?.counts_by_flag || {};
+    const counts = {
+      all: Object.values(countsByFlag).reduce((sum, count) => sum + count, 0) || data?.count || 0,
+      suspect: 0, unknown: 0, track_mismatch: 0, multilingual: 0,
+      ...countsByFlag,
+    };
+    // P3-S1: the server applies the case-insensitive search (over title /
+    // episode / canonical-path) before slicing; here we only apply the flag-pill
+    // filter over the returned page — search no longer filters client-side.
+    const filtered = allItems.filter((it) =>
+      filter === 'all' || it.flag === filter
+    );
     const byTitle = new Map();
     for (const it of filtered) {
       const t = it.title || '(unknown)';
@@ -680,7 +737,7 @@ export function ReviewPage() {
     const tvGroups = groups.filter((g) => g.media_type !== 'movie');
     const movieGroups = groups.filter((g) => g.media_type === 'movie');
     return { groups, tvGroups, movieGroups, totalCounts: counts };
-  }, [data, filter, search]);
+  }, [data, filter]);
 
   // #310: track-mismatch rows are now selectable alongside language-assignable
   // ones, so split the current selection by flag — each half gets its own bulk
@@ -712,16 +769,11 @@ export function ReviewPage() {
     // selection are handled by Swap all / Dismiss all instead.
     const paths = selAssignPaths;
     if (!paths.length) return;
-    // #457: ONE source of truth for what gets assigned. This same array is
-    // handed to buildVerifyBody below, so the dialog cannot drift from the
-    // action it is describing.
-    const assignCodes = multilingualMode ? bulkLangs : [bulkLang];
-    const confirmText = bulkAssignConfirmText(assignCodes, paths.length);
-    if (!confirmText) {
-      window.alert('Pick at least one audio language first.');
-      return;
-    }
-    if (!window.confirm(confirmText)) return;
+    if (!window.confirm(
+      `Assign "${bulkLang}" as the audio language for ${paths.length} file${paths.length === 1 ? '' : 's'}?`
+      + `\n\nEach file will be saved locally, pushed to Sonarr's per-file language record, `
+      + `and Bazarr will be triggered to re-sync. The selected rows will leave this list once verified.`
+    )) return;
     setBulkRunning(true);
     setBulkProgress({ done: 0, total: paths.length, errors: 0 });
     let done = 0; let errors = 0;
@@ -734,7 +786,7 @@ export function ReviewPage() {
         try {
           // #406: multilingual mode submits the full checked set; otherwise the
           // single bulkLang. Empty selection -> builder returns null -> skip.
-          const verifyBody = buildVerifyBody(p, assignCodes);
+          const verifyBody = buildVerifyBody(p, multilingualMode ? bulkLangs : [bulkLang]);
           if (!verifyBody) { done += 1; setBulkProgress({ done, total: paths.length, errors }); continue; }
           const r = await fetch('/api/audio-lang/verifications', {
             method: 'POST',
@@ -839,11 +891,8 @@ export function ReviewPage() {
     { id: 'multilingual', label: `multilingual (${totalCounts.multilingual})` },  // #406
   ];
   const selectedCount = epSelection.size;
-  // #448: `count` from the endpoint is the TRUE total; items is the window we
-  // asked for. If the server had more than we fetched, say so -- the old
-  // behaviour was to silently show 200 and let the user believe that was all.
-  const fetchedAll = !data || (data.count ?? 0) <= (data.items?.length ?? 0);
-  const hiddenCount = fetchedAll ? 0 : (data.count - data.items.length);
+  // P3-S2: pagination facts from the server's truthful total count.
+  const pagination = computePagination({ count: data?.count, limit, offset });
 
   return (
     <main className="main-canvas" style={{
@@ -919,29 +968,62 @@ export function ReviewPage() {
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           {filterPills.map((f) => (
-            <span key={f.id} onClick={() => setFilter(f.id)}
+            <span key={f.id} onClick={() => { setFilter(f.id); setOffset(0); }}
               role="button" tabIndex={0}
               aria-label={`Filter by ${f.id}`}
-              onKeyDown={(e) => { if (e.key === 'Enter') setFilter(f.id); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { setFilter(f.id); setOffset(0); } }}
               className={`chip ${filter === f.id ? 'violet' : ''}`}
               style={{ cursor: 'pointer' }}>
               {f.label}
             </span>
           ))}
-          {/* #448: never silently truncate. If the server has more rows than we
-              fetched, say how many and how to narrow the list. */}
-          {hiddenCount > 0 && (
-            <span className="chip" title={`Fetched the first ${REVIEW_FETCH_LIMIT} of ${data.count} rows`}
-              style={{ opacity: 0.85 }}>
-              +{hiddenCount} more not shown — use search to narrow
-            </span>
-          )}
         </div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num">
           {groups.length} {groups.length === 1 ? 'series' : 'series'}, {groups.reduce((s, g) => s + g.items.length, 0)} files
         </span>
       </div>
+
+      {/* P3-S2: server-side pagination — total from the server `count`, prev/next
+          disabled at the boundaries, and a page-size selector. Changing the page
+          size resets to the first page. Buttons are disabled mid-refetch so a
+          pending response can't be double-stepped past the end. */}
+      {data && pagination.total > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '2px 2px 6px' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+            {pagination.shownStart}–{pagination.shownEnd} of {pagination.total}
+          </span>
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
+          }}>
+            Page size
+            <select value={limit}
+              onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}
+              aria-label="Page size"
+              style={{
+                height: 24, padding: '0 6px', background: 'var(--bg-1)', color: 'var(--fg-0)',
+                border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-2xs)',
+              }}>
+              {[50, 100, 200, 500].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <span style={{ flex: 1 }} />
+          <button className="btn sm" disabled={!pagination.hasPrev || isRefetching}
+            aria-label="Previous page"
+            onClick={() => setOffset(Math.max(0, offset - limit))}>
+            ‹ Prev
+          </button>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            Page {pagination.pageNumber} of {pagination.totalPages}
+          </span>
+          <button className="btn sm" disabled={!pagination.hasNext || isRefetching}
+            aria-label="Next page"
+            onClick={() => setOffset(offset + limit)}>
+            Next ›
+          </button>
+        </div>
+      )}
 
       {/* #170: track-mismatch rows can't be cleared by the bulk language-apply
           (which excludes them). Surface a bulk dismiss + explain the split. */}
@@ -1030,9 +1112,9 @@ export function ReviewPage() {
           )}
           {data && groups.length === 0 && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
-              {totalCounts.all === 0
+              {pagination.total === 0 && !search.trim()
                 ? "🎉 Nothing pending. Audio-language data looks clean across your library."
-                : `No items match the "${filter}" filter${search ? ' or your search' : ''}.`}
+                : `No items match the "${filter}" filter${search.trim() ? ' or your search' : ''}.`}
             </div>
           )}
           {[
