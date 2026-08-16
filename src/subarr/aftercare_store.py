@@ -19,20 +19,51 @@ from .data_persistence import apply_journal_mode
 # strings are assembled here at MODULE scope — not via f-strings at the
 # execute() call site — so bandit doesn't read them as dynamic SQL (B608).
 # They contain only fixed literals + bound ? params; no user input is ever
-# interpolated (view selects between two constants; limit/offset are bound).
+# interpolated (view selects between two constants; limit/offset/search are
+# bound params). The query fragments below are fixed SQL; all runtime values
+# remain bound parameters.
 _LATEST = "a.id = (SELECT MAX(b.id) FROM aftercare_results b WHERE b.canonical_path = a.canonical_path)"
 _PENDING_COUNT_SQL = (
     f"SELECT COUNT(*) FROM aftercare_results a WHERE a.flagged = 1 AND a.reviewed_at IS NULL AND {_LATEST}"
 )
-_LIST_ALL_SQL = (
-    f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
-    "ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?"
+
+# View fragment: `flagged` shows only pending (unreviewed) flagged rows; `all`
+# shows every latest-per-path row (flagged or clean, reviewed or not) — just
+# `_LATEST` on its own.
+_VIEW_FLAGGED = f"{_LATEST} AND a.flagged = 1 AND a.reviewed_at IS NULL"
+
+# Shared, case-insensitive search predicate over the searchable persisted row
+# fields (canonical path, source, preview). Three bound ? params in this exact
+# order (one per column) — the pattern values come from _like_patterns(), so
+# user input is bound and never interpolated into the SQL string. Reused by
+# BOTH the page query and the count query so their results always agree.
+_SEARCH = (
+    "LOWER(a.canonical_path) LIKE ? ESCAPE '\\' "
+    "OR LOWER(COALESCE(a.source, '')) LIKE ? ESCAPE '\\' "
+    "OR LOWER(COALESCE(a.preview, '')) LIKE ? ESCAPE '\\'"
 )
-_LIST_FLAGGED_SQL = (
-    f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
-    "AND a.flagged = 1 AND a.reviewed_at IS NULL "
-    "ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?"
-)
+_SEARCH_WHERE = f"AND ({_SEARCH})"
+_SOURCE_WHERE = "AND a.source = ?"
+
+_ORDER_BY = "ORDER BY a.flagged DESC, a.completed_at DESC, a.id DESC"
+_LIMIT_OFFSET = "LIMIT ? OFFSET ?"
+
+# Page + count SELECTs. `WHERE`/`ORDER BY`/`LIMIT` fragments are concatenated at
+# execute time from these module-scope constants only (no user input spliced).
+_SELECT_ALL = f"SELECT * FROM aftercare_results a WHERE {_LATEST}"
+_SELECT_FLAGGED = f"SELECT * FROM aftercare_results a WHERE {_VIEW_FLAGGED}"
+_COUNT_ALL = f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST}"
+_COUNT_FLAGGED = f"SELECT COUNT(*) FROM aftercare_results a WHERE {_VIEW_FLAGGED}"
+
+
+def _like_patterns(term: str) -> list[str]:
+    """Return the bound LIKE patterns for the shared _SEARCH predicate, one per
+    searched column in the same order. Escapes the LIKE wildcards (\\, %, _) so a
+    literal '%' or '_' in the user's query matches literally; the values are
+    bound parameters, never spliced into the SQL string."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    return [pattern, pattern, pattern]
 
 
 class AfterCareStore:
@@ -100,23 +131,59 @@ class AfterCareStore:
         return int(row[0])
 
     def list_results(
-        self, *, view: str, limit: int, offset: int, source: str | None = None
+        self,
+        *,
+        view: str,
+        limit: int,
+        offset: int,
+        source: str | None = None,
+        search: str | None = None,
     ) -> list[dict[str, Any]]:
-        # #216: optional source filter (e.g. 'existing_audit') lets the review
-        # page separate audited external subs from completion-watcher rows.
-        base = _LIST_FLAGGED_SQL if view == "flagged" else _LIST_ALL_SQL
+        """Latest-per-path page of results. `view` ('flagged'|'all'), `source`,
+        and `search` filter the set; the ORDER BY/LIMIT/OFFSET fragments are
+        appended so the LIMIT/OFFSET bound params stay last. The WHERE/order
+        SQL text comes only from module-scope constants — user input (source,
+        search, limit, offset) is bound."""
+        base = _SELECT_FLAGGED if view == "flagged" else _SELECT_ALL
+        fragments = [base]
+        params: list[Any] = []
+        if search:
+            fragments.append(_SEARCH_WHERE)
+            params.extend(_like_patterns(search))
         if source is not None:
-            # Splice the source predicate before the trailing ORDER BY clause so
-            # the LIMIT/OFFSET params stay last.
-            head, sep, tail = base.partition("ORDER BY")
-            sql = f"{head}AND a.source = ? {sep}{tail}"
-            params: tuple = (source, limit, offset)
-        else:
-            sql = base
-            params = (limit, offset)
+            fragments.append(_SOURCE_WHERE)
+            params.append(source)
+        fragments.append(_ORDER_BY)
+        fragments.append(_LIMIT_OFFSET)
+        sql = " ".join(fragments)
+        params.extend([limit, offset])
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    def count_results(
+        self,
+        *,
+        view: str,
+        source: str | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Total matching rows for `list_results` with the SAME view/source/search
+        predicates (and the same bound-parameter order), before pagination — so
+        the UI's count is the truthful total, not the returned page length."""
+        base = _COUNT_FLAGGED if view == "flagged" else _COUNT_ALL
+        fragments = [base]
+        params: list[Any] = []
+        if search:
+            fragments.append(_SEARCH_WHERE)
+            params.extend(_like_patterns(search))
+        if source is not None:
+            fragments.append(_SOURCE_WHERE)
+            params.append(source)
+        sql = " ".join(fragments)
+        with self._lock:
+            row = self._conn.execute(sql, params).fetchone()
+        return int(row[0])
 
     def get(self, result_id: int) -> dict[str, Any] | None:
         with self._lock:

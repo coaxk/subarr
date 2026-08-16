@@ -1,7 +1,7 @@
 """#156 Track A: aftercare review endpoints.
 
 GET  /api/aftercare/pending             - flagged & unreviewed count (header pill)
-GET  /api/aftercare/results?view=&source=&... - latest-per-path results (page)
+GET  /api/aftercare/results?view=&source=&search=&limit=&offset= - latest-per-path results (page)
 POST /api/aftercare/audit               - #216 start the existing-sub audit
 GET  /api/aftercare/audit/status        - #216 audit progress
 POST /api/aftercare/{id}/acknowledge    - mark reviewed
@@ -56,9 +56,33 @@ async def results(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     source: str | None = Query(None, max_length=40),
+    search: str | None = Query(
+        None,
+        max_length=200,
+        description="Case-insensitive substring over canonical_path/source/preview; literal wildcards escaped.",
+    ),
 ) -> dict[str, Any]:
+    """Return a page of latest-per-path aftercare results for the given view.
+
+    Response shape:
+      count  - number of rows in this page (kept for compatibility).
+      total  - TRUTHFUL total matching rows for the query predicates (view +
+               source + search), so the UI can paginate reliably across
+               multi-page result sets.
+      items  - the page slice, limited by `limit`/`offset` and enriched
+               per-row with language (from the coverage snapshot) and library.
+      view   - the view selector echoed back to the client.
+
+    `search` is a case-insensitive substring match applied over
+    canonical_path/source/preview, with literal wildcard characters escaped so
+    they match literally. `source` filters by the job source; an empty search
+    string is treated as no filter.
+    """
     store = request.app.state.aftercare
-    items = store.list_results(view=view, limit=limit, offset=offset, source=source)
+    items = store.list_results(view=view, limit=limit, offset=offset, source=source, search=search)
+    # Truthful total across the SAME predicates used for the page (not the page
+    # length), so the UI can paginate reliably.
+    total = store.count_results(view=view, source=source, search=search)
     # Best-effort enrich each row with the show's language from the in-memory
     # coverage snapshot (per-language is the tuning axis — drives the flag + the
     # #168 loop). No schema cost; read-time lookup against the cached snapshot.
@@ -83,7 +107,17 @@ async def results(
 
     for row in items:
         row["library"] = library_label(row.get("canonical_path") or "")
-    return {"count": len(items), "view": view, "items": items}
+    page_count = (total + limit - 1) // limit
+    return {
+        "count": len(items),
+        "total": total,
+        "page_count": page_count,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total,
+        "view": view,
+        "items": items,
+    }
 
 
 @router.post("/acknowledge-all")

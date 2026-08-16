@@ -5,7 +5,7 @@ GET  /api/audio-lang/verifications/{path} — get one
 POST /api/audio-lang/verifications        — upsert (user confirms language)
 DELETE /api/audio-lang/verifications/{path} — remove a verification
 POST /api/audio-lang/verifications/bulk-for-series — apply to multiple files
-GET  /api/audio-lang/pending-review       — coverage rows needing user input
+GET  /api/audio-lang/pending-review?search=&limit=&offset= — coverage rows needing user input
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from ..audio_sampler import (
     find_dialog_positions,
 )
 from ..config import settings
+from ..error_detail import safe_error
 from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from ..subgen_client import SubgenUnavailable
-from ..error_detail import safe_error
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/audio-lang", tags=["audio-lang"])
@@ -654,12 +654,27 @@ async def sample(
 
 
 @router.get("/pending-review")
-async def pending_review(request: Request) -> dict[str, Any]:
+async def pending_review(
+    request: Request,
+    search: str | None = Query(
+        None, max_length=200, description="case-insensitive substring over title/episode/path"
+    ),
+    limit: int = Query(200, ge=1, le=500, description="page size (default 200, matching the historical cap)"),
+    offset: int = Query(0, ge=0, description="row offset into the fully-classified, searched set"),
+    flag_filter: str = Query(
+        "all", alias="flag", pattern="^(all|suspect|unknown|track_mismatch|multilingual)$"
+    ),
+) -> dict[str, Any]:
     """v1.1-O Layer 4: surface coverage rows that need user audio-lang
     verification — suspect or unknown flags set, no existing verification.
 
     v1.1 ARCH: reads from the coverage_cache snapshot instead of rebuilding
-    coverage end-to-end. Returns instantly (was 60-90s)."""
+    coverage end-to-end. Returns instantly (was 60-90s).
+
+    Classification (track-mismatch -> auto-multi -> verified skip ->
+    suspect/unknown) always runs over the COMPLETE pending set; search and
+    page slicing are applied only after classification, so precedence is
+    unaffected by pagination and `count` is the total matching rows."""
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
     # #406: key the multilingual lane on the STORE source (not the snapshot's
@@ -750,7 +765,39 @@ async def pending_review(request: Request) -> dict[str, Any]:
                 **extra,
             }
         )
-    return {"count": len(pending), "items": pending[:200]}
+    # Case-insensitive search over the client-visible review fields, applied to
+    # the FULLY-CLASSIFIED pending set (before any slicing). Mirrors the haystack
+    # the Review UI built client-side so behavior is preserved server-side.
+    needle = (search or "").strip().lower()
+    if needle:
+        pending = [p for p in pending if _matches_pending_search(p, needle)]
+    counts_by_flag = {
+        name: sum(p.get("flag") == name for p in pending)
+        for name in ("suspect", "unknown", "track_mismatch", "multilingual")
+    }
+    if flag_filter != "all":
+        pending = [p for p in pending if p.get("flag") == flag_filter]
+    total = len(pending)
+    return {
+        "count": total,
+        "counts_by_flag": counts_by_flag,
+        "flag": flag_filter,
+        "limit": limit,
+        "offset": offset,
+        "page_count": (total + limit - 1) // limit,
+        "has_more": offset + limit < total,
+        "items": pending[offset : offset + limit],
+    }
+
+
+def _matches_pending_search(row: dict[str, Any], needle: str) -> bool:
+    """Case-insensitive substring match over the review row's client-visible
+    fields: title, episode number, and canonical/file path."""
+    hay = (
+        f"{row.get('title') or ''} {row.get('episode_number') or ''} "
+        f"{(row.get('file_canonical_path') or row.get('canonical_path') or '')}"
+    ).lower()
+    return needle in hay
 
 
 # ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───

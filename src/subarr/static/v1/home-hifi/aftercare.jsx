@@ -5,8 +5,10 @@
 import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { BlacklistPanel } from './blacklist-panel.jsx';
+// P4: reuse Review's pagination derivation (server `count` -> prev/next + range).
+import { computePagination } from './review.jsx';
 
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
 // ISO-639-1 → representative country flag. Languages aren't countries, so a few
 // (en/es/pt/ca) pick the most common flag; unknown falls back to a white flag.
@@ -296,6 +298,35 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
 
 // Collapsible legend explaining the status dots + flag chips. Errors here are
 // the deterministic failure-modes the judges detect — not accuracy.
+// P4: build the /api/aftercare/results query string for server-side search +
+// page slicing + view/source filters. The server validates these (search
+// max_length=200, limit 1..500, offset >= 0) and returns the truthful total
+// matching `count` for the CURRENT query. Empty search is omitted so the URL
+// stays clean. Exported for tests, mirroring review.jsx's buildReviewQuery.
+export function buildAftercareQuery({ view = 'flagged', source = null, search = '', limit = 100, offset = 0 }) {
+  const q = new URLSearchParams();
+  q.set('view', view);
+  if (source) q.set('source', source);
+  const s = (search || '').trim();
+  if (s) q.set('search', s);
+  q.set('limit', String(limit));
+  q.set('offset', String(offset));
+  return q.toString();
+}
+
+// P4-S4: pure predicate for the empty-last-page recovery. If a response comes
+// back with no rows but the server reports more matching rows beyond this page
+// (rows were acknowledged / requeued / audited out between fetches), the page
+// is now past the end and invalid. Returns the offset to step back to (the
+// previous page start), or null when there is genuinely no match (render the
+// empty state as-is). Exported for tests.
+export function recoverEmptyPageOffset({ itemsLength = 0, count = 0, offset = 0, limit = 100 }) {
+  if (itemsLength === 0 && count > 0 && offset > 0) {
+    return Math.max(0, offset - limit);
+  }
+  return null;
+}
+
 function Legend() {
   const dotItem = (kind, label, desc) => (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -344,12 +375,59 @@ export function AftercarePage() {
   const [audit, setAudit] = useState({ running: false, done: 0, total: 0 }); // #216 audit progress
   const [ackingAll, setAckingAll] = useState(false); // #313 bulk-acknowledge in flight
 
+  // P4: server-side search + pagination. `search` is the live input value;
+  // `debouncedSearch` is the term that actually drives the request (see the
+  // debounce effect below). `limit` is the page size (matches the server
+  // default 100) and `offset` the current page's starting row into the server's
+  // searched set.
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [limit, setLimit] = useState(100);
+  const [offset, setOffset] = useState(0);
+  // P4-S3: a request sequence token so a stale poll / query response can never
+  // overwrite a newer one — the fetch guard in refetch. isRefetching disables
+  // the pagination buttons mid-flight so a pending response can't be double-
+  // stepped past the end (same convention as review.jsx).
+  const fetchSeq = useRef(0);
+  const [isRefetching, setIsRefetching] = useState(false);
+
+  // P4: debounce the server search so typing doesn't fire a request per
+  // keystroke. When the term settles, reset to page 1 (a new search starts at
+  // the top of the results).
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setDebouncedSearch(search);
+      setOffset(0);
+    }, 250);
+    return () => clearTimeout(id);
+  }, [search]);
+
   const refetch = useCallback(async () => {
-    const q = new URLSearchParams({ view });
-    if (source) q.set('source', source);
-    const r = await fetch(`/api/aftercare/results?${q.toString()}`, { credentials: 'same-origin' });
-    if (r.ok) setData(await r.json());
-  }, [view, source]);
+    // P4-S3: claim a fresh sequence token; a stale poll or older query/page
+    // that resolves later must not clobber the newer one.
+    const seq = ++fetchSeq.current;
+    setIsRefetching(true);
+    try {
+      const q = buildAftercareQuery({ view, source, search: debouncedSearch, limit, offset });
+      const r = await fetch(`/api/aftercare/results?${q}`, { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const payload = await r.json();
+      const items = payload?.items || [];
+      // P4-S2: empty-last-page recovery — after an acknowledge / requeue / audit
+      // completion rows may have left the current page so it's now past the end.
+      // Step back to the previous valid page and refetch instead of leaving a
+      // blank invalid page (the offset change below re-triggers refetch).
+      const stepBack = recoverEmptyPageOffset({ itemsLength: items.length, count: payload?.total, offset, limit });
+      if (stepBack !== null) {
+        if (seq === fetchSeq.current) setOffset(stepBack);
+        return;
+      }
+      if (seq !== fetchSeq.current) return; // a newer query/page won the race
+      setData(payload);
+    } finally {
+      if (seq === fetchSeq.current) setIsRefetching(false);
+    }
+  }, [view, source, debouncedSearch, limit, offset]);
 
   useEffect(() => {
     refetch();
@@ -424,16 +502,21 @@ export function AftercarePage() {
     setExpandedId((prev) => (prev === id ? null : id));
   }, []);
 
-  // View toggle pills. Show count if data is loaded.
-  const flaggedCount = data ? data.items.filter(i => i.flagged).length : null;
-  const allCount = data ? data.items.length : null;
+  // P4-S1: the server's `total` is the TRUTHFUL total matching the current query
+  // (view + source + search); `count` remains the length of the returned page. Only the
+  // ACTIVE view's total is in this response, so only its pill shows a number;
+  // the inactive view's total isn't derivable from a single page, so it shows
+  // the bare label rather than a misleading page-length count.
+  const totalCount = data ? data.total : null;
 
   const viewPills = [
-    { id: 'flagged', label: flaggedCount !== null ? `flagged (${flaggedCount})` : 'flagged' },
-    { id: 'all',     label: allCount !== null     ? `all (${allCount})`         : 'all'     },
+    { id: 'flagged', label: (view === 'flagged' && totalCount !== null) ? `flagged (${totalCount})` : 'flagged' },
+    { id: 'all',     label: (view === 'all' && totalCount !== null)     ? `all (${totalCount})`     : 'all'     },
   ];
 
   const items = data?.items || [];
+  // P4-S1: pagination facts from the server's truthful total (`total`).
+  const pagination = computePagination({ count: data?.total, limit, offset });
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -448,7 +531,7 @@ export function AftercarePage() {
             detected automatically.
           </div>
         </div>
-        {items.length > 0 && (
+        {totalCount > 0 && (
           <button onClick={acknowledgeAll} disabled={ackingAll} className="btn sm"
             title="Mark all pending items reviewed — clears the backlog in one action. Does not change the subtitle files."
             style={{ flex: 'none', whiteSpace: 'nowrap' }}>
@@ -460,9 +543,9 @@ export function AftercarePage() {
       {/* View toggle + source filter + existing-sub audit trigger (#216) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {viewPills.map((p) => (
-          <span key={p.id} onClick={() => setView(p.id)}
+          <span key={p.id} onClick={() => { setView(p.id); setOffset(0); }}
             role="button" tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setView(p.id); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setView(p.id); setOffset(0); } }}
             className={`chip ${view === p.id ? 'violet' : ''}`}
             style={{ cursor: 'pointer' }}>
             {p.label}
@@ -470,14 +553,30 @@ export function AftercarePage() {
         ))}
         <span style={{ width: 1, height: 16, background: 'var(--bg-3)', margin: '0 2px' }} />
         {[{ id: null, label: 'all sources' }, { id: 'existing_audit', label: 'existing audit' }].map((p) => (
-          <span key={p.id || 'all'} onClick={() => setSource(p.id)}
+          <span key={p.id || 'all'} onClick={() => { setSource(p.id); setOffset(0); }}
             role="button" tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSource(p.id); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setSource(p.id); setOffset(0); } }}
             className={`chip ${source === p.id ? 'violet' : ''}`}
             style={{ cursor: 'pointer' }}>
             {p.label}
           </span>
         ))}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          height: 30, padding: '0 12px',
+          background: 'var(--bg-2)', border: 'var(--border)',
+          borderRadius: 'var(--radius-md)', width: 280,
+        }}>
+          <input type="search" value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search path, source, or preview…"
+            aria-label="Search aftercare items"
+            style={{
+              flex: 1, background: 'transparent', border: 'none',
+              fontSize: 'var(--text-sm)', color: 'var(--fg-0)',
+              outline: 'none',
+            }} />
+        </div>
         <span style={{ flex: 1 }} />
         <button onClick={runAudit} disabled={audit.running}
           title="Scan the external subtitles you already have and score their quality"
@@ -489,6 +588,46 @@ export function AftercarePage() {
         <Legend />
       </div>
 
+      {/* P4: server-side pagination — total from the server `total`, prev/next
+          disabled at the boundaries and mid-refetch, and a page-size selector.
+          Changing the page size resets to the first page. Mirrors review.jsx. */}
+      {data && pagination.total > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '2px 2px 6px' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+            {pagination.shownStart}–{pagination.shownEnd} of {pagination.total}
+          </span>
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
+          }}>
+            Page size
+            <select value={limit}
+              onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}
+              aria-label="Page size"
+              style={{
+                height: 24, padding: '0 6px', background: 'var(--bg-1)', color: 'var(--fg-0)',
+                border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-2xs)',
+              }}>
+              {[50, 100, 200, 500].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <span style={{ flex: 1 }} />
+          <button className="btn sm" disabled={!pagination.hasPrev || isRefetching}
+            aria-label="Previous page"
+            onClick={() => setOffset(Math.max(0, offset - limit))}>
+            ‹ Prev
+          </button>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            Page {pagination.pageNumber} of {pagination.totalPages}
+          </span>
+          <button className="btn sm" disabled={!pagination.hasNext || isRefetching}
+            aria-label="Next page"
+            onClick={() => setOffset(offset + limit)}>
+            Next ›
+          </button>
+        </div>
+      )}
+
       {/* Content card */}
       <section style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -498,8 +637,8 @@ export function AftercarePage() {
             {data == null
               ? 'loading…'
               : view === 'flagged'
-                ? (flaggedCount === 0 ? 'nothing flagged' : `${flaggedCount} flagged`)
-                : `${allCount} total`}
+                ? (totalCount === 0 ? 'nothing flagged' : `${totalCount} flagged`)
+                : `${totalCount} total`}
           </span>
         </div>
 
@@ -513,9 +652,11 @@ export function AftercarePage() {
         {/* Empty state */}
         {data !== null && items.length === 0 && (
           <div style={{ padding: '24px 12px', color: 'var(--fg-3)', fontSize: 'var(--text-sm)' }}>
-            {view === 'flagged'
-              ? 'Nothing needs review — no flagged jobs at the moment.'
-              : 'No completed jobs recorded yet. Jobs appear here once subgen finishes processing them.'}
+            {debouncedSearch.trim()
+              ? `${view === 'flagged' ? 'No flagged jobs' : 'No completed jobs'} match your search “${debouncedSearch.trim()}”.`
+              : view === 'flagged'
+                ? 'Nothing needs review — no flagged jobs at the moment.'
+                : 'No completed jobs recorded yet. Jobs appear here once subgen finishes processing them.'}
           </div>
         )}
 
