@@ -422,11 +422,12 @@ export function ReviewPage() {
     setEpSelection(new Set());
   }, [filter]);
 
-  // Selection is intentionally page-scoped; navigating to another page must
-  // not leave a bulk-action bar referring to rows that are no longer visible.
+  // Selection is intentionally page-scoped; navigating to another page or
+  // changing its size must not leave a bulk-action bar referring to rows that
+  // are no longer visible.
   useEffect(() => {
     setEpSelection(new Set());
-  }, [offset]);
+  }, [offset, limit]);
 
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or

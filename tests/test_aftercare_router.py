@@ -118,6 +118,25 @@ def test_results_count_is_total_not_page_length(tmp_path):
     assert body["items"] == []
 
 
+def test_results_crosses_historical_page_boundary_without_loss(tmp_path):
+    client = _results_client(tmp_path, n=150)
+    first = client.get("/api/aftercare/results", params={"limit": 100, "offset": 0}).json()
+    second = client.get("/api/aftercare/results", params={"limit": 100, "offset": 100}).json()
+
+    assert first["total"] == second["total"] == 150
+    paths = [item["canonical_path"] for item in first["items"] + second["items"]]
+    assert len(paths) == 150
+    assert len(set(paths)) == 150
+
+
+def test_results_search_crosses_historical_page_boundary(tmp_path):
+    client = _results_client(tmp_path, n=150)
+    body = client.get("/api/aftercare/results", params={"search": "e149", "limit": 50}).json()
+
+    assert body["total"] == 1
+    assert body["items"][0]["canonical_path"] == "TV/A/e149.mkv"
+
+
 def test_results_search_still_enriches_language_and_library(tmp_path, monkeypatch):
     # enrichment (language from coverage snapshot + library label) must still be
     # applied to the returned page when search/pagination are in play.

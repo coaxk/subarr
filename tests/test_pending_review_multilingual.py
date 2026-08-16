@@ -208,6 +208,30 @@ def test_search_case_insensitive_across_supported_fields(app_with_stub):
     assert body["items"][0]["canonical_path"] == "TV/ShowC/e3.mkv"
 
 
+def test_search_reaches_rows_beyond_historical_cap(app_with_stub):
+    app = app_with_stub.app
+    rows = _suspect_rows(250)
+    rows[249]["title"] = "NeedleInHaystack"
+    app.state.coverage_cache = _SnapCache(rows)
+
+    body = app_with_stub.get(PENDING, params={"search": "needleinhaystack"}).json()
+    assert body["count"] == 1
+    assert body["items"][0]["canonical_path"] == "TV/Bulk/e249.mkv"
+
+
+def test_flag_filter_is_global_and_reports_matching_counts(app_with_stub):
+    rows = _suspect_rows(205)
+    rows[200]["audio_label_suspect"] = False
+    rows[200]["audio_label_unknown"] = True
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+
+    body = app_with_stub.get(PENDING, params={"flag": "unknown", "limit": 5}).json()
+    assert body["count"] == 1
+    assert body["items"][0]["canonical_path"] == "TV/Bulk/e200.mkv"
+    assert body["counts_by_flag"]["suspect"] == 204
+    assert body["counts_by_flag"]["unknown"] == 1
+
+
 def test_offset_limit_slicing_is_stable(app_with_stub):
     app = app_with_stub.app
     n = 20
