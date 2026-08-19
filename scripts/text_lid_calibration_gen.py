@@ -415,13 +415,23 @@ def build_corpus(root: Path) -> list[dict]:
     return rows
 
 
-def main() -> int:
-    root = Path("artifacts/calibration/pr451-text-lid")
+def write_corpus(root: Path) -> Path:
+    """Generate the corpus under ``root`` and write ``manifest.jsonl`` there,
+    returning the manifest path. Deterministic (fixed seeds per language and
+    category), so regeneration is byte-identical. Reusable by tests via
+    ``write_corpus(tmp_path)`` and by ``main()`` for the artifacts layout."""
     rows = build_corpus(root)
     manifest = root / "manifest.jsonl"
     with manifest.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    return manifest
+
+
+def main() -> int:
+    root = Path("artifacts/calibration/pr451-text-lid")
+    manifest = write_corpus(root)
+    rows = [json.loads(line) for line in manifest.open(encoding="utf-8") if line.strip()]
     print(f"wrote {len(rows)} rows to {root}")
     from collections import Counter
 

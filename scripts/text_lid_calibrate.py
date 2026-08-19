@@ -1,4 +1,4 @@
-"""Calibrate the ``pr451-v1`` text-LID policy thresholds on a labeled corpus.
+"""Calibrate the ``pr451-v2`` text-LID policy thresholds on a labeled corpus.
 
 Consumes the manifest built by ``scripts/text_lid_calibration_gen.py`` and
 selects a (threshold, margin) pair that maximizes *dev* clean recall subject to
@@ -8,40 +8,38 @@ report to ``results/heldout.json``. Exact JSON schema per DD-pr-451.
 Run:
     python -m scripts.text_lid_calibrate \\
         --manifest artifacts/calibration/pr451-text-lid/manifest.jsonl \\
-        --model-sha256 8c99809ff6de3d129e447306d30ceae4713735230dced7e8d4d46df89e6968ce \\
-        --policy-version pr451-v1
+        --policy-version pr451-v2
 
 The pipeline REUSES the checker's canonical region builder and aggregation
 (``text_lid.extract_visible_cues`` / ``classification_regions`` / ``_aggregate`` /
 ``_is_mixed`` / ``_translation_failure_shape`` / ``_explicit_source_target_mismatch``)
 and a REAL py3langid ``LanguageIdentifier`` built via
-``from_pickled_model(path, norm_probs=True)`` restricted to the six languages.
-It never reimplements region logic. Each fixture's regions are classified ONCE;
-the threshold/margin sweep is pure arithmetic over the precomputed features.
+``from_pickled_model(MODEL_FILE, norm_probs=True)`` over the FULL open-world
+model space (97 languages). By default it consumes the bundled py3langid==0.3.0
+model that ships inside the installed package — no download, no SHA pin; an
+explicit ``--model-path`` remains usable for calibration. It never reimplements
+region logic. Each fixture's regions are classified ONCE; the threshold/margin
+sweep is pure arithmetic over the precomputed features.
 
 Exit codes: 0 success; 1 a validation/availability error (bad --help exits 0 via
-argparse; missing py3langid/model, hash mismatch, or no qualifying pair exit 1).
+argparse; missing py3langid/model or no qualifying pair exit 1).
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import sys
 from pathlib import Path
 
-from subarr import text_lid
 from subarr.langs import normalize_lang
 from subarr.text_lid import (
     INCONCLUSIVE,
     MIN_ALPHABETIC_CHARS,
     MIN_REGIONS,
     PASS,
-    SUPPORTED_LANGUAGES,
     UNAVAILABLE,
-    UNSUPPORTED,
     WARN,
     _aggregate,
     _argmax_lex,
@@ -65,7 +63,7 @@ HOLDOUT_MIXED_ABSTENTION = 0.95
 
 
 class CalibrationError(Exception):
-    """Raised for unavailable backend, hash mismatch, or no qualifying pair."""
+    """Raised for an unavailable backend or no qualifying pair."""
 
 
 def load_manifest(path: str | Path) -> list[dict]:
@@ -84,68 +82,36 @@ def _arange_bp(min_bp: int, max_bp: int, step_bp: int):
         yield round(bp / 100, 2)
 
 
-def resolve_model_path(model_sha256: str, model_path: str | None = None) -> Path:
-    """Resolve a model file whose SHA-256 matches ``model_sha256``. Prefers an
-    explicit path, then the checker's pinned cache path, then the py3langid
-    bundled model. Raises CalibrationError when none matches (or py3langid is
-    absent)."""
-    if model_path is not None:
-        cands = [Path(model_path)]
-    else:
-        cands = []
-        if text_lid.model_target_path().is_file():
-            cands.append(text_lid.model_target_path())
-        # The bundled py3langid model is only a candidate when the extra is
-        # installed; absence is resolved as a clear error below.
-        if importlib.util.find_spec("py3langid") is not None:
-            import py3langid
-
-            bundled = Path(py3langid.__file__).parent / "data" / "model.plzma"
-            cands.append(bundled)
-    for cand in cands:
-        if cand.is_file() and hashlib.sha256(cand.read_bytes()).hexdigest() == model_sha256:
-            return cand
-    raise CalibrationError(
-        f"text-LID model unavailable: expected SHA-256 {model_sha256} but no matching model "
-        "file was found (pip install '.[text-lid]' provides py3langid's bundled model, or "
-        "point --model-path at a verified artifact)."
-    )
-
-
-def build_classifier(model_path: str | Path, model_sha256: str):
-    """Return a real py3langid LanguageIdentifier restricted to the six
-    languages, or raise CalibrationError on absence/failure."""
+def build_classifier(model_path: str | Path | None = None):
+    """Return a real py3langid LanguageIdentifier over the FULL open-world model
+    space (97 languages). Defaults to the bundled py3langid==0.3.0 model
+    (``MODEL_FILE`` inside the installed package; no download, no SHA pin); an
+    explicit ``model_path`` remains usable for calibration. Raises
+    CalibrationError on absence/failure. The classifier is left in its full-space
+    state (no language-restriction call)."""
     try:
-        from py3langid.langid import LanguageIdentifier
+        from py3langid.langid import LanguageIdentifier, MODEL_FILE
     except Exception as exc:
         raise CalibrationError(
             "py3langid is not importable — install the optional '[text-lid]' extra "
             "(pip install '.[text-lid]') before calibrating."
         ) from exc
     try:
-        ident = LanguageIdentifier.from_pickled_model(str(model_path), norm_probs=True)
-        ident.set_languages(sorted(SUPPORTED_LANGUAGES))
-        return ident
+        if model_path is None:
+            return LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
+        return LanguageIdentifier.from_pickled_model(str(model_path), norm_probs=True)
     except Exception as exc:
         raise CalibrationError(f"failed to build the text-LID classifier: {exc}") from exc
 
 
 def rank(classifier, text: str) -> dict[str, float] | None:
-    """Normalized {language: probability} over the six languages for one region
+    """Normalized {language: probability} over the FULL model space for one region
     (mirrors text_lid.classify_text but accepts an injected classifier)."""
     try:
         ranked = classifier.rank(text)
     except Exception:  # noqa: BLE001 - inference failure -> skip region
         return None
-    probs: dict[str, float] = {}
-    for lang, p in ranked:
-        norm = normalize_lang(lang)
-        if norm in SUPPORTED_LANGUAGES:
-            probs[norm] = float(p)
-    total = sum(probs.values())
-    if total > 0:
-        probs = {k: v / total for k, v in probs.items()}
-    return probs
+    return {normalize_lang(lang): float(p) for lang, p in ranked}
 
 
 def _expected(row: dict, task: str) -> set[str]:
@@ -218,8 +184,10 @@ def precompute(feat: dict) -> tuple[str | None, str | None]:
     expected = feat["expected"]
     if not expected:
         return (INCONCLUSIVE, "unknown_language_provenance")
-    if any(e not in SUPPORTED_LANGUAGES for e in expected):
-        return (UNSUPPORTED, "unsupported_language")
+    # No fixed candidate-set (or model-space) UNSUPPORTED gate here: the corpus
+    # languages (de/en/es/fr/it/pt) are all within the full 97-language model
+    # space, so the branch could never fire. Mirrors check_subtitle_text's
+    # precedence for the remaining gates.
     if not feat["region_probs"]:
         return (UNAVAILABLE, "inference_failed")
     if _is_mixed(feat["agg"], feat["region_probs"]):
@@ -239,7 +207,7 @@ def verdict(feat: dict, fixed: tuple[str | None, str | None], threshold: float, 
     agg = feat["agg"]
     expected = feat["expected"]
     p_expected = max(agg.get(e, 0.0) for e in expected)
-    p_next = max((agg.get(l, 0.0) for l in SUPPORTED_LANGUAGES if l not in expected), default=0.0)
+    p_next = max((agg.get(l, 0.0) for l in agg if l not in expected), default=0.0)
     if p_expected >= threshold and (p_expected - p_next) >= margin:
         return (PASS, "expected_language")
     return (WARN, "ordinary_mismatch")
@@ -309,27 +277,45 @@ def select_params(train_feats: list[dict], dev_feats: list[dict]):
     return best, fixed
 
 
-def calibrate(manifest_path, base_dir, model_sha256, policy_version, *, classifier=None, model_path=None):
-    """Full calibration pipeline -> report dict. `classifier` injectable for tests."""
+def _bundled_model_sha256() -> str:
+    """SHA-256 of the bundled py3langid model bytes (data/model.plzma)."""
+    import py3langid
+    from py3langid.langid import MODEL_FILE
+
+    return hashlib.sha256((Path(py3langid.__file__).parent / MODEL_FILE).read_bytes()).hexdigest()
+
+
+def calibrate(manifest_path, base_dir, policy_version, *, classifier=None, model_path=None, precomputed=None):
+    """Full calibration pipeline -> report dict.
+
+    `classifier` is injectable for tests. `precomputed` optionally supplies a
+    (train_feats, dev_feats, held_feats) tuple from a prior classify_rows() pass
+    so a test can reuse a single expensive classification across repeated
+    calibrate() runs (determinism / acceptance) without re-classifying. When
+    omitted (the production `main()` path), the features are classified here.
+    The report (schema, selection, metrics) is identical either way.
+    """
     rows = load_manifest(manifest_path)
-    if classifier is None:
-        mpath = resolve_model_path(model_sha256, model_path)
-        classifier = build_classifier(mpath, model_sha256)
-    train = [r for r in rows if r["split"] == "train"]
-    dev = [r for r in rows if r["split"] == "dev"]
-    heldout = [r for r in rows if r["split"] == "heldout"]
-    if not (train and dev and heldout):
-        raise CalibrationError("manifest must contain train, dev, and heldout rows")
-    train_feats = classify_rows(classifier, train, base_dir)
-    dev_feats = classify_rows(classifier, dev, base_dir)
-    held_feats = classify_rows(classifier, heldout, base_dir)
+    if precomputed is not None:
+        train_feats, dev_feats, held_feats = precomputed
+    else:
+        if classifier is None:
+            classifier = build_classifier(model_path)
+        train = [r for r in rows if r["split"] == "train"]
+        dev = [r for r in rows if r["split"] == "dev"]
+        heldout = [r for r in rows if r["split"] == "heldout"]
+        if not (train and dev and heldout):
+            raise CalibrationError("manifest must contain train, dev, and heldout rows")
+        train_feats = classify_rows(classifier, train, base_dir)
+        dev_feats = classify_rows(classifier, dev, base_dir)
+        held_feats = classify_rows(classifier, heldout, base_dir)
     (threshold, margin), fixed = select_params(train_feats, dev_feats)
     held_fixed = {f["id"]: precompute(f) for f in held_feats}
     held_fixed.update(fixed)  # fixed is per-id, disjoint across splits
     return {
         "schema_version": SCHEMA_VERSION,
         "manifest_sha256": manifest_sha256(manifest_path),
-        "model_sha256": model_sha256,
+        "model_sha256": _bundled_model_sha256(),
         "policy_version": policy_version,
         "threshold": threshold,
         "margin": margin,
@@ -339,7 +325,7 @@ def calibrate(manifest_path, base_dir, model_sha256, policy_version, *, classifi
                 lang: _summary(
                     [f for f in held_feats if f["language"] == lang], held_fixed, threshold, margin
                 )
-                for lang in sorted(SUPPORTED_LANGUAGES)
+                for lang in sorted({row["language"] for row in rows})
             },
             "by_category": _by_category(held_feats, held_fixed, threshold, margin),
         },
@@ -374,16 +360,15 @@ def write_heldout(report: dict, out_path: str | Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="scripts.text_lid_calibrate",
-        description="Calibrate the pr451-v1 text-LID thresholds and emit a heldout report.",
+        description="Calibrate the pr451-v2 text-LID thresholds and emit a heldout report.",
     )
     parser.add_argument("--manifest", required=True, help="path to manifest.jsonl")
     parser.add_argument(
-        "--model-sha256",
-        required=True,
-        help="pinned model SHA-256 (must match the resolved model file)",
+        "--model-path",
+        default=None,
+        help="optional explicit model file path (default: bundled py3langid model)",
     )
-    parser.add_argument("--model-path", default=None, help="optional explicit model file path")
-    parser.add_argument("--policy-version", default="pr451-v1")
+    parser.add_argument("--policy-version", default="pr451-v2")
     parser.add_argument(
         "--out",
         default=None,
@@ -399,7 +384,6 @@ def main(argv: list[str] | None = None) -> int:
         report = calibrate(
             manifest_path,
             base_dir,
-            args.model_sha256,
             args.policy_version,
             model_path=args.model_path,
         )

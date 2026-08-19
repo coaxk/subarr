@@ -70,12 +70,20 @@ class AfterCareStore:
         evaluation: AftercareEvaluation,
         source: str | None,
         preview: str | None = None,
-    ) -> None:
+    ) -> int:
+        """Insert one aftercare row and return its id.
+
+        Returns the inserted row id (int) so callers can attach follow-up data
+        (e.g. the advisory text-LID check) to the EXACT row that produced it.
+        The return-value change is backward compatible with callers that
+        ignore it. Latest-per-path display queries are unchanged (read-side,
+        MAX(id)-based).
+        """
         # `preview` (#216) is an already-sanitized snippet of a representative
         # cue, shown in the review UI to explain why an EXTERNAL sub is flagged.
         # NULL for our own (clean) Whisper output.
         with self._lock:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "INSERT INTO aftercare_results "
                 "(canonical_path, completed_at, composite, cue_count, flagged, "
                 " readability_json, signals_json, source, preview, reviewed_at, created_at) "
@@ -93,20 +101,19 @@ class AfterCareStore:
                     time.time(),
                 ),
             )
+            return int(cur.lastrowid)
 
-    def set_text_lang_check(self, canonical_path: str, check: dict | None) -> None:
-        """#451: attach ONE bounded advisory text-LID result to the LATEST
-        aftercare row for a path (the just-completed job). Advisory only — never
-        gates anything; `check` is the checker's bounded to_dict() (status,
-        reason, normalized languages, bounded evidence, provenance, versions,
-        probabilities) — never full subtitle text. Best-effort: a NULL / absent
-        row simply leaves the column NULL."""
+    def set_text_lang_check(self, result_id: int, check: dict | None) -> None:
+        """#451: attach ONE bounded advisory text-LID result to the EXACT
+        aftercare row identified by result_id (the id returned by record()).
+        Advisory only — never gates anything; `check` is the checker's bounded
+        to_dict() (status, reason, normalized languages, bounded evidence,
+        provenance, versions, probabilities) — never full subtitle text.
+        Best-effort: an absent row simply leaves the column NULL."""
         with self._lock:
             self._conn.execute(
-                "UPDATE aftercare_results SET text_lang_check_json = ? "
-                "WHERE id = (SELECT MAX(b.id) FROM aftercare_results b "
-                "WHERE b.canonical_path = ?)",
-                (json.dumps(check) if check else None, canonical_path),
+                "UPDATE aftercare_results SET text_lang_check_json = ? WHERE id = ?",
+                (json.dumps(check) if check else None, result_id),
             )
 
     def pending_count(self) -> int:

@@ -464,7 +464,7 @@ class CompletionWatcher:
             except Exception:  # noqa: BLE001 - probe lookup must not block judging
                 duration_s = None
             ev = evaluate_subtitle(text, media_duration_s=duration_s)
-            self._aftercare.record(
+            row_id = self._aftercare.record(
                 canonical_path=entry.canonical_path,
                 completed_at=time.time(),
                 evaluation=ev,
@@ -472,8 +472,13 @@ class CompletionWatcher:
             )
             # #451: once the produced subtitle is available, schedule the
             # bounded advisory text-LID check. Best-effort + warning-only; it
-            # records its result on the row just written above.
-            self._schedule_language_check(entry, srt_path)
+            # records its result on the EXACT row just written above — the row
+            # id returned by record() binds the async result, so a same-path
+            # re-completion can never misroute an older check onto the newer
+            # row. record() always returns a real id on success; on store
+            # failure the exception is already caught by this method's outer
+            # try, and _schedule_language_check fails soft on any edge case.
+            self._schedule_language_check(entry, srt_path, aftercare_row_id=row_id)
         except Exception as e:  # noqa: BLE001 - aftercare must never break completion
             log.warning("aftercare judging failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
 
@@ -481,10 +486,16 @@ class CompletionWatcher:
     # #451: bounded advisory text-LID sanity check (warning-only, fail-soft)
     # ------------------------------------------------------------------
 
-    def _schedule_language_check(self, entry, srt_path: str) -> None:
+    def _schedule_language_check(self, entry, srt_path: str, aftercare_row_id: int | None = None) -> None:
         """#451: schedule a bounded, advisory text-LID sanity check once the
         produced subtitle is available. Warning-only: it NEVER raises, NEVER
         blocks completion/upload/scan/aftercare, and records nothing on failure.
+
+        The check is bound to the EXACT aftercare row identified by
+        aftercare_row_id (the id returned by record()) so a same-path
+        re-completion can never misroute the result onto a newer row. The
+        id threads into the created task and lands on that row via
+        set_text_lang_check(result_id, ...).
 
         Uses a RETAINED `asyncio.create_task` (GC-safe strong ref), duplicate
         coalescing by canonical subtitle identity (one in-flight check per
@@ -522,7 +533,7 @@ class CompletionWatcher:
         sem = self._lang_semaphore()
         try:
             t = asyncio.create_task(
-                self._lang_check_worker(entry, srt_path, identity, key, sem),
+                self._lang_check_worker(entry, srt_path, identity, key, sem, aftercare_row_id),
                 name="subarr-text-lid-check",
             )
         except RuntimeError as e:
@@ -542,24 +553,30 @@ class CompletionWatcher:
             self._lang_check_semaphore = sem
         return sem
 
-    async def _lang_check_worker(self, entry, srt_path, identity, key, sem) -> None:
+    async def _lang_check_worker(
+        self, entry, srt_path, identity, key, sem, aftercare_row_id
+    ) -> None:
         """Advisory background worker. Bounded by the semaphore + wait_for
-        timeout. Cancellation propagates (supervisor shutdown); every other
-        failure is logged warning-only and records nothing."""
+        timeout. Runs the check and records its result on the exact aftercare
+        row identified by aftercare_row_id. Cancellation propagates (supervisor
+        shutdown); every other failure is logged warning-only and records
+        nothing."""
         import asyncio
 
         try:
             async with sem:
-                await self._run_language_check(entry, srt_path, identity)
+                await self._run_language_check(entry, srt_path, identity, aftercare_row_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - advisory must never break the loop
             log.warning("text-lid: advisory check failed for %s: %s", srt_path, e)
 
-    async def _run_language_check(self, entry, srt_path, identity) -> None:
+    async def _run_language_check(self, entry, srt_path, identity, aftercare_row_id) -> None:
         """Read the produced subtitle, run the bounded checker in the thread
-        pool under a timeout, and record ONE bounded result. Missing sidecar,
-        timeout, cancellation, and exceptions all fail soft (record nothing)."""
+        pool under a timeout, and record ONE bounded result on the EXACT
+        aftercare row identified by aftercare_row_id (the id returned by
+        record()). Missing sidecar, timeout, cancellation, and exceptions all
+        fail soft (record nothing)."""
         import asyncio
         import hashlib
 
@@ -603,20 +620,24 @@ class CompletionWatcher:
         except Exception as e:  # noqa: BLE001 - inference failure is advisory
             log.warning("text-lid: advisory check errored for %s: %s", srt_path, e)
             return  # exception -> fail-soft, record nothing
-        self._record_lang_check(entry, result)
+        self._record_lang_check(aftercare_row_id, result)
 
-    def _record_lang_check(self, entry, result) -> None:
-        """Persist ONE bounded structured result onto the latest aftercare row
-        for this path. Best-effort and advisory — a store failure only logs.
+    def _record_lang_check(self, aftercare_row_id: int | None, result) -> None:
+        """Persist ONE bounded structured result onto the EXACT aftercare row
+        identified by aftercare_row_id (the id returned by record()) — never
+        a latest-per-path lookup, so a same-path re-completion can't misroute
+        the result. Best-effort and advisory — a store failure only logs.
         Persists the bounded result only (status/reason/provenance/versions/…),
         never full subtitle text."""
         store = getattr(self, "_aftercare", None)
         if store is None or not hasattr(store, "set_text_lang_check"):
             return
         try:
-            store.set_text_lang_check(entry.canonical_path, result.to_dict())
+            store.set_text_lang_check(aftercare_row_id, result.to_dict())
         except Exception as e:  # noqa: BLE001 - advisory store write must not raise
-            log.warning("text-lid: failed to record advisory result for %s: %s", entry.canonical_path, e)
+            log.warning(
+                "text-lid: failed to record advisory result for row %s: %s", aftercare_row_id, e
+            )
 
     def _run_retime(self, entry) -> None:
         """#359: re-time the produced .srt in place (extend over-CPS cues into

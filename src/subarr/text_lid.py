@@ -6,10 +6,12 @@ selection, OCR, or HI policy — the caller (aftercare integration) swallows any
 failure and records the result.
 
 This is the TEXT counterpart to `lid.py` (which classifies *audio* waveforms via
-silero-lang95 ONNX). We build a separate checker here: optional lazy py3langid,
-pinned + checksum-verified model artifact, bounded deterministic sampling, and a
-pure `pr451-v1` policy. Base installation imports neither `py3langid` nor
-`numpy`; every backend dependency is imported inside a function.
+silero-lang95 ONNX). We build a separate checker here: optional lazy py3langid
+using the FULL open-world bundled model (py3langid==0.3.0 ships its 97-language
+`data/model.plzma` inside the installed package — no download, no cache, no
+checksum pin), bounded deterministic sampling, and a pure `pr451-v2` policy.
+Base installation imports neither `py3langid` nor `numpy`; every backend
+dependency is imported inside a function.
 
 No full subtitle text is persisted or logged — extraction retains only sanitized,
 bounded evidence samples.
@@ -28,11 +30,9 @@ import hashlib
 import json
 import logging
 import math
-import os
 import posixpath
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 
 from .langs import normalize_lang
 from .subtitle_readability import parse_srt
@@ -41,15 +41,18 @@ from .subtitle_sanitize import sanitize_cue_text
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants (policy `pr451-v1`)
+# Constants (policy `pr451-v2`)
 # ---------------------------------------------------------------------------
 
-SUPPORTED_LANGUAGES = frozenset({"de", "en", "es", "fr", "it", "pt"})
-POLICY_VERSION = "pr451-v1"
-CHECKER_VERSION = "1.0.0"
+POLICY_VERSION = "pr451-v2"
+CHECKER_VERSION = "1.1.0"
 
 # Pinned optional dependency (the `[text-lid]` extra ships exactly this).
 PY3LANGID_PIN = "py3langid==0.3.0"
+
+# Cache serialization marker identifying the exact bundled model this checker's
+# verdicts were produced against (invalidation input for cache_key()).
+MODEL_MARKER = "py3langid-bundled-0.3.0"
 
 # Bounded extraction: never read/decode more than this many bytes of a subtitle.
 MAX_BYTES = 32768
@@ -63,7 +66,7 @@ MIN_REGIONS = 3
 # Subtitles with fewer visible alphabetic characters are INCONCLUSIVE.
 MIN_ALPHABETIC_CHARS = 80
 
-# Policy thresholds (`pr451-v1`).
+# Policy thresholds (`pr451-v2`).
 THRESHOLD = 0.70  # p_expected >= 0.70
 MARGIN = 0.10  # p_expected - p_next >= 0.10
 TIE_EPS = 1e-9  # ties within this are ties
@@ -73,22 +76,6 @@ SOURCE_RESIDUE_FRACTION = 0.20  # translation-failure: >= 20% source-residue reg
 
 # Bounded evidence: each region's excerpt in a result is capped here.
 _EVIDENCE_SAMPLE_CHARS = 48
-
-# Model artifact (mirrors lid.py's pin + verify + atomic-write pattern).
-_MODEL_CACHE_ENV = "SUBARR_MODEL_CACHE"
-_MODEL_VERSION = "1.0.0"
-# The `[text-lid]` optional dependency (py3langid) is installed SEPARATELY from
-# the audio `[lid]` extra. The artifact is acquired LAZILY on the first
-# subtitle-text checker backend use: get_classifier() -> pull_model() verifies
-# the SHA-256 and writes it atomically into the cache (a present but mismatched
-# file is re-fetched and overwritten). ANY failure (missing extra, download,
-# checksum, cache dir, classifier init, timeout, inference) degrades to
-# UNAVAILABLE; there is NO boot-time fetch and the model is never a hard-required
-# dependency. Verified against the bundled py3langid==0.3.0 model
-# (py3langid/data/model.plzma) on 2026-08-19 during PR451 phase 4 calibration;
-# tests monkeypatch MODEL_SHA256 (same pattern as tests/test_lid.py).
-MODEL_URL = "https://github.com/coaxk/subarr-text-lid-model/releases/download/1.0.0/model.pickle"
-MODEL_SHA256 = "8c99809ff6de3d129e447306d30ceae4713735230dced7e8d4d46df89e6968ce"
 
 # Thread-safety: py3langid classify()/rank() thread-safety is undocumented, so we
 # guard both construction and inference with one lock (research note). Inference
@@ -238,7 +225,7 @@ def _alphabetic_count(texts: list[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# P3-S3 — lazy optional backend (mirrors lid.py's availability/pull/atomic-cache)
+# P3-S3 — lazy optional backend (bundled py3langid model; no download/cache)
 # ---------------------------------------------------------------------------
 
 
@@ -251,66 +238,17 @@ def runtime_present() -> bool:
     return True
 
 
-def model_cache_dir() -> Path:
-    """`SUBARR_MODEL_CACHE/text-lid/1.0.0`. Defaults beside the DB (mirrors
-    lid.py's persistence convention) when SUBARR_MODEL_CACHE is unset."""
-    base = os.environ.get(_MODEL_CACHE_ENV)
-    if not base:
-        db = os.environ.get("SUBARR_DB_PATH", "/data/subarr.db")
-        base = str(Path(db).parent / "models")
-    return Path(base) / "text-lid" / _MODEL_VERSION
-
-
-def model_target_path() -> Path:
-    """Cache location: <cache>/text-lid/1.0.0/<sha256>.pickle."""
-    return model_cache_dir() / f"{MODEL_SHA256}.pickle"
-
-
-def _default_fetch(url: str) -> bytes:
-    import httpx
-
-    r = httpx.get(url, follow_redirects=True, timeout=120.0)
-    r.raise_for_status()
-    return r.content
-
-
-def pull_model(force: bool = False, *, _fetch=None) -> dict:
-    """Download the pinned model, verify SHA256, and write it atomically to the
-    cache. Idempotent; never persists a checksum-mismatched file. `_fetch`
-    injectable for tests."""
-    if not MODEL_SHA256:
-        raise RuntimeError("text-lid model checksum is not pinned; refusing to pull")
-    target = model_target_path()
-    if target.is_file() and not force:
-        if hashlib.sha256(target.read_bytes()).hexdigest() == MODEL_SHA256:
-            return {"status": "present", "path": str(target)}
-    data = (_fetch or _default_fetch)(MODEL_URL)
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != MODEL_SHA256:
-        raise ValueError(f"text-lid model checksum mismatch: got {digest}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(target)
-    return {"status": "downloaded", "path": str(target), "sha256": digest}
-
-
-def model_available() -> bool:
-    """True iff py3langid AND the pinned, verified model file are present."""
-    return runtime_present() and model_target_path().is_file()
-
-
 def get_classifier():
-    """Return a cached py3langid LanguageIdentifier restricted to
-    SUPPORTED_LANGUAGES, or None when the extra/model is unavailable.
+    """Return a cached py3langid LanguageIdentifier built from the FULL
+    open-world bundled model (`MODEL_FILE` inside the installed py3langid
+    package), or None when the optional extra is unavailable.
 
-    Single-path LAZY acquisition: on first use, if the optional runtime is
-    importable, `pull_model()` is attempted inside the lock (atomic
-    checksum-verified cache placement; a present-but-unverified artifact is
-    re-fetched and overwritten). Missing optional dependency, download,
-    checksum, cache-directory, classifier-init, timeout, and inference
-    failures all convert to None -> UNAVAILABLE. Never raises; never fetches
-    at boot; the model is never a hard-required dependency.
+    Single-path LAZY construction: on first use, if the optional runtime is
+    importable, `LanguageIdentifier.from_pickled_model(MODEL_FILE,
+    norm_probs=True)` is built inside the lock and cached. Missing optional
+    dependency, classifier-init, and inference failures all convert to None ->
+    UNAVAILABLE. Never raises; never fetches at boot; never touches the network
+    or a cache dir; the model is never a hard-required dependency.
     """
     global _cached_classifier
     if _cached_classifier is not None:
@@ -321,47 +259,43 @@ def get_classifier():
         if _cached_classifier is not None:
             return _cached_classifier
         try:
-            # Idempotent: returns "present" when the verified artifact is
-            # already cached (no fetch), downloads + atomically verifies/writes
-            # when absent or checksum-mismatched.
-            pull_model()
-        except Exception:  # noqa: BLE001 - offline/checksum/cache failure -> UNAVAILABLE
-            log.warning("text-lid: model acquisition failed; degrading to UNAVAILABLE", exc_info=True)
-            return None
-        try:
-            from py3langid.langid import LanguageIdentifier
+            from py3langid.langid import LanguageIdentifier, MODEL_FILE
 
-            ident = LanguageIdentifier.from_pickled_model(str(model_target_path()), norm_probs=True)
-            ident.set_languages(sorted(SUPPORTED_LANGUAGES))
+            ident = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
             _cached_classifier = ident
         except Exception:  # noqa: BLE001 - degrade to None -> UNAVAILABLE
-            log.warning("text-lid: classifier init failed", exc_info=True)
+            log.warning("text-lid: classifier init failed; degrading to UNAVAILABLE", exc_info=True)
             _cached_classifier = None
     return _cached_classifier
 
 
 def classify_text(text: str) -> dict[str, float] | None:
-    """Classify one region -> normalized {language: probability} over
-    SUPPORTED_LANGUAGES (sum ~= 1.0), or None on missing extra/model or any
-    inference failure. Thread-safe via the classifier lock. Never raises."""
+    """Classify one region -> normalized {language: probability} over the FULL
+    model space (97 languages, sum ~= 1.0 because norm_probs=True normalizes
+    the whole distribution), or None on missing extra/model or any inference
+    failure. Thread-safe via the classifier lock. Never raises."""
     ident = get_classifier()
     if ident is None:
         return None
     try:
         with _CLASSIFIER_LOCK:
-            ranked = ident.rank(text)  # [(lang, prob)] over the restricted set
-        probs: dict[str, float] = {}
-        for lang, p in ranked:
-            norm = normalize_lang(lang)
-            if norm in SUPPORTED_LANGUAGES:
-                probs[norm] = float(p)
-        total = sum(probs.values())
-        if total > 0:
-            probs = {k: v / total for k, v in probs.items()}
-        return probs
+            ranked = ident.rank(text)  # [(lang, prob)] over the full model space
+        return {normalize_lang(lang): float(p) for lang, p in ranked}
     except Exception:  # noqa: BLE001 - inference failure degrades to UNAVAILABLE
         log.warning("text-lid: inference failed for a region", exc_info=True)
         return None
+
+
+def model_language_space(classifier) -> set[str] | None:
+    """Derive the set of language codes a classifier can emit from its
+    `nb_classes` attribute, when present. Returns `None` for an unknown model
+    space (e.g. a fake/foreign classifier without `nb_classes`)."""
+    cls = getattr(classifier, "nb_classes", None)
+    if cls is None:
+        return None
+    if isinstance(cls, (list, tuple, set)) and cls and all(isinstance(c, str) for c in cls):
+        return set(cls)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +399,7 @@ def _translation_failure_shape(
     if task != "translate":
         return False
     src = normalize_lang(source_language)
-    if not src or src not in SUPPORTED_LANGUAGES:
+    if not src:
         return False
     n = len(region_probs)
     if n == 0:
@@ -488,7 +422,7 @@ def _explicit_source_target_mismatch(winner: str | None, source_language, target
 
 
 # ---------------------------------------------------------------------------
-# P3-S5 — check_subtitle_text (pr451-v1 precedence)
+# P3-S5 — check_subtitle_text (pr451-v2 precedence)
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +475,8 @@ def check_subtitle_text(
         return _result(INCONCLUSIVE, "insufficient_regions", provenance)
 
     # --- (a) backend unavailable -> UNAVAILABLE ------------------------------
-    if get_classifier() is None:
+    classifier = get_classifier()
+    if classifier is None:
         return _result(UNAVAILABLE, "backend_unavailable", provenance)
 
     # --- (b) short / markup-only / malformed -> INCONCLUSIVE -----------------
@@ -556,8 +491,9 @@ def check_subtitle_text(
     if not expected:
         return _result(INCONCLUSIVE, "unknown_language_provenance", provenance)
 
-    # --- (d) known language outside the six -> UNSUPPORTED -------------------
-    if any(e not in SUPPORTED_LANGUAGES for e in expected):
+    # --- (d) expected code outside the known model space -> UNSUPPORTED ------
+    space = model_language_space(classifier)
+    if space is not None and any(e not in space for e in expected):
         return _result(UNSUPPORTED, "unsupported_language", provenance)
 
     # --- classify distinct regions (<=4 calls) -------------------------------
@@ -604,7 +540,7 @@ def check_subtitle_text(
 
     # --- (h) sufficient expected winner -> PASS ------------------------------
     p_expected = max(agg.get(e, 0.0) for e in expected)
-    p_next = max((agg.get(l, 0.0) for l in SUPPORTED_LANGUAGES if l not in expected), default=0.0)
+    p_next = max((agg.get(l, 0.0) for l in agg if l not in expected), default=0.0)
     if p_expected >= THRESHOLD and (p_expected - p_next) >= MARGIN:
         return _result(
             PASS,
@@ -686,7 +622,7 @@ def cache_key(
             "conflict": provenance_conflict,
         },
         PY3LANGID_PIN,
-        MODEL_SHA256,
+        MODEL_MARKER,
         POLICY_VERSION,
     ]
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

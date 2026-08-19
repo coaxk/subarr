@@ -1,13 +1,17 @@
-"""#451 Phase 3 — pure bounded text-LID policy and optional backend.
+"""#451 Phase 4 — pure bounded text-LID policy and optional backend.
 
-Tests the pure extraction/sampling, deterministic regions, pr451-v1 policy
-precedence, canonical cache identity/keying, and the optional py3langid backend.
-A fake/stub classifier is injected via monkeypatch so py3langid need not be
-installed; real-backend assertions use `pytest.importorskip` (test_lid.py style).
+Tests the pure extraction/sampling, deterministic regions, pr451-v2 policy
+precedence, canonical cache identity/keying, and the optional py3langid backend
+built from the BUNDLED model (no download/cache/checksum). A fake/stub
+classifier is injected via monkeypatch so py3langid need not be installed for
+the pure-policy tests; real-backend assertions use ``pytest.importorskip`` and
+run against the full open-world bundled model (97-language space).
 """
 
 import hashlib
 import json
+import socket
+import sys
 from pathlib import Path
 
 import pytest
@@ -41,7 +45,20 @@ def _english_cues(n: int = 24) -> list[str]:
     ]
 
 
+# Real, distinct sentences (12 each) so the full/begin/middle/end region texts
+# stay distinct (>= 3 regions) and each language has >= MIN_ALPHABETIC_CHARS.
+_EN_REAL = [f"The quick brown fox jumps over the lazy dog near the river bank, number {i}." for i in range(12)]
+_JA_REAL = [f"これは日本語の文章です。翻訳が必要な字幕の{i}行目です。" for i in range(12)]
+_KO_REAL = [f"이것은 한국어 문장입니다. 자막을 번역해야 하는 {i}번째 줄입니다。" for i in range(12)]
+_SW_REAL = [f"Hii ni maandishi ya Kiswahili kwa ajili ya majaribio ya manukuu namba {i}." for i in range(12)]
+
+
 class FakeClassifier:
+    """Stands in for a py3langid LanguageIdentifier over a known model space."""
+
+    # Full-ish model space the fake claims to emit; used by model_language_space().
+    nb_classes = {"de", "en", "es", "fr", "it", "pt", "ja", "ko", "sw"}
+
     def __init__(self, ranking):
         self.ranking = ranking  # list[(lang, prob)]
 
@@ -69,6 +86,22 @@ def _default_kw() -> dict:
 
 def _run(*texts: str, **kw) -> text_lid.TextLanguageResult:
     base = _default_kw()
+    base.update(kw)
+    return text_lid.check_subtitle_text(_srt(*texts), **base)
+
+
+def _real_run(*texts: str, **kw) -> text_lid.TextLanguageResult:
+    """check_subtitle_text over REAL bundled-model output. `kw` supplies the
+    full provenance; expected is derived from task/source/target (expected_languages=[])."""
+    ident = text_lid.canonical_subtitle_identity("/media/TV/Show.mkv", "TV/Show/Show.en.srt", "en", 1)
+    base = dict(
+        canonical_identity=ident,
+        content_sha256="abc123",
+        expected_languages=[],
+        task="transcribe",
+        source_language="en",
+        target_language="en",
+    )
     base.update(kw)
     return text_lid.check_subtitle_text(_srt(*texts), **base)
 
@@ -148,15 +181,22 @@ def test_one_or_two_regions_never_pass(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# P3-S3 — backend availability / pull / checksum
+# P3-S3 — bundled backend availability (no download/cache/checksum)
 # ---------------------------------------------------------------------------
 
 
 def test_runtime_present_false_without_extra(monkeypatch):
-    import sys
-
     monkeypatch.setitem(sys.modules, "py3langid", None)  # force absent extra
     assert text_lid.runtime_present() is False
+
+
+def test_get_classifier_none_without_runtime(monkeypatch):
+    monkeypatch.setitem(sys.modules, "py3langid", None)
+    text_lid._cached_classifier = None
+    try:
+        assert text_lid.get_classifier() is None
+    finally:
+        text_lid._cached_classifier = None
 
 
 def test_base_import_stays_ml_free():
@@ -167,9 +207,6 @@ def test_base_import_stays_ml_free():
     imports inside runtime_present()/get_classifier() on call, never at import.
     Guards against an accidental top-level ``import py3langid`` / ``import numpy``.
     """
-    import sys
-    import subprocess
-
     script = (
         "import sys; import subarr; import subarr.text_lid as t; "
         "ml=[m for m in sys.modules if m=='py3langid' or m.startswith('numpy')]; "
@@ -177,6 +214,8 @@ def test_base_import_stays_ml_free():
         "print('ML-OK', t.runtime_present())"
     )
     # Run in a fresh interpreter so baseline modules reflect a cold base install.
+    import subprocess
+
     out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "ML-OK" in out.stdout
@@ -195,7 +234,6 @@ def test_text_lid_extra_separate_and_base_ml_free_packaging():
          (bakes the text-LID runtime separately, distinct from the audio [lid]).
     """
     import tomllib
-    from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     with open(root / "pyproject.toml", "rb") as fh:
@@ -220,50 +258,123 @@ def test_text_lid_extra_separate_and_base_ml_free_packaging():
     assert ".[vad,qe-onnx,lid,text-lid]" in dockerfile
 
 
-def test_get_classifier_none_when_model_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    # #451 P7: lazy acquisition is ATTEMPTED on the first-use path (no boot-time
-    # fetch). With the fetcher offline, nothing usable is cached and the
-    # classifier degrades to None -> UNAVAILABLE.
-    monkeypatch.setattr(text_lid, "_default_fetch", lambda url: (_ for _ in ()).throw(OSError("offline")))
+def test_no_external_acquisition_symbols():
+    """The external download/cache/checksum acquisition path is fully removed."""
+    for s in (
+        "MODEL_URL",
+        "MODEL_SHA256",
+        "pull_model",
+        "model_target_path",
+        "model_cache_dir",
+        "_default_fetch",
+        "model_available",
+        "_MODEL_CACHE_ENV",
+    ):
+        assert not hasattr(text_lid, s), f"external acquisition symbol {s!r} must not exist"
+    assert "httpx" not in text_lid.__dict__
+    assert "urllib" not in text_lid.__dict__
+
+
+# ---------------------------------------------------------------------------
+# bundled-model construction (spy-based)
+# ---------------------------------------------------------------------------
+
+
+def _real_from_pickled():
+    pytest.importorskip("py3langid")
+    from py3langid import langid as _langid
+
+    return _langid.LanguageIdentifier.from_pickled_model, _langid
+
+
+def test_get_classifier_builds_from_bundled_model_file(monkeypatch):
+    """get_classifier() builds via from_pickled_model(MODEL_FILE, norm_probs=True)."""
+    real, _langid = _real_from_pickled()
+    calls = []
+
+    def spy(path, **kw):
+        calls.append((path, kw))
+        return real(path, **kw)
+
+    monkeypatch.setattr(_langid.LanguageIdentifier, "from_pickled_model", spy)
     text_lid._cached_classifier = None
-    assert text_lid.get_classifier() is None
-    assert not text_lid.model_target_path().exists()
+    try:
+        clf = text_lid.get_classifier()
+        assert clf is not None
+        assert len(calls) == 1
+        path, kw = calls[0]
+        assert path == _langid.MODEL_FILE
+        assert kw.get("norm_probs") is True
+    finally:
+        text_lid._cached_classifier = None
+
+
+def test_get_classifier_cached_across_calls(monkeypatch):
+    """Two get_classifier() calls build exactly once and return the same object."""
+    real, _langid = _real_from_pickled()
+    n = {"calls": 0}
+
+    def spy(path, **kw):
+        n["calls"] += 1
+        return real(path, **kw)
+
+    monkeypatch.setattr(_langid.LanguageIdentifier, "from_pickled_model", spy)
     text_lid._cached_classifier = None
+    try:
+        a = text_lid.get_classifier()
+        b = text_lid.get_classifier()
+        assert a is not None and b is not None
+        assert n["calls"] == 1
+        assert a is b
+    finally:
+        text_lid._cached_classifier = None
 
 
-def test_pull_model_verifies_checksum_and_never_persists_bad(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    good = b"fake-model-bytes"
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", hashlib.sha256(good).hexdigest())
-    res = text_lid.pull_model(_fetch=lambda url: good)
-    assert res["status"] == "downloaded"
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", "0" * 64)
-    with pytest.raises(ValueError):
-        text_lid.pull_model(_fetch=lambda url: good)
-    assert not text_lid.model_target_path().exists()
+def test_bundled_model_file_path(monkeypatch):
+    """The classifier is built from the py3langid-bundled MODEL_FILE (data/model.plzma).
+
+    py3langid 0.3.0's LanguageIdentifier exposes `cl_path` only as a *method*
+    requiring a path argument (not a model-path attribute), so we assert the
+    construction path instead: the MODEL_FILE path passed to from_pickled_model
+    resolves to the bundled model inside the installed py3langid package.
+    """
+    real, _langid = _real_from_pickled()
+    captured = {}
+
+    def spy(path, **kw):
+        captured["path"] = path
+        return real(path, **kw)
+
+    monkeypatch.setattr(_langid.LanguageIdentifier, "from_pickled_model", spy)
+    text_lid._cached_classifier = None
+    try:
+        text_lid.get_classifier()
+        # MODEL_FILE is a package-relative path (e.g. 'data/model.plzma').
+        assert str(captured["path"]).endswith("data/model.plzma")
+        assert str(Path(_langid.__file__).parent / _langid.MODEL_FILE).endswith("data/model.plzma")
+        assert (Path(_langid.__file__).parent / _langid.MODEL_FILE).is_file()
+    finally:
+        text_lid._cached_classifier = None
 
 
-def test_pull_model_atomic_and_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    good = b"model-bytes"
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", hashlib.sha256(good).hexdigest())
-    text_lid.pull_model(_fetch=lambda url: good)
-    target = text_lid.model_target_path()
-    assert target.read_bytes() == good
-    # second pull sees present+verified file; no fetch needed
-    calls = {"n": 0}
+def test_classifier_works_without_network(monkeypatch):
+    """get_classifier() and rank() work with the network fully blocked — the
+    bundled model loads from the installed package, never from the network."""
+    pytest.importorskip("py3langid")
 
-    def fetch(url):
-        calls["n"] += 1
-        return good
+    def _block(*_a, **_k):
+        raise OSError("network blocked")
 
-    text_lid.pull_model(_fetch=fetch)
-    assert calls["n"] == 0
-
-
-def test_model_target_path_is_sha256_named():
-    assert text_lid.model_target_path().name == f"{text_lid.MODEL_SHA256}.pickle"
+    monkeypatch.setattr(socket.socket, "connect", _block)
+    monkeypatch.setattr(socket, "getaddrinfo", _block)
+    text_lid._cached_classifier = None
+    try:
+        clf = text_lid.get_classifier()
+        assert clf is not None
+        ranked = clf.rank("This is English text about a fox and a lazy dog by the river.")
+        assert ranked[0][0] == "en"
+    finally:
+        text_lid._cached_classifier = None
 
 
 # ---------------------------------------------------------------------------
@@ -408,11 +519,34 @@ def test_inconclusive_unknown_language_provenance(monkeypatch):
     assert r.reason == "unknown_language_provenance"
 
 
-def test_unsupported_known_language_outside_six(monkeypatch):
+def test_ko_classified_by_full_model_not_unsupported(monkeypatch):
+    # ko is inside the (fake) full model space -> PASS, not UNSUPPORTED.
     _install(monkeypatch, {"ko": 1.0})
     r = text_lid.check_subtitle_text(
         _srt(*_english_cues()),
-        **dict(_default_kw(), expected_languages=["ko"], source_language="ko", target_language="ko"),
+        **dict(
+            _default_kw(),
+            expected_languages=["ko"],
+            source_language="ko",
+            target_language="ko",
+            task="transcribe",
+        ),
+    )
+    assert r.status == text_lid.PASS
+    assert r.reason == "expected_language"
+
+
+def test_unsupported_code_outside_model_space(monkeypatch):
+    # 'xx' is not in the (fake) full model space -> UNSUPPORTED.
+    _install(monkeypatch, {"xx": 1.0})
+    r = text_lid.check_subtitle_text(
+        _srt(*_english_cues()),
+        **dict(
+            _default_kw(),
+            expected_languages=["xx"],
+            source_language="xx",
+            target_language="xx",
+        ),
     )
     assert r.status == text_lid.UNSUPPORTED
     assert r.reason == "unsupported_language"
@@ -566,8 +700,8 @@ def test_cache_key_matches_exact_serialization():
                 "conflict": None,
             },
             "py3langid==0.3.0",
-            text_lid.MODEL_SHA256,
-            "pr451-v1",
+            text_lid.MODEL_MARKER,
+            text_lid.POLICY_VERSION,
         ],
         sort_keys=True,
         separators=(",", ":"),
@@ -584,123 +718,97 @@ def test_cache_key_matches_exact_serialization():
 
 
 # ---------------------------------------------------------------------------
-# optional backend real-path (skipped on base CI; test_lid.py pattern)
+# real bundled-model classification + blocker-1 open-world behavior
 # ---------------------------------------------------------------------------
 
 
-def test_real_classify_text_uses_rank(monkeypatch):
+def test_real_classify_text_uses_full_model_space():
     pytest.importorskip("py3langid")
-    from py3langid.langid import MODEL_FILE, LanguageIdentifier
-
-    ident = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
-    ident.set_languages(["de", "en", "es", "fr", "it", "pt"])
-    monkeypatch.setattr(text_lid, "get_classifier", lambda: ident)
-    probs = text_lid.classify_text(
-        "This is an English sentence about the quick fox and the lazy dog near the river bank."
-    )
-    assert probs is not None
-    assert all(k in text_lid.SUPPORTED_LANGUAGES for k in probs)
-    assert abs(sum(probs.values()) - 1.0) < 1e-6
-
-
-# ---------------------------------------------------------------------------
-# P7 — single-path lazy acquisition on first backend use (absent cache)
-# ---------------------------------------------------------------------------
-# P7 closes the QA gap that pull_model() had no call site: get_classifier()
-# now attempts acquisition on the guarded first-use path. The real pinned model
-# (py3langid's bundled model.pklzma, whose sha256 == MODEL_SHA256 by contract) is
-# used as the deterministic fetch payload; tests compute its sha256 at runtime
-# rather than hardcoding the model hash.
+    text_lid._cached_classifier = None
+    try:
+        clf = text_lid.get_classifier()
+        assert clf is not None
+        space = text_lid.model_language_space(clf)
+        assert space is not None and len(space) == 97
+        probs = text_lid.classify_text(
+            "This is an English sentence about the quick fox and the lazy dog near the river bank."
+        )
+        assert probs is not None
+        # full model space, not a restricted six-language set
+        assert all(k in space for k in probs)
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+        assert max(probs, key=probs.get) == "en"
+    finally:
+        text_lid._cached_classifier = None
 
 
-def _bundled_model() -> bytes:
-    """Bytes of the pinned py3langid bundled model (the canonical artifact of
-    the pinned `[text-lid]` extra). Skips when the optional extra is absent."""
+def test_ja_translate_english_passes():
     pytest.importorskip("py3langid")
-    from py3langid import langid as _langid
-
-    # MODEL_FILE is relative to the py3langid package (e.g. 'data/model.plzma').
-    return (Path(_langid.__file__).parent / _langid.MODEL_FILE).read_bytes()
-
-
-def test_lazy_acquire_verified_payload_is_cached_then_classifies(tmp_path, monkeypatch):
-    """Absent cache: acquisition is attempted, the checksum-valid payload is
-    atomically cached, and classification then succeeds (first call does one
-    fetch, no more)."""
-    payload = _bundled_model()
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", hashlib.sha256(payload).hexdigest())
-    calls = {"n": 0}
-
-    def fetch(url):
-        calls["n"] += 1
-        return payload
-
-    monkeypatch.setattr(text_lid, "_default_fetch", fetch)
     text_lid._cached_classifier = None
     try:
-        r = text_lid.check_subtitle_text(_srt(*_english_cues()), **_default_kw())
+        r = _real_run(*_EN_REAL, task="translate", source_language="ja", target_language="en")
         assert r.status == text_lid.PASS
-        # checksum-valid payload atomically placed at the sha-named cache path
-        assert text_lid.model_target_path().is_file()
-        assert text_lid.model_target_path().read_bytes() == payload
-        assert calls["n"] == 1  # one fetch, then cached
+        assert r.reason == "expected_language"
     finally:
         text_lid._cached_classifier = None
 
 
-def test_lazy_acquire_download_failure_unavailable_no_cache(tmp_path, monkeypatch):
-    """Download failure leaves no usable cache and produces UNAVAILABLE. Passes
-    with or without the [text-lid] extra installed (offline fetch -> None)."""
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setattr(
-        text_lid, "_default_fetch", lambda url: (_ for _ in ()).throw(OSError("network down"))
-    )
+def test_ja_translate_untranslated_source_warns():
+    pytest.importorskip("py3langid")
     text_lid._cached_classifier = None
     try:
-        r = text_lid.check_subtitle_text(_srt(*_english_cues()), **_default_kw())
-        assert r.status == text_lid.UNAVAILABLE
-        assert r.reason == "backend_unavailable"
-        assert not text_lid.model_target_path().exists()
+        # Japanese text claimed as the output of a ja->en translation -> the
+        # source still dominates, so the translation-failure shape must fire.
+        r = _real_run(*_JA_REAL, task="translate", source_language="ja", target_language="en")
+        assert r.status == text_lid.WARN
+        assert r.reason == "likely_untranslated_source"
     finally:
         text_lid._cached_classifier = None
 
 
-def test_lazy_acquire_checksum_mismatch_unavailable_no_cache(tmp_path, monkeypatch):
-    """Checksum mismatch never persists a usable cache and yields UNAVAILABLE."""
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", "0" * 64)
-    monkeypatch.setattr(text_lid, "_default_fetch", lambda url: b"wrong-model-bytes")
+def test_ja_transcribe_japanese_passes():
+    pytest.importorskip("py3langid")
     text_lid._cached_classifier = None
     try:
-        r = text_lid.check_subtitle_text(_srt(*_english_cues()), **_default_kw())
-        assert r.status == text_lid.UNAVAILABLE
-        assert r.reason == "backend_unavailable"
-        assert not text_lid.model_target_path().exists()
-    finally:
-        text_lid._cached_classifier = None
-
-
-def test_valid_cache_classifies_without_invoking_fetcher(tmp_path, monkeypatch):
-    """A verified cache present yields classification WITHOUT invoking the
-    fetcher (pull_model short-circuits on a present, sha-valid artifact)."""
-    payload = _bundled_model()
-    monkeypatch.setenv("SUBARR_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setattr(text_lid, "MODEL_SHA256", hashlib.sha256(payload).hexdigest())
-    target = text_lid.model_target_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)  # pre-place the verified artifact
-    calls = {"n": 0}
-
-    def fetch(url):
-        calls["n"] += 1
-        raise AssertionError("fetcher must not run when the verified cache is present")
-
-    monkeypatch.setattr(text_lid, "_default_fetch", fetch)
-    text_lid._cached_classifier = None
-    try:
-        r = text_lid.check_subtitle_text(_srt(*_english_cues()), **_default_kw())
+        r = _real_run(*_JA_REAL, task="transcribe", source_language="ja", target_language="ja")
         assert r.status == text_lid.PASS
-        assert calls["n"] == 0  # fetcher never invoked
+        assert r.reason == "expected_language"
+    finally:
+        text_lid._cached_classifier = None
+
+
+def test_ko_expected_korean_passes():
+    pytest.importorskip("py3langid")
+    text_lid._cached_classifier = None
+    try:
+        r = _real_run(*_KO_REAL, task="transcribe", source_language="ko", target_language="ko")
+        assert r.status == text_lid.PASS
+        assert r.reason == "expected_language"
+    finally:
+        text_lid._cached_classifier = None
+
+
+def test_ko_translate_from_ja_korean_text_passes():
+    pytest.importorskip("py3langid")
+    text_lid._cached_classifier = None
+    try:
+        r = _real_run(*_KO_REAL, task="translate", source_language="ja", target_language="ko")
+        assert r.status == text_lid.PASS
+        assert r.reason == "expected_language"
+    finally:
+        text_lid._cached_classifier = None
+
+
+def test_unrelated_language_not_false_pass():
+    pytest.importorskip("py3langid")
+    text_lid._cached_classifier = None
+    try:
+        # Swahili text expected to be English (en): full model gives sw ~1.0 and
+        # en ~0.0, so this must be an ordinary mismatch — never PASS, never
+        # UNSUPPORTED. (The old restricted-candidate renormalization would have
+        # false-passed by renormalizing en within a six-language set.)
+        r = _real_run(*_SW_REAL, task="translate", source_language="en", target_language="en")
+        assert r.status == text_lid.WARN
+        assert r.reason == "ordinary_mismatch"
     finally:
         text_lid._cached_classifier = None

@@ -9,6 +9,17 @@ Covers (P4-S3):
   * filename-mismatch provenance — the checker never uses the filename
   * zero malformed/short rows produce PASS/WARN
 
+The corpus is GENERATED deterministically under a module-scoped tmp_path
+fixture (gen.write_corpus(root)) — no committed artifacts. The classifier is the
+BUNDLED py3langid model (build_classifier() with no external path/SHA pin), and
+model_sha256 is computed from the bundled MODEL_FILE bytes at runtime.
+
+The expensive full-corpus py3langid classification (~250s for 1080 rows over the
+97-language model) is performed exactly ONCE in a module-scoped fixture; every
+calibrate() call reuses those features via calibrate(..., precomputed=...), so
+the determinism (two runs) and acceptance assertions stay fast and still exercise
+the real report-building/selection/sweep code paths.
+
 Real-backend tests use ``pytest.importorskip("py3langid")`` so the suite still
 collects where the optional ``[text-lid]`` extra is absent.
 """
@@ -30,10 +41,7 @@ if str(_ROOT) not in sys.path:
 from scripts import text_lid_calibrate as cal
 from scripts import text_lid_calibration_gen as gen
 
-BASE = _ROOT / "artifacts/calibration/pr451-text-lid"
-MANIFEST = BASE / "manifest.jsonl"
-MODEL_SHA = "8c99809ff6de3d129e447306d30ceae4713735230dced7e8d4d46df89e6968ce"
-POLICY = "pr451-v1"
+POLICY = "pr451-v2"
 
 REQUIRED_FIELDS = {
     "id",
@@ -54,24 +62,63 @@ CATEGORIES = set(gen.CATEGORY_COUNTS)
 SPLITS = {"train", "dev", "heldout"}
 
 
-def _rows() -> list[dict]:
-    return [json.loads(line) for line in MANIFEST.read_text(encoding="utf-8").splitlines() if line.strip()]
+@pytest.fixture(scope="module")
+def corpus(tmp_path_factory):
+    """Deterministically generate the calibration corpus under a temp dir and
+    return (root, manifest_path). build_corpus uses fixed random.Random seeds per
+    language/category, so regeneration is byte-identical across runs."""
+    root = tmp_path_factory.mktemp("cal")
+    manifest = gen.write_corpus(root)
+    return root, manifest
 
 
 def _classifier():
     pytest.importorskip("py3langid")
-    return cal.build_classifier(cal.resolve_model_path(MODEL_SHA), MODEL_SHA)
+    return cal.build_classifier()  # bundled py3langid MODEL_FILE, no path/SHA pin
 
 
-def _feats_and_fixed(clf, label: str | None = None, split: str | None = None):
-    rows = _rows()
-    if label is not None:
-        rows = [r for r in rows if r["label"] == label]
-    if split is not None:
-        rows = [r for r in rows if r["split"] == split]
-    feats = cal.classify_rows(clf, rows, BASE)
-    fixed = {f["id"]: cal.precompute(f) for f in feats}
-    return feats, fixed
+@pytest.fixture(scope="module")
+def feats(corpus):
+    """Classify the FULL corpus once (the one expensive py3langid pass over 1080
+    rows) and return (train_feats, dev_feats, held_feats). All tests reuse these
+    via calibrate(..., precomputed=...) / filtering — never re-classifying."""
+    root, _manifest = corpus
+    clf = _classifier()
+    rows = _rows(corpus)
+    train = [r for r in rows if r["split"] == "train"]
+    dev = [r for r in rows if r["split"] == "dev"]
+    heldout = [r for r in rows if r["split"] == "heldout"]
+    return (
+        cal.classify_rows(clf, train, root),
+        cal.classify_rows(clf, dev, root),
+        cal.classify_rows(clf, heldout, root),
+    )
+
+
+def _rows(corpus) -> list[dict]:
+    _root, manifest = corpus
+    return [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _filter_feats(all_feats, label: str | None = None, split: str | None = None):
+    """Filter the precomputed full-corpus features by label/split and build the
+    threshold-independent verdict map (mirrors the old _feats_and_fixed, but
+    without re-classifying)."""
+    out = [
+        f
+        for f in all_feats
+        if (label is None or f["label"] == label) and (split is None or f["split"] == split)
+    ]
+    return out, {f["id"]: cal.precompute(f) for f in out}
+
+
+def _bundled_model_sha() -> str:
+    """SHA-256 of the bundled py3langid model bytes (data/model.plzma)."""
+    pytest.importorskip("py3langid")
+    import py3langid
+    from py3langid.langid import MODEL_FILE
+
+    return hashlib.sha256((Path(py3langid.__file__).parent / MODEL_FILE).read_bytes()).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +126,9 @@ def _feats_and_fixed(clf, label: str | None = None, split: str | None = None):
 # ---------------------------------------------------------------------------
 
 
-def test_manifest_schema_counts_and_hashes() -> None:
-    rows = _rows()
+def test_manifest_schema_counts_and_hashes(corpus) -> None:
+    root, _manifest = corpus
+    rows = _rows(corpus)
     assert len(rows) == 1080
     for r in rows:
         assert set(r) == REQUIRED_FIELDS
@@ -90,7 +138,7 @@ def test_manifest_schema_counts_and_hashes() -> None:
         assert r["task"] == "translate"
         assert r["target_language"] == r["language"]
         # fixture exists and its sha256 matches the manifest (hash validation)
-        body = (BASE / r["path"]).read_bytes()
+        body = (root / r["path"]).read_bytes()
         assert hashlib.sha256(body).hexdigest() == r["sha256"]
     # global category counts = 6 languages x per-language allocation
     assert Counter(r["label"] for r in rows) == {k: v * 6 for k, v in gen.CATEGORY_COUNTS.items()}
@@ -101,8 +149,8 @@ def test_manifest_schema_counts_and_hashes() -> None:
         assert Counter(r["label"] for r in per) == gen.CATEGORY_COUNTS
 
 
-def test_stable_idordered_splits_with_full_category_coverage() -> None:
-    rows = _rows()
+def test_stable_idordered_splits_with_full_category_coverage(corpus) -> None:
+    rows = _rows(corpus)
     # globally id-ordered
     assert [r["id"] for r in rows] == sorted(r["id"] for r in rows)
     assert len({r["id"] for r in rows}) == 1080  # unique ids
@@ -125,22 +173,24 @@ def test_stable_idordered_splits_with_full_category_coverage() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_deterministic_report_selection() -> None:
-    clf = _classifier()
-    r1 = cal.calibrate(MANIFEST, BASE, MODEL_SHA, POLICY, classifier=clf)
-    r2 = cal.calibrate(MANIFEST, BASE, MODEL_SHA, POLICY, classifier=clf)
+def test_deterministic_report_selection(corpus, feats) -> None:
+    _root, manifest = corpus
+    r1 = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
+    r2 = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
     assert json.dumps(r1, sort_keys=True) == json.dumps(r2, sort_keys=True)
     # threshold/margin must be a valid sweep pair in [0,1]
     assert 0.0 <= r1["threshold"] <= 1.0
     assert 0.0 <= r1["margin"] <= 1.0
 
 
-def test_report_schema_and_acceptance() -> None:
-    clf = _classifier()
-    rep = cal.calibrate(MANIFEST, BASE, MODEL_SHA, POLICY, classifier=clf)
+def test_report_schema_and_acceptance(corpus, feats) -> None:
+    _root, manifest = corpus
+    rep = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
+    model_sha = _bundled_model_sha()
     # schema
     assert rep["schema_version"] == "1.0.0"
-    assert rep["model_sha256"] == MODEL_SHA
+    assert rep["model_sha256"] == model_sha  # runtime hash of the bundled MODEL_FILE
+    assert len(rep["model_sha256"]) == 64  # and it is a real 64-hex sha256
     assert rep["policy_version"] == POLICY
     assert set(rep["metrics"]["by_language"]) == LANGS
     assert set(rep["metrics"]["by_category"]) == {"mixed", "short", "hard_negative", "translation_failure"}
@@ -162,9 +212,8 @@ def test_report_schema_and_acceptance() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_translation_failure_rows_warn_as_designed() -> None:
-    clf = _classifier()
-    feats, fixed = _feats_and_fixed(clf, label="translation_failure", split="heldout")
+def test_translation_failure_rows_warn_as_designed(feats) -> None:
+    feats, fixed = _filter_feats(feats[2], label="translation_failure", split="heldout")
     assert feats, "heldout must contain translation-failure rows"
     for f in feats:
         status, reason = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
@@ -172,29 +221,29 @@ def test_translation_failure_rows_warn_as_designed() -> None:
         assert reason == "likely_untranslated_source"
 
 
-def test_filename_mismatch_provenance_never_used() -> None:
-    rows = _rows()
+def test_filename_mismatch_provenance_never_used(corpus, feats) -> None:
+    rows = _rows(corpus)
     # deterministic subset carries a filename token that conflicts with manifest language
     mismatched = [r for r in rows if not r["path"].split("/")[-1].startswith(r["language"])]
     assert mismatched, "corpus must contain filename-mismatch provenance rows"
     clean_mm = [r for r in mismatched if r["label"] == "clean"]
     assert clean_mm, "at least one clean row must have a misleading filename"
-    clf = _classifier()
-    feats, fixed = _feats_and_fixed(clf, label="clean")
-    for f in feats:
+    all_feats = feats[0] + feats[1] + feats[2]
+    clean_feats, fixed = _filter_feats(all_feats, label="clean")
+    for f in clean_feats:
         # clean rows classify PASS from the manifest claim, never the filename
         status, reason = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
         assert status == "PASS"
         assert reason == "expected_language"
 
 
-def test_zero_malformed_or_short_pass_warn() -> None:
-    clf = _classifier()
-    feats, fixed = _feats_and_fixed(clf, label="malformed")
-    feats_s, fixed_s = _feats_and_fixed(clf, label="short")
-    feats = feats + feats_s
-    fixed = {**fixed, **fixed_s}
-    assert feats
-    for f in feats:
+def test_zero_malformed_or_short_pass_warn(feats) -> None:
+    all_feats = feats[0] + feats[1] + feats[2]
+    m_feats, m_fixed = _filter_feats(all_feats, label="malformed")
+    s_feats, s_fixed = _filter_feats(all_feats, label="short")
+    feats_ = m_feats + s_feats
+    fixed = {**m_fixed, **s_fixed}
+    assert feats_
+    for f in feats_:
         status, _ = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
         assert status == "INCONCLUSIVE"

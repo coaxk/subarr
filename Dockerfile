@@ -50,11 +50,12 @@ COPY src/ ./src/
 # The small silero-lang95 model is NOT baked; pulled + checksum-verified lazily
 # on first forced-segment scan, same opt-in pattern as [vad]'s silero VAD model.
 # PR451: also bake the TEXT-LID runtime ([text-lid] = py3langid, SEPARATE from
-# the audio [lid] silero-lang95). Its ~2MB naive-Bayes model is pinned by SHA-256
-# (src/subarr/text_lid.py MODEL_SHA256) and NOT baked; it is acquired lazily on
-# the first subtitle-text checker backend use (checksum-verified, atomically
-# cached) and any acquisition/init failure degrades to UNAVAILABLE — no boot-time
-# model fetch, same fail-soft opt-in pattern as the audio models.
+# the audio [lid] silero-lang95). The model ships INSIDE the installed
+# py3langid==0.3.0 wheel (data/model.plzma) — no separate model download, no
+# SHA-256 pin, no SUBARR_MODEL_CACHE. The classifier is initialized lazily on
+# the first subtitle-text checker backend use and any init/inference failure
+# degrades to UNAVAILABLE — no boot-time model fetch, same fail-soft opt-in
+# pattern as the audio models.
 RUN pip install --no-cache-dir ".[vad,qe-onnx,lid,text-lid]"
 
 # #237: non-root runtime. Create a default subarr user/group (1000:1000,

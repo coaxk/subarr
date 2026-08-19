@@ -8,6 +8,12 @@ timeout, cancellation, missing sidecar, duplicate schedules), that a single
 bounded structured result is stored with the aftercare signal/result model, and
 that it is surfaced through the aftercare preview/history surface
 (GET /api/aftercare/results) + its rendering helper.
+
+Since #451 P3-S3/P3-S4, the advisory result is bound to the EXACT aftercare row
+that produced it (the id returned by ``record()``), never a latest-per-path
+lookup — so a same-path re-completion can never misroute an older check onto a
+newer row. Two regression tests cover that binding at the store and watcher
+levels.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from subarr.aftercare import AftercareEvaluation
 from subarr.aftercare_store import AfterCareStore
 from subarr.completion_watcher import CompletionWatcher
 
@@ -36,6 +43,10 @@ def _srt(tmp_path, name="S01E01.en.srt"):
         encoding="utf-8",
     )
     return str(p)
+
+
+def _evaluation():
+    return AftercareEvaluation(40.0, 10, True, {"issues": []}, {"canned_phrase_hits": 1})
 
 
 class _Entry:
@@ -64,8 +75,8 @@ class _FakeResult:
             "languages": languages,
             "evidence": {},
             "provenance": provenance or {},
-            "checker_version": "1.0.0",
-            "policy_version": "pr451-v1",
+            "checker_version": "1.1.0",
+            "policy_version": "pr451-v2",
             "probabilities": {},
         }
 
@@ -130,10 +141,10 @@ async def test_completion_proceeds_and_records_each_status(tmp_path, monkeypatch
     entry = _Entry()
     ran = {}
 
-    async def fake_check(entry_, srt_path, identity):
+    async def fake_check(entry_, srt_path, identity, aftercare_row_id):
         ran["status"] = status
         w._record_lang_check(
-            entry_,
+            aftercare_row_id,
             _FakeResult(
                 status, reason="r", languages=("en",), provenance={"origin": "sonarr", "conflict": 0}
             ),
@@ -158,7 +169,7 @@ async def test_completion_proceeds_when_checker_raises(tmp_path, monkeypatch):
     store = _store(tmp_path)
     w, events, _scanned, _enq = _watcher(store, _srt(tmp_path))
 
-    async def raise_check(entry_, srt_path, identity):
+    async def raise_check(entry_, srt_path, identity, aftercare_row_id):
         raise ValueError("boom")
 
     monkeypatch.setattr(w, "_run_language_check", raise_check)
@@ -194,7 +205,7 @@ async def test_language_check_cancelled_failsoft(tmp_path, monkeypatch):
     store = _store(tmp_path)
     w, events, _scanned, _enq = _watcher(store, _srt(tmp_path))
 
-    async def slow_check(entry_, srt_path, identity):
+    async def slow_check(entry_, srt_path, identity, aftercare_row_id):
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(w, "_run_language_check", slow_check)
@@ -223,7 +234,7 @@ async def test_duplicate_schedules_coalesce(tmp_path, monkeypatch):
     store = _store(tmp_path)
     w, _events, _scanned, _enq = _watcher(store, _srt(tmp_path))
 
-    async def slow_check(entry_, srt_path, identity):
+    async def slow_check(entry_, srt_path, identity, aftercare_row_id):
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(w, "_run_language_check", slow_check)
@@ -244,8 +255,8 @@ async def test_no_veto_scan_still_fires_queue_untouched(tmp_path, monkeypatch):
     w, events, scanned, enqueued = _watcher(store, _srt(tmp_path), upload=False)
     entry = _Entry()
 
-    async def warn_check(entry_, srt_path, identity):
-        w._record_lang_check(entry_, _FakeResult("WARN", reason="source_target_mismatch"))
+    async def warn_check(entry_, srt_path, identity, aftercare_row_id):
+        w._record_lang_check(aftercare_row_id, _FakeResult("WARN", reason="source_target_mismatch"))
 
     monkeypatch.setattr(w, "_run_language_check", warn_check)
     await _complete(w, entry)
@@ -265,6 +276,71 @@ def test_no_language_gate_or_validate_language_token():
         assert tok not in src, f"#451 must not reintroduce {tok!r} (gate was deleted)"
 
 
+# ---------------------------------------------------------------------------
+# #451 P3-S4 exact-row binding regressions
+# ---------------------------------------------------------------------------
+
+
+def test_lang_check_attaches_to_exact_row_same_path(tmp_path):
+    """Store-level: set_text_lang_check(row1_id) updates row1 only, never a
+    same-path newer row. Under the old MAX(id) semantics row2 would have gotten
+    it."""
+    store = _store(tmp_path)
+    ev = _evaluation()
+    row1 = store.record(canonical_path="TV/A/e1.mkv", completed_at=1.0, evaluation=ev, source="subgenscan")
+    row2 = store.record(canonical_path="TV/A/e1.mkv", completed_at=2.0, evaluation=ev, source="subgenscan")
+    assert row1 != row2
+    assert store.get(row2)["text_lang_check"] is None  # nothing written yet
+    store.set_text_lang_check(row1, {"status": "WARN", "reason": "source_target_mismatch"})
+    assert store.get(row1)["text_lang_check"] == {"status": "WARN", "reason": "source_target_mismatch"}
+    assert store.get(row2)["text_lang_check"] is None  # the newer same-path row is untouched
+
+
+@pytest.mark.asyncio
+async def test_lang_check_watcher_binds_first_result_to_first_row(tmp_path, monkeypatch):
+    """Watcher-level: the advisory check scheduled for the first aftercare row
+    lands on THAT row even when a newer same-path row is inserted before the
+    (async) check completes — the row id threaded from record() binds the
+    result, so it can never overwrite the newest row."""
+    store = _store(tmp_path)
+    w, events, _scanned, _enq = _watcher(store, _srt(tmp_path))
+    entry = _Entry()
+    captured = {}
+
+    async def fake_check(entry_, srt_path, identity, aftercare_row_id):
+        captured["row_id"] = aftercare_row_id
+        # While this check for the FIRST row is in flight, a second completion
+        # records a NEWER row for the same canonical path.
+        captured["second"] = store.record(
+            canonical_path=entry_.canonical_path,
+            completed_at=2.0,
+            evaluation=_evaluation(),
+            source="subgenscan",
+        )
+        w._record_lang_check(aftercare_row_id, _FakeResult("WARN", reason="source_target_mismatch"))
+
+    monkeypatch.setattr(w, "_run_language_check", fake_check)
+    await _complete(w, entry)
+
+    first = captured["row_id"]
+    second = captured["second"]
+    assert first is not None and second is not None
+    assert first != second  # distinct rows
+    # The check bound to the FIRST row stayed there; the newer same-path row is clean.
+    assert store.get(first)["text_lang_check"] == {
+        "status": "WARN",
+        "reason": "source_target_mismatch",
+        "languages": ["en"],
+        "evidence": {},
+        "provenance": {},
+        "checker_version": "1.1.0",
+        "policy_version": "pr451-v2",
+        "probabilities": {},
+    }
+    assert store.get(second)["text_lang_check"] is None
+    assert [e[0] for e in events] == ["mark", "retime", "forced", "upload", "plex"]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # preview / history rendering: GET /api/aftercare/results exposes the bounded
 # structured result (status / reason / provenance) on the aftercare row.
@@ -277,7 +353,6 @@ def _app_with_result(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from subarr.aftercare import AftercareEvaluation
     from subarr.routers import aftercare as r
 
     db = tmp_path / "a.db"
@@ -285,22 +360,22 @@ def _app_with_result(tmp_path):
 
     run_migrations(db)
     store = AfterCareStore(db)
-    store.record(
+    rid = store.record(
         canonical_path="TV/A/e1.mkv",
         completed_at=1.0,
-        evaluation=AftercareEvaluation(40.0, 10, True, {"issues": []}, {"canned_phrase_hits": 1}),
+        evaluation=_evaluation(),
         source="subgenscan",
     )
     store.set_text_lang_check(
-        "TV/A/e1.mkv",
+        rid,
         {
             "status": "WARN",
             "reason": "source_target_mismatch",
             "languages": ["en", "de"],
             "evidence": {},
             "provenance": {"origin": "webhook", "conflict": 1},
-            "checker_version": "1.0.0",
-            "policy_version": "pr451-v1",
+            "checker_version": "1.1.0",
+            "policy_version": "pr451-v2",
             "probabilities": {},
         },
     )
@@ -329,11 +404,11 @@ def test_preview_history_null_when_no_check(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from subarr.aftercare import AftercareEvaluation
-    from subarr.migrate import run_migrations
     from subarr.routers import aftercare as r
 
     db = tmp_path / "a.db"
+    from subarr.migrate import run_migrations
+
     run_migrations(db)
     store = AfterCareStore(db)
     store.record(
