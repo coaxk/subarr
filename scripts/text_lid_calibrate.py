@@ -1,9 +1,17 @@
-"""Calibrate the ``pr451-v2`` text-LID policy thresholds on a labeled corpus.
+"""Evaluate the ``pr451-v2`` text-LID FIXED policy thresholds on a labeled corpus.
 
-Consumes the manifest built by ``scripts/text_lid_calibration_gen.py`` and
-selects a (threshold, margin) pair that maximizes *dev* clean recall subject to
-false-warning <=5% and mixed abstention >=95%, then emits an un-refit heldout
-report to ``results/heldout.json``. Exact JSON schema per DD-pr-451.
+FIXED-POLICY CONTRACT: the runtime constants ``text_lid.THRESHOLD`` /
+``text_lid.MARGIN`` ARE the policy. This script evaluates THAT fixed pair against
+the heldout set and reports acceptance explicitly (non-zero exit on failure). The
+parameter sweep remains only as a diagnostic optimizer sub-report (report
+``"optimizer"``), never the reported policy — ``"optimizer"`` is either
+{threshold, margin, dev} when the sweep finds a qualifying pair, or {"error":
+...} when it does not — the report's top-level ``"threshold"``/``"margin"``
+always pin the runtime constants.
+
+Consumes the manifest built by ``scripts/text_lid_calibration_gen.py``, evaluates
+the fixed runtime pair on the heldout set, and emits an un-refit report to
+``results/heldout.json``. Exact JSON schema per DD-pr-451.
 
 Run:
     python -m scripts.text_lid_calibrate \\
@@ -21,8 +29,11 @@ explicit ``--model-path`` remains usable for calibration. It never reimplements
 region logic. Each fixture's regions are classified ONCE; the threshold/margin
 sweep is pure arithmetic over the precomputed features.
 
-Exit codes: 0 success; 1 a validation/availability error (bad --help exits 0 via
-argparse; missing py3langid/model or no qualifying pair exit 1).
+Exit codes: --help exits 0 via argparse; argparse usage errors (e.g. a missing
+--manifest) exit 2; validation/availability errors (missing py3langid/model)
+exit 1; a failed optimizer sweep is recorded as {"optimizer": {"error": ...}}
+and never affects the exit code — the fixed-policy evaluation still proceeds
+(0 on acceptance, 2 on failure).
 """
 
 from __future__ import annotations
@@ -36,6 +47,8 @@ from pathlib import Path
 from subarr.langs import normalize_lang
 from subarr.text_lid import (
     INCONCLUSIVE,
+    MARGIN,
+    THRESHOLD,
     MIN_ALPHABETIC_CHARS,
     MIN_REGIONS,
     PASS,
@@ -50,7 +63,7 @@ from subarr.text_lid import (
     extract_visible_cues,
 )
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # Sweep grid in 0.01 increments (basis points to avoid float drift).
 THRESHOLD_MIN_BP, THRESHOLD_MAX_BP, THRESHOLD_STEP_BP = 30, 99, 1
@@ -63,7 +76,15 @@ HOLDOUT_MIXED_ABSTENTION = 0.95
 
 
 class CalibrationError(Exception):
-    """Raised for an unavailable backend or no qualifying pair."""
+    """Raised when calibration cannot complete cleanly.
+
+    Covers: missing py3langid / unbuildable model, a fixture-content SHA-256
+    mismatch against the manifest, invalid manifest / dev-split validation
+    (missing train/dev/
+    heldout rows, or dev lacking both clean and mixed rows), no qualifying
+    optimizer (threshold, margin) pair, the report/runtime drift live-guard, and
+    heldout acceptance failure for the fixed policy.
+    """
 
 
 def load_manifest(path: str | Path) -> list[dict]:
@@ -229,8 +250,11 @@ def _by_category(feats: list[dict], fixed, threshold: float, margin: float) -> d
 
 
 def _summary(feats: list[dict], fixed, threshold: float, margin: float) -> dict:
-    """Dev metric triple used by the sweep: clean recall, false-warning rate,
-    mixed abstention."""
+    """Metric triple: clean recall, false-warning rate, mixed abstention.
+
+    Used by the optimizer sweep AND to feed the heldout report and its
+    acceptance verification (report["metrics"] overall / by_language / by_category
+    are all built from this summary)."""
     clean = [f for f in feats if f["label"] == "clean"]
     mixed = [f for f in feats if f["label"] == "mixed"]
     if not clean or not mixed:
@@ -309,45 +333,95 @@ def calibrate(manifest_path, base_dir, policy_version, *, classifier=None, model
         train_feats = classify_rows(classifier, train, base_dir)
         dev_feats = classify_rows(classifier, dev, base_dir)
         held_feats = classify_rows(classifier, heldout, base_dir)
-    (threshold, margin), fixed = select_params(train_feats, dev_feats)
+    # Run the existing optimizer sweep as a DIAGNOSTIC: the report below reports
+    # the FIXED runtime policy (text_lid.THRESHOLD/MARGIN), never the optimizer's
+    # selected pair. The optimizer pair + its dev metrics land only in the
+    # report's "optimizer" key.
+    #
+    # A sweep failure must NOT gate the fixed-policy evaluation: the optimizer is
+    # now diagnostic-only, so a "no qualifying pair" CalibrationError is recorded
+    # as {"optimizer": {"error": ...}} and the fixed-pair report still proceeds.
+    try:
+        (opt_threshold, opt_margin), fixed = select_params(train_feats, dev_feats)
+        optimizer_sub = {
+            "threshold": opt_threshold,
+            "margin": opt_margin,
+            "dev": _summary(dev_feats, fixed, opt_threshold, opt_margin),
+        }
+    except CalibrationError as exc:
+        optimizer_sub = {"error": str(exc)}
+        fixed = {f["id"]: precompute(f) for f in train_feats + dev_feats}
     held_fixed = {f["id"]: precompute(f) for f in held_feats}
     held_fixed.update(fixed)  # fixed is per-id, disjoint across splits
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "manifest_sha256": manifest_sha256(manifest_path),
         "model_sha256": _bundled_model_sha256(),
         "policy_version": policy_version,
-        "threshold": threshold,
-        "margin": margin,
+        "threshold": THRESHOLD,
+        "margin": MARGIN,
+        "optimizer": optimizer_sub,
         "metrics": {
-            "overall": _summary(held_feats, held_fixed, threshold, margin),
+            "overall": _summary(held_feats, held_fixed, THRESHOLD, MARGIN),
             "by_language": {
                 lang: _summary(
-                    [f for f in held_feats if f["language"] == lang], held_fixed, threshold, margin
+                    [f for f in held_feats if f["language"] == lang], held_fixed, THRESHOLD, MARGIN
                 )
                 for lang in sorted({row["language"] for row in rows})
             },
-            "by_category": _by_category(held_feats, held_fixed, threshold, margin),
+            "by_category": _by_category(held_feats, held_fixed, THRESHOLD, MARGIN),
         },
     }
+    # Live guard: the report MUST always pin the runtime fixed policy, so a
+    # future refactor cannot silently diverge and report optimizer-selected
+    # values. Built from the constants above this is a structural invariant, but
+    # the guard must exist regardless.
+    if report["threshold"] != THRESHOLD or report["margin"] != MARGIN:
+        raise CalibrationError(
+            "report threshold/margin must equal text_lid.THRESHOLD/MARGIN — calibration "
+            "must report the runtime fixed policy, not optimizer-selected values"
+        )
+    return report
 
 
 def _verify_acceptance(report: dict) -> None:
+    """Verify the fixed runtime policy met heldout acceptance; raise
+    CalibrationError with the measured metrics (explicit PASS/FAIL per criterion)
+    on failure. On success, print the confirmation."""
     o = report["metrics"]["overall"]
-    ok = (
-        o["recall"] >= HOLDOUT_CLEAN_RECALL
-        and o["false_warning_rate"] <= HOLDOUT_FALSE_WARNING
-        and o["abstention"] >= HOLDOUT_MIXED_ABSTENTION
-    )
-    short = report["metrics"]["by_category"]["short"]
+    bc = report["metrics"]["by_category"]
+    short = bc["short"]
     short_clean = short["pass"] == 0 and short["warn"] == 0
-    if not ok or not short_clean:
-        print(
-            f"WARNING: heldout acceptance not met: recall={o['recall']:.3f} "
-            f"fwr={o['false_warning_rate']:.3f} abstention={o['abstention']:.3f} "
-            f"short pass/warn={short['pass']}/{short['warn']}",
-            file=sys.stderr,
+    hard_negative_pass = bc["hard_negative"]["pass"] == 0
+    tf_warn = bc["translation_failure"]["warn"] == bc["translation_failure"]["count"]
+
+    def flag(cond: bool) -> str:
+        return "PASS" if cond else "FAIL"
+
+    recall_ok = o["recall"] >= HOLDOUT_CLEAN_RECALL
+    fwr_ok = o["false_warning_rate"] <= HOLDOUT_FALSE_WARNING
+    abstain_ok = o["abstention"] >= HOLDOUT_MIXED_ABSTENTION
+    if not (recall_ok and fwr_ok and abstain_ok and short_clean and hard_negative_pass and tf_warn):
+        raise CalibrationError(
+            "heldout acceptance not met — fixed runtime policy "
+            f"(threshold={report['threshold']}, margin={report['margin']}): "
+            f"recall={o['recall']:.3f} [{flag(recall_ok)} >= {HOLDOUT_CLEAN_RECALL}] "
+            f"false_warning_rate={o['false_warning_rate']:.3f} [{flag(fwr_ok)} <= {HOLDOUT_FALSE_WARNING}] "
+            f"abstention={o['abstention']:.3f} [{flag(abstain_ok)} >= {HOLDOUT_MIXED_ABSTENTION}] "
+            f"short pass/warn={short['pass']}/{short['warn']} [{flag(short_clean)}] "
+            f"hard_negative pass={bc['hard_negative']['pass']} [{flag(hard_negative_pass)}] "
+            f"translation_failure warn={bc['translation_failure']['warn']}/"
+            f"{bc['translation_failure']['count']} [{flag(tf_warn)}]"
         )
+    print(
+        f"heldout acceptance OK: recall={o['recall']:.3f} "
+        f"false_warning_rate={o['false_warning_rate']:.3f} "
+        f"abstention={o['abstention']:.3f} "
+        f"short pass/warn={short['pass']}/{short['warn']} "
+        f"hard_negative pass={bc['hard_negative']['pass']} "
+        f"translation_failure warn={bc['translation_failure']['warn']}/"
+        f"{bc['translation_failure']['count']}"
+    )
 
 
 def write_heldout(report: dict, out_path: str | Path) -> None:
@@ -360,7 +434,7 @@ def write_heldout(report: dict, out_path: str | Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="scripts.text_lid_calibrate",
-        description="Calibrate the pr451-v2 text-LID thresholds and emit a heldout report.",
+        description="Evaluate the FIXED pr451-v2 text-LID policy thresholds against the heldout corpus.",
     )
     parser.add_argument("--manifest", required=True, help="path to manifest.jsonl")
     parser.add_argument(
@@ -391,11 +465,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    _verify_acceptance(report)
+    # Verify BEFORE writing: an acceptance failure must not leave a misleading
+    # report on disk — print to stderr and exit 2 (explicit acceptance failure).
+    try:
+        _verify_acceptance(report)
+    except CalibrationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     write_heldout(report, out_path)
     o = report["metrics"]["overall"]
     print(
-        f"selected threshold={report['threshold']:.2f} margin={report['margin']:.2f} "
+        f"policy threshold={report['threshold']:.2f} margin={report['margin']:.2f} "
         f"| heldout recall={o['recall']:.3f} false_warning_rate={o['false_warning_rate']:.3f} "
         f"abstention={o['abstention']:.3f} | wrote {out_path}"
     )

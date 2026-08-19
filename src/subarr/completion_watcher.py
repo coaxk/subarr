@@ -553,9 +553,7 @@ class CompletionWatcher:
             self._lang_check_semaphore = sem
         return sem
 
-    async def _lang_check_worker(
-        self, entry, srt_path, identity, key, sem, aftercare_row_id
-    ) -> None:
+    async def _lang_check_worker(self, entry, srt_path, identity, key, sem, aftercare_row_id) -> None:
         """Advisory background worker. Bounded by the semaphore + wait_for
         timeout. Runs the check and records its result on the exact aftercare
         row identified by aftercare_row_id. Cancellation propagates (supervisor
@@ -635,9 +633,7 @@ class CompletionWatcher:
         try:
             store.set_text_lang_check(aftercare_row_id, result.to_dict())
         except Exception as e:  # noqa: BLE001 - advisory store write must not raise
-            log.warning(
-                "text-lid: failed to record advisory result for row %s: %s", aftercare_row_id, e
-            )
+            log.warning("text-lid: failed to record advisory result for row %s: %s", aftercare_row_id, e)
 
     def _run_retime(self, entry) -> None:
         """#359: re-time the produced .srt in place (extend over-CPS cues into

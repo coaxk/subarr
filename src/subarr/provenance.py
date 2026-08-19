@@ -93,7 +93,7 @@ class LedgerEntry:
 
 
 # Schema (subs_generated + indexes) is owned by migrations/001_baseline.sql
-# (extended by 030_pr451_provenance.sql). run_migrations() runs at boot before
+# (extended by 030_pr451_subtitle_tuning.sql). run_migrations() runs at boot before
 # this store — no per-store init_schema().
 
 # One explicit column list shared by every ledger SELECT so the dataclass

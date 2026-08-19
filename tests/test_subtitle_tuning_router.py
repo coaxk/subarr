@@ -923,9 +923,7 @@ def test_preview_retime_preserves_cue_text_byte_for_byte(app_with_stub, tmp_path
 
 
 # ─── concurrency: interleaved transactions serialize; rollback is scoped ────
-def test_put_concurrent_transactions_serialize_and_scoped_rollback(
-    app_with_stub, tmp_path, monkeypatch
-):
+def test_put_concurrent_transactions_serialize_and_scoped_rollback(app_with_stub, tmp_path, monkeypatch):
     """Deterministic two-transaction interleaving regression (no barrier race).
 
     Thread A starts a PUT of min_gap_ms and blocks mid-live-apply while holding

@@ -40,6 +40,7 @@ if str(_ROOT) not in sys.path:
 
 from scripts import text_lid_calibrate as cal
 from scripts import text_lid_calibration_gen as gen
+from subarr.text_lid import MARGIN, THRESHOLD
 
 POLICY = "pr451-v2"
 
@@ -178,9 +179,9 @@ def test_deterministic_report_selection(corpus, feats) -> None:
     r1 = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
     r2 = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
     assert json.dumps(r1, sort_keys=True) == json.dumps(r2, sort_keys=True)
-    # threshold/margin must be a valid sweep pair in [0,1]
-    assert 0.0 <= r1["threshold"] <= 1.0
-    assert 0.0 <= r1["margin"] <= 1.0
+    # The report MUST pin the runtime fixed pair, never an optimizer-selected one.
+    assert r1["threshold"] == THRESHOLD
+    assert r1["margin"] == MARGIN
 
 
 def test_report_schema_and_acceptance(corpus, feats) -> None:
@@ -188,10 +189,15 @@ def test_report_schema_and_acceptance(corpus, feats) -> None:
     rep = cal.calibrate(manifest, _root, POLICY, precomputed=feats)
     model_sha = _bundled_model_sha()
     # schema
-    assert rep["schema_version"] == "1.0.0"
+    assert rep["schema_version"] == "1.1.0"
     assert rep["model_sha256"] == model_sha  # runtime hash of the bundled MODEL_FILE
     assert len(rep["model_sha256"]) == 64  # and it is a real 64-hex sha256
     assert rep["policy_version"] == POLICY
+    # the reported pair pins the runtime fixed policy (not optimizer-selected)
+    assert rep["threshold"] == THRESHOLD
+    assert rep["margin"] == MARGIN
+    # the optimizer sweep is present as a DIAGNOSTIC sub-report only
+    assert set(rep["optimizer"]) == {"threshold", "margin", "dev"}
     assert set(rep["metrics"]["by_language"]) == LANGS
     assert set(rep["metrics"]["by_category"]) == {"mixed", "short", "hard_negative", "translation_failure"}
     # heldout acceptance: clean recall>=95%, false-warning<=5%, mixed abstention>=95%
@@ -216,7 +222,7 @@ def test_translation_failure_rows_warn_as_designed(feats) -> None:
     feats, fixed = _filter_feats(feats[2], label="translation_failure", split="heldout")
     assert feats, "heldout must contain translation-failure rows"
     for f in feats:
-        status, reason = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
+        status, reason = cal.verdict(f, fixed[f["id"]], THRESHOLD, MARGIN)
         assert status == "WARN"
         assert reason == "likely_untranslated_source"
 
@@ -232,7 +238,7 @@ def test_filename_mismatch_provenance_never_used(corpus, feats) -> None:
     clean_feats, fixed = _filter_feats(all_feats, label="clean")
     for f in clean_feats:
         # clean rows classify PASS from the manifest claim, never the filename
-        status, reason = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
+        status, reason = cal.verdict(f, fixed[f["id"]], THRESHOLD, MARGIN)
         assert status == "PASS"
         assert reason == "expected_language"
 
@@ -245,5 +251,146 @@ def test_zero_malformed_or_short_pass_warn(feats) -> None:
     fixed = {**m_fixed, **s_fixed}
     assert feats_
     for f in feats_:
-        status, _ = cal.verdict(f, fixed[f["id"]], 0.70, 0.10)
+        status, _ = cal.verdict(f, fixed[f["id"]], THRESHOLD, MARGIN)
         assert status == "INCONCLUSIVE"
+
+
+# ---------------------------------------------------------------------------
+# fast synthetic contract tests — no corpus, no py3langid classification.
+# Selected by QA/CI via: -k "contract or fixed_policy"
+# ---------------------------------------------------------------------------
+
+
+def _contract_report(*, recall: float = 1.0) -> dict:
+    """Minimal synthetic heldout report shaped exactly like calibrate() output —
+    enough for _verify_acceptance / main() to run on pure arithmetic."""
+    return {
+        "threshold": THRESHOLD,
+        "margin": MARGIN,
+        "optimizer": {"threshold": THRESHOLD, "margin": MARGIN, "dev": {}},
+        "metrics": {
+            "overall": {"recall": recall, "false_warning_rate": 0.0, "abstention": 1.0},
+            "by_language": {},
+            "by_category": {
+                "mixed": {"count": 2, "pass": 0, "warn": 0, "inconclusive": 2},
+                "short": {"count": 0, "pass": 0, "warn": 0, "inconclusive": 0},
+                "hard_negative": {"count": 0, "pass": 0, "warn": 0, "inconclusive": 0},
+                "translation_failure": {"count": 0, "pass": 0, "warn": 0, "inconclusive": 0},
+            },
+        },
+    }
+
+
+def _synthetic_feats() -> tuple[list[dict], list[dict], list[dict]]:
+    """Minimal feature triple (train/dev/heldout) mirroring classify_rows output
+    keys — precompute()/verdict() run their pure-arithmetic branches on these
+    without any classifier or corpus."""
+
+    def row(
+        fid: int, lang: str, label: str, split: str, task: str, probs: dict, expected: set, alpha: int = 200
+    ) -> dict:
+        return {
+            "id": fid,
+            "language": lang,
+            "label": label,
+            "split": split,
+            "task": task,
+            "source": lang,
+            "target": None,
+            "nonempty": 10,
+            "n_distinct": 4,
+            "alpha": alpha,
+            "region_probs": [("full", dict(probs)), ("begin", dict(probs)), ("end", dict(probs))],
+            "agg": dict(probs),
+            "winner": max(probs, key=probs.get),
+            "expected": set(expected),
+        }
+
+    train = [
+        row(1, "de", "clean", "train", "transcribe", {"de": 1.0}, {"de"}),
+        row(2, "en", "clean", "train", "transcribe", {"en": 1.0}, {"en"}),
+    ]
+    dev = [
+        row(3, "de", "clean", "dev", "transcribe", {"de": 1.0}, {"de"}),
+        row(4, "en", "clean", "dev", "transcribe", {"en": 1.0}, {"en"}),
+    ]
+    held = [
+        row(5, "de", "clean", "heldout", "transcribe", {"de": 1.0}, {"de"}),
+        row(6, "en", "clean", "heldout", "transcribe", {"en": 1.0}, {"en"}),
+        row(7, "de", "mixed", "heldout", "transcribe", {"de": 0.5, "en": 0.5}, {"de"}),
+        row(8, "en", "mixed", "heldout", "transcribe", {"de": 0.5, "en": 0.5}, {"en"}),
+        row(9, "de", "translation_failure", "heldout", "translate", {"de": 0.95, "en": 0.05}, {"en"}),
+        row(10, "de", "short", "heldout", "transcribe", {"de": 1.0}, {"de"}, alpha=40),
+    ]
+    return train, dev, held
+
+
+def test_contract_verify_acceptance_raises_on_failing_report() -> None:
+    """A failing-metrics report raises CalibrationError; a passing one doesn't."""
+    failing = _contract_report(recall=0.5)  # recall below HOLDOUT_CLEAN_RECALL
+    with pytest.raises(cal.CalibrationError):
+        cal._verify_acceptance(failing)
+    cal._verify_acceptance(_contract_report(recall=1.0))  # must NOT raise
+
+
+def test_contract_main_returns_2_and_writes_nothing_on_acceptance_failure(monkeypatch, tmp_path) -> None:
+    """Acceptance failure: main() exits 2 and never writes the output file."""
+    failing = _contract_report(recall=0.5)
+    monkeypatch.setattr(cal, "calibrate", lambda *args, **kwargs: failing)
+    out = tmp_path / "heldout.json"
+    argv = ["--manifest", str(tmp_path / "manifest.jsonl"), "--out", str(out)]
+    assert cal.main(argv) == 2
+    assert not out.exists()
+
+
+def test_contract_main_returns_1_on_calibration_error(monkeypatch, tmp_path) -> None:
+    """CalibrationError from calibrate(): main() exits 1."""
+
+    def _boom(*args, **kwargs):
+        raise cal.CalibrationError("boom")
+
+    monkeypatch.setattr(cal, "calibrate", _boom)
+    argv = ["--manifest", str(tmp_path / "manifest.jsonl")]
+    assert cal.main(argv) == 1
+
+
+def test_contract_main_returns_0_and_writes_on_success(monkeypatch, tmp_path) -> None:
+    """Passing report: main() exits 0 and the heldout report is written."""
+    passing = _contract_report(recall=1.0)
+    monkeypatch.setattr(cal, "calibrate", lambda *args, **kwargs: passing)
+    written: list[Path] = []
+
+    def _fake_write(report, out_path):
+        written.append(Path(out_path))
+
+    monkeypatch.setattr(cal, "write_heldout", _fake_write)
+    out = tmp_path / "heldout.json"
+    argv = ["--manifest", str(tmp_path / "manifest.jsonl"), "--out", str(out)]
+    assert cal.main(argv) == 0
+    assert written == [out]
+
+
+def test_optimizer_failure_is_nonfatal_fixed_policy_report(monkeypatch, tmp_path) -> None:
+    """A failed optimizer sweep must not gate the fixed-policy evaluation: the
+    report records optimizer {"error": ...} and still pins THRESHOLD/MARGIN with
+    the fixed-pair metrics evaluated."""
+    pytest.importorskip("py3langid")
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps({"id": 5, "language": "de", "label": "clean", "split": "heldout"})
+        + "\n"
+        + json.dumps({"id": 6, "language": "en", "label": "clean", "split": "heldout"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _no_qualifying_pair(*args, **kwargs):
+        raise cal.CalibrationError("no qualifying pair")
+
+    monkeypatch.setattr(cal, "select_params", _no_qualifying_pair)
+    rep = cal.calibrate(manifest, tmp_path, POLICY, precomputed=_synthetic_feats())
+    assert rep["optimizer"] == {"error": "no qualifying pair"}
+    assert rep["threshold"] == THRESHOLD
+    assert rep["margin"] == MARGIN
+    assert "overall" in rep["metrics"]  # fixed-pair evaluation still ran
+    assert "by_category" in rep["metrics"]

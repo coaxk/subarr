@@ -67,6 +67,22 @@ MIN_REGIONS = 3
 MIN_ALPHABETIC_CHARS = 80
 
 # Policy thresholds (`pr451-v2`).
+#
+# These are deliberately conservative, FIXED-policy values (false-warning-first:
+# better to abstain/be inconclusive than to mislabel a subtitle's language).
+#
+# They are validated against the calibration heldout corpus
+# (scripts/text_lid_calibrate.py; acceptance: clean recall >= 0.95,
+# false-warning rate <= 0.05, mixed abstention >= 0.95).
+#
+# They are evaluated at runtime DIRECTLY from these constants — calibration
+# reports THE SAME pair, never an optimizer-selected pair. Changing them requires
+# re-running calibration and updating the calibration tests.
+#
+# Heldout acceptance (matching _verify_acceptance) also gates category-level
+# outcomes: short rows must never PASS or WARN, hard-negative rows must never
+# PASS, and translation-failure rows must all WARN — not just the aggregate
+# recall / false-warning / abstention triples.
 THRESHOLD = 0.70  # p_expected >= 0.70
 MARGIN = 0.10  # p_expected - p_next >= 0.10
 TIE_EPS = 1e-9  # ties within this are ties

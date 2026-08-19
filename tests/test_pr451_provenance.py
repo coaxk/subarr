@@ -1,7 +1,9 @@
 """#451 phase-1 store/migration tests.
 
-Covers migration 030_pr451_provenance (fresh + upgraded DBs, nullable legacy
-rows, unique open-row backstop) and the provenance store extensions:
+Covers migration 030_pr451_subtitle_tuning (provenance + advisory
+text-language-check, consolidated pre-merge from the two-file 030/031 form)
+(fresh + upgraded DBs, nullable legacy rows, unique open-row backstop) and the
+provenance store extensions:
 LedgerEntry field round trips/order, provenance_conflict tri-state/stickiness,
 record_webhook_and_complete (evidence writes, normalized comparison, exactly-once
 completion, concurrent delivery, idempotent zero-row behavior).
@@ -74,6 +76,10 @@ def test_migration_030_fresh_db_columns(tmp_path):
         # task predates 030 (014); it must remain present + nullable.
         assert pq.get("task") == "TEXT"
 
+        # Consolidated 030 also adds the advisory text-language-check column.
+        ar = _cols(conn, "aftercare_results")
+        assert ar.get("text_lang_check_json") == "TEXT"
+
         # All new columns are nullable with no default -> legacy rows stay NULL.
         for col in _LEDGER_COLS:
             dflt = conn.execute(
@@ -116,9 +122,10 @@ def test_migration_030_upgrade_legacy_rows_stay_null(tmp_path):
     finally:
         conn.close()
 
-    # Upgrade with the FULL current set (includes 031: aftercare text-LID result).
+    # Upgrade with the FULL current set (includes the consolidated 030: aftercare
+    # text-LID result column).
     upgraded = run_migrations(db)
-    assert max(m.version for m in upgraded) == 31
+    assert max(m.version for m in upgraded) == 30
 
     conn = sqlite3.connect(str(db))
     try:
@@ -141,6 +148,9 @@ def test_migration_030_upgrade_legacy_rows_stay_null(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_subs_generated_open'"
         ).fetchone()
         assert idx is not None
+        # The consolidated 030 freshly adds the advisory text-LID result column.
+        ar = _cols(conn, "aftercare_results")
+        assert ar.get("text_lang_check_json") == "TEXT"
     finally:
         conn.close()
 

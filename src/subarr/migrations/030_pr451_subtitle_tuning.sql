@@ -1,14 +1,21 @@
--- 030_pr451_provenance.sql
+-- 030_pr451_subtitle_tuning.sql
 --
--- #451: explicit nullable provenance for the subtitle-text language sanity
--- checker. New transcribe/translate jobs carry explicit task/language/origin
--- claims; the completion webhook records its own evidence; the checker compares
--- the two. Legacy rows keep NULL = unknown — NO default reinterpretation, and
--- no language claim ever comes from a filename.
+-- Consolidated PR #451 migration: explicit nullable provenance columns for the
+-- subtitle-text language sanity checker (section 1) PLUS the advisory
+-- text-language-check result column on aftercare_results (section 2).
 --
--- Every column here is nullable with no DEFAULT, so pre-existing rows (and any
--- path that doesn't know a claim) remain NULL forever. This mirrors the
--- 015/025/026 pattern (nullable additive columns, legacy rows stay NULL).
+-- Merged pre-merge from the two-file form (030_pr451_provenance.sql +
+-- 031_pr451_text_lang_check.sql) so installs apply ONE coherent change. Since
+-- upstream/main has 29 migrations (001..029), 030 remains the correct next
+-- version — there is no 031 anymore.
+--
+-- Load-bearing invariants (unchanged from the original 030 header):
+--   * every new column is nullable with NO default — legacy rows stay NULL
+--     forever (no default reinterpretation; mirrors the 015/026 pattern; 025
+--     is the deliberate NOT NULL DEFAULT 0 exception);
+--   * no language claim ever comes from a filename.
+--
+-- Section 1 (provenance) is copied VERBATIM from 030_pr451_provenance.sql:
 --
 --   pending_queue  — submission-side claims travel with the job so the feeder
 --                    can persist them on the ledger row at drain time
@@ -28,13 +35,20 @@
 -- duplicate open rows (the exact corruption this backstop exists to prevent),
 -- this CREATE UNIQUE INDEX fails loudly rather than silently deduplicating —
 -- dropping rows is outside a migration's data-integrity remit.
+--
+-- Section 2 (text-lang-check) is copied VERBATIM from
+-- 031_pr451_text_lang_check.sql:
+--
+--   aftercare_results — one bounded advisory text-LID checker result persisted
+--                       on the aftercare result row. Advisory only; NULL until a
+--                       check lands.
 
--- ── pending_queue: submission claims ride on the job ───────────────────
+-- ── Section 1: pending_queue submission claims ride on the job ──────────
 ALTER TABLE pending_queue ADD COLUMN source_language TEXT;
 ALTER TABLE pending_queue ADD COLUMN target_language TEXT;
 ALTER TABLE pending_queue ADD COLUMN submission_origin TEXT;
 
--- ── subs_generated: full provenance evidence + conflict outcome ────────
+-- ── Section 1: subs_generated full provenance evidence + conflict outcome ─
 ALTER TABLE subs_generated ADD COLUMN task TEXT;
 ALTER TABLE subs_generated ADD COLUMN source_language TEXT;
 ALTER TABLE subs_generated ADD COLUMN target_language TEXT;
@@ -48,3 +62,6 @@ ALTER TABLE subs_generated ADD COLUMN provenance_conflict INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subs_generated_open
     ON subs_generated (canonical_path)
     WHERE completed_at IS NULL;
+
+-- ── Section 2: aftercare_results advisory text-language-check result ─────
+ALTER TABLE aftercare_results ADD COLUMN text_lang_check_json TEXT;

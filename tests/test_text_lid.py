@@ -47,7 +47,9 @@ def _english_cues(n: int = 24) -> list[str]:
 
 # Real, distinct sentences (12 each) so the full/begin/middle/end region texts
 # stay distinct (>= 3 regions) and each language has >= MIN_ALPHABETIC_CHARS.
-_EN_REAL = [f"The quick brown fox jumps over the lazy dog near the river bank, number {i}." for i in range(12)]
+_EN_REAL = [
+    f"The quick brown fox jumps over the lazy dog near the river bank, number {i}." for i in range(12)
+]
 _JA_REAL = [f"これは日本語の文章です。翻訳が必要な字幕の{i}行目です。" for i in range(12)]
 _KO_REAL = [f"이것은 한국어 문장입니다. 자막을 번역해야 하는 {i}번째 줄입니다。" for i in range(12)]
 _SW_REAL = [f"Hii ni maandishi ya Kiswahili kwa ajili ya majaribio ya manukuu namba {i}." for i in range(12)]
