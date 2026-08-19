@@ -559,6 +559,7 @@ class Scheduler:
                 source="gaps",
                 series_id=series_id,
                 sonarr_episode_id=sonarr_ep_id,
+                submission_origin="gaps",  # #451: scheduler gap-fill origin
             )
             return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
@@ -569,6 +570,7 @@ class Scheduler:
             source=SOURCE_SUBGENSCAN,
             series_id=series_id,
             sonarr_episode_id=sonarr_ep_id,
+            submission_origin="gaps",
         )
         return scan.id, None
 
@@ -619,6 +621,7 @@ class Scheduler:
                 series_id=series_id,
                 sonarr_episode_id=item.bazarr_episode_id,
                 radarr_movie_id=item.bazarr_radarr_id,
+                submission_origin="auto",  # #451: scheduler auto-queue origin
             )
             return job.id, None
         scan = self._scan_store.create([canonical], reverse=False)
@@ -630,5 +633,6 @@ class Scheduler:
             series_id=series_id,
             sonarr_episode_id=item.bazarr_episode_id,
             radarr_movie_id=item.bazarr_radarr_id,
+            submission_origin="auto",
         )
         return scan.id, None

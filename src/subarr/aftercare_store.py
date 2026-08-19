@@ -94,6 +94,21 @@ class AfterCareStore:
                 ),
             )
 
+    def set_text_lang_check(self, canonical_path: str, check: dict | None) -> None:
+        """#451: attach ONE bounded advisory text-LID result to the LATEST
+        aftercare row for a path (the just-completed job). Advisory only — never
+        gates anything; `check` is the checker's bounded to_dict() (status,
+        reason, normalized languages, bounded evidence, provenance, versions,
+        probabilities) — never full subtitle text. Best-effort: a NULL / absent
+        row simply leaves the column NULL."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE aftercare_results SET text_lang_check_json = ? "
+                "WHERE id = (SELECT MAX(b.id) FROM aftercare_results b "
+                "WHERE b.canonical_path = ?)",
+                (json.dumps(check) if check else None, canonical_path),
+            )
+
     def pending_count(self) -> int:
         with self._lock:
             row = self._conn.execute(_PENDING_COUNT_SQL).fetchone()
@@ -183,4 +198,5 @@ class AfterCareStore:
             "preview": r["preview"],
             "reviewed_at": r["reviewed_at"],
             "created_at": r["created_at"],
+            "text_lang_check": (json.loads(r["text_lang_check_json"]) if r["text_lang_check_json"] else None),
         }

@@ -468,6 +468,12 @@ async def subgen_webhook_completed(
     Reuses CompletionWatcher.complete_by_canonical so the battle-tested
     Bazarr/Plex logic lives in exactly one place. Idempotent: if polling
     already completed the entry, this is a benign no-op (matched=0).
+
+    #451: atomically persists webhook evidence (event / language / subtitle)
+    onto the OPEN ledger row and completes it BEFORE the shared completion
+    flow runs, so the checker sees the webhook's own evidence when the row is
+    consumed. The webhook `subtitle` is treated as a canonicalized output-
+    path LOCATOR ONLY — it is never compared as a language claim.
     """
     from ..config import settings as _settings
 
@@ -489,14 +495,39 @@ async def subgen_webhook_completed(
     from ..paths import subgen_to_canonical
 
     canonical = subgen_to_canonical(payload.file)
+    prov = request.app.state.provenance
     watcher = request.app.state.watcher
-    matched = await watcher.complete_by_canonical(canonical)
+    # #451: persist + complete atomically BEFORE consumption so the webhook's
+    # evidence is on the row the shared completion flow then consumes. Returns
+    # the ledger id, or 0 when there is no OPEN row (benign: polling already
+    # completed it, or subarr never tracked the path).
+    srt_locator = None
+    if payload.subtitle:
+        try:
+            srt_locator = subgen_to_canonical(payload.subtitle)
+        except Exception:  # noqa: BLE001 - locator only; best-effort canonical
+            srt_locator = payload.subtitle
+    ledger_id = prov.record_webhook_and_complete(
+        canonical_path=canonical,
+        event=payload.event,
+        language=payload.language,
+        subtitle=srt_locator,
+    )
+    matched = 1 if ledger_id else 0
+    if ledger_id:
+        entry = next((e for e in prov.query_by_path(canonical) if e.id == ledger_id), None)
+        if entry is not None:
+            # Share completion_watcher's single battle-tested downstream path
+            # (Bazarr upload/scan-disk, Plex, aftercare) on the now-completed
+            # row — complete_entry is idempotent on already-completed entries.
+            await watcher.complete_entry(entry)
     log.info(
-        "subgen completion webhook: event=%s file=%s canonical=%s matched=%d",
+        "subgen completion webhook: event=%s file=%s canonical=%s matched=%d ledger=%s",
         scrub(payload.event),  # webhook fields are untrusted (no auth by default)
         scrub(payload.file),
         scrub(canonical),
         matched,
+        ledger_id,
     )
     return {
         "accepted": True,
@@ -593,7 +624,12 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
     # submit time and records provenance. Manual priority + kick() = near-
     # immediate. enqueue dedups if the path is already pending/in-flight.
     pending = request.app.state.pending_queue
-    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override)
+    job = pending.enqueue(
+        canonical,
+        source="manual",
+        audio_language_override=audio_language_override,
+        submission_origin="requeue",  # #451: requeue producer
+    )
     request.app.state.queue_feeder.kick()
     return {"job": job.id, "path": canonical, "status": "pending"}
 
@@ -782,7 +818,12 @@ async def backfill_library(request: Request) -> dict:
         canonical = it.file_canonical_path or it.canonical_path
         if not canonical:
             continue
-        pending.enqueue(canonical, source="backfill", sonarr_episode_id=it.bazarr_episode_id)
+        pending.enqueue(
+            canonical,
+            source="backfill",
+            sonarr_episode_id=it.bazarr_episode_id,
+            submission_origin="backfill",  # #451: backfill producer
+        )
         enqueued += 1
 
     counts = pending.count_by_status()

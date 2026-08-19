@@ -29,7 +29,7 @@ import {
 } from './lang-rules-util.mjs';
 import { instanceSubRows } from './instance-health-util.mjs';
 
-const { useState, useEffect, useCallback, useMemo } = React;
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
 // ─── Live data hooks ─────────────────────────────────────────────
 function useLiveHealth(intervalMs = 10000) {
@@ -888,7 +888,7 @@ function ProvidersPanel() {
   );
 }
 
-function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, librariesActive, onSelectLibraries, instancesActive, onSelectInstances, subgenTuningActive, onSelectSubgenTuning }) {
+function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSystem, telemetryActive, onSelectTelemetry, updatesActive, onSelectUpdates, providersActive, onSelectProviders, langRulesActive, onSelectLangRules, subtitleTuningActive, onSelectSubtitleTuning, librariesActive, onSelectLibraries, instancesActive, onSelectInstances, subgenTuningActive, onSelectSubgenTuning }) {
   // #10: render the same persistent GPU/queue/walker footer that the
   // other pages show in SubRail, so the bottom-left vitals are
   // visible everywhere including Settings. Aside becomes a flex
@@ -917,7 +917,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           <div style={{ padding: 'var(--row-dense)', fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>Loading…</div>
         )}
         {items.map((it) => {
-          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !librariesActive && !instancesActive && !subgenTuningActive;
+          const active = it.id === selectedId && !systemActive && !telemetryActive && !updatesActive && !providersActive && !langRulesActive && !subtitleTuningActive && !librariesActive && !instancesActive && !subgenTuningActive;
           return (
             <button key={it.id} onClick={() => onSelect(it.id)} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -944,6 +944,7 @@ function SettingsRail({ items, selectedId, onSelect, systemActive, onSelectSyste
           { id: 'instances', label: 'Instances', active: instancesActive, onClick: onSelectInstances },
           { id: 'libraries', label: 'Libraries', active: librariesActive, onClick: onSelectLibraries },
           { id: 'lang-rules', label: 'Language rules', active: langRulesActive, onClick: onSelectLangRules },
+          { id: 'subtitle-tuning', label: 'Subtitle tuning', active: subtitleTuningActive, onClick: onSelectSubtitleTuning },
           { id: 'subgen-tuning', label: 'Subgen tuning', active: subgenTuningActive, onClick: onSelectSubgenTuning },
           { id: 'system', label: 'System actions', active: systemActive, onClick: onSelectSystem },
           { id: 'updates', label: 'Updates', active: updatesActive, onClick: onSelectUpdates },
@@ -1606,6 +1607,817 @@ function ForcedSegmentCard() {
         </div>
       )}
     </SectionCard>
+  );
+}
+
+
+// ─── Subtitle tuning (#359 / Phase A) ────────────────────────────
+// The persisted + live-applied re-timing config and a side-effect-free
+// preview. Consumes the /api/settings/subtitle-tuning seam: GET returns
+// per-field {value, env_controlled}, PUT persists below env + live-applies
+// (fields set via SUBARR_RETIME_ENABLED are never
+// clobbered — the UI renders them locked), and POST /preview runs the
+// exact RetimeParams path without writing any media.
+//
+// Defaults below mirror config.py / subtitle_retime.RetimeParams exactly —
+// the backend always reports current values, so defaults only render while
+// nothing has been overridden. Env authority is preserved: reset and save
+// skip any env-controlled field (only retime_enabled has SUBARR_RETIME_ENABLED
+// authority; the numeric knobs are never env-managed).
+export const TUNING_DEFAULTS = Object.freeze({
+  retime_enabled: true,
+  target_cps: 17.0,
+  min_cue_ms: 1000,
+  min_gap_ms: 100,
+  max_cue_ms: 7000,
+  max_borrow_ms: 500,
+});
+
+// Frontend mirror of the backend Canonical Bounds in
+// src/subarr/routers/subtitle_tuning.py — MUST stay in sync: PUT and
+// POST /preview enforce the same ranges server-side, and the UI drives its
+// input min/max/step and overrides validation from this single source.
+export const TUNING_BOUNDS = Object.freeze({
+  target_cps:    { min: 5,    max: 25,    step: 0.5 },
+  min_cue_ms:    { min: 100,  max: 5000,  step: 100 },
+  min_gap_ms:    { min: 0,    max: 1000,  step: 10 },
+  max_cue_ms:    { min: 1000, max: 15000, step: 100 },
+  max_borrow_ms: { min: 0,    max: 5000,  step: 50 },
+});
+
+// WPM estimate for a CPS target: captions read at roughly 10 WPM per CPS.
+export function wpmForCps(cps) {
+  return Math.round(Number(cps) * 10);
+}
+
+export const RETIMER_FIELDS = [
+  { key: 'min_cue_ms', label: 'Min cue duration (ms)', hint: 'Pad micro-cues up to this length — clears the 833ms too-short floor.' },
+  { key: 'min_gap_ms', label: 'Min gap (ms)', hint: 'Keeps the requested gap before the next cue when there is room to extend into it — existing overlaps or smaller gaps are never widened.' },
+  { key: 'max_cue_ms', label: 'Max cue duration (ms)', hint: 'Caps how far re-timing may extend a cue past its own start — an already-longer cue is never shortened.' },
+  { key: 'max_borrow_ms', label: 'Max borrow (ms)', hint: 'How much the next cue may give up to relieve an over-speed cue.' },
+];
+
+// Human labels for the five numeric knobs (target_cps sits in the top-level
+// Reading speed control, the rest live in Advanced timing) — reused by
+// overrides-validation error messages.
+const TUNING_LABELS = {
+  target_cps: 'Target CPS',
+  ...Object.fromEntries(RETIMER_FIELDS.map((f) => [f.key, f.label])),
+};
+
+// ── Pure tuning helpers (exported for tests; the panel delegates to them) ──
+
+// A field is env-controlled when the backend reports env_controlled — those are
+// read-only: the operator's SUBARR_RETIME_ENABLED wins.
+export function fieldIsEnv(fields, key) {
+  return !!(fields && fields[key] && fields[key].env_controlled);
+}
+
+// Current authoritative value: backend-reported when available, else the
+// compile-time default (used before the first GET resolves).
+export function fieldCurrentValue(fields, key) {
+  return (fields && fields[key]) ? fields[key].value : TUNING_DEFAULTS[key];
+}
+
+// Keys the user may actually edit — everything except env-managed fields.
+export function editableKeysFor(fields) {
+  return Object.keys(TUNING_DEFAULTS).filter((k) => !fieldIsEnv(fields, k));
+}
+
+// Draft value: the edited value for editable fields, else the current value.
+export function fieldDraftValue(draft, fields, key) {
+  return (key in draft) ? draft[key] : fieldCurrentValue(fields, key);
+}
+
+export function fieldsDirty(draft, fields) {
+  return editableKeysFor(fields).some(
+    (k) => String(fieldDraftValue(draft, fields, k)) !== String(fieldCurrentValue(fields, k)),
+  );
+}
+
+// Parse an edited numeric field; ''/null is invalid and returns undefined.
+// target_cps is a float; every other numeric is an integer milliseconds value.
+export function parseTuningNum(key, draft) {
+  const raw = draft[key];
+  if (raw === '' || raw == null) return undefined;
+  return key === 'target_cps' ? parseFloat(raw) : parseInt(raw, 10);
+}
+
+// Build the PUT body: only editable fields that actually changed, bools coerced
+// to !! and numerics parsed. Env-managed fields are excluded entirely.
+export function tuningSaveBody(fields, draft) {
+  const body = {};
+  for (const k of editableKeysFor(fields)) {
+    if (String(fieldDraftValue(draft, fields, k)) === String(fieldCurrentValue(fields, k))) continue;
+    if (k === 'retime_enabled') body[k] = !!fieldDraftValue(draft, fields, k);
+    else { const v = parseTuningNum(k, draft); if (v !== undefined) body[k] = v; }
+  }
+  return body;
+}
+
+// Reset request: a bodyless DELETE. The backend reverts persisted tuning
+// overrides to built-in defaults (clear_override semantics) and never clobbers
+// env-managed fields, so no literal-default payload is needed — and none is
+// sent.
+export function tuningResetRequest() {
+  return { method: 'DELETE' };
+}
+
+// Flatten a FastAPI error body's `detail` into a single readable message.
+export function flattenErrorDetail(j) {
+  if (j && j.detail) {
+    return Array.isArray(j.detail) ? j.detail.map((d) => d.msg || d).join('; ') : String(j.detail);
+  }
+  return null;
+}
+
+// Build the transient preview overrides from the unsaved numeric draft.
+// Returns { overrides, error }: overrides is null when nothing/worthless was
+// edited (the preview then shows the LIVE settings) and is never persisted —
+// it rides the preview POST only. Env-pinned fields are skipped, and every
+// edited field must parse as a number and stay inside TUNING_BOUNDS, else an
+// error naming the offending key is returned and the preview is skipped.
+export function tuningOverridesFor(draft, fields) {
+  const overrides = {};
+  for (const k of Object.keys(TUNING_BOUNDS)) {
+    if (fieldIsEnv(fields, k)) continue;
+    if (!(k in draft)) continue; // untouched -> live value wins
+    if (String(draft[k]) === String(fieldCurrentValue(fields, k))) continue;
+    const bounds = TUNING_BOUNDS[k];
+    const v = parseTuningNum(k, draft);
+    if (v === undefined || Number.isNaN(v)) {
+      return { overrides: null, error: { key: k, message: `Enter a number for ${TUNING_LABELS[k]}.` } };
+    }
+    if (v < bounds.min || v > bounds.max) {
+      return { overrides: null, error: { key: k, message: `${TUNING_LABELS[k]} must be between ${bounds.min} and ${bounds.max}.` } };
+    }
+    overrides[k] = v;
+  }
+  return { overrides: Object.keys(overrides).length > 0 ? overrides : null, error: null };
+}
+
+// Build the /preview request body + any validation error, so the preview never
+// fires an invalid request. `overrides` is expected PRE-CLEANED by the panel
+// (tuningOverridesFor) — null when none. Defensively, any override that still
+// fails to parse or falls outside TUNING_BOUNDS is dropped here, never sent.
+// Returns { body, error }.
+export function buildPreviewBody(mode, { sampleId, customText, overrides }) {
+  const body = {};
+  if (mode === 'sample') {
+    if (!sampleId) return { body: null, error: 'Pick a sample first.' };
+    body.sample_id = sampleId;
+  } else {
+    if (!customText.trim()) return { body: null, error: 'Enter some subtitle text first.' };
+    body.text = customText;
+  }
+  if (overrides && typeof overrides === 'object') {
+    const clean = {};
+    for (const [k, v] of Object.entries(overrides)) {
+      const bounds = TUNING_BOUNDS[k];
+      const num = typeof v === 'number' ? v : parseTuningNum(k, { [k]: v });
+      if (bounds && typeof num === 'number' && !Number.isNaN(num) && num >= bounds.min && num <= bounds.max) clean[k] = num;
+    }
+    if (Object.keys(clean).length > 0) body.overrides = clean;
+  }
+  return { body, error: null };
+}
+
+// Settings-route deep-link resolution (#subtitle-tuning etc.), pure so the
+// on-mount hash effect and its tests share one mapping.
+export const SETTINGS_VIEW_WHITELIST = ['providers', 'instances', 'libraries', 'telemetry', 'system', 'updates', 'lang-rules', 'subtitle-tuning', 'subgen-tuning'];
+export function resolveSettingsView(rawHash) {
+  const hash = String(rawHash || '').replace(/^#/, '').toLowerCase();
+  if (SETTINGS_VIEW_WHITELIST.includes(hash)) return { view: hash };
+  if (hash === 'integrations') return { view: 'integrations-summary' };
+  if (hash.startsWith('integration:')) {
+    const id = hash.split(':')[1];
+    if (id) return { view: 'integration', selectedId: id };
+  }
+  return null;
+}
+
+// Compact before/after metric chip used under the preview.
+function MetricChip({ label, before, after }) {
+  return (
+    <div style={{ background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span className="label">{label}</span>
+      <span style={{ flex: 1 }} />
+      <span className="mono num" style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>{before}</span>
+      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>→</span>
+      <span className="mono num" style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-0)', fontWeight: 600 }}>{after}</span>
+    </div>
+  );
+}
+
+// One side of the before/after timed view: a labelled mono SRT block.
+function CueColumn({ title, text }) {
+  return (
+    <div style={{ background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', minWidth: 0 }}>
+      <div style={{ padding: '8px 12px', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-3)', borderBottom: '1px solid var(--bg-3)' }}>
+        {title}
+      </div>
+      <pre className="mono" style={{
+        margin: 0, padding: 12, fontSize: 'var(--text-xs)', lineHeight: 1.6,
+        color: 'var(--fg-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        maxHeight: 360, overflow: 'auto',
+      }}>{text}</pre>
+    </div>
+  );
+}
+
+// ── Timed playback + preview-guard helpers (pure; exported for tests) ───────
+// PlaybackView drives a clock over the retimed SRT — these pure helpers do
+// all the parsing/bookkeeping so the components stay thin renderers.
+
+const SRT_TS_RE = /(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})/;
+const srtToMs = (h, m, s, ms) => h * 3600000 + m * 60000 + s * 1000 + ms;
+
+// Parse a simple block SRT into timed cues: each blank-line-separated block
+// holds its timestamp line (HH:MM:SS,mmm --> HH:MM:SS,mmm); the text is the
+// remaining lines of the block joined with \n. Blocks without a valid
+// timestamp line or without any text are skipped (malformed). \r\n is
+// normalised first. index is the 1-based cue position.
+export function parseSrtCues(raw) {
+  const blocks = String(raw || '').replace(/\r\n/g, '\n').split(/\n{2,}/);
+  const cues = [];
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const tsIdx = lines.findIndex((l) => SRT_TS_RE.test(l));
+    if (tsIdx < 0) continue; // no timestamp line -> malformed block
+    const m = SRT_TS_RE.exec(lines[tsIdx]);
+    const text = lines.slice(tsIdx + 1).join('\n').trim();
+    if (!text) continue; // timestamp but no text -> malformed block
+    cues.push({
+      index: cues.length + 1,
+      startMs: srtToMs(+m[1], +m[2], +m[3], +m[4]),
+      endMs: srtToMs(+m[5], +m[6], +m[7], +m[8]),
+      text,
+    });
+  }
+  return cues;
+}
+
+// Index of the cue whose [startMs, endMs) window contains elapsedMs, else -1
+// (before the first cue, in a gap, or past the end).
+export function cueIndexAt(cues, elapsedMs) {
+  for (let i = 0; i < cues.length; i++) {
+    if (elapsedMs >= cues[i].startMs && elapsedMs < cues[i].endMs) return i;
+  }
+  return -1;
+}
+
+// Next playback-clock elapsed value. Clamped to totalMs with done=true once
+// the bounded clock reaches/passes its end; totalMs <= 0 means unbounded
+// (never done, raw value returned).
+export function nextPlaybackElapsed(originMs, startedAt, now, totalMs) {
+  const raw = originMs + (now - startedAt);
+  if (totalMs > 0 && raw >= totalMs) return { elapsed: totalMs, done: true };
+  return { elapsed: raw, done: false };
+}
+
+// Stale-preview guard decisions (pure). A run whose captured seq no longer
+// matches the latest seq has been superseded by a newer run; an AbortError
+// means the request was cancelled, not failed. Exported so the pure-helper
+// vitest suite exercises the supersession/abort logic without a DOM.
+export function previewSeqIsStale(seq, latest) {
+  return seq !== latest;
+}
+export function previewAbortIgnored(err) {
+  return !!(err && err.name === 'AbortError');
+}
+
+// 0:00:03.2 style clock for the playback readout.
+function fmtTime(ms) {
+  const t = Math.max(0, Math.floor(ms / 100)); // tenths of a second
+  const h = Math.floor(t / 36000);
+  const m = Math.floor((t % 36000) / 600);
+  const s = Math.floor((t % 600) / 10);
+  const d = t % 10;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${d}`;
+}
+
+// Audio-free timed playback of a retimed SRT: rAF-driven clock over
+// performance.now() while playing, showing the active cue text + position.
+// The parent passes key={srtText} so a new retimed string remounts (and the
+// reset-to-0/paused effect below is the defensive backstop for that contract).
+function PlaybackView({ srtText }) {
+  const cues = useMemo(() => parseSrtCues(srtText || ''), [srtText]);
+  const [playing, setPlaying] = useState(false);
+  const [elapsed, setElapsed] = useState(0); // ms
+  const rafId = useRef(null);
+  const originRef = useRef(0);      // elapsed value when the clock last started
+  const startedAtRef = useRef(0);   // performance.now() when the clock started
+  const totalMs = cues.length ? cues[cues.length - 1].endMs : 0;
+
+  const stopClock = () => { if (rafId.current) { cancelAnimationFrame(rafId.current); rafId.current = null; } };
+  // Unmount / new-text safety: never leave a rAF loop dangling.
+  useEffect(() => () => stopClock(), []);
+  useEffect(() => { stopClock(); setElapsed(0); setPlaying(false); }, [srtText]);
+
+  const tick = () => {
+    const result = nextPlaybackElapsed(originRef.current, startedAtRef.current, performance.now(), totalMs);
+    if (result.done) {
+      setElapsed(result.elapsed); // exactly totalMs
+      setPlaying(false);
+      stopClock(); // cancels rAF + nulls rafId -> no re-armed frame, loop ends
+      return;
+    }
+    setElapsed(result.elapsed);
+    rafId.current = requestAnimationFrame(tick);
+  };
+
+  const play = () => {
+    if (playing) return;
+    let from = elapsed;
+    if (totalMs > 0 && from >= totalMs) from = 0; // already past the end -> restart from 0
+    setElapsed(from);
+    originRef.current = from;
+    startedAtRef.current = performance.now();
+    setPlaying(true);
+    rafId.current = requestAnimationFrame(tick);
+  };
+
+  const pause = () => {
+    if (!playing) return;
+    stopClock();
+    setElapsed(originRef.current + (performance.now() - startedAtRef.current));
+    setPlaying(false);
+  };
+
+  const restart = () => { stopClock(); setElapsed(0); setPlaying(false); };
+
+  const activeIdx = cueIndexAt(cues, elapsed);
+  const active = activeIdx >= 0 ? cues[activeIdx] : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.10em', color: 'var(--fg-3)' }}>Playback</span>
+        <span style={{ flex: 1 }} />
+        <span className="mono num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>{fmtTime(elapsed)} / {fmtTime(totalMs)}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button className="btn sm ghost" onClick={play} disabled={playing || cues.length === 0}>▶ Play</button>
+        <button className="btn sm ghost" onClick={pause} disabled={!playing}>⏸ Pause</button>
+        <button className="btn sm ghost" onClick={restart} disabled={cues.length === 0}>↺ Restart</button>
+      </div>
+      <div style={{ minHeight: 34, display: 'flex', alignItems: 'center', fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+        {cues.length === 0
+          ? <span style={{ color: 'var(--fg-3)' }}>No timed cues to play.</span>
+          : active
+            ? <span>{active.text}</span>
+            : <span style={{ color: 'var(--fg-3)' }}>{'… between cues'}</span>}
+      </div>
+    </div>
+  );
+}
+
+function SubtitleTuningPanel() {
+  const [fields, setFields] = useState(null);   // {name: {value, env_controlled}}
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [draft, setDraft] = useState({});        // editable field -> edited value
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);  // {ok,text} | {err}
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Preview state
+  const [samples, setSamples] = useState([]);
+  const [samplesError, setSamplesError] = useState(null);
+  const [mode, setMode] = useState('sample');    // 'sample' | 'custom'
+  const [sampleId, setSampleId] = useState('');
+  const [sampleText, setSampleText] = useState(''); // loaded sample text (reference view)
+  const [customText, setCustomText] = useState('');
+  const [preview, setPreview] = useState(null);  // POST /preview result
+  const [running, setRunning] = useState(false);
+  const [previewErr, setPreviewErr] = useState(null);
+
+  // Stale-preview guard: an AbortController for the in-flight request plus a
+  // monotonic run sequence. A superseded run's late response/error is dropped,
+  // and only the newest run may clear `running`.
+  const abortRef = useRef(null);    // AbortController for the in-flight preview
+  const previewSeqRef = useRef(0);  // monotonic sequence of preview runs
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/settings/subtitle-tuning', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setFields(d.fields || {});
+      setDraft({});
+      setSaveMsg(null);
+    } catch (e) { setLoadError(String(e.message || e)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // Load the sample list once. First sample becomes the default pick.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/settings/subtitle-tuning/samples', { credentials: 'same-origin' })
+      .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => {
+        if (cancelled) return;
+        const list = d.samples || [];
+        setSamples(list);
+        setSamplesError(null);
+        if (list.length > 0) {
+          setSampleId(id => id || list[0].id);
+        }
+      })
+      .catch(e => { if (!cancelled) setSamplesError(String(e.message || e)); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load the picked sample's text (shown for reference in sample mode).
+  useEffect(() => {
+    if (!sampleId) return;
+    let cancelled = false;
+    fetch(`/api/settings/subtitle-tuning/samples/${encodeURIComponent(sampleId)}`, { credentials: 'same-origin' })
+      .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { if (!cancelled) setSampleText(d.text || ''); })
+      .catch(() => { if (!cancelled) setSampleText(''); });
+    return () => { cancelled = true; };
+  }, [sampleId]);
+
+  const isEnv = (key) => fieldIsEnv(fields, key);
+  const currentValue = (key) => fieldCurrentValue(fields, key);
+  const editableKeys = editableKeysFor(fields);
+
+  // draftValue: edited value for editable fields, else current (backend) value.
+  const draftValue = (key) => fieldDraftValue(draft, fields, key);
+  const isDirty = fieldsDirty(draft, fields);
+
+  const setToggle = (key, val) => {
+    if (isEnv(key)) return; // locked — env owns it
+    setDraft(d => ({ ...d, [key]: val }));
+    setSaveMsg(null);
+  };
+  const setDraftNum = (key, raw) => {
+    setDraft(d => ({ ...d, [key]: raw }));
+    setSaveMsg(null);
+  };
+  const parseDraftNum = (key) => parseTuningNum(key, draft);
+
+  const buildSaveBody = () => tuningSaveBody(fields, draft);
+
+  const save = async () => {
+    const body = buildSaveBody();
+    if (Object.keys(body).length === 0) { setSaveMsg({ err: 'No changes to save.' }); return; }
+    setSaving(true); setSaveMsg(null);
+    try {
+      const r = await fetch('/api/settings/subtitle-tuning', {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); detail = flattenErrorDetail(j) || detail; } catch {}
+        throw new Error(detail);
+      }
+      const d = await r.json();
+      const parts = [];
+      if (d.applied?.length) parts.push(`saved ${d.applied.length} field${d.applied.length === 1 ? '' : 's'}`);
+      if (d.managed_by_env?.length) parts.push(`${d.managed_by_env.length} managed by env (unchanged)`);
+      setSaveMsg({ ok: true, text: parts.join(' · ') || 'no changes' });
+      setFields(d.fields || fields);
+      setDraft({});
+    } catch (e) { setSaveMsg({ err: String(e.message || e) }); }
+    finally { setSaving(false); }
+  };
+
+  // Reset every EDITABLE field to its default; env-set fields stay locked to
+  // the operator's env value. A bodyless DELETE — the backend removes persisted
+  // tuning overrides (clear_override semantics) and reverts live settings to
+  // built-in defaults, so no literal-default payload is sent.
+  const resetDefaults = async () => {
+    setSaving(true); setSaveMsg(null);
+    try {
+      const r = await fetch('/api/settings/subtitle-tuning', {
+        ...tuningResetRequest(),
+        credentials: 'same-origin',
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); detail = flattenErrorDetail(j) || detail; } catch {}
+        throw new Error(detail);
+      }
+      const d = await r.json();
+      const parts = [`reset ${d.reset?.length ?? 0} field${d.reset?.length === 1 ? '' : 's'} to defaults`];
+      if (d.managed_by_env?.length) parts.push(`${d.managed_by_env.length} managed by env (unchanged)`);
+      setSaveMsg({ ok: true, text: parts.join(' · ') });
+      setFields(d.fields || fields);
+      setDraft({});
+    } catch (e) { setSaveMsg({ err: String(e.message || e) }); }
+    finally { setSaving(false); }
+  };
+
+  // Shared preview runner (manual button + debounced auto-run). The unsaved
+  // numeric draft rides along as transient overrides (never persisted); a
+  // validation error surfaces as previewErr and skips the request. The last
+  // good preview stays visible while a run is in flight.
+  const runPreview = useCallback(async () => {
+    // Supersede any in-flight run: abort its request and bump the sequence so a
+    // stale response/error (and spinner clear) can never land after ours.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const seq = ++previewSeqRef.current;
+
+    setRunning(true); setPreviewErr(null);
+    const { overrides, error: ovErr } = tuningOverridesFor(draft, fields);
+    if (ovErr) { setPreviewErr(ovErr.message); setRunning(false); return; }
+    const { body, error } = buildPreviewBody(mode, { sampleId, customText, overrides });
+    if (error) { setPreviewErr(error); setRunning(false); return; }
+    try {
+      const r = await fetch('/api/settings/subtitle-tuning/preview', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (previewSeqIsStale(seq, previewSeqRef.current)) return;
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); detail = flattenErrorDetail(j) || detail; } catch {}
+        throw new Error(detail);
+      }
+      const data = await r.json();
+      if (previewSeqIsStale(seq, previewSeqRef.current)) return;
+      setPreview(data);
+    } catch (e) {
+      if (previewAbortIgnored(e)) return;
+      if (previewSeqIsStale(seq, previewSeqRef.current)) return;
+      setPreviewErr(String(e.message || e));
+    }
+    finally { if (!previewSeqIsStale(seq, previewSeqRef.current)) setRunning(false); }
+  }, [draft, fields, mode, sampleId, customText]);
+
+  // Auto-preview: re-run the preview ~500ms after the source/tuning draft
+  // settles, riding the unsaved numeric draft as transient overrides. Skipped
+  // while a PUT save is in flight or no preview source is set. Deliberately
+  // does NOT watch preview/running state — the manual button runs immediately.
+  useEffect(() => {
+    if (saving) return;
+    const hasSource = mode === 'sample' ? !!sampleId : !!(customText && customText.trim());
+    if (!hasSource) return;
+    const timer = setTimeout(() => { runPreview(); }, 500);
+    return () => {
+      clearTimeout(timer);
+      // A dependency changed (or this effect is unmounting): drop any in-flight
+      // request so a stale response can't land before the re-armed run
+      // supersedes it.
+      abortRef.current?.abort();
+    };
+  }, [saving, mode, sampleId, customText, draft, fields, runPreview]);
+
+  // On unmount, abort any in-flight preview so a late response/error can't
+  // update state on a component that no longer exists.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  if (loading && !fields) {
+    return <SectionCard label="Subtitle tuning"><div style={{ padding: 14, color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>Loading tuning…</div></SectionCard>;
+  }
+  if (loadError && !fields) {
+    return (
+      <SectionCard label="Subtitle tuning">
+        <div style={{ padding: 14, color: 'var(--error-500)', fontSize: 'var(--text-sm)' }}>
+          Couldn't load tuning: {loadError}
+          <div style={{ marginTop: 12 }}><button className="btn" onClick={load}>Retry</button></div>
+        </div>
+      </SectionCard>
+    );
+  }
+
+  const envLocked = editableKeys.length === 0;
+  const cpsValue = draftValue('target_cps');
+  const cpsEnv = isEnv('target_cps');
+  const cpsBounds = TUNING_BOUNDS.target_cps;
+  const cpsReadout = `${cpsValue} CPS ≈ ${wpmForCps(cpsValue)} WPM`;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 900 }}>
+      {/* ── Controls ── */}
+      <SectionCard label="Subtitle tuning" action={<button className="btn sm ghost" onClick={load}>Refresh</button>}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+          Re-timing knobs applied to every completed subtitle before it uploads. Values persist
+          across restarts and apply live — no restart needed.
+          Anything set via <span className="mono">SUBARR_RETIME_ENABLED</span> stays authoritative and shows here locked.
+        </div>
+
+        {/* Reading speed — a first-class top-level control (CPS is not buried
+            in Advanced timing; the ms knobs there are the fine tuning). */}
+        <Row label="Reading speed"
+          hint={cpsEnv ? 'managed by env (read-only)' : 'Higher = faster caption pace. 25 CPS is the readability ceiling; WPM ≈ 10 × CPS.'}
+          control={cpsEnv ? (
+            <div className="mono" style={{
+              height: 34, display: 'flex', alignItems: 'center', padding: '0 12px',
+              background: 'var(--bg-3)', border: '1px solid var(--bg-4)',
+              borderRadius: 'var(--radius-md)', color: 'var(--fg-3)', fontSize: 'var(--text-md)',
+            }}>
+              {currentValue('target_cps')}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>🔒 env</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
+              <input type="range" min={cpsBounds.min} max={cpsBounds.max} step={cpsBounds.step}
+                value={cpsValue} disabled={saving}
+                onChange={(e) => setDraftNum('target_cps', e.target.value)}
+                aria-label="Reading speed"
+                style={{ width: '100%', accentColor: 'var(--violet-500)' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="number" min={cpsBounds.min} max={cpsBounds.max} step={cpsBounds.step}
+                  value={cpsValue} disabled={saving}
+                  onChange={(e) => setDraftNum('target_cps', e.target.value)}
+                  aria-label="Reading speed"
+                  style={{
+                    width: 90, height: 34, textAlign: 'right', padding: '0 10px',
+                    background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+                    borderRadius: 'var(--radius-md)', color: 'var(--fg-0)',
+                    fontSize: 'var(--text-md)', fontFamily: 'var(--font-mono)', outline: 'none',
+                  }} />
+                <span className="mono num" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', whiteSpace: 'nowrap' }}>{cpsReadout}</span>
+              </div>
+            </div>
+          )} />
+        <Row label="Re-time subtitles"
+          hint={isEnv('retime_enabled') ? 'managed by env (read-only)' : 'Re-time completed subtitles against the knobs below before they upload.'}
+          control={<Toggle on={!!draftValue('retime_enabled')} busy={saving || isEnv('retime_enabled')} onToggle={() => setToggle('retime_enabled', !draftValue('retime_enabled'))} label="Re-time subtitles" />} />
+
+        {/* Advanced timing — collapsed by default */}
+        <div>
+          <button onClick={() => setAdvancedOpen(o => !o)} aria-expanded={advancedOpen} style={{
+            display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+            background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 0',
+            color: 'var(--fg-1)', fontSize: 'var(--text-md)', fontWeight: 600, textAlign: 'left',
+          }}>
+            <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>{advancedOpen ? '▾' : '▸'}</span>
+            Advanced timing
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)', fontWeight: 400 }}>
+              {advancedOpen ? 'hide' : 'min/max durations · gaps'}
+            </span>
+          </button>
+          {advancedOpen && (
+            <div style={{ marginTop: 4 }}>
+              {RETIMER_FIELDS.map(f => {
+                const env = isEnv(f.key);
+                return (
+                  <Row key={f.key} label={f.label} hint={env ? 'managed by env (read-only)' : f.hint}
+                    control={env ? (
+                      <div className="mono" style={{
+                        height: 34, display: 'flex', alignItems: 'center', padding: '0 12px',
+                        background: 'var(--bg-3)', border: '1px solid var(--bg-4)',
+                        borderRadius: 'var(--radius-md)', color: 'var(--fg-3)', fontSize: 'var(--text-md)',
+                      }}>
+                        {currentValue(f.key)}
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>🔒 env</span>
+                      </div>
+                    ) : (
+                      <input type="number"
+                        value={draftValue(f.key)}
+                        min={TUNING_BOUNDS[f.key].min} max={TUNING_BOUNDS[f.key].max} step={TUNING_BOUNDS[f.key].step}
+                        onChange={(e) => setDraftNum(f.key, e.target.value)}
+                        disabled={saving}
+                        aria-label={f.label}
+                        style={{
+                          width: 110, height: 34, textAlign: 'right', padding: '0 10px',
+                          background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+                          borderRadius: 'var(--radius-md)', color: 'var(--fg-0)',
+                          fontSize: 'var(--text-md)', fontFamily: 'var(--font-mono)', outline: 'none',
+                        }} />
+                    )} />
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {saveMsg?.ok && <div style={{ fontSize: 'var(--text-sm)', color: '#22c55e' }}>✓ {saveMsg.text}</div>}
+        {saveMsg?.err && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)' }}>Save failed: {saveMsg.err}</div>}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 14, borderTop: '1px solid var(--bg-3)' }}>
+          <span style={{ flex: 1, fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+            {envLocked
+              ? 'All fields are env-managed — nothing to edit here.'
+              : (isDirty ? 'Unsaved changes. Saves persist below any env var and apply live.' : 'Current values — defaults shown where nothing has been overridden.')}
+          </span>
+          <button className="btn sm ghost" onClick={resetDefaults} disabled={saving || envLocked}
+            title="Return every editable field to its default. Env-set fields stay locked to your env value.">
+            Reset defaults
+          </button>
+          <button className="btn sm" onClick={save} disabled={saving || !isDirty}
+            style={{ background: 'var(--violet-500)', color: '#fff' }}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </SectionCard>
+
+      {/* ── Preview ── */}
+      <SectionCard label="Preview" action={<button className="btn sm ghost" onClick={runPreview} disabled={running || (mode === 'custom' && !customText.trim())}>{running ? 'Running…' : 'Run preview'}</button>}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+          See the current tuning applied to a sample or your own subtitle text — before/after cues and
+          metrics, plus timed playback of the retimed result. Unsaved knob edits preview as draft
+          overrides. Pure preview: nothing is written to media or saved.
+        </div>
+
+        {/* Source radio */}
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)', color: 'var(--fg-1)', cursor: 'pointer' }}>
+            <input type="radio" name="preview-source" checked={mode === 'sample'} onChange={() => setMode('sample')} /> Sample
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)', color: 'var(--fg-1)', cursor: 'pointer' }}>
+            <input type="radio" name="preview-source" checked={mode === 'custom'} onChange={() => setMode('custom')} /> Custom text
+          </label>
+        </div>
+
+        {mode === 'sample' && (
+          <>
+            {samplesError && (
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>Couldn't load samples: {samplesError}</div>
+            )}
+            {samples.length === 0 && !samplesError && (
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>No samples available.</div>
+            )}
+            {samples.length > 0 && (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {samples.map(s => (
+                  <button key={s.id} onClick={() => { setSampleId(s.id); }}
+                    style={{
+                      flex: '1 1 180px', textAlign: 'left', cursor: 'pointer',
+                      background: sampleId === s.id ? 'rgba(139,92,246,0.08)' : 'var(--bg-2)',
+                      border: `1px solid ${sampleId === s.id ? 'var(--violet-500)' : 'var(--bg-4)'}`,
+                      borderRadius: 'var(--radius-md)', padding: '10px 12px',
+                      display: 'flex', flexDirection: 'column', gap: 3,
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--fg-0)' }}>{s.name}</span>
+                      <LangTag value={s.language} />
+                    </div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>{s.description}</div>
+                    <div className="mono num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>{s.cue_count} cues</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+              Preview uses the bundled sample copy. To tweak it, switch to Custom text.
+            </div>
+            {sampleText && (
+              <pre className="mono" style={{
+                margin: 0, padding: 12, fontSize: 'var(--text-xs)', lineHeight: 1.6,
+                background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                color: 'var(--fg-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                maxHeight: 220, overflow: 'auto',
+              }}>{sampleText}</pre>
+            )}
+          </>
+        )}
+
+        {mode === 'custom' && (
+          <textarea
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            placeholder={'Paste SRT subtitle text here…\n\n1\n00:00:00,000 --> 00:00:02,000\nThis is a line of dialogue'}
+            rows={7}
+            style={{
+              width: '100%', resize: 'vertical', boxSizing: 'border-box',
+              padding: '10px 12px', background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+              borderRadius: 'var(--radius-md)', color: 'var(--fg-0)',
+              fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', lineHeight: 1.6,
+              outline: 'none',
+            }} />
+        )}
+
+        {previewErr && (
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)' }}>Preview failed: {previewErr}</div>
+        )}
+
+        {preview && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <MetricChip label="cues" before={preview.metrics.before.cue_count} after={preview.metrics.after.cue_count} />
+              <MetricChip label="critical cues" before={preview.metrics.before.critical_cues} after={preview.metrics.after.critical_cues} />
+            </div>
+            <div className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              params: {preview.params.target_cps.toFixed(1)} CPS · {preview.params.min_cue_ms}ms min cue · {preview.params.min_gap_ms}ms min gap · {preview.params.max_cue_ms}ms max cue · {preview.params.max_borrow_ms}ms max borrow
+              {preview.overrides_applied ? ' · (draft overrides applied)' : ''}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <CueColumn title="Original" text={preview.original} />
+              <CueColumn title="Retimed" text={preview.retimed} />
+            </div>
+            {/* key={retimed} remounts playback whenever a new retimed string lands */}
+            <PlaybackView key={preview.retimed} srtText={preview.retimed} />
+          </div>
+        )}
+      </SectionCard>
+    </div>
   );
 }
 
@@ -2383,21 +3195,10 @@ export function SettingsPage() {
   // /settings#telemetry, /settings#system, /settings#updates land directly on
   // the named view rather than dropping the user on the default integration.
   useEffect(() => {
-    const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
-    if (['providers', 'instances', 'libraries', 'telemetry', 'system', 'updates', 'lang-rules', 'subgen-tuning'].includes(hash)) {
-      setView(hash);
-    }
-    // #207: 'integrations' lands on the summary tile grid rather than
-    // dumping the user onto Bazarr (the first rail item). From the
-    // summary they can click into any integration's detail panel.
-    if (hash === 'integrations') {
-      setView('integrations-summary');
-    }
-    // Also support /settings#integration:<name> for direct integration deep-links.
-    if (hash.startsWith('integration:')) {
-      const id = hash.split(':')[1];
-      if (id) { setSelectedId(id); setView('integration'); }
-    }
+    const r = resolveSettingsView(window.location.hash);
+    if (!r) return;
+    setView(r.view);
+    if (r.selectedId) setSelectedId(r.selectedId);
   }, []);
 
   const selected = rail.find((r) => r.id === selectedId);
@@ -2412,6 +3213,7 @@ export function SettingsPage() {
     : view === 'instances' ? ['Settings', 'Instances']
     : view === 'libraries' ? ['Settings', 'Libraries']
     : view === 'lang-rules' ? ['Settings', 'Language rules']
+    : view === 'subtitle-tuning' ? ['Settings', 'Subtitle tuning']
     : view === 'subgen-tuning' ? ['Settings', 'Subgen tuning']
     : ['Settings'];
 
@@ -2424,6 +3226,7 @@ export function SettingsPage() {
     : view === 'instances' ? 'Instances'
     : view === 'libraries' ? 'Libraries'
     : view === 'lang-rules' ? 'Language rules'
+    : view === 'subtitle-tuning' ? 'Subtitle tuning'
     : view === 'subgen-tuning' ? 'Subgen tuning'
     : 'Settings';
 
@@ -2436,6 +3239,7 @@ export function SettingsPage() {
     : view === 'instances' ? 'Connect more than one Sonarr/Radarr/Bazarr stack. The default instance comes from your env config; add others here and bind libraries to them under Libraries.'
     : view === 'libraries' ? 'Media locations subarr walks. Each library maps a filesystem root to its subgen and *arr path prefixes; the default comes from SUBARR_MEDIA_ROOT.'
     : view === 'lang-rules' ? 'Declared audio languages for whole shows and movies. New downloads inherit automatically; a per-file correction always overrides.'
+    : view === 'subtitle-tuning' ? 'Re-timing knobs applied to every completed subtitle before it uploads. Includes a side-effect-free preview.'
     : view === 'subgen-tuning' ? 'Hardware-matched Whisper model, device and compute type.'
     : '';
 
@@ -2450,6 +3254,7 @@ export function SettingsPage() {
         updatesActive={view === 'updates'} onSelectUpdates={() => setView('updates')}
         providersActive={view === 'providers'} onSelectProviders={() => setView('providers')}
         langRulesActive={view === 'lang-rules'} onSelectLangRules={() => setView('lang-rules')}
+        subtitleTuningActive={view === 'subtitle-tuning'} onSelectSubtitleTuning={() => setView('subtitle-tuning')}
         subgenTuningActive={view === 'subgen-tuning'} onSelectSubgenTuning={() => setView('subgen-tuning')}
         librariesActive={view === 'libraries'} onSelectLibraries={() => setView('libraries')}
         instancesActive={view === 'instances'} onSelectInstances={() => setView('instances')}
@@ -2505,6 +3310,7 @@ export function SettingsPage() {
             </div>
           )}
           {view === 'lang-rules' && <LangRulesPanel />}
+          {view === 'subtitle-tuning' && <SubtitleTuningPanel />}
           {view === 'subgen-tuning' && <SubgenSetupFlow />}
         </div>
       </main>

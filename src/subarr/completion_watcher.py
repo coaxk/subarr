@@ -28,20 +28,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
+from .langs import normalize_lang
+from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .provenance import ProvenanceStore
 from .subgen_client import SubgenClient, SubgenUnavailable
-from .subtitle_retime import retime_srt
+from .subtitle_retime import retime_params_from_settings, retime_srt
 
 log = logging.getLogger(__name__)
 
 WATCHER_INTERVAL_S = 30
+
+# #451: bounded advisory text-LID sanity check on the just-completed subtitle.
+# Advisory only — NEVER gates completion, upload, scan, or aftercare. The
+# blocking py3langid classifier call runs in a dedicated 2-worker thread pool
+# under an asyncio semaphore, bounded by LANG_CHECK_TIMEOUT_S. Every failure is
+# warning-only (record nothing or a fail-soft status).
+_LANG_CHECK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="textlid")
+LANG_CHECK_MAX_CONCURRENCY = 4
+LANG_CHECK_TIMEOUT_S = 2.0
 # Bazarr task IDs vary across versions. Discovered at runtime by matching
 # both job_id AND name fields. Hint order = priority: first match wins.
 #
@@ -108,6 +119,13 @@ class CompletionWatcher:
         # #216: canonical_path -> media duration_s (or None), resolved from
         # the ffprobe cache. Enables aftercare's sync-overrun signal.
         self._duration_lookup = duration_lookup or (lambda canonical: None)
+        # #451: retained in-flight advisory text-LID checks keyed by canonical
+        # subtitle identity (frozenset of identity items). Holds a strong ref
+        # (GC-safe, mirroring _forced_segment_tasks) and coalesces duplicate
+        # schedules (one in-flight check per identity). Bounded by an asyncio
+        # semaphore (built lazily so __new__-constructed test watchers work).
+        self._lang_check_tasks: dict = {}
+        self._lang_check_semaphore: asyncio.Semaphore | None = None
 
     @property
     def _subgen(self):
@@ -178,8 +196,10 @@ class CompletionWatcher:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass  # normal supervisor shutdown
+            except Exception:  # stop() must never raise; teardown is best-effort
+                log.debug("watcher loop task ended with an error during stop", exc_info=True)
             self._task = None
         # #364: best-effort cancel any in-flight at-import forced-segment scans
         # so a shutdown never leaves them dangling. Don't await (stop() does not
@@ -199,11 +219,11 @@ class CompletionWatcher:
                 _h = getattr(self, "_health", None)
                 if _h:
                     _h.record_failure("completion-watcher", e, expected_interval_s=self._interval_s)
-                log.exception("completion watcher tick failed: %s", e)
+                log.exception("completion watcher tick failed")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)
                 # If stop was set we exit; otherwise the timeout fires and we loop.
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
         log.info("completion watcher stopped")
 
@@ -450,15 +470,165 @@ class CompletionWatcher:
                 evaluation=ev,
                 source=getattr(entry, "source", None) or "subgenscan",
             )
+            # #451: once the produced subtitle is available, schedule the
+            # bounded advisory text-LID check. Best-effort + warning-only; it
+            # records its result on the row just written above.
+            self._schedule_language_check(entry, srt_path)
         except Exception as e:  # noqa: BLE001 - aftercare must never break completion
             log.warning("aftercare judging failed for %s: %s", getattr(entry, "canonical_path", "?"), e)
+
+    # ------------------------------------------------------------------
+    # #451: bounded advisory text-LID sanity check (warning-only, fail-soft)
+    # ------------------------------------------------------------------
+
+    def _schedule_language_check(self, entry, srt_path: str) -> None:
+        """#451: schedule a bounded, advisory text-LID sanity check once the
+        produced subtitle is available. Warning-only: it NEVER raises, NEVER
+        blocks completion/upload/scan/aftercare, and records nothing on failure.
+
+        Uses a RETAINED `asyncio.create_task` (GC-safe strong ref), duplicate
+        coalescing by canonical subtitle identity (one in-flight check per
+        identity), an asyncio semaphore for bounded concurrency, a
+        `ThreadPoolExecutor(max_workers=2)` for the blocking classifier call,
+        and `asyncio.wait_for(timeout=2.0)`. Cancellation/timeout/exception/
+        missing sidecar/backend-unavailable are all advisory-only."""
+        try:
+            import asyncio
+
+            from .text_lid import canonical_subtitle_identity
+
+            identity = canonical_subtitle_identity(
+                video_path=entry.canonical_path,
+                subtitle_path=srt_path,
+                # The .srt's declared output language = the ledger's declared
+                # target, normalized. NEVER a filename, the hardcoded upload
+                # language, provider, OCR, or HI preference. NULL when unknown
+                # -> unknown provenance (checker returns INCONCLUSIVE).
+                subtitle_language=normalize_lang(getattr(entry, "target_language", None)),
+                ledger_id=getattr(entry, "id", 0),
+            )
+        except Exception as e:  # noqa: BLE001 - advisory identity build must not raise
+            log.warning("text-lid: identity build failed for %s: %s", srt_path, e)
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop (unit context / non-loop driver) — advisory, skip
+        if getattr(self, "_lang_check_tasks", None) is None:
+            self._lang_check_tasks = {}
+        key = frozenset(identity.items())
+        if key in self._lang_check_tasks:
+            return  # already in flight for this canonical identity — coalesce
+        sem = self._lang_semaphore()
+        try:
+            t = asyncio.create_task(
+                self._lang_check_worker(entry, srt_path, identity, key, sem),
+                name="subarr-text-lid-check",
+            )
+        except RuntimeError as e:
+            log.warning("text-lid: no running loop to schedule %s: %s", srt_path, e)
+            return
+        self._lang_check_tasks[key] = t
+        t.add_done_callback(lambda _t: self._lang_check_tasks.pop(key, None))
+
+    def _lang_semaphore(self) -> asyncio.Semaphore:
+        """Lazily-created asyncio semaphore bounding concurrent language checks.
+        Built on the running loop so __new__-constructed test watchers work."""
+        import asyncio
+
+        sem = getattr(self, "_lang_check_semaphore", None)
+        if sem is None:
+            sem = asyncio.Semaphore(LANG_CHECK_MAX_CONCURRENCY)
+            self._lang_check_semaphore = sem
+        return sem
+
+    async def _lang_check_worker(self, entry, srt_path, identity, key, sem) -> None:
+        """Advisory background worker. Bounded by the semaphore + wait_for
+        timeout. Cancellation propagates (supervisor shutdown); every other
+        failure is logged warning-only and records nothing."""
+        import asyncio
+
+        try:
+            async with sem:
+                await self._run_language_check(entry, srt_path, identity)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - advisory must never break the loop
+            log.warning("text-lid: advisory check failed for %s: %s", srt_path, e)
+
+    async def _run_language_check(self, entry, srt_path, identity) -> None:
+        """Read the produced subtitle, run the bounded checker in the thread
+        pool under a timeout, and record ONE bounded result. Missing sidecar,
+        timeout, cancellation, and exceptions all fail soft (record nothing)."""
+        import asyncio
+        import hashlib
+
+        from .text_lid import check_subtitle_text
+
+        try:
+            text_bytes = Path(srt_path).read_bytes()
+        except OSError as e:
+            log.warning("text-lid: sidecar read failed for %s: %s", srt_path, e)
+            return  # missing/unreadable sidecar -> fail-soft, record nothing
+        content_sha256 = hashlib.sha256(text_bytes).hexdigest()
+        # Explicit ledger/provenance context (P5-S2). expected_languages is left
+        # to the checker to derive from the declared task/source/target contract
+        # — never a filename, hardcoded upload language, provider, OCR, or HI
+        # preference. Unknown provenance naturally yields INCONCLUSIVE.
+        kwargs = dict(
+            canonical_identity=identity,
+            content_sha256=content_sha256,
+            expected_languages=[],
+            task=getattr(entry, "task", None),
+            source_language=getattr(entry, "source_language", None),
+            target_language=getattr(entry, "target_language", None),
+            submission_origin=getattr(entry, "submission_origin", None),
+            webhook_event=getattr(entry, "webhook_event", None),
+            webhook_language=getattr(entry, "webhook_language", None),
+            webhook_subtitle=getattr(entry, "webhook_subtitle", None),
+            provenance_conflict=getattr(entry, "provenance_conflict", None),
+        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    _LANG_CHECK_EXECUTOR, lambda: check_subtitle_text(text_bytes, **kwargs)
+                ),
+                timeout=LANG_CHECK_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            log.warning("text-lid: advisory check timed out for %s", srt_path)
+            return  # timeout -> fail-soft, record nothing
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - inference failure is advisory
+            log.warning("text-lid: advisory check errored for %s: %s", srt_path, e)
+            return  # exception -> fail-soft, record nothing
+        self._record_lang_check(entry, result)
+
+    def _record_lang_check(self, entry, result) -> None:
+        """Persist ONE bounded structured result onto the latest aftercare row
+        for this path. Best-effort and advisory — a store failure only logs.
+        Persists the bounded result only (status/reason/provenance/versions/…),
+        never full subtitle text."""
+        store = getattr(self, "_aftercare", None)
+        if store is None or not hasattr(store, "set_text_lang_check"):
+            return
+        try:
+            store.set_text_lang_check(entry.canonical_path, result.to_dict())
+        except Exception as e:  # noqa: BLE001 - advisory store write must not raise
+            log.warning("text-lid: failed to record advisory result for %s: %s", entry.canonical_path, e)
 
     def _run_retime(self, entry) -> None:
         """#359: re-time the produced .srt in place (extend over-CPS cues into
         the gap before the next cue) BEFORE aftercare + upload, so both see the
         improved sub. On by default; opt out with SUBARR_RETIME_ENABLED=0.
         Best-effort — a failure here must NEVER block completion. Writes only if
-        changed."""
+        changed. The retimer runs with the ACTIVE tuning config (P2-S2): the five
+        numeric RetimeParams come from the running Settings singleton
+        (target_cps/min_cue_ms/min_gap_ms/max_cue_ms/max_borrow_ms), so a live or
+        persisted tuning change applies on the next completion without a restart.
+        RetimeParams' own defaults are never mutated — they are only overridden
+        by explicit values when Settings carries them."""
         from .config import settings as _settings
 
         if not _settings.retime_enabled:
@@ -468,7 +638,8 @@ class CompletionWatcher:
             if not srt_path:
                 return
             text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
-            new_text = retime_srt(text)
+            params = retime_params_from_settings(_settings)
+            new_text = retime_srt(text, params)
             if new_text != text:
                 Path(srt_path).write_text(new_text, encoding="utf-8")
                 log.info("re-timed %s", entry.canonical_path)

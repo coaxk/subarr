@@ -35,7 +35,9 @@ class RetimeParams:
     max_borrow_ms: int = 500
 
 
-def retime_cues(cues: list[Cue], params: RetimeParams = RetimeParams()) -> list[Cue]:
+def retime_cues(cues: list[Cue], params: RetimeParams | None = None) -> list[Cue]:
+    if params is None:
+        params = RetimeParams()
     out: list[Cue] = []
     n = len(cues)
     for i, c in enumerate(cues):
@@ -131,6 +133,27 @@ def render_srt(cues: list[Cue]) -> str:
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
-def retime_srt(srt_text: str, params: RetimeParams = RetimeParams()) -> str:
+def retime_srt(srt_text: str, params: RetimeParams | None = None) -> str:
     """Parse → re-time → re-render. The convenience entry point."""
+    if params is None:
+        params = RetimeParams()
     return render_srt(retime_cues(parse_srt(srt_text), params))
+
+
+def retime_params_from_settings(settings) -> RetimeParams:
+    """Build the exact :class:`RetimeParams` the completion retimer uses from
+    the Settings singleton's five tuned numeric fields (target_cps,
+    min_cue_ms, min_gap_ms, max_cue_ms, max_borrow_ms). Values are expected to
+    already sit inside the Canonical Bounds — config.py clamps them on load.
+
+    Never mutates :class:`RetimeParams`'s own defaults — if a field is somehow
+    missing from a settings-like object this raises, which is correct (the five
+    numerics are always present on Settings). Passing `settings` explicitly (vs
+    importing the module singleton here) keeps this pure and testable."""
+    return RetimeParams(
+        target_cps=float(settings.target_cps),
+        min_cue_ms=int(settings.min_cue_ms),
+        min_gap_ms=int(settings.min_gap_ms),
+        max_cue_ms=int(settings.max_cue_ms),
+        max_borrow_ms=int(settings.max_borrow_ms),
+    )

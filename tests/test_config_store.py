@@ -97,6 +97,82 @@ def test_write_is_fsynced(tmp_path, monkeypatch):
     assert calls  # fsynced before the atomic replace
 
 
+def test_save_overrides_merges_all_keys_in_one_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    cs.save_override("existing", "kept")
+    writes = []
+    real_write = cs._write
+    monkeypatch.setattr(cs, "_write", lambda data: (writes.append(data), real_write(data))[1])
+
+    cs.save_overrides({"a": 1, "b": 2, "c": 3})  # N keys, one write
+
+    assert len(writes) == 1  # ONE atomic write for N keys
+    got = cs.load_overrides()
+    assert got["existing"] == "kept"  # merges into existing keys, not replace
+    assert got["a"] == 1 and got["b"] == 2 and got["c"] == 3
+
+
+def test_clear_overrides_removes_only_listed_keys_in_one_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    cs.save_overrides({"a": 1, "b": 2, "c": 3, "d": 4})
+    writes = []
+    real_write = cs._write
+    monkeypatch.setattr(cs, "_write", lambda data: (writes.append(data), real_write(data))[1])
+
+    cs.clear_overrides(["a", "c", "missing"])  # missing key is a no-op
+
+    assert len(writes) == 1  # ONE atomic write for N keys
+    assert cs.load_overrides() == {"b": 2, "d": 4}  # only the listed keys removed
+
+
+def test_clear_overrides_no_write_when_no_keys_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    cs.save_overrides({"a": 1})
+    writes = []
+    monkeypatch.setattr(cs, "_write", lambda data: writes.append(data))
+    cs.clear_overrides(["missing", "nope"])  # nothing present -> no-op
+    assert writes == []
+
+
+def test_save_overrides_aborts_on_present_but_unreadable_file(tmp_path, monkeypatch):
+    import pytest
+
+    p = tmp_path / "ov.json"
+    p.write_text('{"sonarr_api_key": "keep-me"}', encoding="utf-8")
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(p))
+    from subarr import config_store as cs
+
+    real_read = cs.Path.read_text
+
+    def boom(self, *a, **k):
+        if self.name == "ov.json":
+            raise OSError("stale NFS handle")  # transient read failure
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(cs.Path, "read_text", boom)
+    with pytest.raises(cs.ConfigStoreError):
+        cs.save_overrides({"a": 1, "b": 2})  # must abort, not overwrite
+    monkeypatch.setattr(cs.Path, "read_text", real_read)
+    # the existing config survived untouched
+    assert cs.load_overrides() == {"sonarr_api_key": "keep-me"}
+
+
+def test_bulk_write_is_fsynced(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    from subarr import config_store as cs
+
+    calls = []
+    monkeypatch.setattr(cs.os, "fsync", lambda fd: calls.append(fd))
+    cs.save_overrides({"a": 1, "b": 2})
+    assert calls  # fsynced before the atomic replace
+
+
 def test_file_override_applies_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
     monkeypatch.delenv("SUBARR_VAD_ENABLED", raising=False)

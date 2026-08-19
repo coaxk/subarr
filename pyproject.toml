@@ -77,6 +77,21 @@ lid = [
     "numpy>=1.24,<3.0",
 ]
 
+# PR451: TEXT language sanity checker (subtitle-text LID), SEPARATE from the
+# audio `[lid]` extra above. `[lid]` is the waveform silero-lang95 (onnxruntime);
+# `[text-lid]` is the subtitle-TEXT naive-Bayes classifier (py3langid). This
+# extra is installed SEPARATELY from `[lid]` (baked into the image, but NOT a
+# base dependency). The small model (~2MB plzma), pinned by SHA-256 in
+# src/subarr/text_lid.py MODEL_SHA256, is acquired LAZILY on the first
+# subtitle-text checker backend use: downloaded, checksum-verified, and written
+# atomically into SUBARR_MODEL_CACHE; any acquisition/init failure degrades to
+# UNAVAILABLE. There is NO boot-time fetch and no hard model requirement —
+# `import subarr` stays ML-free (text_lid lazy-imports py3langid).
+text-lid = [
+    "py3langid==0.3.0",
+    "numpy>=2,<3",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -90,7 +105,7 @@ where = ["src"]
 # the frontend is silently missing in the wheel (404 at / + /static/*).
 # Caught 2026-05-27 after v1.1 deploy.
 [tool.setuptools.package-data]
-subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md", "data/*.json"]
+subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md", "data/*.json", "data/subtitle_samples/*.srt"]
 
 [tool.pytest.ini_options]
 # Playwright suite lives at tests/e2e/ — JS/TS, not Python. Excluding

@@ -167,6 +167,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         sonarr_episode_id=req.sonarr_episode_id,
         radarr_movie_id=req.radarr_movie_id,
         ignore_forced=req.ignore_forced,
+        submission_origin="coverage",  # #451: coverage-queue origin
     )
 
     return {

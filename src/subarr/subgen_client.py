@@ -503,6 +503,8 @@ class SubgenClient:
         kwargs: dict[str, Any] | None = None,
         task: str | None = None,
         ignore_forced: bool = False,
+        source_language: str | None = None,
+        target_language: str | None = None,
     ) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
@@ -532,6 +534,12 @@ class SubgenClient:
         None → omitted (subgen keeps its global). Gate on
         capabilities.per_request_task before relying on it. Raises ValueError
         on any other value (fail loud rather than silently send junk).
+
+        source_language / target_language (#451): nullable provenance claims
+        about the job itself (not overrides), normalized to lowercase
+        ISO-639-1 at the wire boundary; NULL/empty are omitted entirely so
+        the request stays byte-identical for callers that don't declare them.
+        Advisory only — they never gate or change processing.
         """
         if task is not None and task not in ("transcribe", "translate"):
             raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
@@ -549,6 +557,14 @@ class SubgenClient:
             params["audio_language_override"] = (
                 normalize_lang(audio_language_override) or audio_language_override
             )
+        # #451: nullable source/target language claims, normalized at the wire
+        # boundary (same lowercased ISO-639-1 form as forceLanguage / asr).
+        # Omitted entirely when NULL/empty so existing callers' request shape
+        # is byte-identical and ≤older subgens never see an unknown param.
+        if source_language:
+            params["source_language"] = normalize_lang(source_language) or source_language
+        if target_language:
+            params["target_language"] = normalize_lang(target_language) or target_language
         if kwargs:
             params["kwargs"] = json.dumps(kwargs)
         if task:

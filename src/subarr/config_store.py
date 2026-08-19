@@ -10,7 +10,10 @@ lock so two concurrent saves can never clobber each other's keys; writes are
 atomic + fsynced; and a save NEVER overwrites a present-but-unreadable file
 (which would destroy recoverable config) — a transient read error aborts the
 save, and a genuinely corrupt file is preserved as `<name>.corrupt-<ts>` before
-starting fresh. Reads stay fail-soft so config always loads.
+starting fresh. Reads stay fail-soft so config always loads. The bulk
+save_overrides/clear_overrides operations inherit these same guarantees: one
+lock, one strict read, one fsynced atomic write, so a multi-field update or
+reset can never leave partial persistence.
 """
 
 from __future__ import annotations
@@ -103,18 +106,42 @@ def _write(data: dict) -> None:
     os.replace(tmp, p)  # atomic
 
 
-def save_override(key: str, value) -> None:
+def save_overrides(mapping: dict) -> None:
+    """Atomically persist several keys in ONE locked read-modify-write.
+
+    Under the module lock: one strict read, overlay every key from `mapping`,
+    one fsynced atomic write. This guarantees a multi-field update cannot leave
+    partial persistence if the process fails mid-loop. Preserves the
+    abort-on-unreadable guarantee: a present-but-unreadable file raises
+    ConfigStoreError and nothing is written, so recoverable config is never
+    clobbered by a bulk save.
+    """
     with _lock:
         # _read_strict raises ConfigStoreError on a present-but-unreadable file,
-        # so we abort rather than overwrite recoverable config with one key.
+        # so we abort rather than overwrite recoverable config.
         data = _read_strict(store_path())
-        data[key] = value
+        data.update(mapping)
         _write(data)
 
 
-def clear_override(key: str) -> None:
+def clear_overrides(keys: list[str]) -> None:
+    """Atomically remove several keys in ONE locked read-modify-write.
+
+    Absent keys are a no-op; an empty list is a no-op (single read, no write).
+    Only writes when at least one listed key is actually present, matching the
+    single-key clear behaviour.
+    """
     with _lock:
         data = _read_strict(store_path())
-        if key in data:
-            del data[key]
+        if any(k in data for k in keys):
+            for k in keys:
+                data.pop(k, None)
             _write(data)
+
+
+def save_override(key: str, value) -> None:
+    save_overrides({key: value})
+
+
+def clear_override(key: str) -> None:
+    clear_overrides([key])

@@ -111,8 +111,19 @@ class Settings:
     # off; set SONARR_PROPAGATE_AUDIO_LANG=1 to enable.
     sonarr_propagate_audio_lang: bool
     # #359: re-time finished .srt subtitles (extend over-CPS cues into gaps)
-    # before aftercare/upload. Off by default until the params are arena-proven.
+    # before aftercare/upload. On by default (see the bake note in load()); opt
+    # out with SUBARR_RETIME_ENABLED=0. Env is authoritative over any persisted
+    # or live UI change (subtitle-tuning page).
     retime_enabled: bool
+    # #359 retimer knobs exposed via the subtitle-tuning page. Defaults stay in
+    # lockstep with subtitle_retime.RetimeParams (Phase 2 feeds these into it;
+    # RetimeParams is NOT replaced). UI/persisted only — NO env vars; values are
+    # clamped into the Canonical Bounds on load (_enforce_retime_bounds).
+    target_cps: float
+    min_cue_ms: int
+    min_gap_ms: int
+    max_cue_ms: int
+    max_borrow_ms: int
     # #364: opt-in "Deep-scan English files for foreign scenes" — drives the
     # forced-segment walker + the at-import hook. OFF by default so the skip-
     # English optimisation is byte-for-byte unchanged for everyone who does not
@@ -270,6 +281,21 @@ class Settings:
     instances: tuple[Instance, ...] = ()
 
 
+# Subtitle-tuning built-in defaults — the single source of truth for the six
+# retime tuning defaults. Seeded by load() and used by the reset path
+# (DELETE /api/settings/subtitle-tuning) to revert live settings to the
+# built-in defaults. Numerics mirror subtitle_retime.RetimeParams exactly
+# (17.0, 1000, 100, 7000, 500) and retime_enabled defaults True.
+RETIME_DEFAULTS: dict[str, bool | float | int] = {
+    "retime_enabled": True,
+    "target_cps": 17.0,
+    "min_cue_ms": 1000,
+    "min_gap_ms": 100,
+    "max_cue_ms": 7000,
+    "max_borrow_ms": 500,
+}
+
+
 def load() -> Settings:
     # See _env_or docstring for the empty-string fall-through rule (#127).
     # Helper applied where empty is semantically meaningless. Bare .get() kept
@@ -301,6 +327,16 @@ def load() -> Settings:
         # Opt out with SUBARR_RETIME_ENABLED=0.
         retime_enabled=os.environ.get("SUBARR_RETIME_ENABLED", "1").strip().lower()
         in ("1", "true", "yes", "on"),
+        # #359 retimer knobs: plain defaults — the numerics are UI/persisted
+        # only (NO env vars; retime_enabled above is the single env authority).
+        # Defaults come from RETIME_DEFAULTS (single source of truth, mirrors
+        # subtitle_retime.RetimeParams exactly) and are clamped into the
+        # Canonical Bounds by _enforce_retime_bounds after overrides.
+        target_cps=RETIME_DEFAULTS["target_cps"],
+        min_cue_ms=RETIME_DEFAULTS["min_cue_ms"],
+        min_gap_ms=RETIME_DEFAULTS["min_gap_ms"],
+        max_cue_ms=RETIME_DEFAULTS["max_cue_ms"],
+        max_borrow_ms=RETIME_DEFAULTS["max_borrow_ms"],
         # #364: default OFF (opt-in GPU-spending pipeline).
         forced_segment_enabled=os.environ.get("SUBARR_FORCED_SEGMENT_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on"),
@@ -362,6 +398,7 @@ def load() -> Settings:
         arena_retention_days=int(_env_or("SUBARR_ARENA_RETENTION_DAYS", "30")),
     )
     _apply_persisted_overrides(_s)
+    _enforce_retime_bounds(_s)
     rebuild_libraries(_s)
     rebuild_instances(_s)
     return _s
@@ -476,7 +513,7 @@ def _warn_dangling_bindings(s: Settings) -> None:
     try:
         for msg in validate_library_bindings(s.libraries, s.instances):
             log.warning("%s", msg)
-    except Exception:  # noqa: BLE001 — binding validation is advisory, never fatal
+    except Exception:  # binding validation is advisory, never fatal
         log.warning("library binding validation failed", exc_info=True)
 
 
@@ -539,6 +576,26 @@ def _coerce_bool(v) -> bool:
     return str(v).strip().lower() not in ("0", "false", "no", "off", "")
 
 
+# Canonical Bounds for the five retimer numerics, mirrored by the frontend's
+# TUNING_BOUNDS and enforced identically on load (see _enforce_retime_bounds):
+#   target_cps:      float [5.0, 25.0]      (25 == CRITICAL_CPS readability ceiling)
+#   min_cue_ms:      int   [100, 5000]
+#   min_gap_ms:      int   [0, 1000]
+#   max_cue_ms:      int   [1000, 15000]
+#   max_borrow_ms:   int   [0, 5000]
+#   cross-field:     effective max_cue_ms >= effective min_cue_ms.
+def _clamp_float(lo: float, hi: float):
+    """Coerce factory: clamp a hand-edited persisted override into [lo, hi] as
+    a float, so a bad override file can never produce an invalid retimer."""
+    return lambda v: min(hi, max(lo, float(v)))
+
+
+def _clamp_int(lo: int, hi: int):
+    """Coerce factory: clamp a hand-edited persisted override into [lo, hi] as
+    an int, so a bad override file can never produce an invalid retimer."""
+    return lambda v: min(hi, max(lo, int(v)))
+
+
 # #112: per-field coercion for persisted overrides (JSON → typed). Only
 # fields listed here can be set from the UI persistence layer; everything
 # else in an override file is ignored (defensive — the file never widens the
@@ -550,6 +607,18 @@ _FIELD_COERCE = {
     "plex_partial_scan_enabled": _coerce_bool,
     "subgen_webhook_enabled": _coerce_bool,
     "forced_segment_enabled": _coerce_bool,
+    # Subtitle-tuning: retime_enabled is UI-settable too (was missing here, so it
+    # could only come from env/default — it is already in FIELD_ENV_VARS). The
+    # five retimer numerics follow below with bounds-clamping coercion (P1-S3).
+    "retime_enabled": _coerce_bool,
+    # The five numerics use the bounds-clamping factories above: a persisted/
+    # live override outside the Canonical Bounds is clamped on load, so a bad
+    # override file can never produce an invalid retimer.
+    "target_cps": _clamp_float(5.0, 25.0),
+    "min_cue_ms": _clamp_int(100, 5000),
+    "min_gap_ms": _clamp_int(0, 1000),
+    "max_cue_ms": _clamp_int(1000, 15000),
+    "max_borrow_ms": _clamp_int(0, 5000),
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
@@ -572,6 +641,33 @@ _FIELD_COERCE = {
     "jellyfin_api_key": str,
     "jellyfin_path_prefix": str,
 }
+
+
+def _enforce_retime_bounds(s: Settings) -> None:
+    """Re-clamp the five retimer numerics into the Canonical Bounds after
+    persisted overrides are applied, and fix a cross-field violation by raising
+    ``max_cue_ms`` to ``min_cue_ms``.
+
+    Defense in depth behind the _FIELD_COERCE clamps: anything that reaches a
+    Settings object (defaults, persisted file, or a runtime patch) is forced
+    back into bounds, so a bad override file can never produce an invalid
+    retimer. Fail-soft — never raises, logs and moves on."""
+    try:
+        object.__setattr__(s, "target_cps", _clamp_float(5.0, 25.0)(s.target_cps))
+        object.__setattr__(s, "min_cue_ms", _clamp_int(100, 5000)(s.min_cue_ms))
+        object.__setattr__(s, "min_gap_ms", _clamp_int(0, 1000)(s.min_gap_ms))
+        object.__setattr__(s, "max_cue_ms", _clamp_int(1000, 15000)(s.max_cue_ms))
+        object.__setattr__(s, "max_borrow_ms", _clamp_int(0, 5000)(s.max_borrow_ms))
+    except Exception:  # bounds enforcement is advisory, never fatal
+        log.warning("retime bounds enforcement failed; leaving values as-is", exc_info=True)
+        return
+    if s.max_cue_ms < s.min_cue_ms:
+        log.warning(
+            "retime bounds: max_cue_ms=%d < min_cue_ms=%d — raising max_cue_ms to min_cue_ms",
+            s.max_cue_ms,
+            s.min_cue_ms,
+        )
+        object.__setattr__(s, "max_cue_ms", s.min_cue_ms)
 
 
 def _apply_persisted_overrides(s: Settings) -> None:

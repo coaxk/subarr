@@ -71,6 +71,13 @@ class PendingJob:
     # finished .srt straight to the owning Bazarr (the movie analogue of
     # series_id + sonarr_episode_id). None for episodes / path-only jobs.
     radarr_movie_id: int | None = None
+    # #451: explicit provenance claims (task stays nullable above). These ride
+    # with the job so the feeder can persist them on the ledger row at drain
+    # time. Legacy rows / unknown claims stay NULL — no filename inference.
+    # Order is fixed: source_language, target_language, submission_origin.
+    source_language: str | None = None
+    target_language: str | None = None
+    submission_origin: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,13 +96,17 @@ class PendingJob:
             "sonarr_episode_id": self.sonarr_episode_id,
             "ignore_forced": self.ignore_forced,
             "radarr_movie_id": self.radarr_movie_id,
+            "source_language": self.source_language,
+            "target_language": self.target_language,
+            "submission_origin": self.submission_origin,
         }
 
 
 _COLS = (
     "id, canonical_path, position, priority, status, "
     "audio_language_override, task, source, created_at, submitted_at, error, "
-    "series_id, sonarr_episode_id, ignore_forced, radarr_movie_id"
+    "series_id, sonarr_episode_id, ignore_forced, radarr_movie_id, "
+    "source_language, target_language, submission_origin"
 )
 
 # Statements built ONCE as constants. The only interpolation is the static
@@ -110,7 +121,7 @@ _SELECT = f"SELECT {_COLS} FROM pending_queue"  # nosec B608
 _Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1"
 _Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
 _Q_INSERT = (  # nosec B608
-    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _Q_GET = f"{_SELECT} WHERE id = ?"
 _Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
@@ -139,6 +150,9 @@ def _row(r: tuple) -> PendingJob:
         sonarr_episode_id=r[12],
         ignore_forced=bool(r[13]),
         radarr_movie_id=r[14],
+        source_language=r[15],
+        target_language=r[16],
+        submission_origin=r[17],
     )
 
 
@@ -171,6 +185,9 @@ class PendingQueueStore:
         sonarr_episode_id: int | None = None,
         ignore_forced: bool = False,
         radarr_movie_id: int | None = None,
+        source_language: str | None = None,
+        target_language: str | None = None,
+        submission_origin: str | None = None,
     ) -> PendingJob:
         """Add a job, or return the existing ACTIVE one for this path (dedup —
         we never double-queue a file that's already pending or in subgen).
@@ -211,6 +228,9 @@ class PendingQueueStore:
                 sonarr_episode_id=sonarr_episode_id,
                 ignore_forced=ignore_forced,
                 radarr_movie_id=radarr_movie_id,
+                source_language=source_language,
+                target_language=target_language,
+                submission_origin=submission_origin,
             )
             self._conn.execute(
                 _Q_INSERT,
@@ -230,6 +250,9 @@ class PendingQueueStore:
                     job.sonarr_episode_id,
                     int(job.ignore_forced),
                     job.radarr_movie_id,
+                    job.source_language,
+                    job.target_language,
+                    job.submission_origin,
                 ),
             )
             return job

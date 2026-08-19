@@ -33,6 +33,15 @@ from .subgen_client import SubgenCapabilities, SubgenClient, SubgenUnavailable
 log = logging.getLogger(__name__)
 
 
+def _norm_claim_lang(value: str | None) -> str | None:
+    """#451: normalize a nullable language claim to lowercase ISO-639-1 at the
+    scan boundary, so every consumer (batch wire, ledger) sees the same form.
+    Unknown/None pass through unchanged (NULL stays unknown)."""
+    from .langs import normalize_lang
+
+    return normalize_lang(value)
+
+
 def classify_batch_outcome(status_code: int, body) -> "tuple[str, str]":
     """Map a subgen POST /batch (status_code, body) to (path_status, error).
 
@@ -123,6 +132,13 @@ class ScanRunner:
         # default; app.py wires it to ErrorStore.record. Must never raise
         # into the scan path (ErrorStore.record already swallows).
         self._error_recorder = error_recorder or (lambda cls: None)
+        # #451: per-scan nullable provenance claims (task, source_language,
+        # target_language), retained for the scan's lifetime and forwarded to
+        # subgen's /batch. In-memory like _overrides/_ignore_forced — lost on a
+        # restart, but so is the in-flight scan. Values are normalized at
+        # start(); the ledger is persisted by _feeder_submit / direct-record
+        # callers, not here.
+        self._claims: dict[str, dict] = {}
 
     @property
     def _subgen(self):
@@ -165,11 +181,28 @@ class ScanRunner:
         scan: Scan,
         audio_language_override: str | None = None,
         ignore_forced: bool = False,
+        *,
+        task: str | None = None,
+        source_language: str | None = None,
+        target_language: str | None = None,
     ) -> None:
+        """Start a scan. `task` (transcribe|translate) and the language claims
+        are nullable provenance carried for the scan's lifetime and forwarded
+        to subgen's /batch; they do NOT change which priority/override logic
+        applies. An invalid `task` raises ValueError (mirrors subgen_client).
+        NULL claims are intentionally retained as NULL (unknown) — no
+        filename inference ever happens here."""
+        if task is not None and task not in ("transcribe", "translate"):
+            raise ValueError(f"task must be 'transcribe' or 'translate', got {task!r}")
         if audio_language_override:
             self._overrides[scan.id] = audio_language_override
         if ignore_forced:
             self._ignore_forced.add(scan.id)
+        self._claims[scan.id] = {
+            "task": task,
+            "source_language": _norm_claim_lang(source_language),
+            "target_language": _norm_claim_lang(target_language),
+        }
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
         task.add_done_callback(
@@ -177,6 +210,7 @@ class ScanRunner:
                 self._tasks.pop(sid, None),
                 self._overrides.pop(sid, None),
                 self._ignore_forced.discard(sid),
+                self._claims.pop(sid, None),
             )
         )
 
@@ -238,11 +272,15 @@ class ScanRunner:
             try:
                 directory = canonical_to_subgen_batch(path)
                 override = self._overrides.get(scan_id)
+                claims = self._claims.get(scan_id, {})
                 status_code, body = await self._subgen.batch(
                     directory,
                     reverse=scan.reverse,
                     audio_language_override=override,
                     ignore_forced=scan_id in self._ignore_forced,
+                    task=claims.get("task"),
+                    source_language=claims.get("source_language"),
+                    target_language=claims.get("target_language"),
                 )
                 result.subgen_status_code = status_code
                 result.subgen_body = body

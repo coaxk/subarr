@@ -46,6 +46,32 @@ function flagChips(item) {
   return out;
 }
 
+// #451: bounded advisory text-LID sanity check view. item.text_lang_check is the
+// checker's bounded to_dict() ({status, reason, languages, provenance, ...}).
+// Purely advisory — never gates completion, upload, provider, OCR, or HI policy.
+// Returns a small display object for the row, or null when no check result is
+// present (legacy rows, jobs still in flight, or fail-soft no-records). Kept as
+// a pure exported helper so the rendering logic is unit-testable without a DOM.
+export function langCheckView(item) {
+  const c = item && item.text_lang_check;
+  if (!c) return null;
+  const status = c.status || 'UNKNOWN';
+  const reason = c.reason || null;
+  const languages = (c.languages || []).slice(0, 3);
+  const prov = c.provenance || {};
+  const conflict = prov.conflict;
+  return {
+    status,
+    reason,
+    languages,
+    label: [status, reason, ...languages].filter(Boolean).join(' · ') || 'language check',
+    provenance: {
+      origin: prov.origin || null,
+      conflict: conflict == null ? null : !!conflict,
+    },
+  };
+}
+
 // Per-component breakdown shown on hover over the score (the "why this
 // number" the chips only hint at). Reads the values already on the row —
 // no scoring math is reconstructed here, so it can't drift from the
@@ -87,6 +113,7 @@ function timeAgo(ts) {
 function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeue, onListen }) {
   const kind = badgeKind(item);
   const chips = item.flagged ? flagChips(item) : [];
+  const langCheck = langCheckView(item);
   const filename = item.canonical_path.split('/').slice(-1)[0];
   const isBusy = busy === item.id;
 
@@ -288,6 +315,23 @@ function ItemRow({ item, expanded, onToggleExpand, busy, onAcknowledge, onRequeu
               <span style={{ marginLeft: 8 }}>· reviewed {timeAgo(item.reviewed_at)}</span>
             )}
           </div>
+
+          {/* #451: bounded advisory text-LID sanity check — status/reason/
+              languages + provenance origin/conflict. Advisory only; never gates
+              anything. Hidden when the backend recorded no result. */}
+          {langCheck && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', borderTop: '1px solid var(--bg-3)', paddingTop: 8 }}>
+              <span style={{ color: 'var(--fg-2)' }}>language check</span>
+              {' · '}
+              <span>{langCheck.label}</span>
+              {langCheck.provenance.origin && (
+                <span style={{ marginLeft: 8 }}>· origin {langCheck.provenance.origin}</span>
+              )}
+              {langCheck.provenance.conflict && (
+                <span style={{ marginLeft: 8 }}>· provenance conflict</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </React.Fragment>

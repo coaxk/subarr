@@ -73,7 +73,10 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
     # Scan-tab picks — power-user surgery, not the Bazarr-aware path). enqueue()
     # dedups against anything already pending/in-flight for the same path.
     pending = request.app.state.pending_queue
-    jobs = [pending.enqueue(p, source="manual") for p in cleaned]
+    jobs = [
+        pending.enqueue(p, source="manual", submission_origin="manual_scan")  # #451
+        for p in cleaned
+    ]
     request.app.state.queue_feeder.kick()
     return {
         "enqueued": [j.canonical_path for j in jobs],

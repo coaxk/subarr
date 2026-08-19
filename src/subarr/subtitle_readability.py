@@ -187,3 +187,14 @@ def analyze_srt(
 ) -> ReadabilityReport:
     """Parse + analyse an SRT string in one call."""
     return analyze_cues(parse_srt(text), cps_max=cps_max, cps_critical=cps_critical)
+
+
+def cue_metrics(srt_text: str) -> dict:
+    """Concise cue metrics for the preview UI: total cue count plus how many
+    cues clear the critical reading-speed bar (CRITICAL_CPS). Malformed input
+    degrades to a 0-cue report — never raises."""
+    cues = parse_srt(srt_text)
+    return {
+        "cue_count": len(cues),
+        "critical_cues": sum(1 for c in cues if c.duration_s > 0 and c.cps > CRITICAL_CPS),
+    }

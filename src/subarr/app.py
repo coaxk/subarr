@@ -102,6 +102,7 @@ from .routers import (
     schedule as r_schedule,
     sidecar as r_sidecar,
     subgen_setup as r_subgen_setup,
+    subtitle_tuning as r_subtitle_tuning,
     telemetry as r_telemetry,
     updates as r_updates,
     vad as r_vad,
@@ -500,10 +501,16 @@ async def lifespan(app_: FastAPI):
 
     async def _feeder_submit(job) -> None:
         scan = app_.state.scans.create([job.canonical_path], reverse=False)
+        # #451: carry the pending row's nullable provenance claims onto the
+        # scan (and from there to subgen's /batch) and the ledger, so the
+        # checker later sees what the job actually claimed. NULLs stay NULL.
         app_.state.runner.start(
             scan,
             audio_language_override=job.audio_language_override,
             ignore_forced=job.ignore_forced,
+            task=job.task,
+            source_language=job.source_language,
+            target_language=job.target_language,
         )
         # Full provenance (series_id carried on the job) so completion_watcher
         # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).
@@ -514,6 +521,10 @@ async def lifespan(app_: FastAPI):
             series_id=job.series_id,
             sonarr_episode_id=job.sonarr_episode_id,
             radarr_movie_id=job.radarr_movie_id,  # #368: movie upload provenance
+            task=job.task,
+            source_language=job.source_language,
+            target_language=job.target_language,
+            submission_origin=job.submission_origin,
         )
 
     app_.state.queue_feeder = PendingQueueFeeder(
@@ -1176,6 +1187,7 @@ app.include_router(r_audio_audit.router)
 app.include_router(r_forced_segment.router)
 app.include_router(r_aftercare.router)
 app.include_router(r_subgen_setup.router)
+app.include_router(r_subtitle_tuning.router)
 
 
 @app.get("/api/health")

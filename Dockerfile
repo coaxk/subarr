@@ -49,7 +49,13 @@ COPY src/ ./src/
 # onnxruntime/numpy pair as [vad], listed separately so it can diverge later).
 # The small silero-lang95 model is NOT baked; pulled + checksum-verified lazily
 # on first forced-segment scan, same opt-in pattern as [vad]'s silero VAD model.
-RUN pip install --no-cache-dir ".[vad,qe-onnx,lid]"
+# PR451: also bake the TEXT-LID runtime ([text-lid] = py3langid, SEPARATE from
+# the audio [lid] silero-lang95). Its ~2MB naive-Bayes model is pinned by SHA-256
+# (src/subarr/text_lid.py MODEL_SHA256) and NOT baked; it is acquired lazily on
+# the first subtitle-text checker backend use (checksum-verified, atomically
+# cached) and any acquisition/init failure degrades to UNAVAILABLE — no boot-time
+# model fetch, same fail-soft opt-in pattern as the audio models.
+RUN pip install --no-cache-dir ".[vad,qe-onnx,lid,text-lid]"
 
 # #237: non-root runtime. Create a default subarr user/group (1000:1000,
 # overridable at runtime via PUID/PGID by the entrypoint). HF_HOME moves the QE
