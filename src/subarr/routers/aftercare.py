@@ -83,7 +83,18 @@ async def results(
 
     for row in items:
         row["library"] = library_label(row.get("canonical_path") or "")
-    return {"count": len(items), "view": view, "items": items}
+    # #448: `count` stayed as the PAGE length for back-compat, and `total` is
+    # the real number of matching rows. Without a total the UI cannot know more
+    # rows exist, which is why Aftercare silently showed the first 100 forever.
+    total = store.count_results(view=view, source=source)
+    return {
+        "count": len(items),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "view": view,
+        "items": items,
+    }
 
 
 @router.post("/acknowledge-all")

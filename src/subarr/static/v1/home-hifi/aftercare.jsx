@@ -5,6 +5,7 @@
 import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { BlacklistPanel } from './blacklist-panel.jsx';
+import { pageWindow, clampOffset } from './paging.js';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -343,19 +344,36 @@ export function AftercarePage() {
   const [expandedId, setExpandedId] = useState(null);
   const [audit, setAudit] = useState({ running: false, done: 0, total: 0 }); // #216 audit progress
   const [ackingAll, setAckingAll] = useState(false); // #313 bulk-acknowledge in flight
+  // #448: Aftercare showed the first 100 rows forever -- it never sent an
+  // offset, and the endpoint reported the PAGE length as `count`, so nothing
+  // ever revealed that more existed.
+  const PAGE_SIZE = 100;
+  const [offset, setOffset] = useState(0);
 
   const refetch = useCallback(async () => {
-    const q = new URLSearchParams({ view });
+    const q = new URLSearchParams({ view, limit: String(PAGE_SIZE), offset: String(offset) });
     if (source) q.set('source', source);
     const r = await fetch(`/api/aftercare/results?${q.toString()}`, { credentials: 'same-origin' });
     if (r.ok) setData(await r.json());
-  }, [view, source]);
+  }, [view, source, offset]);
 
   useEffect(() => {
     refetch();
     const id = setInterval(refetch, 8000);
     return () => clearInterval(id);
   }, [refetch]);
+
+  // #448: a filter change starts a new result set -- staying on page 4 of the
+  // old one shows an empty list and looks like a bug.
+  useEffect(() => { setOffset(0); }, [view, source]);
+
+  // #448: acknowledging a batch shrinks the total under the user, which can
+  // leave the offset pointing past the end. Pull it back to the last real page.
+  useEffect(() => {
+    if (!data) return;
+    const next = clampOffset(data.total ?? 0, PAGE_SIZE, offset);
+    if (next !== offset) setOffset(next);
+  }, [data, offset]);
 
   // #216: existing-subtitle audit. Single-flight on the server; here we POST to
   // start, then poll status until it finishes and refetch the (now-populated)
@@ -425,15 +443,17 @@ export function AftercarePage() {
   }, []);
 
   // View toggle pills. Show count if data is loaded.
-  const flaggedCount = data ? data.items.filter(i => i.flagged).length : null;
-  const allCount = data ? data.items.length : null;
-
+  // #448: these counted the current PAGE, so both pills lied once the list
+  // exceeded one page. Only the active view has a known total, so the inactive
+  // pill shows no number rather than a wrong one.
+  const activeTotal = data?.total ?? null;
   const viewPills = [
-    { id: 'flagged', label: flaggedCount !== null ? `flagged (${flaggedCount})` : 'flagged' },
-    { id: 'all',     label: allCount !== null     ? `all (${allCount})`         : 'all'     },
+    { id: 'flagged', label: view === 'flagged' && activeTotal !== null ? `flagged (${activeTotal})` : 'flagged' },
+    { id: 'all',     label: view === 'all'     && activeTotal !== null ? `all (${activeTotal})`     : 'all'     },
   ];
 
   const items = data?.items || [];
+  const win = pageWindow(data?.total ?? 0, PAGE_SIZE, offset);
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 14, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -534,6 +554,32 @@ export function AftercarePage() {
                 onListen={listen}
               />
             ))}
+          </div>
+        )}
+
+        {/* #448: pager. Without this the page silently showed the first 100
+            rows and there was no way to reach the rest. */}
+        {win.pages > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        gap: 12, padding: '10px 2px' }}>
+            <span style={{ fontSize: 12, opacity: 0.75 }}>
+              Showing {win.from}-{win.to} of {win.total}
+            </span>
+            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button type="button" className="btn-ghost"
+                disabled={!win.hasPrev}
+                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                Previous
+              </button>
+              <span style={{ fontSize: 12, opacity: 0.75 }}>
+                Page {win.page} of {win.pages}
+              </span>
+              <button type="button" className="btn-ghost"
+                disabled={!win.hasNext}
+                onClick={() => setOffset(offset + PAGE_SIZE)}>
+                Next
+              </button>
+            </span>
           </div>
         )}
 

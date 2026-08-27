@@ -327,6 +327,12 @@ export function acceptMultilingualBody(row) {
   };
 }
 
+// #448: the endpoint used to hard-cap at 200 with no way past it, so a library
+// with 538 rows showed 200 and hid the rest silently. 1000 covers realistic
+// libraries while staying one bounded request; anything beyond it is surfaced
+// in the UI rather than dropped on the floor.
+const REVIEW_FETCH_LIMIT = 1000;
+
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
@@ -382,7 +388,12 @@ export function ReviewPage() {
     setIsRefetching(true);
     const startedAt = Date.now();
     try {
-      const r = await fetch('/api/audio-lang/pending-review', {
+      // #448: this page groups rows by title and filters them client-side, so
+      // server-side paging would split groups across pages and make the search
+      // box only ever search the current page -- worse than the truncation it
+      // would fix. Instead fetch a large window and tell the user plainly when
+      // there is still more (see the notice below the toolbar).
+      const r = await fetch(`/api/audio-lang/pending-review?limit=${REVIEW_FETCH_LIMIT}`, {
         credentials: 'same-origin',
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -828,6 +839,11 @@ export function ReviewPage() {
     { id: 'multilingual', label: `multilingual (${totalCounts.multilingual})` },  // #406
   ];
   const selectedCount = epSelection.size;
+  // #448: `count` from the endpoint is the TRUE total; items is the window we
+  // asked for. If the server had more than we fetched, say so -- the old
+  // behaviour was to silently show 200 and let the user believe that was all.
+  const fetchedAll = !data || (data.count ?? 0) <= (data.items?.length ?? 0);
+  const hiddenCount = fetchedAll ? 0 : (data.count - data.items.length);
 
   return (
     <main className="main-canvas" style={{
@@ -912,6 +928,14 @@ export function ReviewPage() {
               {f.label}
             </span>
           ))}
+          {/* #448: never silently truncate. If the server has more rows than we
+              fetched, say how many and how to narrow the list. */}
+          {hiddenCount > 0 && (
+            <span className="chip" title={`Fetched the first ${REVIEW_FETCH_LIMIT} of ${data.count} rows`}
+              style={{ opacity: 0.85 }}>
+              +{hiddenCount} more not shown — use search to narrow
+            </span>
+          )}
         </div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num">

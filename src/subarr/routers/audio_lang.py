@@ -654,7 +654,11 @@ async def sample(
 
 
 @router.get("/pending-review")
-async def pending_review(request: Request) -> dict[str, Any]:
+async def pending_review(
+    request: Request,
+    limit: int = Query(200, ge=1, le=2000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Rows to skip"),
+) -> dict[str, Any]:
     """v1.1-O Layer 4: surface coverage rows that need user audio-lang
     verification — suspect or unknown flags set, no existing verification.
 
@@ -750,7 +754,17 @@ async def pending_review(request: Request) -> dict[str, Any]:
                 **extra,
             }
         )
-    return {"count": len(pending), "items": pending[:200]}
+    # #448: `count` is the TRUE total and `items` is one page of it. This used
+    # to return pending[:200] with no offset, so a library with 538 rows was
+    # told there were 538 and handed 200, with the rest unreachable from the UI.
+    # The list is built by iterating the snapshot in order, so paging is stable
+    # between requests as long as the snapshot has not been refreshed under us.
+    return {
+        "count": len(pending),
+        "limit": limit,
+        "offset": offset,
+        "items": pending[offset : offset + limit],
+    }
 
 
 # ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───
