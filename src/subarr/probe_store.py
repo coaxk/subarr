@@ -164,9 +164,7 @@ class ProbeStore:
         has been renamed or removed -- see subarr.orphan_prune, which decides
         whether pruning is safe before any of these run."""
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM media_probe WHERE canonical_path = ?", (canonical_path,)
-            )
+            cur = self._conn.execute("DELETE FROM media_probe WHERE canonical_path = ?", (canonical_path,))
         return cur.rowcount > 0
 
     def all_paths(self) -> list[str]:

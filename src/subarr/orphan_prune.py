@@ -36,9 +36,7 @@ class PruneDecision:
     reason: str
 
 
-def partition_missing(
-    paths: Iterable[str], *, exists: Callable[[str], bool]
-) -> tuple[list[str], list[str]]:
+def partition_missing(paths: Iterable[str], *, exists: Callable[[str], bool]) -> tuple[list[str], list[str]]:
     """Split paths into (present, missing), preserving order.
 
     ``exists`` is injected so this stays pure and testable -- callers pass
@@ -104,9 +102,7 @@ def prune_missing(
     """
     paths = list(store.all_paths())
     _present, missing = partition_missing(paths, exists=exists)
-    decision = prune_decision(
-        total=len(paths), missing=len(missing), max_missing_ratio=max_missing_ratio
-    )
+    decision = prune_decision(total=len(paths), missing=len(missing), max_missing_ratio=max_missing_ratio)
     if not decision.safe or dry_run:
         return PruneReport(decision, 0, missing)
     deleted = sum(1 for p in missing if store.delete(p))
