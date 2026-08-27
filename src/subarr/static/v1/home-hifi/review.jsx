@@ -271,6 +271,26 @@ export function buildVerifyBody(canonicalPath, langs) {
   return { canonical_path: canonicalPath, lang_code: codes[0], source: 'user', lang_class: 'single' };
 }
 
+// #457: the bulk-assign confirmation must name the codes that will ACTUALLY be
+// submitted. It interpolated the single-select `bulkLang` even in multilingual
+// mode, so a user picking en+ja was asked to confirm "fr" -- whatever stale
+// value the single dropdown was sitting on. The submission was already correct;
+// only the dialog lied, which is the worse way round, because that prompt is the
+// user's last chance to stop a wrong bulk writeback to Sonarr and Bazarr.
+//
+// #406 fixed this same class a few lines below for the dispatched event and did
+// not touch the dialog. Deriving both from one array is what prevents a third.
+export function bulkAssignConfirmText(codes, fileCount) {
+  const list = (codes || []).filter(Boolean);
+  if (list.length === 0) return null;  // nothing selected -> caller must not prompt
+  const files = `${fileCount} file${fileCount === 1 ? '' : 's'}`;
+  const quoted = list.map((c) => `"${c}"`).join(', ');
+  const noun = list.length === 1 ? 'audio language' : 'audio languages';
+  return `Assign ${quoted} as the ${noun} for ${files}?`
+    + `\n\nEach file will be saved locally, pushed to Sonarr's per-file language record, `
+    + `and Bazarr will be triggered to re-sync. The selected rows will leave this list once verified.`;
+}
+
 // #357: the glance lane surfaces auto-classified multilingual rows for a bulk
 // eyeball. Keys on the pending-review payload's source (store 'auto-high-conf-
 // multi') or the coverage display state ('multilingual').
@@ -681,11 +701,16 @@ export function ReviewPage() {
     // selection are handled by Swap all / Dismiss all instead.
     const paths = selAssignPaths;
     if (!paths.length) return;
-    if (!window.confirm(
-      `Assign "${bulkLang}" as the audio language for ${paths.length} file${paths.length === 1 ? '' : 's'}?`
-      + `\n\nEach file will be saved locally, pushed to Sonarr's per-file language record, `
-      + `and Bazarr will be triggered to re-sync. The selected rows will leave this list once verified.`
-    )) return;
+    // #457: ONE source of truth for what gets assigned. This same array is
+    // handed to buildVerifyBody below, so the dialog cannot drift from the
+    // action it is describing.
+    const assignCodes = multilingualMode ? bulkLangs : [bulkLang];
+    const confirmText = bulkAssignConfirmText(assignCodes, paths.length);
+    if (!confirmText) {
+      window.alert('Pick at least one audio language first.');
+      return;
+    }
+    if (!window.confirm(confirmText)) return;
     setBulkRunning(true);
     setBulkProgress({ done: 0, total: paths.length, errors: 0 });
     let done = 0; let errors = 0;
@@ -698,7 +723,7 @@ export function ReviewPage() {
         try {
           // #406: multilingual mode submits the full checked set; otherwise the
           // single bulkLang. Empty selection -> builder returns null -> skip.
-          const verifyBody = buildVerifyBody(p, multilingualMode ? bulkLangs : [bulkLang]);
+          const verifyBody = buildVerifyBody(p, assignCodes);
           if (!verifyBody) { done += 1; setBulkProgress({ done, total: paths.length, errors }); continue; }
           const r = await fetch('/api/audio-lang/verifications', {
             method: 'POST',

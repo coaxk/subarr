@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildVerifyBody, isAutoMultilingualRow, sortPendingRows, acceptMultilingualBody,
+  bulkAssignConfirmText,
 } from '../review.jsx';
 
 describe('buildVerifyBody', () => {
@@ -85,5 +86,61 @@ describe('acceptMultilingualBody', () => {
   it('returns null for a row missing lang_codes (caller skips)', () => {
     expect(acceptMultilingualBody({ canonical_path: 'x.mkv' })).toBe(null);
     expect(acceptMultilingualBody({ canonical_path: 'x.mkv', lang_codes: [] })).toBe(null);
+  });
+});
+
+// #457 — the confirm dialog named the single-select `bulkLang` even in
+// multilingual mode, so picking en+ja prompted "Assign \"fr\"". The submission
+// was right; only the prompt lied, which is worse: it is the user's last chance
+// to stop a wrong bulk writeback to Sonarr and Bazarr.
+describe('bulkAssignConfirmText', () => {
+  it('names every selected code in multilingual mode', () => {
+    const t = bulkAssignConfirmText(['en', 'ja'], 11);
+    expect(t).toContain('"en", "ja"');
+    expect(t).toContain('11 files');
+    expect(t).toContain('audio languages');
+  });
+
+  it('never names a language that was not selected', () => {
+    // The exact reported symptom: fr must not appear anywhere.
+    const t = bulkAssignConfirmText(['en', 'ja'], 11);
+    expect(t).not.toContain('fr');
+  });
+
+  it('single language reads naturally', () => {
+    const t = bulkAssignConfirmText(['es'], 1);
+    expect(t).toContain('"es"');
+    expect(t).toContain('1 file?');
+    expect(t).toContain('the audio language for');
+  });
+
+  it('empty selection returns null so the caller does not prompt', () => {
+    expect(bulkAssignConfirmText([], 5)).toBeNull();
+    expect(bulkAssignConfirmText(null, 5)).toBeNull();
+    expect(bulkAssignConfirmText([null, ''], 5)).toBeNull();
+  });
+
+  it('still explains the Sonarr and Bazarr side effects', () => {
+    const t = bulkAssignConfirmText(['en'], 2);
+    expect(t).toContain('Sonarr');
+    expect(t).toContain('Bazarr');
+  });
+});
+
+// The original defect was not in either helper -- it was the CALLER handing the
+// dialog a different value than it handed the submitter. applyBulk now derives
+// both from one `assignCodes` array, which a unit test cannot reach directly.
+// This is the next best guard: for any selection, the text names exactly the
+// codes the body would submit, so a future drift between them fails here.
+describe('confirm text agrees with the submitted body', () => {
+  const cases = [['en'], ['en', 'ja'], ['es', 'pt', 'fr']];
+  it.each(cases)('codes %j', (...codes) => {
+    const list = codes.flat();
+    const body = buildVerifyBody('/m/x.mkv', list);
+    const text = bulkAssignConfirmText(list, 1);
+    const submitted = body.lang_codes || [body.lang_code];
+    for (const c of submitted) expect(text).toContain(`"${c}"`);
+    // and nothing else: count the quoted codes in the text
+    expect((text.match(/"[a-z]{2,3}"/g) || []).length).toBe(submitted.length);
   });
 });
