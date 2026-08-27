@@ -12,7 +12,7 @@
     "test:frontend": "vitest run"
   },
   "devDependencies": {
-    "esbuild": "0.28.1",
-    "vitest": "4.1.10"
+    "esbuild": "0.28.2",
+    "vitest": "4.1.11"
   }
 }
