@@ -33,8 +33,7 @@ _LIST_ALL_SQL = (
 # ORDER BY or LIMIT: counting does not need either.
 _COUNT_ALL_SQL = f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST}"
 _COUNT_FLAGGED_SQL = (
-    f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST} "
-    "AND a.flagged = 1 AND a.reviewed_at IS NULL"
+    f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST} AND a.flagged = 1 AND a.reviewed_at IS NULL"
 )
 
 _LIST_FLAGGED_SQL = (
