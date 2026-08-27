@@ -7,6 +7,23 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-08-28
+
+**Three reported bugs, a readability win, and a security refresh.** No config changes, no migration.
+
+### Fixed
+- **Bulk-assign asked you to confirm the wrong language (#457).** Selecting English and Japanese in multilingual mode prompted `Assign "fr" ...`, because the confirmation named the single-select dropdown while the code assigned the multi-select set. The assignment itself was always correct, but the dialog is your last chance to stop a bulk write that reaches Sonarr and triggers a Bazarr re-sync, so a prompt that misstates it is the more dangerous half. Both now derive from one value, and a test asserts the dialog names exactly what gets submitted.
+- **Review and Aftercare stopped hiding rows (#448).** Review was capped at 200 items server-side while reporting the true total, so a large library was told it had 538 rows and shown 200 with no way to reach the rest. Aftercare reported the size of the page it had just returned as the total, so it showed the first 100 forever and never offered a next page. Aftercare now has a proper pager ("Showing 201-300 of 538"), and Review fetches a much larger window and tells you plainly when more exists rather than truncating in silence. Review is deliberately not paged: it groups by title and filters as you type, and paging would have made the search box only ever search the current page.
+- **Aftercare's view counts were counting the page (#448).** The flagged/all pills derived their numbers from the rows currently loaded, so both were wrong for any list longer than one page.
+
+### Added
+- **The re-timer can borrow time from the next cue (#445).** Cues that run too fast to read could only be extended into the gap ahead of them, and on densely-segmented output there is often no gap at all. It can now push the following cue slightly later to make room, but only when that cue has time to spare, and never far enough to make it unreadable in turn. Subtitles are never shown before their speech. On a 35-clip sample this took cues exceeding the 25 chars-per-second readability threshold from 2.81% to 0.85%, with no new overlapping cues. Bounded to 500ms by default; set `max_borrow_ms` to 0 to restore the previous behaviour exactly.
+- **Groundwork for cleaning up renamed files (#453).** Internal only, not yet user-visible. Renaming files leaves stale entries wedged in Review, and the safe way to clear them needs a guard: when a network share drops, its mountpoint often still lists directories while serving nothing, so every file appears to vanish at once. Deleting on that signal would wipe every language you have confirmed. The new logic refuses outright when too much is missing, rather than doing it partially.
+
+### Security
+- **OS packages refreshed (#440).** The published image had drifted behind Debian security updates, with 12 packages carrying published fixes. This release rebuilds against current packages. The image now also gets rebuilt when this is detected, rather than waiting for a feature release.
+- **postcss updated to clear GHSA advisory coverage.** Build-time dependency only; it is not part of the shipped image.
+
 ## [2.5.0] - 2026-07-21
 
 **Jellyfin, beside Plex (#71).** subarr now refreshes Jellyfin the same way it has always refreshed Plex: when a subtitle lands, the owning item is refreshed so the sub appears without waiting for a scheduled scan. Configure either server, or both, and a landed subtitle fans out to every configured server. Plex behaviour is unchanged; existing installs upgrade with no migration and no config change.
