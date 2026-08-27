@@ -28,6 +28,15 @@ _LIST_ALL_SQL = (
     f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
     "ORDER BY a.flagged DESC, a.completed_at DESC LIMIT ? OFFSET ?"
 )
+# [#448] Totals for the pager. These MUST mirror the WHERE clauses of the two
+# list queries above, or the pager will promise pages that do not exist. No
+# ORDER BY or LIMIT: counting does not need either.
+_COUNT_ALL_SQL = f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST}"
+_COUNT_FLAGGED_SQL = (
+    f"SELECT COUNT(*) FROM aftercare_results a WHERE {_LATEST} "
+    "AND a.flagged = 1 AND a.reviewed_at IS NULL"
+)
+
 _LIST_FLAGGED_SQL = (
     f"SELECT * FROM aftercare_results a WHERE {_LATEST} "
     "AND a.flagged = 1 AND a.reviewed_at IS NULL "
@@ -117,6 +126,23 @@ class AfterCareStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    def count_results(self, *, view: str, source: str | None = None) -> int:
+        """[#448] Total rows matching the same filters list_results uses.
+
+        The endpoint previously reported len(items) as `count`, i.e. the size of
+        the page it had just returned, so a UI could not tell whether more rows
+        existed. Paging needs the real total.
+        """
+        base = _COUNT_FLAGGED_SQL if view == "flagged" else _COUNT_ALL_SQL
+        if source is not None:
+            sql = f"{base} AND a.source = ?"
+            params: tuple = (source,)
+        else:
+            sql, params = base, ()
+        with self._lock:
+            row = self._conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
 
     def get(self, result_id: int) -> dict[str, Any] | None:
         with self._lock:
