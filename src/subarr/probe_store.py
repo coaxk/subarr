@@ -159,6 +159,14 @@ class ProbeStore:
             rows = self._conn.execute("SELECT source, COUNT(*) FROM media_probe GROUP BY source").fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def delete(self, canonical_path: str) -> bool:
+        """[#453] Drop one cached probe. Used by the orphan prune when a file
+        has been renamed or removed -- see subarr.orphan_prune, which decides
+        whether pruning is safe before any of these run."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM media_probe WHERE canonical_path = ?", (canonical_path,))
+        return cur.rowcount > 0
+
     def all_paths(self) -> list[str]:
         with self._lock:
             rows = self._conn.execute("SELECT canonical_path FROM media_probe").fetchall()
