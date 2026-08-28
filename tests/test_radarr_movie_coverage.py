@@ -69,6 +69,7 @@ def _run(movies, items, idx):
             plex_hints={},
             sources={},
             ignore_forced_subtitles=False,
+            ignore_image_subtitles=False,  # [#458]
         )
     )
 

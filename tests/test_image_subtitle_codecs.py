@@ -237,3 +237,67 @@ def test_full_english_is_still_satisfied_and_not_demoted():
     it = _item("EN")
     _score(it, {}, ignore_forced_subtitles=True)
     assert not any("partial coverage" in r for r in it.score_reasons)
+
+
+# --- Do not queue work subgen will refuse (the #79 gating, for images) ------
+# Before this fix an image-only file was labelled "EN" and auto-queue skipped
+# it as covered. Now it is correctly NOT coverage, so it becomes eligible --
+# but subgen still refuses it unless IGNORE_IMAGE_SUBTITLES is on. Without
+# gating, the fix would turn a silent skip into a queue full of instant
+# rejections, which is a worse experience, not a better one.
+
+
+def test_image_skip_flag_exists_and_defaults_false():
+    it = _item()
+    assert it.image_only_subgen_will_skip is False
+    assert it.to_dict()["image_only_subgen_will_skip"] is False
+
+
+def test_cap_off_marks_image_only_as_non_actionable():
+    from subarr.coverage_engine import _score
+
+    it = _item("EN(image)")
+    _score(it, {}, ignore_image_subtitles=False)
+    assert it.image_only_subgen_will_skip is True
+    assert any("skip" in r.lower() for r in it.score_reasons)
+
+
+def test_cap_on_makes_image_only_an_actionable_gap():
+    from subarr.coverage_engine import _score
+
+    it = _item("EN(image)")
+    _score(it, {}, ignore_image_subtitles=True)
+    assert it.image_only_subgen_will_skip is False
+    # still demoted -- a bitmap is still not usable text coverage
+    assert any("partial coverage" in r for r in it.score_reasons)
+
+
+def test_auto_queue_skips_what_subgen_will_refuse():
+    from subarr.auto_queue import _filter_reason
+    from subarr.schedule_store import AutoQueueRules
+
+    it = _item("EN(image)")
+    it.image_only_subgen_will_skip = True
+    reason = _filter_reason(it, AutoQueueRules())
+    assert reason is not None and "image" in reason.lower()
+
+
+def test_auto_queue_allows_image_only_once_subgen_can_fill_it():
+    from subarr.auto_queue import _filter_reason
+    from subarr.schedule_store import AutoQueueRules
+
+    it = _item("EN(image)")
+    it.image_only_subgen_will_skip = False
+    it.score = 10_000  # clear the min_score gate; we are testing the image rule
+    reason = _filter_reason(it, AutoQueueRules())
+    assert reason is None or "image" not in reason.lower()
+
+
+def test_the_forced_cap_does_not_gate_the_image_case():
+    # Two independent caps. Turning IGNORE_FORCED_SUBTITLES on must not make
+    # an image-only file look fillable.
+    from subarr.coverage_engine import _score
+
+    it = _item("EN(image)")
+    _score(it, {}, ignore_forced_subtitles=True, ignore_image_subtitles=False)
+    assert it.image_only_subgen_will_skip is True

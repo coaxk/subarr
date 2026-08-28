@@ -181,6 +181,13 @@ def _filter_reason(item: CoverageItem, rules: AutoQueueRules) -> str | None:
         return "stale: .srt already on disk"
     if rules.skip_embedded_en and item.embedded_en in {"EN", "EN(SDH)"}:
         return f"embedded English already present ({item.embedded_en})"
+    # [#458] An image-only EN file is NOT coverage, so it is correctly eligible
+    # now -- but subgen refuses it unless IGNORE_IMAGE_SUBTITLES is on, and that
+    # defaults OFF. Queueing it would turn a silent skip into a queue full of
+    # instant rejections. The flag is set during scoring from subgen's RUNTIME
+    # capability, so this clears itself the moment subgen can actually fill it.
+    if item.image_only_subgen_will_skip:
+        return "embedded English is image-based (PGS/VobSub); subgen will skip it"
     if rules.require_monitored and item.monitored is False:
         return "not monitored"
     if item.score < rules.min_score:
