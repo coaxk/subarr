@@ -56,12 +56,22 @@ ENGLISH_TAGS = {"en", "eng"}
 #
 # dvb_teletext is deliberately absent. Teletext IS text, and ffmpeg decodes it
 # to text, so it does not belong here.
+# BOTH SPELLINGS ARE CARRIED. ffprobe reports a stream's `codec_name`
+# ("hdmv_pgs_subtitle"); PyAV's `codec_context.name` reports the DECODER name
+# ("pgssub"). subarr populates SubtitleStream.codec from ffprobe today, but
+# subgen reads the same tracks through PyAV, and a set that knows only one
+# spelling silently matches nothing on the other. Measured 2026-08-28:
+#     hdmv_pgs_subtitle -> pgssub     dvd_subtitle -> dvdsub
+#     dvb_subtitle      -> dvbsub     xsub         -> xsub
 IMAGE_SUBTITLE_CODECS = frozenset(
     {
-        "hdmv_pgs_subtitle",  # Blu-ray PGS
-        "dvd_subtitle",  # DVD VobSub (the reported case)
-        "dvb_subtitle",  # DVB broadcast bitmap
-        "xsub",  # DivX/AVI bitmap
+        "hdmv_pgs_subtitle",
+        "pgssub",  # Blu-ray PGS
+        "dvd_subtitle",
+        "dvdsub",  # DVD VobSub (the reported case)
+        "dvb_subtitle",
+        "dvbsub",  # DVB broadcast bitmap
+        "xsub",  # DivX/AVI bitmap (same name either way)
     }
 )
 

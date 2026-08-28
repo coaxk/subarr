@@ -52,6 +52,26 @@ def test_the_image_codecs_we_deny():
         assert is_image_subtitle_codec(c) is True
 
 
+def test_pyav_decoder_spellings_are_denied_too():
+    """The near-miss that would have shipped a no-op.
+
+    ffprobe reports a stream's codec_name; PyAV's codec_context.name reports
+    the DECODER name, and they DISAGREE for three of the four bitmap codecs.
+    Measured 2026-08-28 by asking PyAV directly (av.codec.Codec(n, "r").name):
+
+        hdmv_pgs_subtitle -> pgssub      dvd_subtitle -> dvdsub
+        dvb_subtitle      -> dvbsub      xsub         -> xsub
+
+    A deny set holding only the ffprobe spellings matches 1 of 4 on the PyAV
+    side, missing PGS and VobSub -- exactly the two codecs that were reported.
+    It applies clean and passes every structural check while doing nothing.
+    """
+    for decoder_name in ("pgssub", "dvdsub", "dvbsub", "xsub"):
+        assert is_image_subtitle_codec(decoder_name) is True, (
+            f"{decoder_name} is how PyAV spells a bitmap codec"
+        )
+
+
 def test_text_codecs_are_not_denied_including_the_long_tail():
     # ffmpeg also decodes pjs, realtext, vplayer and subviewer1 as text -- four
     # more formats the reporter's 7-entry allowlist would have misfiled as
@@ -59,8 +79,12 @@ def test_text_codecs_are_not_denied_including_the_long_tail():
     # The reporter's allowlist was {srt, ass, mov_text, subrip, webvtt, text,
     # ssa}. Anything outside it would have been wrongly treated as an image
     # sub. Denying instead means these all keep working with no extra config.
+    # "srt" is PyAV's decoder name for "subrip" and "cc_dec" is its name for
+    # eia_608 -- both text, and both must survive from either naming scheme.
     for c in (
         "subrip",
+        "srt",
+        "cc_dec",
         "ass",
         "ssa",
         "mov_text",
