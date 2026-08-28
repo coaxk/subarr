@@ -60,7 +60,7 @@ class CoverageItem:
     bazarr_episode_id: int | None = None
     missing_subtitles: list[str] = field(default_factory=list)
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
-    embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
+    embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / 'EN(image)' / None
     audio_langs: list[str] = field(default_factory=list)
     audio_lang_codes: list[str] | None = None  # #357: multilingual set (>=2 langs)
     suggest_bazarr_rescan: bool = False
@@ -1420,7 +1420,7 @@ def _score(
         label = "full English" if item.embedded_en == "EN" else "English SDH"
         reasons.append(f"embedded: {label} sub in file (Bazarr missed it)")
         item.suggest_bazarr_rescan = True
-    elif item.embedded_en in {"EN(forced)", "EN(commentary)"}:
+    elif item.embedded_en in {"EN(forced)", "EN(commentary)", "EN(image)"}:
         s -= 500
         reasons.append(f"embedded: {item.embedded_en} — partial coverage")
         # #79: forced-only EN is only an ACTIONABLE gap if the connected
@@ -1433,6 +1433,16 @@ def _score(
             reasons.append(
                 "subgen will skip this (forced-only EN) — "
                 "enable IGNORE_FORCED_SUBTITLES on subgen to transcribe it"
+            )
+        # [#458] Same trap as #79, different cause. subgen's
+        # has_internal_subtitle_in_language() matches on stream type +
+        # language tag and never looks at the CODEC, so a bitmap track
+        # tagged "eng" makes it skip the file. The gap is real -- a picture
+        # is not text -- but nothing subarr can send today will fill it, so
+        # say that plainly instead of dangling an un-fillable gap.
+        if item.embedded_en == "EN(image)":
+            reasons.append(
+                "subgen will skip this (English subs are image-based, PGS/VobSub) — it cannot be used as text"
             )
     item.score = s
     item.score_reasons = reasons
