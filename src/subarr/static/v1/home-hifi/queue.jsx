@@ -642,6 +642,114 @@ export function ArenaSlotIndicator({ arenaActive }) {
 }
 
 // ─── Page ────────────────────────────────────────────────────────
+
+// [#469] Pending rows whose English coverage is already satisfied on disk.
+//
+// #468 stops new ones accumulating by acting on subgen's skip verdict straight
+// away. This surfaces the ones that piled up before that landed: each holds a
+// feeder depth slot for 30s as it drains, so a backlog costs real GPU idle time.
+//
+// Deletes nothing without a second click, and shows exactly which rows first.
+// The apply side deliberately never touches a bypass_skip row or a PENDING one.
+function SatisfiedPendingBanner({ onResolved }) {
+  const [state, setState] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/admin/db/pending-satisfied', { credentials: 'same-origin' });
+        if (!r.ok) return;              // silent: a nicety, not core UI
+        const body = await r.json();
+        if (alive) setState(body);
+      } catch { /* offline or blocked: stay quiet rather than alarm */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/admin/db/pending-satisfied/reconcile', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      setDone(await r.json());
+      // Re-read rather than trusting the POST echo -- believing the thing under
+      // test is how you ship a cleanup that reports success and removes nothing.
+      const again = await fetch('/api/admin/db/pending-satisfied', { credentials: 'same-origin' });
+      if (again.ok) setState(await again.json());
+      if (onResolved) onResolved();
+    } catch (e) {
+      setDone({ resolved: 0, error: e.message || String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (dismissed || !state) return null;
+  const n = (state.satisfied || []).length;
+  if (!n && !done) return null;
+
+  return (
+    <div style={{
+      border: '1px solid var(--border, #333)', borderRadius: 8,
+      padding: '10px 12px', fontSize: 'var(--text-sm)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          {done ? (
+            <span>
+              {done.error
+                ? `Cleanup failed: ${done.error}`
+                : `Removed ${done.resolved} stale queue row${done.resolved === 1 ? '' : 's'}.`}
+            </span>
+          ) : (
+            <span>
+              <strong>{n} queued job{n === 1 ? '' : 's'} already have English subtitles on disk.</strong>{' '}
+              subgen will refuse each one, and every refusal holds a slot for 30 seconds
+              before the queue moves on.
+            </span>
+          )}
+        </div>
+        {!done && (
+          <button className="btn" type="button" onClick={() => setOpen(v => !v)}>
+            {open ? 'Hide' : 'Show these'}
+          </button>
+        )}
+        <button className="btn" type="button" onClick={() => setDismissed(true)} aria-label="Dismiss">
+          {'×'}
+        </button>
+      </div>
+
+      {open && !done && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            maxHeight: 180, overflowY: 'auto', fontSize: 'var(--text-xs)',
+            color: 'var(--fg-2)', border: '1px solid var(--border, #333)',
+            borderRadius: 6, padding: 8,
+          }}>
+            {(state.satisfied || []).map(p => <div key={p}>{p}</div>)}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="btn" type="button" onClick={apply} disabled={busy}>
+              {busy ? 'Removing...' : `Remove ${n} stale row${n === 1 ? '' : 's'}`}
+            </button>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              Removes queue entries only. No subtitle or media file is touched, and
+              jobs you asked to transcribe anyway are left alone.
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function QueuePage() {
   const { data, loading, error, refetch } = useLiveQueue();
   const [busyAction, setBusyAction] = useState(null);  // scan_id or 'clear'
@@ -831,6 +939,7 @@ export function QueuePage() {
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 16, overflow: 'auto' }}>
+      <SatisfiedPendingBanner onResolved={refetch} />
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', lineHeight: 'var(--lh-h1)', fontWeight: 600 }}>Queue</h1>
