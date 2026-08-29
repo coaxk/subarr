@@ -214,6 +214,91 @@ async def db_integrity_check(request: Request) -> dict:
     return {"ok": ok, "findings": findings}
 
 
+def _orphan_stores(request: Request) -> dict:
+    """The stores keyed by canonical_path that go stale on a rename.
+
+    audio_lang holds hand-confirmed verifications (expensive to rebuild and the
+    reason the guard exists); probe_store holds the probe cache (regenerable,
+    but it shows the same stale paths in Library Probe). Swept together under
+    ONE decision so a mount failure can never refuse one and clear the other.
+    """
+    out = {}
+    for name, attr in (("audio_lang", "audio_lang"), ("probe", "probe_store")):
+        store = getattr(request.app.state, attr, None)
+        if store is not None:
+            out[name] = store
+    return out
+
+
+def _path_exists(canonical: str) -> bool:
+    """Does this canonical path still point at a real file?
+
+    An UNRESOLVABLE path counts as PRESENT, deliberately. If a library is
+    removed from config or a path fails the traversal guard, we cannot tell
+    "the file is gone" from "we cannot look right now" -- and a temporary
+    misconfiguration would otherwise make every row under that library a
+    deletion candidate in one pass. A stale row left behind is recoverable;
+    hours of deleted verifications are not.
+    """
+    from ..paths import canonical_to_fs
+
+    try:
+        return canonical_to_fs(canonical).exists()
+    except Exception:
+        return True
+
+
+def _sweep(request: Request, *, dry_run: bool) -> dict:
+    from ..orphan_prune import prune_missing_multi
+
+    stores = _orphan_stores(request)
+    if not stores:
+        return {
+            "safe": False,
+            "reason": "no prunable stores are available on this instance",
+            "total_paths": 0,
+            "would_delete": 0,
+            "deleted_total": 0,
+            "deleted_by_store": {},
+            "missing": [],
+        }
+    rep = prune_missing_multi(stores, exists=_path_exists, dry_run=dry_run)
+    return {
+        "safe": rep.decision.safe,
+        "reason": rep.decision.reason,
+        "total_paths": rep.total_paths,
+        "would_delete": rep.decision.would_delete,
+        "deleted_total": sum(rep.deleted_by_store.values()),
+        "deleted_by_store": rep.deleted_by_store,
+        "missing": rep.missing,
+    }
+
+
+@router.get("/admin/db/orphans")
+async def db_orphans(request: Request) -> dict:
+    """[#453] DRY RUN: which rows reference files that no longer exist.
+
+    Deletes nothing. This is the product, not a debugging aid -- the apply
+    endpoint destroys hand-built verification data, so the user sees the exact
+    list first.
+
+    Runs in a thread: this stats every known path, and on a network share that
+    is slow enough to stall the event loop for every other request.
+    """
+    return await asyncio.to_thread(_sweep, request, dry_run=True)
+
+
+@router.post("/admin/db/orphans/prune")
+async def db_orphans_prune(request: Request) -> dict:
+    """[#453] APPLY. Refuses as a whole when too much is missing at once.
+
+    Returns 200 with safe=False rather than an error status when it refuses:
+    a refusal is a correct, expected outcome that the UI renders as an
+    explanation, not a failure to handle.
+    """
+    return await asyncio.to_thread(_sweep, request, dry_run=False)
+
+
 @router.post("/admin/db/backup")
 async def db_backup(request: Request) -> dict:
     """VACUUM INTO a timestamped clean copy of the database.

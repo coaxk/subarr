@@ -161,3 +161,118 @@ def test_prune_missing_against_a_real_probe_store(tmp_path):
     assert rep.decision.safe is True
     assert rep.deleted == 1
     assert st.all_paths() == ["/m/keep.mkv"]
+
+
+# --- #453 wiring: sweep BOTH stores under ONE safety decision ---------------
+# Review is driven by /api/audio-lang/*, so audio_lang_store holds the rows the
+# user actually sees stuck. probe_store holds the probe cache, which is
+# regenerable but shows the same stale paths in Library Probe.
+#
+# ONE decision over the UNION, not one per store. Judging separately would let
+# a dropped mount refuse one store and allow the other, which is exactly the
+# partial prune the guard exists to prevent: it would destroy the expensive
+# verifications while looking like it worked.
+
+
+class _MultiFakeStore:
+    # Deliberately NOT named _FakeStore: this module already has one with a
+    # different attribute shape (.paths), and redefining the name silently
+    # shadowed it and broke the mount-failure test above.
+    def __init__(self, paths):
+        self._paths = list(paths)
+        self.deleted = []
+
+    def all_paths(self):
+        return list(self._paths)
+
+    def delete(self, p):
+        if p in self._paths:
+            self._paths.remove(p)
+            self.deleted.append(p)
+            return True
+        return False
+
+
+def test_audio_lang_store_exposes_all_paths():
+    """The core's docstring claimed audio_lang_store already had this shape.
+
+    It did not -- it has delete() but never had all_paths(), so the documented
+    usage would have raised AttributeError the moment it was wired up. Pinning
+    it so the claim and the code cannot drift apart again.
+    """
+    from subarr.audio_lang_store import AudioLangStore
+
+    assert hasattr(AudioLangStore, "all_paths")
+    assert hasattr(AudioLangStore, "delete")
+
+
+def test_union_is_judged_once_not_per_store():
+    from subarr.orphan_prune import prune_missing_multi
+
+    # 4 of 6 distinct paths missing = 67%, over the 50% bar. Per-store this
+    # would be 1/3 (safe) and 3/3 (unsafe); as a union it is one refusal.
+    a = _MultiFakeStore(["ok1.mkv", "ok2.mkv", "gone1.mkv"])
+    b = _MultiFakeStore(["gone2.mkv", "gone3.mkv", "gone4.mkv"])
+    rep = prune_missing_multi({"a": a, "b": b}, exists=lambda p: not p.startswith("gone"))
+
+    assert rep.decision.safe is False
+    assert a.deleted == [] and b.deleted == []
+
+
+def test_a_shared_path_counts_once():
+    from subarr.orphan_prune import prune_missing_multi
+
+    # Both stores key on canonical_path, so the same file appears in both.
+    # Counting it twice would skew the ratio and could tip a safe prune unsafe.
+    a = _MultiFakeStore(["same.mkv", "ok.mkv"])
+    b = _MultiFakeStore(["same.mkv"])
+    rep = prune_missing_multi({"a": a, "b": b}, exists=lambda p: True, dry_run=True)
+    assert rep.decision.would_delete == 0
+    assert rep.total_paths == 2  # not 3
+
+
+def test_safe_sweep_deletes_from_every_store():
+    from subarr.orphan_prune import prune_missing_multi
+
+    a = _MultiFakeStore(["ok1.mkv", "ok2.mkv", "ok3.mkv", "gone.mkv"])
+    b = _MultiFakeStore(["ok1.mkv", "gone.mkv"])
+    rep = prune_missing_multi({"a": a, "b": b}, exists=lambda p: p != "gone.mkv")
+
+    assert rep.decision.safe is True
+    assert a.deleted == ["gone.mkv"]
+    assert b.deleted == ["gone.mkv"]
+    assert rep.deleted_by_store == {"a": 1, "b": 1}
+
+
+def test_dry_run_deletes_nothing_but_reports_what_would_go():
+    from subarr.orphan_prune import prune_missing_multi
+
+    a = _MultiFakeStore(["ok1.mkv", "ok2.mkv", "ok3.mkv", "gone.mkv"])
+    b = _MultiFakeStore(["gone.mkv"])
+    rep = prune_missing_multi({"a": a, "b": b}, exists=lambda p: p != "gone.mkv", dry_run=True)
+
+    assert rep.decision.safe is True
+    assert rep.decision.would_delete == 1
+    assert rep.missing == ["gone.mkv"]
+    assert a.deleted == [] and b.deleted == []
+    assert rep.deleted_by_store == {}
+
+
+def test_a_store_that_is_empty_does_not_break_the_sweep():
+    from subarr.orphan_prune import prune_missing_multi
+
+    a = _MultiFakeStore(["ok1.mkv", "ok2.mkv", "ok3.mkv", "gone.mkv"])
+    b = _MultiFakeStore([])
+    rep = prune_missing_multi({"a": a, "b": b}, exists=lambda p: p != "gone.mkv")
+    assert rep.decision.safe is True
+    assert a.deleted == ["gone.mkv"]
+
+
+def test_everything_present_is_a_no_op_not_a_refusal():
+    from subarr.orphan_prune import prune_missing_multi
+
+    a = _MultiFakeStore(["ok1.mkv", "ok2.mkv"])
+    rep = prune_missing_multi({"a": a}, exists=lambda p: True)
+    assert rep.decision.safe is True
+    assert rep.decision.would_delete == 0
+    assert a.deleted == []

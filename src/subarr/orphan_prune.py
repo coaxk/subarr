@@ -92,8 +92,9 @@ def prune_missing(
 ) -> PruneReport:
     """Drop rows for paths that no longer exist, if that looks safe.
 
-    ``store`` needs ``all_paths()`` and ``delete(path)`` -- both probe_store and
-    audio_lang_store already satisfy that shape.
+    ``store`` needs ``all_paths()`` and ``delete(path)``. probe_store and
+    audio_lang_store both satisfy that shape (audio_lang_store's
+    ``all_paths`` was added for #453; it had only ``delete`` before).
 
     Refuses as a whole rather than partially: if the missing share says the
     storage is down, nothing is deleted at all. A partial prune under a mount
@@ -107,3 +108,50 @@ def prune_missing(
         return PruneReport(decision, 0, missing)
     deleted = sum(1 for p in missing if store.delete(p))
     return PruneReport(decision, deleted, missing)
+
+
+@dataclass(frozen=True)
+class MultiPruneReport:
+    decision: PruneDecision
+    total_paths: int
+    missing: list[str]
+    deleted_by_store: dict[str, int]
+
+
+def prune_missing_multi(
+    stores: dict,
+    *,
+    exists: Callable[[str], bool],
+    dry_run: bool = False,
+    max_missing_ratio: float = MAX_MISSING_RATIO,
+) -> MultiPruneReport:
+    """Sweep several stores under a SINGLE safety decision.
+
+    The stores are judged as one universe of distinct paths, deliberately.
+    Judging each separately would let a dropped mount refuse one store and
+    allow another -- which is precisely the partial prune the guard exists to
+    prevent. Under a mount failure the cheap, regenerable probe cache and the
+    expensive hand-built verifications look equally missing, so if either is
+    unsafe to touch, neither is.
+
+    Paths are de-duplicated across stores before the ratio is computed: both
+    stores key on canonical_path and overlap heavily, and double-counting a
+    shared file would skew the ratio enough to flip the verdict.
+    """
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    for store in stores.values():
+        for path in store.all_paths():
+            if path not in seen_set:
+                seen_set.add(path)
+                seen.append(path)
+
+    _present, missing = partition_missing(seen, exists=exists)
+    decision = prune_decision(total=len(seen), missing=len(missing), max_missing_ratio=max_missing_ratio)
+    if not decision.safe or dry_run:
+        return MultiPruneReport(decision, len(seen), missing, {})
+
+    deleted_by_store: dict[str, int] = {}
+    for name, store in stores.items():
+        deleted_by_store[name] = sum(1 for path in missing if store.delete(path))
+    return MultiPruneReport(decision, len(seen), missing, deleted_by_store)
