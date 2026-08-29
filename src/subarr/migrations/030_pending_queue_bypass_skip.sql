@@ -1,0 +1,18 @@
+-- 030_pending_queue_bypass_skip.sql
+--
+-- #458 follow-on: a pending job can carry a per-request `bypass_skip` flag so
+-- the feeder forwards it to subgen's POST /batch (?bypass_skip=true, subgen
+-- v4.23+). That bypasses EVERY one of subgen's skip heuristics for that one
+-- request.
+--
+-- Needed because #458 exposed a file class no existing knob can reach: English
+-- audio whose only English subtitle is a BITMAP. Once image subs correctly stop
+-- counting as coverage the row becomes a real gap, but subgen still refuses it
+-- via SKIP_IF_AUDIO_LANGUAGES=eng (English audio has nothing to translate).
+-- `ignore_forced` does not help either: the subtitle is not forced, it is a
+-- picture. The only alternatives were unskipping every English file in the
+-- library, or leaving the gap permanently unfillable.
+--
+-- 0/1 INTEGER, default 0 = normal skip behaviour. Pre-existing rows get 0,
+-- which is correct: they were queued as ordinary gaps, not skip-overrides.
+ALTER TABLE pending_queue ADD COLUMN bypass_skip INTEGER NOT NULL DEFAULT 0;
