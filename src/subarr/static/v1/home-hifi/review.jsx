@@ -359,6 +359,120 @@ export function computePagination({ count = 0, limit = 200, offset = 0 }) {
   };
 }
 
+
+// [#453] Renamed or deleted files leave rows keyed on the OLD canonical path.
+// Nothing in the coverage path checks whether a file still exists, so re-walking
+// never clears them and users have resorted to hand-written SQL.
+//
+// This auto-detects on load but NEVER deletes on its own. The apply step
+// destroys hand-confirmed audio-language verifications, which cost hours to
+// rebuild, so the user sees the exact list first and clicks to confirm.
+function OrphanBanner() {
+  const [state, setState] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [done, setDone] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/admin/db/orphans', { credentials: 'same-origin' });
+        if (!r.ok) return;                 // silent: this is a nicety, not core UI
+        const body = await r.json();
+        if (alive) setState(body);
+      } catch { /* offline or blocked: stay silent rather than alarm */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/admin/db/orphans/prune', {
+        method: 'POST', credentials: 'same-origin',
+      });
+      const body = await r.json();
+      setDone(body);
+      // Re-fetching the list is what proves the rows are gone; trusting the
+      // POST's own echo would be believing the thing under test.
+      const again = await fetch('/api/admin/db/orphans', { credentials: 'same-origin' });
+      if (again.ok) setState(await again.json());
+    } catch (e) {
+      setDone({ safe: false, reason: `Prune failed: ${e.message || e}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (dismissed || !state) return null;
+  const n = state.would_delete || 0;
+  const blocked = n > 0 && state.safe === false;
+  if (n === 0 && !done) return null;
+
+  // A refusal is not an error. It means the storage looks unavailable, and the
+  // honest thing is to explain that rather than offer a button that would
+  // delete everything the user has confirmed.
+  const tone = blocked ? 'var(--warn, #d98324)' : 'var(--fg-2)';
+
+  return (
+    <div style={{
+      border: `1px solid ${blocked ? tone : 'var(--border, #333)'}`,
+      borderRadius: 8, padding: '10px 12px', fontSize: 'var(--text-sm)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ color: tone }}>{blocked ? '⚠' : '●'}</span>
+        <div style={{ flex: 1 }}>
+          {done ? (
+            <span>
+              {done.safe
+                ? `Removed ${done.deleted_total} orphaned row${done.deleted_total === 1 ? '' : 's'}.`
+                : done.reason}
+            </span>
+          ) : blocked ? (
+            <span><strong>{n} rows reference files that are missing, and cleanup is on hold.</strong> {state.reason}</span>
+          ) : (
+            <span>
+              <strong>{n} row{n === 1 ? '' : 's'} reference files that no longer exist.</strong>{' '}
+              Usually renames. Cleaning them up clears stale entries from Review.
+            </span>
+          )}
+        </div>
+        {!done && !blocked && (
+          <button type="button" onClick={() => setOpen(v => !v)} style={{ whiteSpace: 'nowrap' }}>
+            {open ? 'Hide' : 'Show these'}
+          </button>
+        )}
+        <button type="button" onClick={() => setDismissed(true)} aria-label="Dismiss">
+          {'×'}
+        </button>
+      </div>
+
+      {open && !done && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            maxHeight: 180, overflowY: 'auto', fontFamily: 'var(--mono, monospace)',
+            fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+            border: '1px solid var(--border, #333)', borderRadius: 6, padding: 8,
+          }}>
+            {state.missing.map(pth => <div key={pth}>{pth}</div>)}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button type="button" onClick={apply} disabled={busy}>
+              {busy ? 'Removing...' : `Remove ${n} row${n === 1 ? '' : 's'}`}
+            </button>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              This deletes saved audio-language verifications for these files. It cannot be undone.
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
@@ -925,6 +1039,7 @@ export function ReviewPage() {
       padding: '22px 24px 22px', gap: 14, overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
     }}>
+      <OrphanBanner />
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Review</h1>

@@ -54,7 +54,7 @@ vad = [
 # (sentence-transformers) is the original backend, kept as fallback + parity
 # reference. NOT baked into the image — it pulls torch (~2GB).
 qe = [
-    "sentence-transformers>=2.2,<6.0",
+    "sentence-transformers>=2.2,<7.0",
 ]
 # #179: the no-torch QE backend (qe_onnx.py) — runs LaBSE's official ONNX
 # export via onnxruntime + numpy (both already in [vad]) + the light tokenizer/

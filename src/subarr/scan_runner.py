@@ -93,6 +93,7 @@ class ScanRunner:
         caps_provider=None,
         subgen_provider=None,
         error_recorder=None,
+        outcome_recorder=None,
     ):
         # subgen is resolved through a provider so onboarding live-reload
         # can swap the client on app.state without restarting the runner.
@@ -113,6 +114,10 @@ class ScanRunner:
         # /batch (transcribe a forced-only file anyway). In-memory, same lifetime
         # as _overrides — lost on restart, but so is the in-flight scan.
         self._ignore_forced: set[str] = set()
+        # [#458 follow-on] scans allowed to overrule subgen's skip heuristics
+        # entirely -- the image-only-subtitle class, which SKIP_IF_AUDIO_LANGUAGES
+        # otherwise refuses forever.
+        self._bypass_skip: set[str] = set()
         self._lock = asyncio.Lock()
         # Callable returning the cached SubgenCapabilities snapshot.
         # We don't probe per-scan — caps are stable per app boot.
@@ -123,6 +128,12 @@ class ScanRunner:
         # default; app.py wires it to ErrorStore.record. Must never raise
         # into the scan path (ErrorStore.record already swallows).
         self._error_recorder = error_recorder or (lambda cls: None)
+        # [#468] Per-path outcome hook, called as soon as /batch is classified.
+        # subgen answers "skipped" in milliseconds; without this the pending row
+        # waits out the 60s orphan sweep and holds a depth slot for 30s of it.
+        # No-op by default and must never raise into the scan path, same
+        # contract as _error_recorder above.
+        self._outcome_recorder = outcome_recorder or (lambda canonical_path, status, detail: None)
 
     @property
     def _subgen(self):
@@ -165,11 +176,14 @@ class ScanRunner:
         scan: Scan,
         audio_language_override: str | None = None,
         ignore_forced: bool = False,
+        bypass_skip: bool = False,
     ) -> None:
         if audio_language_override:
             self._overrides[scan.id] = audio_language_override
         if ignore_forced:
             self._ignore_forced.add(scan.id)
+        if bypass_skip:
+            self._bypass_skip.add(scan.id)
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
         task.add_done_callback(
@@ -177,6 +191,7 @@ class ScanRunner:
                 self._tasks.pop(sid, None),
                 self._overrides.pop(sid, None),
                 self._ignore_forced.discard(sid),
+                self._bypass_skip.discard(sid),
             )
         )
 
@@ -243,12 +258,20 @@ class ScanRunner:
                     reverse=scan.reverse,
                     audio_language_override=override,
                     ignore_forced=scan_id in self._ignore_forced,
+                    bypass_skip=scan_id in self._bypass_skip,
                 )
                 result.subgen_status_code = status_code
                 result.subgen_body = body
                 result.status, _batch_err = classify_batch_outcome(status_code, body)
                 if _batch_err:
                     result.error = _batch_err
+                # [#468] Hand the verdict straight to whoever is tracking this
+                # path. Swallowing is deliberate: a reporting hook must never
+                # cost a transcription.
+                try:
+                    self._outcome_recorder(path, result.status, _batch_err)
+                except Exception:  # noqa: BLE001
+                    log.debug("outcome_recorder raised for %s", path, exc_info=True)
             except SubgenUnavailable as e:
                 result.status = PATH_STATUS_ERROR
                 result.error = str(e)

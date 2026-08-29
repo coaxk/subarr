@@ -60,7 +60,7 @@ class CoverageItem:
     bazarr_episode_id: int | None = None
     missing_subtitles: list[str] = field(default_factory=list)
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
-    embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / None
+    embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / 'EN(image)' / None
     audio_langs: list[str] = field(default_factory=list)
     audio_lang_codes: list[str] | None = None  # #357: multilingual set (>=2 langs)
     suggest_bazarr_rescan: bool = False
@@ -149,6 +149,10 @@ class CoverageItem:
     # gap. When the cap is on, this stays False and the forced-only row is a
     # normal partial-coverage gap.
     forced_only_subgen_will_skip: bool = False
+    # [#458] English exists but ONLY as an image track (PGS/VobSub) AND the
+    # connected subgen will not transcribe it. Same shape as the field above:
+    # a distinct non-actionable state, not a hidden row.
+    image_only_subgen_will_skip: bool = False
     # #159: the default/first audio track isn't the show's original language but
     # a track that IS exists — transcribing the default double-translates a dub
     # (e.g. Russian show, German dub default, original Russian on track 2). The
@@ -213,6 +217,7 @@ class CoverageItem:
             "score_reasons": self.score_reasons,
             "verification_state": self.verification_state,
             "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
+            "image_only_subgen_will_skip": self.image_only_subgen_will_skip,
             "default_track_mismatch": self.default_track_mismatch,
             "mismatch_default_track_lang": self.mismatch_default_track_lang,
             "mismatch_native_track_lang": self.mismatch_native_track_lang,
@@ -1353,6 +1358,7 @@ def _score(
     airing_soon_eps: set[int] | None = None,
     transcoding_titles: set[str] | None = None,
     ignore_forced_subtitles: bool = False,
+    ignore_image_subtitles: bool = False,
 ) -> None:
     s = 0
     reasons: list[str] = []
@@ -1420,7 +1426,7 @@ def _score(
         label = "full English" if item.embedded_en == "EN" else "English SDH"
         reasons.append(f"embedded: {label} sub in file (Bazarr missed it)")
         item.suggest_bazarr_rescan = True
-    elif item.embedded_en in {"EN(forced)", "EN(commentary)"}:
+    elif item.embedded_en in {"EN(forced)", "EN(commentary)", "EN(image)"}:
         s -= 500
         reasons.append(f"embedded: {item.embedded_en} — partial coverage")
         # #79: forced-only EN is only an ACTIONABLE gap if the connected
@@ -1433,6 +1439,18 @@ def _score(
             reasons.append(
                 "subgen will skip this (forced-only EN) — "
                 "enable IGNORE_FORCED_SUBTITLES on subgen to transcribe it"
+            )
+        # [#458] Same trap as #79, different cause. subgen's
+        # has_internal_subtitle_in_language() matches on stream type +
+        # language tag and never looks at the CODEC, so a bitmap track
+        # tagged "eng" makes it skip the file. The gap is real -- a picture
+        # is not text -- but nothing subarr can send today will fill it, so
+        # say that plainly instead of dangling an un-fillable gap.
+        if item.embedded_en == "EN(image)" and not ignore_image_subtitles:
+            item.image_only_subgen_will_skip = True
+            reasons.append(
+                "subgen will skip this (English subs are image-based, PGS/VobSub)"
+                " — enable IGNORE_IMAGE_SUBTITLES on subgen to transcribe it"
             )
     item.score = s
     item.score_reasons = reasons
@@ -1572,6 +1590,10 @@ async def build_coverage(
     # marked forced_only_subgen_will_skip (distinct non-actionable state) rather
     # than presented as fillable gaps. caps on → they stay actionable gaps.
     ignore_forced = bool(getattr(subgen_caps, "ignore_forced_subtitles", False))
+    # [#458] Same gating for image-only EN, on subgen's RUNTIME
+    # IGNORE_IMAGE_SUBTITLES. Independent of the forced cap: they govern
+    # different defects, and subgen defaults this one OFF.
+    ignore_image = bool(getattr(subgen_caps, "ignore_image_subtitles", False))
 
     # ── Bazarr: fan out across ALL instances; each wanted item is tagged with
     #    its source instance id (_bazarr_instance) for routing (#161 Phase 2).
@@ -1833,6 +1855,7 @@ async def build_coverage(
                 just_imported_eps=sonarr_recent_ids,
                 airing_soon_eps=airing_soon_ids,
                 ignore_forced_subtitles=ignore_forced,
+                ignore_image_subtitles=ignore_image,
             )
             inst_ep_rows.append(item)
 
@@ -1862,6 +1885,7 @@ async def build_coverage(
                     sources=sources,
                     plex_hints=plex_audio_hints,
                     ignore_forced_subtitles=ignore_forced,
+                    ignore_image_subtitles=ignore_image,
                 )
             )
         ep_rows.extend(inst_ep_rows)
@@ -1925,6 +1949,7 @@ async def build_coverage(
                 transcoding_titles=activity["transcoding_titles"],
                 just_imported_movies=radarr_recent_ids,
                 ignore_forced_subtitles=ignore_forced,
+                ignore_image_subtitles=ignore_image,
             )
             inst_movie_rows.append(item)
 
@@ -1950,6 +1975,7 @@ async def build_coverage(
                     plex_hints=plex_audio_hints,
                     sources=sources,
                     ignore_forced_subtitles=ignore_forced,
+                    ignore_image_subtitles=ignore_image,
                 )
             )
         movie_rows.extend(inst_movie_rows)
@@ -2034,6 +2060,7 @@ async def _add_bazarr_blind_synthetic_rows(
     sources: dict,
     plex_hints: dict[str, str] | None = None,
     ignore_forced_subtitles: bool = False,
+    ignore_image_subtitles: bool = False,
 ) -> list[CoverageItem]:
     """Build synthetic CoverageItem rows for episodes Bazarr can't see —
     foreign-language series where the file metadata lies and Bazarr's
@@ -2231,6 +2258,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 just_imported_eps=sonarr_recent_ids,
                 airing_soon_eps=airing_soon_ids,
                 ignore_forced_subtitles=ignore_forced_subtitles,
+                ignore_image_subtitles=ignore_image_subtitles,
             )
             new_rows.append(item)
             seen_ep_ids.add(ep_id)
@@ -2266,6 +2294,7 @@ async def _add_radarr_blind_movie_rows(
     plex_hints: dict[str, str],
     sources: dict,
     ignore_forced_subtitles: bool,
+    ignore_image_subtitles: bool,
 ) -> list[CoverageItem]:
     """Surface Radarr movies missing English subtitle coverage.
 
@@ -2340,6 +2369,7 @@ async def _add_radarr_blind_movie_rows(
             transcoding_titles=activity["transcoding_titles"],
             just_imported_movies=radarr_recent_ids,
             ignore_forced_subtitles=ignore_forced_subtitles,
+            ignore_image_subtitles=ignore_image_subtitles,
         )
         new_rows.append(item)
         seen_files.add(file_canonical)

@@ -131,6 +131,8 @@ async def library(
                 row_kind = "forced"
             elif en_summary == "EN(commentary)":
                 row_kind = "commentary"
+            elif en_summary == "EN(image)":  # [#458] PGS/VobSub, not text
+                row_kind = "image"
             if row_kind != kind_filter:
                 continue
         out.append(

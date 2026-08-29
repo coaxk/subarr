@@ -67,6 +67,10 @@ class PendingJob:
     # so a forced-only file is transcribed instead of skipped ("transcribe a
     # full sub anyway"). Default False = normal skip behaviour.
     ignore_forced: bool = False
+    # [#458 follow-on] forward ?bypass_skip=true to subgen's /batch for THIS
+    # job, overruling every skip heuristic. For the image-only-subtitle class,
+    # which SKIP_IF_AUDIO_LANGUAGES otherwise refuses forever.
+    bypass_skip: bool = False
     # #368: owning movie's Radarr id, carried so completion_watcher can upload the
     # finished .srt straight to the owning Bazarr (the movie analogue of
     # series_id + sonarr_episode_id). None for episodes / path-only jobs.
@@ -88,6 +92,7 @@ class PendingJob:
             "series_id": self.series_id,
             "sonarr_episode_id": self.sonarr_episode_id,
             "ignore_forced": self.ignore_forced,
+            "bypass_skip": self.bypass_skip,
             "radarr_movie_id": self.radarr_movie_id,
         }
 
@@ -95,7 +100,7 @@ class PendingJob:
 _COLS = (
     "id, canonical_path, position, priority, status, "
     "audio_language_override, task, source, created_at, submitted_at, error, "
-    "series_id, sonarr_episode_id, ignore_forced, radarr_movie_id"
+    "series_id, sonarr_episode_id, ignore_forced, radarr_movie_id, bypass_skip"
 )
 
 # Statements built ONCE as constants. The only interpolation is the static
@@ -110,7 +115,12 @@ _SELECT = f"SELECT {_COLS} FROM pending_queue"  # nosec B608
 _Q_ACTIVE_BY_PATH = f"{_SELECT} WHERE canonical_path = ? AND status IN (?, ?) LIMIT 1"
 _Q_MAXPOS = "SELECT MAX(position) FROM pending_queue WHERE status = ? AND priority = ?"
 _Q_INSERT = (  # nosec B608
-    f"INSERT INTO pending_queue ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    # Placeholders are DERIVED from _COLS rather than written out. They were a
+    # hardcoded run of 15 "?", which silently went out of step with _COLS the
+    # moment a column was added (#458 follow-on added the 16th). Deriving them
+    # makes that class of drift impossible. Still no user input in the SQL:
+    # _COLS is a module constant and every value is bound as a parameter.
+    f"INSERT INTO pending_queue ({_COLS}) VALUES ({', '.join('?' * (_COLS.count(',') + 1))})"
 )
 _Q_GET = f"{_SELECT} WHERE id = ?"
 _Q_LIST_ALL = f"{_SELECT} ORDER BY priority DESC, position ASC, created_at ASC"
@@ -138,6 +148,7 @@ def _row(r: tuple) -> PendingJob:
         series_id=r[11],
         sonarr_episode_id=r[12],
         ignore_forced=bool(r[13]),
+        bypass_skip=bool(r[15]),
         radarr_movie_id=r[14],
     )
 
@@ -170,6 +181,7 @@ class PendingQueueStore:
         series_id: int | None = None,
         sonarr_episode_id: int | None = None,
         ignore_forced: bool = False,
+        bypass_skip: bool = False,
         radarr_movie_id: int | None = None,
     ) -> PendingJob:
         """Add a job, or return the existing ACTIVE one for this path (dedup —
@@ -210,6 +222,7 @@ class PendingQueueStore:
                 series_id=series_id,
                 sonarr_episode_id=sonarr_episode_id,
                 ignore_forced=ignore_forced,
+                bypass_skip=bypass_skip,
                 radarr_movie_id=radarr_movie_id,
             )
             self._conn.execute(
@@ -230,6 +243,7 @@ class PendingQueueStore:
                     job.sonarr_episode_id,
                     int(job.ignore_forced),
                     job.radarr_movie_id,
+                    int(job.bypass_skip),
                 ),
             )
             return job
@@ -302,6 +316,27 @@ class PendingQueueStore:
                 (job_id,),
             )
             return cur.rowcount > 0
+
+    def resolve_skipped(self, canonical_path: str) -> int:
+        """[#468] REMOVE SUBMITTED rows for a path subgen told us it skipped.
+
+        Same disposal as resolve_orphaned_submitted -- the scan has recorded the
+        outcome, so the pending row has done its job -- but driven by subgen's
+        explicit answer instead of by the 60s absence timeout. subgen reports
+        `skipped` in the POST /batch response within milliseconds; waiting out
+        ORPHAN_GRACE_S to infer the same thing is what left @AztecGuyGDL with
+        110 stale rows draining slowly.
+
+        Deliberately only SUBMITTED. A PENDING row for the same path has not
+        been sent to subgen yet, so this verdict says nothing about it, and
+        dropping it would silently discard work the user is still waiting on.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM pending_queue WHERE status = ? AND canonical_path = ?",
+                (STATUS_SUBMITTED, canonical_path),
+            )
+            return cur.rowcount or 0
 
     def resolve_orphaned_submitted(self, live_subgen_paths: set[str], *, older_than_s: float) -> int:
         """#336: REMOVE SUBMITTED jobs that subgen no longer reports and that were

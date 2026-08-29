@@ -121,6 +121,20 @@ class SubgenCapabilities:
     # subarr's coverage gates the forced-only-EN partial gap on it so users
     # only see an actionable gap the connected subgen will actually fill.
     ignore_forced_subtitles: bool = False
+    # v4.22 capability (#458): when True subgen treats an image-based
+    # (PGS/VobSub) target-language track as NOT coverage and transcribes the
+    # file. When False -- which is subgen's DEFAULT, unlike the forced knob --
+    # it still skips those files. Live on/off value, not merely "supported":
+    # coverage gates the image-only partial gap on it so an un-fillable gap is
+    # never presented as actionable.
+    ignore_image_subtitles: bool = False
+    # v4.23 capability (#458 follow-on): POST /batch accepts bypass_skip=true,
+    # which skips EVERY skip heuristic for that one request. Needed for the
+    # file class that has English audio AND only image-based English subs:
+    # SKIP_IF_AUDIO_LANGUAGES refuses it and no other knob reaches it without
+    # unskipping the whole library. Gate the UI action on this -- an older
+    # subgen drops the unknown param and re-skips, which reads as a dead button.
+    bypass_skip: bool = False
     # r9+ capability: POST /config runtime model/compute switching. Gate
     # post_config() calls on this — older images 404 the endpoint.
     runtime_config: bool = False
@@ -167,6 +181,8 @@ class SubgenCapabilities:
             "asr_vanilla_base": self.asr_vanilla_base,
             "asr_detected_language": self.asr_detected_language,
             "ignore_forced_subtitles": self.ignore_forced_subtitles,
+            "ignore_image_subtitles": self.ignore_image_subtitles,
+            "bypass_skip": self.bypass_skip,
             "runtime_config": self.runtime_config,
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
             "release_tag": self.release_tag,
@@ -193,6 +209,8 @@ class SubgenCapabilities:
             asr_vanilla_base=False,
             asr_detected_language=False,
             ignore_forced_subtitles=False,
+            ignore_image_subtitles=False,
+            bypass_skip=False,
             runtime_config=False,
             request_ignore_forced=False,
             subarr_subgen_patch_rev=None,
@@ -330,6 +348,8 @@ class SubgenClient:
         asr_vanilla_base = False
         asr_detected_language = False
         ignore_forced_subtitles = False
+        ignore_image_subtitles = False
+        bypass_skip = False
         runtime_config = False
         concurrent_transcriptions: int | None = None
         request_ignore_forced = False
@@ -365,6 +385,8 @@ class SubgenClient:
                             asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
                             ignore_forced_subtitles = bool(caps_block.get("ignore_forced_subtitles"))
+                            ignore_image_subtitles = bool(caps_block.get("ignore_image_subtitles"))
+                            bypass_skip = bool(caps_block.get("bypass_skip"))
                             runtime_config = bool(caps_block.get("runtime_config"))
                             request_ignore_forced = bool(caps_block.get("request_ignore_forced"))
                             _ct = caps_block.get("concurrent_transcriptions")
@@ -402,6 +424,8 @@ class SubgenClient:
             asr_vanilla_base=asr_vanilla_base,
             asr_detected_language=asr_detected_language,
             ignore_forced_subtitles=ignore_forced_subtitles,
+            ignore_image_subtitles=ignore_image_subtitles,
+            bypass_skip=bypass_skip,
             runtime_config=runtime_config,
             concurrent_transcriptions=concurrent_transcriptions,
             request_ignore_forced=request_ignore_forced,
@@ -503,6 +527,7 @@ class SubgenClient:
         kwargs: dict[str, Any] | None = None,
         task: str | None = None,
         ignore_forced: bool = False,
+        bypass_skip: bool = False,
     ) -> tuple[int, dict[str, Any]]:
         """POST /batch with subgen's V4.1 structured response.
 
@@ -559,6 +584,12 @@ class SubgenClient:
             # False so ≤v4.14 subgen keeps its global behaviour (and silently
             # drops the unknown param). Gate on capabilities.request_ignore_forced.
             params["ignore_forced"] = "true"
+        if bypass_skip:
+            # v4.23 (#458 follow-on): bypass EVERY skip heuristic for this batch.
+            # Omitted when False so the request stays byte-identical to what
+            # callers send today; a pre-v4.23 subgen drops the unknown param and
+            # re-skips the file. Gate on capabilities.bypass_skip.
+            params["bypass_skip"] = "true"
         try:
             r = await self._client.post("/batch", params=params)
         except httpx.HTTPError as e:
