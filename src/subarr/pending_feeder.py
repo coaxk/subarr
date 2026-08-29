@@ -158,6 +158,17 @@ class PendingQueueFeeder:
                 pass
         log.info("queue feeder stopped")
 
+    def release_inflight(self, canonical_path: str) -> None:
+        """[#468] Drop a path's depth reservation immediately.
+
+        This is the half that actually recovers the GPU. Removing the pending
+        row is not enough: a submitted job holds a slot until it surfaces in
+        subgen's queue or INFLIGHT_GRACE_S (30s) expires, and a SKIPPED file
+        never surfaces, so without this the feeder still cannot refill the slot
+        for the full grace window.
+        """
+        self._inflight.pop(canonical_to_subgen_batch(canonical_path), None)
+
     # ── one tick (public for tests) ─────────────────────────────────
 
     async def tick(self) -> int:

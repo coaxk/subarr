@@ -317,6 +317,27 @@ class PendingQueueStore:
             )
             return cur.rowcount > 0
 
+    def resolve_skipped(self, canonical_path: str) -> int:
+        """[#468] REMOVE SUBMITTED rows for a path subgen told us it skipped.
+
+        Same disposal as resolve_orphaned_submitted -- the scan has recorded the
+        outcome, so the pending row has done its job -- but driven by subgen's
+        explicit answer instead of by the 60s absence timeout. subgen reports
+        `skipped` in the POST /batch response within milliseconds; waiting out
+        ORPHAN_GRACE_S to infer the same thing is what left @AztecGuyGDL with
+        110 stale rows draining slowly.
+
+        Deliberately only SUBMITTED. A PENDING row for the same path has not
+        been sent to subgen yet, so this verdict says nothing about it, and
+        dropping it would silently discard work the user is still waiting on.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM pending_queue WHERE status = ? AND canonical_path = ?",
+                (STATUS_SUBMITTED, canonical_path),
+            )
+            return cur.rowcount or 0
+
     def resolve_orphaned_submitted(self, live_subgen_paths: set[str], *, older_than_s: float) -> int:
         """#336: REMOVE SUBMITTED jobs that subgen no longer reports and that were
         submitted longer ago than `older_than_s` (past the surface-in-/queue grace).
