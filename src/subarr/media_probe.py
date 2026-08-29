@@ -41,6 +41,46 @@ log = logging.getLogger(__name__)
 # 'eng'; some media tag 'en'. Both should match 'is this English?'.
 ENGLISH_TAGS = {"en", "eng"}
 
+# [#458] Bitmap subtitle codecs. A PGS/VobSub track is a sequence of PICTURES:
+# it cannot be read as text, searched, restyled, retimed, or fed to anything
+# downstream, so counting one as subtitle coverage silently skips a file that
+# genuinely needs a transcription.
+#
+# We DENY the image codecs rather than allow-list the text ones. The image set
+# is small and closed (four codecs, no new bitmap format in over a decade); the
+# text set has a long tail -- microdvd, subviewer, stl, jacosub, sami, mpl2 --
+# and every format missing from an allowlist recreates this exact bug for
+# whoever owns that file. Denying also fails in the SAFE direction: an
+# unrecognised codec is treated as text, which over-counts coverage visibly,
+# instead of silently queueing work for a file that already has subtitles.
+#
+# dvb_teletext is deliberately absent. Teletext IS text, and ffmpeg decodes it
+# to text, so it does not belong here.
+# BOTH SPELLINGS ARE CARRIED. ffprobe reports a stream's `codec_name`
+# ("hdmv_pgs_subtitle"); PyAV's `codec_context.name` reports the DECODER name
+# ("pgssub"). subarr populates SubtitleStream.codec from ffprobe today, but
+# subgen reads the same tracks through PyAV, and a set that knows only one
+# spelling silently matches nothing on the other. Measured 2026-08-28:
+#     hdmv_pgs_subtitle -> pgssub     dvd_subtitle -> dvdsub
+#     dvb_subtitle      -> dvbsub     xsub         -> xsub
+IMAGE_SUBTITLE_CODECS = frozenset(
+    {
+        "hdmv_pgs_subtitle",
+        "pgssub",  # Blu-ray PGS
+        "dvd_subtitle",
+        "dvdsub",  # DVD VobSub (the reported case)
+        "dvb_subtitle",
+        "dvbsub",  # DVB broadcast bitmap
+        "xsub",  # DivX/AVI bitmap (same name either way)
+    }
+)
+
+
+def is_image_subtitle_codec(codec: str | None) -> bool:
+    """True only for codecs we KNOW are bitmaps. Unknown or missing -> False."""
+    return (codec or "").strip().lower() in IMAGE_SUBTITLE_CODECS
+
+
 _SDH_PAT = re.compile(r"\b(SDH|HI|hearing[\s-]?impaired|CC|closed[\s-]?caption|deaf)\b", re.I)
 _FORCED_PAT = re.compile(r"\bforced\b", re.I)
 _COMMENTARY_PAT = re.compile(r"\bcommentary\b|\bdirector'?s?\b", re.I)
@@ -268,9 +308,17 @@ def has_usable_embedded_english(result: ProbeResult) -> bool:
 
     Forced subs (only translate non-English dialogue snippets) and
     director's commentary tracks remain non-usable — those genuinely
-    aren't full subtitles for the show."""
+    aren't full subtitles for the show.
+
+    [#458] Image-based tracks (PGS/VobSub) are excluded too: they are pictures,
+    not text, so they cannot serve any purpose subarr has for a subtitle."""
     for s in result.subtitles:
-        if (s.language or "").lower() in ENGLISH_TAGS and not s.forced and not s.commentary:
+        if (
+            (s.language or "").lower() in ENGLISH_TAGS
+            and not s.forced
+            and not s.commentary
+            and not is_image_subtitle_codec(s.codec)  # [#458] a bitmap is not readable text
+        ):
             return True
     return False
 
@@ -292,7 +340,7 @@ has_forced_or_sdh_english = has_forced_or_commentary_english
 
 def english_track_summary(result: ProbeResult) -> str | None:
     """Short label for the UI: 'EN' / 'EN(SDH)' / 'EN(forced)' /
-    'EN(commentary)' / None.
+    'EN(commentary)' / 'EN(image)' / None.
 
     'EN(SDH)' is preserved as metadata so the Library Probe tab can show
     which tracks include hearing-impaired markers, but coverage scoring
@@ -314,6 +362,13 @@ def english_track_summary(result: ProbeResult) -> str | None:
                 return "EN(forced)"
             if s.commentary:
                 return "EN(commentary)"
+            # [#458] An image track reaches here because it is not usable
+            # coverage. It still has to be NAMED: falling through to None would
+            # render a file that genuinely has an English VobSub track as
+            # "no English track", which is indistinguishable from a probe
+            # failure and sends the user looking for the wrong problem.
+            if is_image_subtitle_codec(s.codec):
+                return "EN(image)"
     return None
 
 

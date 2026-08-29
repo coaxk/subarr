@@ -55,6 +55,14 @@ _DEFAULT_HISTORY_WINDOW_S = 24 * 3600
 # Mirrors has_external_subtitle_in_language() in subgen_patched.py — a file
 # subgen skipped because ANY of these sits next to it (not only .srt) was
 # previously mislabeled 'unknown' (#89). Kept in sync with subgen's set.
+# [#458] This list DELIBERATELY still contains the image-sidecar extensions
+# .idx, .pgs and .sub. It is not a coverage judgement -- it is a MIRROR of
+# subgen's has_external_subtitle_in_language(), used only to explain why subgen
+# already skipped a file. Dropping them here would not stop a single skip; it
+# would just make subarr unable to explain one, pushing it into the noisy
+# 'unknown' bucket (#89). Whether a bitmap sidecar SHOULD cause a skip is a
+# subgen-side decision -- change it there first, then update this mirror in
+# lockstep. See media_probe.IMAGE_SUBTITLE_CODECS for the coverage judgement.
 _SUBTITLE_SIDECAR_EXTS = (
     ".srt",
     ".vtt",

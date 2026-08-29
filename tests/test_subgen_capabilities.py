@@ -226,3 +226,71 @@ async def test_detect_language_track_capability_parsed():
     await c.aclose()
     assert caps.detect_language_track is True
     assert caps.to_dict()["detect_language_track"] is True
+
+
+# --- #458: the image-subtitle capability must actually reach the dataclass ---
+# SubgenCapabilities is a FROZEN dataclass with explicit fields. Coverage reads
+# the flag with getattr(caps, "ignore_image_subtitles", False), which silently
+# returns the default forever if the field was never declared and parsed. That
+# is the same class of silent no-op as the PyAV codec naming: everything
+# compiles, every other test passes, and the gate simply never opens.
+
+
+def _caps_handler(caps_block: dict | None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/status":
+            return httpx.Response(200, json={"version": "Subgen 2026.08.1 (docker)"})
+        if request.url.path == "/queue":
+            body = {
+                "queued": [],
+                "processing": [],
+                "queued_count": 0,
+                "processing_count": 0,
+                "idle": True,
+                "version": "2026.08.1",
+            }
+            if caps_block is not None:
+                body["capabilities"] = caps_block
+            return httpx.Response(200, json=body)
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_image_subtitle_capability_is_read_from_queue():
+    c = _make_client(httpx.MockTransport(_caps_handler({"ignore_image_subtitles": True})))
+    caps = await c.probe_capabilities()
+    await c.aclose()
+    assert caps.ignore_image_subtitles is True
+    assert caps.to_dict()["ignore_image_subtitles"] is True
+
+
+@pytest.mark.asyncio
+async def test_image_subtitle_capability_off_when_subgen_says_off():
+    c = _make_client(httpx.MockTransport(_caps_handler({"ignore_image_subtitles": False})))
+    caps = await c.probe_capabilities()
+    await c.aclose()
+    assert caps.ignore_image_subtitles is False
+
+
+@pytest.mark.asyncio
+async def test_image_subtitle_capability_absent_defaults_off():
+    # Vanilla subgen and every pre-v4.22 build: no such key. Must default OFF,
+    # so subarr keeps treating image-only rows as un-fillable rather than
+    # queueing work that build will refuse.
+    c = _make_client(httpx.MockTransport(_caps_handler(None)))
+    caps = await c.probe_capabilities()
+    await c.aclose()
+    assert caps.ignore_image_subtitles is False
+
+
+@pytest.mark.asyncio
+async def test_image_and_forced_capabilities_are_independent():
+    c = _make_client(
+        httpx.MockTransport(_caps_handler({"ignore_forced_subtitles": True, "ignore_image_subtitles": False}))
+    )
+    caps = await c.probe_capabilities()
+    await c.aclose()
+    assert caps.ignore_forced_subtitles is True
+    assert caps.ignore_image_subtitles is False
