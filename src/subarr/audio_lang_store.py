@@ -223,6 +223,17 @@ class AudioLangStore:
             )
             return cur.rowcount > 0
 
+    def all_paths(self) -> list[str]:
+        """Every canonical_path we hold a verification for.
+
+        [#453] Required by orphan_prune. The prune core's docstring claimed
+        this store already had this shape; it did not, and the documented
+        usage would have raised AttributeError on first use.
+        """
+        with self._lock:
+            rows = self._conn.execute("SELECT canonical_path FROM audio_lang_verifications").fetchall()
+        return [r[0] for r in rows]
+
     def list_all(self) -> list[AudioLangVerification]:
         with self._lock:
             rows = self._conn.execute(
