@@ -64,6 +64,13 @@ class CoverageQueueRequest(BaseModel):
     # this when the connected subgen advertises capabilities.request_ignore_forced;
     # an older subgen silently drops the param (the file re-skips, no harm).
     ignore_forced: bool = False
+    # [#458 follow-on] 'transcribe this anyway' for a row whose only English
+    # subtitle is a BITMAP. Those files usually have English audio too, so
+    # subgen's SKIP_IF_AUDIO_LANGUAGES refuses them and ignore_forced does not
+    # help -- the sub is not forced, it is a picture. Forwards
+    # ?bypass_skip=true. Only sent when the connected subgen advertises
+    # capabilities.bypass_skip; older builds drop it and the file re-skips.
+    bypass_skip: bool = False
 
 
 @router.post("/coverage/queue", status_code=202)
@@ -167,6 +174,7 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         sonarr_episode_id=req.sonarr_episode_id,
         radarr_movie_id=req.radarr_movie_id,
         ignore_forced=req.ignore_forced,
+        bypass_skip=req.bypass_skip,
     )
 
     return {

@@ -504,6 +504,7 @@ async def lifespan(app_: FastAPI):
             scan,
             audio_language_override=job.audio_language_override,
             ignore_forced=job.ignore_forced,
+            bypass_skip=job.bypass_skip,
         )
         # Full provenance (series_id carried on the job) so completion_watcher
         # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).

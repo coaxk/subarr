@@ -113,6 +113,10 @@ class ScanRunner:
         # /batch (transcribe a forced-only file anyway). In-memory, same lifetime
         # as _overrides — lost on restart, but so is the in-flight scan.
         self._ignore_forced: set[str] = set()
+        # [#458 follow-on] scans allowed to overrule subgen's skip heuristics
+        # entirely -- the image-only-subtitle class, which SKIP_IF_AUDIO_LANGUAGES
+        # otherwise refuses forever.
+        self._bypass_skip: set[str] = set()
         self._lock = asyncio.Lock()
         # Callable returning the cached SubgenCapabilities snapshot.
         # We don't probe per-scan — caps are stable per app boot.
@@ -165,11 +169,14 @@ class ScanRunner:
         scan: Scan,
         audio_language_override: str | None = None,
         ignore_forced: bool = False,
+        bypass_skip: bool = False,
     ) -> None:
         if audio_language_override:
             self._overrides[scan.id] = audio_language_override
         if ignore_forced:
             self._ignore_forced.add(scan.id)
+        if bypass_skip:
+            self._bypass_skip.add(scan.id)
         task = asyncio.create_task(self._run(scan.id), name=f"scan-{scan.id}")
         self._tasks[scan.id] = task
         task.add_done_callback(
@@ -177,6 +184,7 @@ class ScanRunner:
                 self._tasks.pop(sid, None),
                 self._overrides.pop(sid, None),
                 self._ignore_forced.discard(sid),
+                self._bypass_skip.discard(sid),
             )
         )
 
@@ -243,6 +251,7 @@ class ScanRunner:
                     reverse=scan.reverse,
                     audio_language_override=override,
                     ignore_forced=scan_id in self._ignore_forced,
+                    bypass_skip=scan_id in self._bypass_skip,
                 )
                 result.subgen_status_code = status_code
                 result.subgen_body = body
