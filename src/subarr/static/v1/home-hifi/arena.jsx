@@ -26,13 +26,13 @@ const { useState, useEffect, useRef, useCallback } = React;
 // set — see #124.)
 const CURATED = [
   { id: 'default', label: 'default', kwargs: {},
-    why: 'Your current subgen settings, unchanged. The baseline every other recipe has to beat.' },
+    why: 'Vanilla baseline. On current subarr-subgen, global and per-language tuning overrides are skipped; {} means upstream/base settings with no recipe overrides. Older Subgen fallback uses its global settings.' },
   { id: 'clean-film', label: 'clean-film',
     kwargs: { vad_filter: false, condition_on_previous_text: true, beam_size: 5, best_of: 5, temperature: 0, compression_ratio_threshold: 2.4, no_speech_threshold: 0.6 },
     why: 'Tuned for clean studio audio (most films and TV). Keeps sentence context for natural phrasing and trusts the soundtrack — no aggressive silence gating that could clip soft dialogue.' },
   { id: 'noisy-robust', label: 'noisy-robust',
     kwargs: { vad_filter: true, condition_on_previous_text: false, beam_size: 5, best_of: 5, temperature: 0, compression_ratio_threshold: 2.2, no_speech_threshold: 0.7 },
-    why: 'For music, effects-heavy, or low-quality audio. Gates out non-speech, drops line-to-line carry-over (so noise can’t snowball), and tightens the gibberish guard.' },
+    why: 'For music, effects-heavy, or low-quality audio. Gates out non-speech, drops line-to-line carry-over (so noise can’t snowball), tightens compression rejection, and uses a more conservative no-speech cutoff.' },
   { id: 'high-accuracy', label: 'high-accuracy',
     kwargs: { vad_filter: false, condition_on_previous_text: true, beam_size: 8, best_of: 8, patience: 2, temperature: 0, compression_ratio_threshold: 2.4, no_speech_threshold: 0.6 },
     why: 'Widest search with full context. The slowest pass, but squeezes out the most accurate read when quality matters more than speed.' },
@@ -46,13 +46,69 @@ const CURATED = [
 // #142: pre-select all six so a sweep compares the full set by default (max data).
 const DEFAULT_SELECTED = ['default', 'clean-film', 'noisy-robust', 'high-accuracy', 'fast-draft', 'raw-unfiltered'];
 
-const KNOBS = [
-  ['beam_size', 'a number, 1 to 10', 'How hard it searches for the best wording. Higher is more accurate but slower. Around 5 is a sensible top end.'],
-  ['vad_filter', 'on or off', 'Skips silence and non-speech before transcribing. The single biggest win against invented lines over music or quiet.'],
-  ['temperature', '0.0 to 1.0', 'How much it guesses. 0 is steady and usually best; it only climbs higher as a fallback.'],
-  ['condition_on_previous_text', 'on or off', 'Whether each line is shaped by the one before it. Turn off when the output repeats or wanders.'],
-  ['compression_ratio_threshold', 'a number near 2.4', 'Catches gibberish and looping. Lower is stricter about throwing out junk.'],
-  ['initial_prompt', 'some text', 'Primes names, jargon and tone. Handy for niche or technical content.'],
+// This is deliberately documentation data, not a second allow-list. Custom
+// recipes accept the receiver's complete stable-ts/faster-whisper kwargs
+// surface. Values below distinguish shipped image overrides from upstream
+// defaults and practical experiments; they are not validation ranges.
+const SETTING_GROUPS = [
+  { label: 'Search & decoding', rows: [
+    ['beam_size', 'Default 5 · practical 1–8', 'Wider beam search considers more candidate transcriptions. Higher is slower and may help; gains diminish. 1 is a fast greedy-ish starting point.', 'Safe to tune'],
+    ['best_of', 'Upstream 5 · positive integer', 'Samples multiple candidates mainly when temperature is non-zero. It is not a replacement for beam_size; at temperature 0 it usually matters little.', 'Situational'],
+    ['patience', 'Default 1 · practical about 1–2', 'How far beam search may continue after completed hypotheses appear. Higher can be slower; the shipped Japanese override is 1.0.', 'Situational'],
+    ['length_penalty', 'Default 1 · explore about 0.5–2', 'CTranslate2 length bias. Above 1 favours longer hypotheses; below 1 favours shorter ones. The shipped Japanese override is 1.3.', 'Advanced'],
+    ['repetition_penalty', 'Upstream 1.0 disabled · shipped 1.05 · try 1.0–1.2', 'Discourages repeated tokens. Strong values can damage legitimate repeated speech, names, chants, or dialogue.', 'Safe to tune'],
+    ['no_repeat_ngram_size', 'Upstream 0 disabled · shipped 3 · try 0–5', 'Hard-blocks repeated token n-grams. Blunt: it can also destroy legitimate repeated phrases.', 'Situational'],
+    ['temperature', 'Scalar or fallback list · shipped [0, .2, .4, .6, .8, 1]', '0 is deterministic decoding. A list is a fallback ladder: later temperatures are tried only after guard thresholds reject an earlier result. A scalar 0 does not provide that ladder.', 'Safe to tune'],
+  ]},
+  { label: 'Hallucination & failure guards', rows: [
+    ['compression_ratio_threshold', 'Upstream/shipped 2.4 · explore about 2.0–2.6 or None', 'Rejects unusually compressible/repetitive output. Lower is stricter. Rejection can trigger the next temperature.', 'Safe to tune'],
+    ['log_prob_threshold', 'Upstream about -1.0 · shipped -0.8 · explore about -1.2 to -0.5', 'Average log probability below this is suspicious. Higher (less negative) is stricter and works with no_speech_threshold and temperature fallback.', 'Safe to tune'],
+    ['no_speech_threshold', '0–1 probability · upstream/shipped 0.6', 'This is no-speech confidence, not a volume knob. With a low log probability, sufficiently high no-speech probability can mark a segment silent; the two checks interact.', 'Safe to tune'],
+    ['hallucination_silence_threshold', 'Seconds or None · upstream None', 'With word timestamps, skips long silent periods around suspected hallucinations. Advanced: test on your audio before adopting a value.', 'Advanced'],
+  ]},
+  { label: 'Context & prompting', rows: [
+    ['condition_on_previous_text', 'Upstream true · shipped false', 'True carries continuity, names, and style across windows. False is less likely to let one bad window poison later windows or start a repetition loop, but can be less consistent.', 'Safe to tune'],
+    ['prompt_reset_on_temperature', 'Upstream about 0.5', 'When previous-text conditioning is enabled, a fallback temperature at or above this value resets accumulated prompt context.', 'Advanced'],
+    ['initial_prompt', 'Text or supported token sequence', 'Treat this as text immediately before the audio, not a ChatGPT instruction. Use a short, transcript-like style seed or relevant names/terms. Effective prompt history is roughly 224 tokens; shorter is safer.', 'Safe to tune'],
+    ['prefix', 'Text prefix', 'A prefix is attached as a transcription prefix; it differs from initial_prompt, which is prior context. Verify carefully before using across windows; prefix and hotwords have special interactions.', 'Advanced'],
+    ['hotwords', 'String of hint phrases', 'Vocabulary/proper-noun hints when you want spelling help rather than transcript-style context. Current Faster-Whisper notes hotwords have no effect when prefix is set.', 'Situational'],
+    ['suppress_blank', 'Upstream true', 'Suppresses blank output tokens. Normally leave alone.', 'Usually leave alone'],
+    ['suppress_tokens', 'Token IDs or None · upstream [-1]', 'Controls Whisper non-speech token suppression. Advanced and easy to misuse without knowing the model token IDs.', 'Usually leave alone'],
+  ]},
+  { label: 'Speech detection, timestamps & language', rows: [
+    ['vad_filter', 'Boolean · shipped true', 'Faster-Whisper Silero preprocessing removes detected non-speech before decoding. It is not Stable-TS vad masking. Higher impact: it can reduce hallucinations but clip soft speech.', 'Safe to tune'],
+    ['vad_parameters', 'Nested object · see below', 'Faster-Whisper Silero settings. The shipped image uses threshold .5, min speech 250 ms, min silence 500 ms, and speech pad 600 ms.', 'Advanced'],
+    ['without_timestamps', 'Upstream default false · Boolean', 'Disables timestamp tokens. Usually unsafe here: Stable-TS quality/timing features and word-level output depend on timestamps.', 'Usually leave alone'],
+    ['max_initial_timestamp', 'Upstream default 1.0 s', 'Caps the first timestamp. Advanced segmentation control; normally leave alone.', 'Advanced'],
+    ['word_timestamps', 'Upstream default false · Boolean', 'Requests word timestamps rather than only segment timestamps. Required by hallucination_silence_threshold and punctuation attachment controls.', 'Situational'],
+    ['prepend_punctuations / append_punctuations', 'Character strings', 'Controls which punctuation attaches to the neighbouring word timestamp. Only meaningful with word_timestamps.', 'Advanced'],
+    ['max_new_tokens', 'Upstream default None · positive integer or None', 'Caps tokens generated for a segment. Too low truncates speech; too high can permit runaway output.', 'Advanced'],
+    ['chunk_length', 'Upstream default None · seconds', 'Controls audio chunking. It can also affect VAD max-speech splitting. Usually leave alone in the Lab.', 'Usually leave alone'],
+    ['clip_timestamps', 'Upstream default "0" · timestamp ranges / supported string', 'Transcribes selected ranges. When explicit clip timestamps are supplied, Faster-Whisper ignores vad_filter for that request.', 'Advanced'],
+    ['multilingual', 'Upstream default false · Boolean', 'Controls whether Faster-Whisper performs language detection on each segment. It is not a generic mixed-language switch; prefer an explicit known source language in the Lab when you know it.', 'Advanced'],
+    ['language_detection_threshold / language_detection_segments', 'Upstream defaults 0.5 / 1', 'Auto-language detection controls. The Lab language selector is separate; selecting a known language is usually more reliable than asking for detection.', 'Advanced'],
+  ]},
+  { label: 'Advanced Stable-TS engine controls', rows: [
+    ['regroup', 'Stable-TS regroup DSL/bool', 'Current shipped subgen still uses Stable-TS. Regroup changes segmentation and is not the same as Whisper decoding; normally tune only with a concrete subtitle-shape goal.', 'Advanced'],
+    ['suppress_silence / suppress_word_ts / use_word_position', 'Stable-TS booleans', 'Stable-TS timestamp/silence adjustments. Current image defaults are true, true, true. These generally require word timestamps.', 'Advanced'],
+    ['q_levels / k_size', 'Stable-TS smoothing controls', 'Silence-mask smoothing. Current research recommends k_size 5 or 3; shipped defaults are q_levels 20 and k_size 5.', 'Advanced'],
+    ['vad / vad_threshold', 'Stable-TS VAD mask · threshold about .35', 'Different from Faster-Whisper vad_filter: this makes a silence mask for timestamp adjustment, not preprocessing. The shipped image baseline has vad false.', 'Advanced'],
+    ['min_word_dur / min_silence_dur / nonspeech_error', 'Stable-TS timing controls', 'Fine-grained timestamp and non-speech heuristics. Advanced; values are audio- and version-sensitive.', 'Advanced'],
+    ['only_voice_freq', 'Stable-TS boolean · shipped false', 'Band-limits analysis to voice frequencies. Can harm music or unusual voices; normally leave alone.', 'Usually leave alone'],
+    ['denoiser / denoiser_options', 'Stable-TS denoiser', 'Newer Stable-TS uses denoiser="demucs" plus denoiser_options; older releases expose demucs directly. Check the installed subgen image before copying either form.', 'Experimental'],
+    ['check_sorted', 'Stable-TS boolean', 'Checks timestamp ordering. Internal/advanced safety control; normally leave alone.', 'Usually leave alone'],
+  ]},
+];
+
+const VAD_ROWS = [
+  ['threshold', '0–1 probability · upstream .5', 'Higher makes speech harder to classify.'],
+  ['neg_threshold', 'None or 0–1 · derived about threshold - .15', 'Hysteresis for ending speech; None uses the implementation-derived value.'],
+  ['min_speech_duration_ms', 'Upstream may be 0 · shipped 250', 'Discards speech chunks shorter than this.'],
+  ['max_speech_duration_s', 'Upstream infinity', 'Splits very long speech regions.'],
+  ['min_silence_duration_ms', 'Upstream about 2000 (path-dependent) · shipped 500', 'Lower splits on shorter pauses; not the minimum speech duration.'],
+  ['speech_pad_ms', 'Upstream about 400 · shipped 600', 'Pads both sides of speech to protect clipped word edges.'],
+  ['min_silence_at_max_speech', 'Upstream about 98 ms', 'Advanced choice of silence when a max-duration split is needed.'],
+  ['use_max_poss_sil_at_max_speech', 'Upstream true', 'Advanced max-duration split behavior.'],
 ];
 
 // Spoken-language picklist (same vocabulary as the Review page). Value is the
@@ -294,16 +350,41 @@ function WhatThisIs() {
 function KnobReference() {
   return (
     <Collapsible label="What the settings mean" id="settings" defaultOpen>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {KNOBS.map(([name, type, desc]) => (
-          <div key={name} style={{ fontSize: 'var(--text-base)', lineHeight: 1.5 }}>
-            <code style={codeName}>{name}</code>
-            <span style={{ color: 'var(--fg-3)', marginLeft: 8, fontSize: 'var(--text-sm)' }}>{type}</span>
-            <div style={{ color: 'var(--fg-2)', marginTop: 2, fontSize: 'var(--text-sm)' }}>{desc}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55 }}>
+          These are the kwargs already accepted by the current subarr-subgen transcription path.
+          A custom recipe is a JSON object, so accepted does not mean every option is a good Lab knob.
+          “Practical” ranges are tuning advice, not hard validation. Current arena runs use a vanilla
+          base when the connected subgen advertises that capability: global and per-language compose
+          overrides are skipped, and the recipe wins at the request layer.
+        </div>
+        {SETTING_GROUPS.map(group => (
+          <div key={group.label}>
+            <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)', marginBottom: 8 }}>{group.label}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {group.rows.map(([name, type, desc, safety]) => (
+                <div key={name} style={{ fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>
+                  <div><code style={codeName}>{name}</code><span style={{ color: 'var(--fg-3)', marginLeft: 8 }}>{type}</span><span style={{ color: 'var(--violet-400)', marginLeft: 8, fontSize: 'var(--text-xs)' }}>{safety}</span></div>
+                  <div style={{ color: 'var(--fg-2)', marginTop: 2 }}>{desc}</div>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
-        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)' }}>
-          The curated recipes below are ready-made combinations of these — just choose the ones you want to compare.
+        <div>
+          <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)', marginBottom: 8 }}>vad_parameters</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+            {VAD_ROWS.map(([name, type, desc]) => <div key={name}><code style={codeName}>{name}</code><span style={{ color: 'var(--fg-3)', marginLeft: 8 }}>{type}</span><div>{desc}</div></div>)}
+          </div>
+        </div>
+        <div style={{ padding: 12, background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55 }}>
+          <b style={{ color: 'var(--fg-1)' }}>Initial prompts: context, not instructions.</b> Whisper treats this as text that came immediately before the audio. Good: “Are you ready?” “Yes, I'm ready. Let's go!” or Japanese 「大丈夫？」「うん、大丈夫。行こう！」. For names, use a short relevant transcript such as 「フリーレン、フェルンとシュタルクは？」「ヒンメルの話をしていたよ。」. For technical audio, “The discussion covers Kubernetes, PostgreSQL, FFmpeg, CUDA, CTranslate2, and Whisper.” Punctuation and exact spellings can bias output, but prompts are empirical and can backfire or cause omissions. Keep them short, accurate, relevant, and normally in the expected audio language; do not write “please add punctuation”. With conditioning disabled, their influence is mainly on the first window. Bracketed cues like [door closes] are experimental style bias, not sound-event recognition, and are not a recommended HI/SDH workflow.
+        </div>
+        <div style={{ padding: 12, background: 'var(--bg-2)', border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55 }}>
+          <b style={{ color: 'var(--fg-1)' }}>Tuning Lab controls are separate.</b> The spoken-language selector chooses a known source language or auto-detection; choose a known language when you can. CPS max/critical (20/25 by default) are judge readability thresholds: changing them changes scoring, not what Whisper hears. Recipes are collections of kwargs. The curated set is intentionally unchanged: <code>default</code> {'{}'}, <code>clean-film</code> (no VAD, previous context, beam/best-of 5), <code>noisy-robust</code> (VAD, context off, stricter compression/no-speech guards), <code>high-accuracy</code> (beam/best-of 8, patience 2), <code>fast-draft</code> (beam/best-of 1), and <code>raw-unfiltered</code> (diagnostic canary, not a recommendation).
+        </div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)', lineHeight: 1.5 }}>
+          The shipped image baseline currently includes no_speech_threshold 0.6, VAD threshold 0.5 / min speech 250 ms / min silence 500 ms / pad 600 ms, condition_on_previous_text false, beam 5, patience 1, length penalty 1, repetition penalty 1.05, no-repeat n-gram 3, compression 2.4, log probability -0.8, and the temperature ladder 0–1. Japanese overrides length_penalty to 1.3. Faster-Whisper VAD and Stable-TS vad are different systems. Stable-TS remains the current shipped path; its separate denoising/timestamp controls are advanced and version-sensitive.
         </div>
       </div>
     </Collapsible>
