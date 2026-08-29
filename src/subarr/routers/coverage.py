@@ -222,6 +222,11 @@ async def get_coverage(
     # anyway" on forced-only rows only when it'll actually work.
     _caps = getattr(request.app.state, "subgen_caps", None)
     req_ignore_forced = bool(getattr(_caps, "request_ignore_forced", False))
+    # [#458 follow-on] same idea for bypass_skip: the "transcribe anyway"
+    # action on image-only rows only works against subgen v4.23+. Without the
+    # gate the button would silently no-op, because an older subgen drops the
+    # unknown query param and re-skips the file.
+    req_bypass_skip = bool(getattr(_caps, "bypass_skip", False))
 
     if cov_cache is not None and not fresh:
         snap = cov_cache.get_cached()
@@ -246,6 +251,7 @@ async def get_coverage(
                 only_wanted_langs=only_wanted_langs,
                 settle_minutes=settle_minutes,
                 subgen_request_ignore_forced=req_ignore_forced,
+                subgen_bypass_skip=req_bypass_skip,
             )
 
     # ?fresh=true OR no cache available → synchronous rebuild and store.
@@ -275,6 +281,7 @@ async def get_coverage(
             hide_pending_download=hide_pending_download,
             settle_minutes=settle_minutes,
             subgen_request_ignore_forced=req_ignore_forced,
+            subgen_bypass_skip=req_bypass_skip,
         )
 
     # Fallback (e.g. boot before warm) — synchronous build, no cache write.
@@ -294,6 +301,7 @@ async def get_coverage(
         hide_english_audio=hide_english_audio,
         hide_pending_download=hide_pending_download,
         subgen_request_ignore_forced=req_ignore_forced,
+        subgen_bypass_skip=req_bypass_skip,
     )
 
 
@@ -308,6 +316,7 @@ def _apply_filters_and_pack(
     only_wanted_langs: str = "",
     settle_minutes: int = 0,
     subgen_request_ignore_forced: bool = False,
+    subgen_bypass_skip: bool = False,
 ) -> dict[str, Any]:
     """Shared post-processing: applies the hide_* filters over the items
     list and returns the response body. Mutates `body` (caller passes a
@@ -390,4 +399,6 @@ def _apply_filters_and_pack(
     # the forced-only-skip bucket on this — without it the action would silently
     # no-op (older subgen drops the param and re-skips the file).
     body["subgen_request_ignore_forced"] = subgen_request_ignore_forced
+    # [#458 follow-on] gates the bulk "transcribe image-only rows" action.
+    body["subgen_bypass_skip"] = subgen_bypass_skip
     return body

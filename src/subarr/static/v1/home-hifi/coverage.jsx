@@ -2236,7 +2236,16 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
 // Episodes route by sonarr_episode_id; movies/other by canonical_path. #368:
 // a movie row also carries radarr_movie_id (its bazarr_radarr_id) so the
 // finished .srt uploads straight to Bazarr instead of only nudging scan-disk.
-export function coverageQueueBody(row, { ignoreForced = false } = {}) {
+// [#458] Rows whose ONLY English subtitle is a bitmap. They are their own
+// bucket, not a flavour of forced: a forced sub is a partial transcript, an
+// image sub is not text at all, and they need different overrides (ignore_forced
+// vs bypass_skip). Exported for unit test.
+export function imageOnlyRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(r => r && r.embedded_en === 'EN(image)');
+}
+
+export function coverageQueueBody(row, { ignoreForced = false, bypassSkip = false } = {}) {
   const body = row._sonarr_episode_id
     ? { sonarr_episode_id: row._sonarr_episode_id }
     : { canonical_path: row._canonical_path };
@@ -2244,11 +2253,17 @@ export function coverageQueueBody(row, { ignoreForced = false } = {}) {
   // #317 Slice B: "transcribe a full sub anyway" — tell subgen to ignore the
   // forced-only embedded sub for THIS job (gated on subgen capability upstream).
   if (ignoreForced) body.ignore_forced = true;
+  // [#458] "transcribe anyway" for an image-only row. These files have English
+  // audio AND an English subtitle track, so SKIP_IF_AUDIO_LANGUAGES refuses
+  // them and ignore_forced does not apply (the sub is not forced, it is a
+  // picture). bypass_skip is the only thing that reaches them, which makes this
+  // load-bearing: omit it and the action silently does nothing.
+  if (bypassSkip) body.bypass_skip = true;
   return body;
 }
 
-export async function queueRow(row, { ignoreForced = false } = {}) {
-  const body = coverageQueueBody(row, { ignoreForced });
+export async function queueRow(row, { ignoreForced = false, bypassSkip = false } = {}) {
+  const body = coverageQueueBody(row, { ignoreForced, bypassSkip });
   const r = await fetch('/api/coverage/queue', {
     method: 'POST',
     credentials: 'same-origin',
@@ -2624,6 +2639,118 @@ function CoverageBucket({ kind, rows, onProbeNow, probing, canFillForced = false
 }
 
 
+
+// [#458] Bulk "transcribe anyway" for rows whose only English subtitle is a
+// bitmap (PGS/VobSub). A picture cannot be searched, restyled, retimed or read,
+// so these are real gaps -- but they are also English-audio files, which means
+// subgen's SKIP_IF_AUDIO_LANGUAGES refuses them and ignore_forced does not
+// apply. bypass_skip (v4.23+) is the only route to them.
+//
+// Acts on the rows CURRENTLY VISIBLE, not the whole library. A bulk action that
+// silently reached rows hidden by a filter would be the kind of surprise this
+// codebase keeps paying for elsewhere; if you filtered them out, you meant it.
+//
+// Never fires without an explicit second click: the first shows the list.
+function ImageOnlyBanner({ rows, canBypass, onQueued }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [done, setDone] = useState(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  const targets = useMemo(() => imageOnlyRows(rows), [rows]);
+  if (dismissed || !targets.length) return null;
+
+  const run = async () => {
+    setBusy(true);
+    let ok = 0;
+    const failed = [];
+    for (let i = 0; i < targets.length; i++) {
+      setProgress({ i: i + 1, n: targets.length });
+      try {
+        await queueRow(targets[i], { bypassSkip: true });
+        ok += 1;
+      } catch (e) {
+        // Keep going: one bad row must not strand the other 127. Collect and
+        // report instead of failing the batch.
+        failed.push(`${targets[i].title || targets[i]._canonical_path}: ${e.message || e}`);
+      }
+    }
+    setBusy(false);
+    setProgress(null);
+    setDone({ ok, failed });
+    if (onQueued) onQueued();
+  };
+
+  return (
+    <div style={{
+      border: '1px solid var(--border, #333)', borderRadius: 8,
+      padding: '10px 12px', fontSize: 'var(--text-sm)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          {done ? (
+            <span>
+              Queued {done.ok} of {done.ok + done.failed.length}.
+              {done.failed.length ? ` ${done.failed.length} failed.` : ''}
+            </span>
+          ) : (
+            <span>
+              <strong>{targets.length} shown row{targets.length === 1 ? '' : 's'} have
+              only image-based English subtitles</strong> (PGS/VobSub). Those are pictures,
+              not text, so they cannot be searched, restyled or retimed.
+              {canBypass ? '' : ' Connected subgen is too old to transcribe them (needs v4.23+).'}
+            </span>
+          )}
+        </div>
+        {!done && canBypass && (
+          <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
+            {open ? 'Hide' : 'Show these'}
+          </button>
+        )}
+        <button type="button" className="btn" onClick={() => setDismissed(true)} aria-label="Dismiss">
+          {'×'}
+        </button>
+      </div>
+
+      {open && !done && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            maxHeight: 180, overflowY: 'auto', fontSize: 'var(--text-xs)',
+            color: 'var(--fg-2)', border: '1px solid var(--border, #333)',
+            borderRadius: 6, padding: 8,
+          }}>
+            {targets.map((r, i) => (
+              <div key={r._canonical_path || i}>{r.title || r._canonical_path}</div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button type="button" className="btn" onClick={run} disabled={busy}>
+              {busy && progress
+                ? `Queueing ${progress.i}/${progress.n}...`
+                : `Queue ${targets.length} for transcription`}
+            </button>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              Each becomes a transcription job on your GPU. Existing image subs are left untouched.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {done && done.failed.length > 0 && (
+        <div style={{
+          maxHeight: 120, overflowY: 'auto', fontSize: 'var(--text-xs)',
+          color: 'var(--fg-2)', border: '1px solid var(--border, #333)',
+          borderRadius: 6, padding: 8,
+        }}>
+          {done.failed.map((m, i) => <div key={i}>{m}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CoveragePage() {
   const [groupBy, setGroupBy] = useState('tree');  // tree-by-show default — matches original subarr
   const [reasonFilter, setReasonFilter] = useState('all');
@@ -2895,6 +3022,11 @@ export function CoveragePage() {
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 0', gap: 14 }}>
+      <ImageOnlyBanner
+        rows={rows}
+        canBypass={!!data?.subgen_bypass_skip}
+        onQueued={refetch}
+      />
       {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
