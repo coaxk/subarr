@@ -299,6 +299,54 @@ async def db_orphans_prune(request: Request) -> dict:
     return await asyncio.to_thread(_sweep, request, dry_run=False)
 
 
+def _list_siblings(canonical_path: str) -> list[str]:
+    """Filenames sitting next to a canonical path, or [] if we cannot look.
+
+    Raising is left to the caller's discretion -- reconcile_pending treats any
+    error as "cannot tell" and KEEPS the row, which is the safe direction: when
+    the media mount is down every listing is empty, and an empty listing reads
+    as "no sidecar", so nothing is resolved.
+    """
+    from ..paths import canonical_to_fs
+
+    fs = canonical_to_fs(canonical_path)
+    return [p.name for p in fs.parent.iterdir() if p.is_file()]
+
+
+def _reconcile(request: Request, *, dry_run: bool) -> dict:
+    from ..pending_reconcile import reconcile_pending
+
+    store = getattr(request.app.state, "pending_queue", None)
+    if store is None:
+        return {"examined": 0, "satisfied": [], "resolved": 0, "skipped_bypass": 0}
+    rep = reconcile_pending(store, list_siblings=_list_siblings, dry_run=dry_run)
+    return {
+        "examined": rep.examined,
+        "satisfied": rep.satisfied,
+        "resolved": rep.resolved,
+        "skipped_bypass": rep.skipped_bypass,
+    }
+
+
+@router.get("/admin/db/pending-satisfied")
+async def db_pending_satisfied(request: Request) -> dict:
+    """[#469] DRY RUN: SUBMITTED rows that already have a full English sidecar.
+
+    Deletes nothing. Same reasoning as the orphan dry run: the apply step
+    removes queued work, so the user sees the list first.
+
+    Runs in a thread -- it lists a directory per row, and on a network share
+    that is slow enough to stall the event loop.
+    """
+    return await asyncio.to_thread(_reconcile, request, dry_run=True)
+
+
+@router.post("/admin/db/pending-satisfied/reconcile")
+async def db_pending_satisfied_apply(request: Request) -> dict:
+    """[#469] APPLY. Never touches a bypass_skip row or a PENDING one."""
+    return await asyncio.to_thread(_reconcile, request, dry_run=False)
+
+
 @router.post("/admin/db/backup")
 async def db_backup(request: Request) -> dict:
     """VACUUM INTO a timestamped clean copy of the database.
