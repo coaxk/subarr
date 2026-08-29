@@ -93,6 +93,7 @@ class ScanRunner:
         caps_provider=None,
         subgen_provider=None,
         error_recorder=None,
+        outcome_recorder=None,
     ):
         # subgen is resolved through a provider so onboarding live-reload
         # can swap the client on app.state without restarting the runner.
@@ -127,6 +128,12 @@ class ScanRunner:
         # default; app.py wires it to ErrorStore.record. Must never raise
         # into the scan path (ErrorStore.record already swallows).
         self._error_recorder = error_recorder or (lambda cls: None)
+        # [#468] Per-path outcome hook, called as soon as /batch is classified.
+        # subgen answers "skipped" in milliseconds; without this the pending row
+        # waits out the 60s orphan sweep and holds a depth slot for 30s of it.
+        # No-op by default and must never raise into the scan path, same
+        # contract as _error_recorder above.
+        self._outcome_recorder = outcome_recorder or (lambda canonical_path, status, detail: None)
 
     @property
     def _subgen(self):
@@ -258,6 +265,13 @@ class ScanRunner:
                 result.status, _batch_err = classify_batch_outcome(status_code, body)
                 if _batch_err:
                     result.error = _batch_err
+                # [#468] Hand the verdict straight to whoever is tracking this
+                # path. Swallowing is deliberate: a reporting hook must never
+                # cost a transcription.
+                try:
+                    self._outcome_recorder(path, result.status, _batch_err)
+                except Exception:  # noqa: BLE001
+                    log.debug("outcome_recorder raised for %s", path, exc_info=True)
             except SubgenUnavailable as e:
                 result.status = PATH_STATUS_ERROR
                 result.error = str(e)

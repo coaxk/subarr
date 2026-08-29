@@ -112,7 +112,7 @@ from .arena_service import ArenaService
 from .arena_store import ArenaStore
 from .aftercare_store import AfterCareStore
 from .existing_audit_service import ExistingAuditService
-from .scan_runner import ScanRunner
+from .scan_runner import PATH_STATUS_SKIPPED, ScanRunner
 from .scan_store import ScanStore
 from .crash_store import CrashStore
 from .data_persistence import check_data_persistence
@@ -395,6 +395,40 @@ async def lifespan(app_: FastAPI):
         ("forced-segment", None),
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
+
+    def _record_scan_outcome(app_ref, canonical_path: str, status: str, detail: str) -> None:
+        """[#468] Act on subgen's verdict for one path as soon as it arrives.
+
+        Only SKIPPED is actionable here. OK and EMPTY are already handled by the
+        existing completion and orphan paths, and ERROR must stay visible rather
+        than being quietly dropped.
+
+        Both halves matter. Removing the row alone leaves the depth slot
+        reserved for the full INFLIGHT_GRACE_S, which is the part that actually
+        idles the GPU.
+
+        Note this deliberately acts on subgen's ANSWER, never on a locally
+        predicted one. A bypass_skip job (#458) is submitted on purpose against
+        subgen's own judgement; when subgen accepts it the status is OK, so it
+        is untouched here. A local "looks already satisfied, drop it" check
+        would have deleted exactly those jobs.
+        """
+        if status != PATH_STATUS_SKIPPED:
+            return
+        try:
+            store = getattr(app_ref.state, "pending_queue", None)
+            if store is not None and store.resolve_skipped(canonical_path):
+                log.info(
+                    "pending: resolved %s immediately (subgen skipped: %s)",
+                    canonical_path,
+                    detail or "no reason given",
+                )
+            feeder = getattr(app_ref.state, "queue_feeder", None)
+            if feeder is not None:
+                feeder.release_inflight(canonical_path)
+        except Exception:  # noqa: BLE001 — must never cost a transcription
+            log.debug("outcome recorder failed for %s", canonical_path, exc_info=True)
+
     app_.state.runner = ScanRunner(
         store=app_.state.scans,
         caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
@@ -403,6 +437,13 @@ async def lifespan(app_: FastAPI):
         subgen_provider=lambda: app_.state.subgen,
         # Best-effort anonymous error-class recording for telemetry.
         error_recorder=lambda cls: app_.state.errors.record(cls),
+        # [#468] subgen answers "skipped" in the /batch response, milliseconds
+        # after submission. Without this the pending row waits out the 60s
+        # orphan sweep and holds a depth slot for 30s of it, so a backlog of
+        # already-satisfied files drains one slot at a time with the GPU idle.
+        outcome_recorder=lambda canonical_path, status, detail: _record_scan_outcome(
+            app_, canonical_path, status, detail
+        ),
     )
     # #131 tuning-lab arena. Sweeps persist (SQLite) so history survives a
     # restart and feeds the federated tournament (#124). Reconcile any run that
