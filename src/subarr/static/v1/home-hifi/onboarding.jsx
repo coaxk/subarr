@@ -207,9 +207,49 @@ export function TestResult({ result }) {
 // ─── Step components ────────────────────────────────────────────
 
 
-function StepWelcome({ onAutoDetect, detectedCount, autoDetectError }) {
+// [#473] /data is not persistent: everything configured in this wizard, plus
+// every verification and queue row afterwards, is discarded on restart.
+//
+// The detection already existed and already lit the Health page and header
+// pill, yet 36% of installs that report the field still run ephemeral /data.
+// Those surfaces are read AFTER setup, when the cost of acting is high. Here it
+// is a one-line compose change before any work has been invested.
+//
+// Deliberately not a blocker. Some people genuinely want a throwaway container,
+// and a wizard that refuses to proceed would be wrong for them. It is loud, it
+// is specific about the consequence, and it stays out of the way otherwise.
+function PersistenceWarning({ persistent }) {
+  // null/undefined = could not tell, which is normal outside a container.
+  // Only false is actionable; treating unknown as broken would warn every
+  // bare-metal user wrongly and teach everyone to ignore it.
+  if (persistent !== false) return null;
+  return (
+    <div style={{
+      border: '1px solid var(--warn, #d98324)', borderRadius: 8,
+      padding: '12px 14px', maxWidth: 540,
+      display: 'flex', flexDirection: 'column', gap: 6,
+    }}>
+      <strong style={{ color: 'var(--warn, #d98324)' }}>
+        Your /data folder is not persistent
+      </strong>
+      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-1)', lineHeight: 1.5 }}>
+        subarr is writing to the container's temporary layer, so everything you set up
+        here, and every subtitle decision you make afterwards, is erased the next time
+        this container is recreated.
+      </span>
+      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+        Fix it now by mounting a volume at <code>/data</code>, for example{' '}
+        <code>-v ./subarr-data:/data</code>, then restart and re-run this wizard.
+        It takes a few seconds now and cannot be recovered later.
+      </span>
+    </div>
+  );
+}
+
+function StepWelcome({ onAutoDetect, detectedCount, autoDetectError, dataPersistent }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <PersistenceWarning persistent={dataPersistent} />
       <h1 className="display" style={{ margin: 0, fontSize: 'var(--text-display-xl)', fontWeight: 600, letterSpacing: '-0.01em' }}>
         Welcome to subarr
       </h1>
@@ -974,7 +1014,7 @@ export function OnboardingPage() {
   if (step.id === 'paths' && !state.progress.media_root) canContinue = false;
 
   const renderStep = () => {
-    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} autoDetectError={autoDetectError} />;
+    if (step.id === 'welcome') return <StepWelcome onAutoDetect={onAutoDetect} detectedCount={autoDetected} autoDetectError={autoDetectError} dataPersistent={state.data_persistent} />;
     if (step.id === 'paths')   return <StepPaths progress={state.progress} setField={setField} probeResult={probeResult} onProbe={onProbe} />;
     if (step.id === 'subgen-setup') {
       return (

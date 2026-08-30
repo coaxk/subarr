@@ -760,7 +760,15 @@ async def lifespan(app_: FastAPI):
             fs = _c2fs(canonical)
             if fs.exists():
                 size = fs.stat().st_size
-                has_sidecar = fs.with_name(fs.stem + ".forced.en.srt").exists()
+                # [#475] Accept either order. This used to hardcode
+                # ".forced.en.srt", so a user who renamed to the Bazarr-visible
+                # form had this gate report "no forced sub" and subarr would
+                # regenerate one beside it.
+                from .forced_segment import is_forced_sidecar_for
+
+                has_sidecar = any(
+                    f.is_file() and is_forced_sidecar_for(f.name, fs.stem, "en") for f in fs.parent.iterdir()
+                )
         except (_PORE, OSError):
             pass
         lang_class = "single"

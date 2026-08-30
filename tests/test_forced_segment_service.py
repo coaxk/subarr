@@ -111,7 +111,7 @@ async def test_generates_forced_sidecar_for_a_foreign_scene(gen):
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "scanned" and result["n_spans"] == 1
-    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
+    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt")
     assert sidecar.exists()
     body = sidecar.read_text(encoding="utf-8")
     # TWO separate cues, each offset to the span absolute start (60s).
@@ -143,7 +143,7 @@ async def test_long_span_emits_multiple_offset_cues(gen):
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "scanned" and result["n_spans"] == 1
-    body = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").read_text(encoding="utf-8")
+    body = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt").read_text(encoding="utf-8")
     assert body.count("-->") == 3  # three separate cues, NOT one fused span cue
     assert "00:05:00,000 --> 00:05:04,000" in body and "Line A" in body  # 0s + 300s
     assert "00:05:10,000 --> 00:05:14,000" in body and "Line B" in body  # 10s + 300s
@@ -158,7 +158,7 @@ async def test_no_foreign_scene_writes_nothing_and_records_none(gen):
     g, store = gen(utterances=utts, lid_map={(0.0, 60.0): ("en", 0.95)}, translate_map={})
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "none" and result["n_spans"] == 0
-    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").exists()
+    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt").exists()
 
 
 @pytest.mark.asyncio
@@ -173,14 +173,14 @@ async def test_mostly_foreign_bails_without_writing(gen):
     )
     result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "bailed"
-    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").exists()
+    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt").exists()
 
 
 @pytest.mark.asyncio
 async def test_never_clobbers_an_existing_forced_sidecar(gen):
     from subarr.paths import canonical_to_fs
 
-    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
+    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt")
     sidecar.write_text("PRE-EXISTING", encoding="utf-8")
     g, store = gen(
         utterances=[(0.0, 60.0), (60.0, 63.0)],
@@ -240,12 +240,12 @@ async def test_cache_hit_skips_gate(gen):
 
 @pytest.mark.asyncio
 async def test_disk_level_no_clobber_when_gate_ok(gen):
-    """Even when the gate passes, a .forced.en.srt already on disk is never
+    """Even when the gate passes, a forced sidecar already on disk is never
     overwritten (defence-in-depth over the gate's has_forced_sidecar): skip +
     record a distinct 'exists' status, original bytes intact."""
     from subarr.paths import canonical_to_fs
 
-    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
+    sidecar = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt")
     sidecar.write_text("HUMAN-EDITED", encoding="utf-8")
     g, store = gen(
         utterances=[(0.0, 60.0), (60.0, 63.0)],
@@ -279,7 +279,7 @@ async def test_vad_unavailable_is_recorded_and_logged_not_silent(gen, monkeypatc
     with caplog.at_level(logging.WARNING, logger="subarr.forced_segment_service"):
         result = await g.process("TV/Show/ep.mkv")
     assert result["status"] == "vad-unavailable"
-    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt").exists()
+    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt").exists()
     assert any("VAD unavailable" in r.getMessage() for r in caplog.records)
     # Recorded (visible in summary), but NOT a cache hit — a transient verdict
     # stays re-scannable so a later walk retries once the VAD model is pulled.
@@ -384,3 +384,33 @@ async def test_generator_uses_local_lid_when_present(gen):
     assert calls["local"] == 1  # local backend was used
     assert lid_calls["n"] == 0  # per-utterance subgen lid_fn was NOT called
     assert result["status"] == "none"  # all-English classification -> no forced spans
+
+
+@pytest.mark.asyncio
+async def test_LEGACY_named_sidecar_still_blocks_regeneration(gen):
+    """[#475] The migration-safety property.
+
+    Installs that ran #364 before the naming fix have `.forced.en.srt` on disk.
+    subarr now WRITES `.en.forced.srt`, so if the no-clobber check only looked
+    for the new name it would happily generate a second sidecar beside the
+    legacy one -- handing the user exactly the mixed-naming mess that #475 was
+    opened to escape, and doing it silently.
+
+    Write one form, read either.
+    """
+    from subarr.paths import canonical_to_fs
+
+    legacy = canonical_to_fs("TV/Show/ep.mkv").with_name("ep.forced.en.srt")
+    legacy.write_text("LEGACY-NAMED", encoding="utf-8")
+    g, store = gen(
+        utterances=[(0.0, 60.0), (60.0, 63.0)],
+        lid_map={(0.0, 60.0): ("en", 0.95), (60.0, 63.0): ("fr", 0.9)},
+        translate_map={(60.0, 63.0): ("hi", None)},
+        gate=(True, "ok"),
+    )
+    result = await g.process("TV/Show/ep.mkv")
+
+    assert result["status"] == "skipped" and result["reason"] == "existing_forced"
+    assert legacy.read_text(encoding="utf-8") == "LEGACY-NAMED"
+    # and crucially: no second sidecar in the new convention beside it
+    assert not canonical_to_fs("TV/Show/ep.mkv").with_name("ep.en.forced.srt").exists()

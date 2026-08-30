@@ -91,7 +91,20 @@ def get_state(request: Request) -> dict[str, Any]:
     from ..onboarding import apply_prefill
 
     state = request.app.state.onboarding.get()
-    return apply_prefill(state.to_dict(), settings)
+    body = apply_prefill(state.to_dict(), settings)
+    # [#473] Surface non-persistent /data IN the wizard. The detection already exists
+    # (data_persistence.py, #196/#202) and already lights the Health page and
+    # the header pill, but 36% of reporting installs still run ephemeral /data,
+    # so those surfaces are not reaching people. Onboarding is the one moment
+    # the warning is cheap to act on -- afterwards the user has already invested
+    # the setup they are about to lose.
+    #
+    # None means "could not tell", which is the normal case outside a container.
+    # It must stay None rather than collapsing to False: warning every
+    # bare-metal user that their data is about to vanish would be wrong most of
+    # the time, and people would learn to dismiss it.
+    body["data_persistent"] = getattr(request.app.state, "data_persistent", None)
+    return body
 
 
 @router.put("/onboarding/state")
