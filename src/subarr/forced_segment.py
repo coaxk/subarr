@@ -191,12 +191,59 @@ def expand_window_verdicts(
     return [(utterances[k], flag_by_idx.get(k, False)) for k in range(len(utterances))]
 
 
+_FORCED_TOKEN = "forced"
+
+
+def forced_sidecar_name(stem: str, lang: str) -> str:
+    """[#475] The filename subarr WRITES for a forced sidecar.
+
+    `<stem>.<lang>.forced.srt`. The language code sits immediately before
+    `forced` because that is the only order Bazarr parses -- verified against a
+    live Bazarr 1.6.0, matching Bazarr's own issue #1516. Plex accepts either
+    order, so this form satisfies both consumers.
+    """
+    return f"{stem}.{lang}.{_FORCED_TOKEN}.srt"
+
+
+def is_forced_sidecar_for(filename: str, stem: str, lang: str) -> bool:
+    """[#475] Does `filename` look like a forced sidecar for `stem` in `lang`?
+
+    Deliberately LIBERAL about order, unlike the writer. Installs that ran #364
+    before this fix have `.forced.<lang>.srt` on disk, and if the no-clobber
+    gate stopped recognising those it would write a second sidecar in the new
+    convention beside the old one -- producing exactly the mixed naming #475
+    was opened to escape.
+
+    Write one form, read either.
+    """
+    name = filename.rsplit("/", 1)[-1]
+    if not name.lower().endswith(".srt"):
+        return False
+    base = name[: -len(".srt")]
+    if not base.startswith(stem):
+        return False
+    parts = [p.lower() for p in base[len(stem) :].split(".") if p]
+    if _FORCED_TOKEN not in parts:
+        return False
+    # Accept 2- and 3-letter codes: subgen emits either depending on
+    # SUBTITLE_LANGUAGE_NAMING_TYPE (ISO_639_1 vs ISO_639_2_B).
+    want = {lang.lower()}
+    if lang.lower() == "en":
+        want.add("eng")
+    return any(p in want for p in parts)
+
+
 def build_forced_srt(cues: list[tuple[int, int, str]]) -> str:
     """(start_ms, end_ms, text) cues -> a forced SRT string, 1..N re-indexed,
     absolute-timed. Reuses the shared Cue + render_srt so the wire format matches
     every other subarr-emitted .srt. The `.forced` marker lives in the FILENAME
-    (<basename>.forced.en.srt), which Bazarr/Plex recognise — cue content is
-    plain. Blank/whitespace lines are stripped so an empty cue never renders."""
+    (<basename>.<lang>.forced.srt) — cue content is plain.
+
+    [#475] That order is load-bearing and was previously wrong. This docstring
+    claimed `.forced.en.srt` is "which Bazarr/Plex recognise". Measured against
+    a live Bazarr 1.6.0 it is not: Bazarr sees `.en.forced.srt` and flags it
+    forced, and does NOT see `.forced.en.srt` at all. Plex accepts either.
+    Bazarr's own issue #1516 states the same expected form. Blank/whitespace lines are stripped so an empty cue never renders."""
     from .subtitle_readability import Cue
     from .subtitle_retime import render_srt
 

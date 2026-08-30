@@ -21,6 +21,8 @@ from typing import Awaitable, Callable
 
 from .arena import parse_robust_detect
 from .forced_segment import (
+    forced_sidecar_name,
+    is_forced_sidecar_for,
     ForcedSegmentParams,
     Span,
     _is_english,
@@ -201,8 +203,16 @@ class ForcedSegmentGenerator:
 
         # No-clobber (defence in depth over the gate): a forced sidecar already on
         # disk is never overwritten — skip + record so it is not a silent no-op.
-        sidecar = fs_path.with_name(fs_path.stem + ".forced.en.srt")
-        if sidecar.exists():
+        # [#475] Write the Bazarr-visible order, but check for EITHER, so an
+        # install that ran #364 before the fix does not get a second sidecar
+        # beside its legacy one.
+        sidecar = fs_path.with_name(forced_sidecar_name(fs_path.stem, "en"))
+        existing = [
+            f
+            for f in fs_path.parent.iterdir()
+            if f.is_file() and is_forced_sidecar_for(f.name, fs_path.stem, "en")
+        ]
+        if existing:
             self._store.upsert(
                 canonical_path=canonical_path, mtime=mtime, size=size, status="exists", n_spans=0, total_ms=0
             )
