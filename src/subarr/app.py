@@ -393,6 +393,22 @@ async def lifespan(app_: FastAPI):
         # #364: opt-in deep-scan walker. expected_interval_s=None (event-driven,
         # never "stale") — sits on the unified Health roster like audio-audit.
         ("forced-segment", None),
+        # [#157] These five recorded health but were never seeded, so they only
+        # appeared on the Health page AFTER their first success. A loop that
+        # dies during startup, or never starts, therefore had no row at all —
+        # a more silent failure than the #79 case this issue exists to prevent,
+        # because #79 at least logged every cycle.
+        #
+        # telemetry is the one that matters: a real 24h loop. Its cadence is
+        # given so the staleness branch works.
+        ("telemetry", 86400),
+        # The rest are one-shot startup checks. expected_interval_s=None so the
+        # staleness branch never fires (same treatment as audio-audit): they
+        # show "never run yet" if they never ran, with no false stale alarm.
+        ("data-persistence", None),
+        ("data-network-fs", None),
+        ("db-integrity", None),
+        ("single-process", None),
     ):
         app_.state.task_health.register(_tname, expected_interval_s=_tiv)
 
