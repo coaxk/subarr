@@ -49,6 +49,10 @@ Kept here because 2.0 is the only release with breaking changes. Skip it if you 
 
 ## Five-minute install
 
+> **Copy [`docker-compose.yml`](./docker-compose.yml) from this repo** rather than retyping the
+> snippet below. Hand-copying is how the `/config` vs `/data` mistake in the v1.0.0 and v1.1.0
+> docs reached so many installs ([#473](https://github.com/coaxk/subarr/issues/473)).
+
 ```yaml
 # compose.yaml
 services:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -120,6 +121,63 @@ def data_dir_is_ephemeral(db_path: Path) -> bool | None:
         return None
 
 
+@dataclass(frozen=True)
+class LegacyConfigMount:
+    """[#473] The install followed our own v1.0.0/v1.1.0 docs and lost its data."""
+
+    legacy_db_path: Path
+    message: str
+
+
+def diagnose_legacy_config_mount(
+    *,
+    db_path: Path,
+    data_is_ephemeral: bool | None,
+    config_dir: Path = Path("/config"),
+) -> LegacyConfigMount | None:
+    """Detect the specific broken shape our v1.0.0 and v1.1.0 README produced.
+
+    That example mounted `./subarr/config:/config` and set no SUBARR_DB_PATH,
+    while the default has always been `/data/subarr.db`. So the volume the user
+    was told to mount is not the one subarr keeps its database in, `/data` sits
+    on the container's ephemeral layer, and every recreate wipes everything.
+
+    These people did not misconfigure anything -- they followed the docs. The
+    generic "mount a volume at /data" warning reads as wrong to them, because
+    they DID mount a volume. This names the actual mismatch instead.
+
+    Returns None unless all three hold: /data is definitely ephemeral, /config
+    exists, and a database is actually sitting in it. Anything less and the
+    generic warning is the honest one.
+
+    ⚠️ Deliberately does NOT advise copying the database into /data. If /data
+    is the ephemeral layer, a copy there is erased on the next recreate: it
+    would look like a migration and fix nothing. The data is already in the
+    persistent place; what is wrong is where subarr is looking.
+    """
+    if data_is_ephemeral is not True:
+        return None  # None (cannot tell) must never be read as broken
+    try:
+        legacy = Path(config_dir) / "subarr.db"
+        if not legacy.is_file():
+            return None
+    except OSError:
+        return None
+    return LegacyConfigMount(
+        legacy_db_path=legacy,
+        message=(
+            f"Your database is at {legacy}, but subarr is reading {db_path}, "
+            f"and /data is not a persistent volume so it is wiped on every "
+            f"recreate. This is the setup our v1.0.0 and v1.1.0 README "
+            f"documented -- it mounted /config while the database default has "
+            f"always been /data/subarr.db. Your data is safe where it is. "
+            f"Fix it with one line: set SUBARR_DB_PATH={legacy} in your "
+            f"environment, or add a persistent volume at /data and point "
+            f"SUBARR_DB_PATH at it."
+        ),
+    )
+
+
 def check_network_fs(db_path: Path, health) -> str | None:
     """Surface a network-FS `/data` on the Health page (not just a log line):
     SQLite over NFS/SMB is a corruption vector that sporadically loses history +
@@ -163,19 +221,31 @@ def check_data_persistence(db_path: Path, health) -> bool | None:
         if ephemeral:
             from .db_integrity import DatabaseCorruptionError  # reuse a loud error type
 
+            # [#473] If this is the shape our own v1.0.0/v1.1.0 docs produced,
+            # say THAT instead. Those users mounted a volume exactly as told, so
+            # "mount a volume at /data" reads as wrong and gets dismissed -- and
+            # their data is recoverable, which the generic message never says.
+            legacy = diagnose_legacy_config_mount(db_path=db_path, data_is_ephemeral=True)
             err = DatabaseCorruptionError(
-                "/data is NOT a persistent volume — your subtitle verifications, "
-                "language intents, and history will be LOST on the next container "
-                "recreate. Mount a named volume or host path at /data. See the "
-                "README 'Backing up your data' section."
+                legacy.message
+                if legacy
+                else (
+                    "/data is NOT a persistent volume — your subtitle verifications, "
+                    "language intents, and history will be LOST on the next container "
+                    "recreate. Mount a named volume or host path at /data. See the "
+                    "README 'Backing up your data' section."
+                )
             )
             health.record_failure(TASK_NAME, err, expected_interval_s=None)
-            log.error(
-                "DATA PERSISTENCE WARNING: /data appears to be the container's "
-                "ephemeral layer, not a mounted volume. Everything in /data "
-                "(verifications, intents, provenance) will be lost on recreate. "
-                "Add a volume for /data."
-            )
+            if legacy:
+                log.error("DATA PERSISTENCE WARNING: %s", legacy.message)
+            else:
+                log.error(
+                    "DATA PERSISTENCE WARNING: /data appears to be the container's "
+                    "ephemeral layer, not a mounted volume. Everything in /data "
+                    "(verifications, intents, provenance) will be lost on recreate. "
+                    "Add a volume for /data."
+                )
         else:
             health.record_success(TASK_NAME, expected_interval_s=None)
     except Exception:

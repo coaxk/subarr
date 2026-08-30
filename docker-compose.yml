@@ -1,0 +1,74 @@
+# subarr — canonical compose file.
+#
+# Copy this file rather than retyping it. Until now the only setup example
+# lived in the README, and hand-copying is how a documentation error becomes
+# thousands of broken installs: the v1.0.0 and v1.1.0 README mounted /config
+# while subarr's database default has always been /data/subarr.db, so every
+# install that followed it silently lost all its data on each recreate (#473).
+#
+#   docker compose up -d
+#
+# Then open http://localhost:9922 and the setup wizard takes it from there.
+
+services:
+  subarr:
+    image: ghcr.io/coaxk/subarr:latest
+    container_name: subarr
+    restart: unless-stopped
+
+    ports:
+      - "9922:9922"
+
+    environment:
+      # Match the uid/gid that owns BOTH the data volume below and your media
+      # library. subarr writes .srt sidecars into the media tree, so a mismatch
+      # here shows up later as permission errors on write, not at boot.
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+      UMASK: "022"
+
+      # Where the database lives. This default matches the volume below; if you
+      # change one, change both. Pointing this at your media tree is never
+      # correct — it is a separate mount subarr treats as your data.
+      SUBARR_DB_PATH: /data/subarr.db
+
+    volumes:
+      # REQUIRED, and the single most common thing to get wrong.
+      #
+      # Everything subarr learns lives here: audio-language verifications you
+      # confirmed by hand, queue state, coverage history, settings. Without a
+      # real volume at this path they sit on the container's writable layer and
+      # are destroyed on every recreate — silently, with no error.
+      #
+      # Keep it on LOCAL disk. SQLite over NFS/SMB/CIFS is a corruption vector;
+      # subarr detects a network filesystem here and warns, but local is the
+      # supported configuration.
+      - ./subarr/data:/data
+
+      # Your media library. Use the SAME path Bazarr, Sonarr/Radarr and subgen
+      # see, or the arrs and subarr will disagree about which file is which.
+      # Read-write because subarr writes subtitle sidecars beside the video.
+      - /path/to/media:/media/library:rw
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9922/api/health',
+          timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+# ─── Verifying it worked ─────────────────────────────────────────────────────
+#
+# After the first start, check the Health page. If /data is not persistent
+# subarr says so there and in the log — it cannot fix your compose for you, but
+# it will not stay quiet about it either.
+#
+# The honest test is a restart: `docker compose down && docker compose up -d`.
+# If your settings survive, persistence is real. If the setup wizard reappears,
+# it is not, whatever the compose file appears to say.
