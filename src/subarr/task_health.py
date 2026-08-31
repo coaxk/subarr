@@ -36,8 +36,19 @@ _SECRET_QS = re.compile(
 )
 
 
-def _redact_secrets(text: str) -> str:
+def redact_secrets(text: str) -> str:
+    """Strip credential query-string values out of text bound for storage or
+    logs. Used here before storing a traceback, and by jobs.py before logging
+    a failed run-now trigger. Both end up on surfaces (/api/health/tasks,
+    /api/logs/recent) reachable without auth on a default install.
+
+    ONE regex on purpose: two copies would drift, and then one surface would
+    start leaking while the other still looked fine."""
     return _SECRET_QS.sub(r"\1=<redacted>", text)
+
+
+# Retained so existing internal callers keep working.
+_redact_secrets = redact_secrets
 
 
 # A task is unhealthy after this many failed cycles in a row...

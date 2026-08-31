@@ -53,6 +53,7 @@ class RevalidatingStaticFiles(StaticFiles):
 
 from . import __version__
 from .completion_watcher import CompletionWatcher
+from .jobs import register_trigger
 from .config import settings
 from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
@@ -545,6 +546,7 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.watcher._health = app_.state.task_health  # #157 supervision
     app_.state.watcher.start()
+    register_trigger(app_.state, "completion-watcher", app_.state.watcher.run_once)  # #252
     app_.state.schedule = ScheduleStore(settings.db_path)
 
     # #66/#116: queue authority. subarr's pending queue + a depth-aware feeder
@@ -598,6 +600,7 @@ async def lifespan(app_: FastAPI):
     app_.state.audio_lang = AudioLangStore(settings.db_path)
     # v1.1 ARCH: coverage cache + background refresh (kills 60-90s page loads).
     from .coverage_cache import CoverageCache, background_refresh_loop
+    from .coverage_cache import make_refresh_trigger as make_coverage_refresh_trigger
 
     app_.state.coverage_cache = CoverageCache(settings.db_path)
     app_.state.coverage_cache.load()  # warm in-memory mirror; table via migrations
@@ -831,20 +834,22 @@ async def lifespan(app_: FastAPI):
     # v1.1 ARCH: start the coverage-cache background refresh loop.
     # Independent of the coverage_walk schedule (much heavier); this one
     # is purely "keep the page snappy". Default 5-min tick.
+    # #252: build the run-now trigger and register it BEFORE create_task, so
+    # there is no window where the button renders and no trigger exists. The
+    # loop is handed the same object, so button and schedule cannot drift.
+    _coverage_trigger = make_coverage_refresh_trigger(
+        app_.state.coverage_cache,
+        bundle_provider=lambda: app_.state.integrations,
+        probe_store=app_.state.probe_store,
+        audio_lang_store=app_.state.audio_lang,
+        probe_walker=app_.state.probe_walker,
+        caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+    )
+    register_trigger(app_.state, "coverage-cache", _coverage_trigger)
     app_.state.coverage_cache_task = asyncio.create_task(
         background_refresh_loop(
             cache=app_.state.coverage_cache,
-            # Resolve the bundle live so onboarding can swap clients
-            # without restarting this refresh loop.
-            bundle_provider=lambda: app_.state.integrations,
-            probe_store=app_.state.probe_store,
-            audio_lang_store=app_.state.audio_lang,
-            # PR-C: eager-probe unprobed wanted files each refresh so the
-            # probe-gate's gap list populates regardless of probe_roots.
-            probe_walker=app_.state.probe_walker,
-            # #79: resolve subgen caps live so the forced-only-EN gate tracks
-            # the watchdog-detected IGNORE_FORCED_SUBTITLES runtime value.
-            caps_provider=lambda: getattr(app_.state, "subgen_caps", None),
+            refresh=_coverage_trigger,
             health=app_.state.task_health,  # #157
         )
     )
@@ -852,10 +857,16 @@ async def lifespan(app_: FastAPI):
     # reuses the existing /api/home/dashboard internals.
     from .routers.home import _build_dashboard as _dash_build
 
+    def _dash_build_fn():
+        return _dash_build(app_.state)
+
+    register_trigger(  # #252, eagerly for the same reason as coverage-cache
+        app_.state, "dashboard-cache", lambda: app_.state.dashboard_cache.refresh(_dash_build_fn)
+    )
     app_.state.dashboard_cache_task = asyncio.create_task(
         dash_refresh_loop(
             cache=app_.state.dashboard_cache,
-            build_fn=lambda: _dash_build(app_.state),
+            build_fn=_dash_build_fn,
             health=app_.state.task_health,  # #157
         )
     )
@@ -1009,6 +1020,10 @@ async def lifespan(app_: FastAPI):
     )
     app_.state.subgen_watchdog._health = app_.state.task_health  # #157 supervision
     app_.state.subgen_watchdog.start()
+    # #252 run-now. Telemetry (#479) says half of genuine installs report
+    # subgen unreachable, so an on-demand re-probe is the button those users
+    # want rather than waiting out the interval.
+    register_trigger(app_.state, "subgen-watchdog", app_.state.subgen_watchdog.run_once)
 
     # Anonymous telemetry — ON by default per v1.0 product decision.
     # Opt-out one-click in Settings. Stats published publicly at
@@ -1282,7 +1297,18 @@ async def run_health_task(task_name: str) -> dict:
     if not can_run_now(task_name):
         raise HTTPException(400, detail=f"job {task_name!r} does not support run-now")
     if not await run_job(app.state, task_name):
-        raise HTTPException(409, detail=f"job {task_name!r} could not be triggered right now")
+        # run_job returns False for two different situations and cannot
+        # distinguish them in a bool: the component is not on app.state yet
+        # (early boot) or the trigger ran and threw. Naming only the first
+        # would send a user to wait when they should be checking why their
+        # Bazarr refused the connection, so say both.
+        raise HTTPException(
+            409,
+            detail=(
+                f"job {task_name!r} did not run: it is not ready yet, or it failed. "
+                "Check the recent log for the reason."
+            ),
+        )
     return {"ran": True, "task_name": task_name}
 
 

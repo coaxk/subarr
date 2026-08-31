@@ -78,8 +78,20 @@ DEFAULT_INTERVAL_S = 30
 
 
 async def background_refresh_loop(
-    cache: DashboardCache, build_fn, interval_s: int = DEFAULT_INTERVAL_S, health=None
+    cache: DashboardCache,
+    build_fn,
+    interval_s: int = DEFAULT_INTERVAL_S,
+    health=None,
+    app_state=None,
 ) -> None:
+    if app_state is not None:
+        # #252 run-now, with the loop's own build_fn so the button and the
+        # schedule cannot diverge. app.py registers this eagerly too (before
+        # create_task); this covers callers that only start the loop.
+        from .jobs import register_trigger
+
+        register_trigger(app_state, "dashboard-cache", lambda: cache.refresh(build_fn))
+
     # Warm on boot if empty.
     if cache.get_cached() is None:
         try:
