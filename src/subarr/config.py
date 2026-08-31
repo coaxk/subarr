@@ -41,6 +41,43 @@ def _env_or(name: str, default: str) -> str:
     return raw
 
 
+# #479: the SUBGEN_URL fallback, named once so config and telemetry cannot
+# disagree about what "default" means. A duplicated literal here would make the
+# telemetry silently report the wrong thing while everything else kept working.
+DEFAULT_SUBGEN_URL = "http://subgen:9000"
+
+
+def subgen_url_is_default(url: object) -> bool:
+    """Is this install still on the shipped SUBGEN_URL?
+
+    #479: 108 genuine installs report subgen unreachable and 104 of them logged
+    no errors at all in 30 days. The default is `http://subgen:9000`, a hostname
+    that resolves only inside one specific compose topology, so an install that
+    never configured subgen probes a host that does not exist and reports
+    identically to one whose real subgen went down. This boolean separates the
+    two. It transmits no URL.
+
+    Empty counts as default because that is what the app actually does: `_env_or`
+    maps an empty SUBGEN_URL back to the fallback, so such an install genuinely
+    IS running on the default. Reporting otherwise would make this field
+    disagree with the behaviour it describes.
+
+    Never raises. It runs inside the telemetry payload build, where an exception
+    would take out the whole ping.
+    """
+    try:
+        if url is None:
+            return True
+        if not isinstance(url, str):
+            return False
+        raw = url.strip()
+        if not raw:
+            return True
+        return raw.rstrip("/").casefold() == DEFAULT_SUBGEN_URL.rstrip("/").casefold()
+    except Exception:
+        return False
+
+
 def _normalize_samesite(v: str) -> str:
     """#238: session-cookie SameSite — lax (default) / strict / none. Anything
     unrecognized falls back to the safe `lax` rather than erroring at boot."""
@@ -278,7 +315,7 @@ def load() -> Settings:
     _s = Settings(
         media_root=Path(_env_or("SUBARR_MEDIA_ROOT", "/media/library")),
         subgen_compose_path=Path(_env_or("SUBGEN_COMPOSE_PATH", "/dockercontainers/subgen/compose.yaml")),
-        subgen_url=_env_or("SUBGEN_URL", "http://subgen:9000"),
+        subgen_url=_env_or("SUBGEN_URL", DEFAULT_SUBGEN_URL),
         subgen_container=_env_or("SUBGEN_CONTAINER", "subgen"),
         subgen_media_prefix=_env_or("SUBGEN_MEDIA_PREFIX", "/media"),
         db_path=Path(_env_or("SUBARR_DB_PATH", "/data/subarr.db")),

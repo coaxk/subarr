@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
+import ssl
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +34,73 @@ _DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=3.0)
 
 class SubgenUnavailable(RuntimeError):
     """Subgen container isn't reachable or returned an unparseable response."""
+
+
+# #479: a closed vocabulary describing WHY a subgen probe failed.
+#
+# unreachable() used to be returned from two structurally different conditions
+# with the difference discarded at the point it was known: a transport error,
+# and a non-200 response meaning something IS listening but is not a healthy
+# subgen. Telemetry then showed one bucket over 108 installs with no way to
+# tell "nothing is there" from "the wrong thing is there".
+#
+# ⚠️ This value is TRANSMITTED. It carries no hostname, URL, port or exception
+# text, only which of a fixed set of shapes the failure had.
+_PROBE_CHAIN_MAX = 8
+
+
+def classify_probe_failure(exc: Exception | None = None, *, status: int | None = None) -> str:
+    """Bucket a probe failure. Pass `exc` for a transport error, `status` for a
+    non-200 response.
+
+    ⚠️ The chain is walked rather than the top-level class inspected, because
+    DNS failure and connection-refused BOTH surface as httpx.ConnectError. The
+    discriminator (socket.gaierror vs ConnectionRefusedError) sits underneath,
+    and classifying on the outer type collapses exactly the two cases this
+    exists to separate.
+
+    ⚠️ The chain shapes here were measured on Linux, which is what runs in
+    production. On Windows httpx does not surface socket.gaierror at all, so a
+    classifier written against a Windows observation would have mislabelled
+    every real install while passing its own tests.
+    """
+    if status is not None:
+        return f"http_{status}" if 100 <= status <= 599 else "http_other"
+
+    # Walk __cause__/__context__, guarding against a cycle: this runs in the
+    # app lifespan and must not hang it.
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+    cur: BaseException | None = exc
+    while cur is not None and len(chain) < _PROBE_CHAIN_MAX and id(cur) not in seen:
+        seen.add(id(cur))
+        chain.append(cur)
+        cur = cur.__cause__ or cur.__context__
+
+    for e in chain:
+        if isinstance(e, socket.gaierror):
+            return "dns"
+        if isinstance(e, ConnectionRefusedError):
+            return "refused"
+        if isinstance(e, ssl.SSLError):
+            return "tls"
+
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "connect_timeout"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "read_timeout"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+
+    # Message is INSPECTED, never emitted: some SSL failures arrive as a bare
+    # ConnectError with no ssl.SSLError in the chain.
+    text = str(exc or "")
+    if "SSL" in text or "certificate" in text.lower():
+        return "tls"
+
+    # Anything unrecognised still gets a bucket. Returning None would put it
+    # back in the undifferentiated hole this replaces.
+    return "transport"
 
 
 @dataclass(frozen=True)
@@ -161,6 +230,11 @@ class SubgenCapabilities:
     # query param and would re-skip the forced-only file. Distinct from
     # ignore_forced_subtitles above, which is subgen's GLOBAL runtime value.
     request_ignore_forced: bool = False
+    # #479: WHY the probe failed, from a closed vocabulary (see
+    # classify_probe_failure). None when reachable. Declared explicitly
+    # because this dataclass is FROZEN: #458 shipped a gate that could never
+    # open because it read an undeclared field via getattr with a default.
+    probe_failure: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,11 +262,15 @@ class SubgenCapabilities:
             "release_tag": self.release_tag,
             "concurrent_transcriptions": self.concurrent_transcriptions,
             "request_ignore_forced": self.request_ignore_forced,
+            "probe_failure": self.probe_failure,
         }
 
     @classmethod
-    def unreachable(cls) -> "SubgenCapabilities":
+    def unreachable(cls, reason: str | None = None) -> "SubgenCapabilities":
+        """#479: `reason` records WHICH failure this was. Optional so the
+        existing no-argument callers keep working unchanged."""
         return cls(
+            probe_failure=reason,
             reachable=False,
             version=None,
             has_queue=False,
@@ -315,11 +393,14 @@ class SubgenClient:
         try:
             r = await self._client.get("/status")
         except httpx.HTTPError as e:
-            log.warning("subgen capability probe: /status unreachable: %s", e)
-            return SubgenCapabilities.unreachable()
+            reason = classify_probe_failure(e)
+            log.warning("subgen capability probe: /status unreachable (%s): %s", reason, e)
+            return SubgenCapabilities.unreachable(reason)
         if r.status_code != 200:
+            # Something IS listening and answered. A completely different
+            # diagnosis from "nothing is there", and previously indistinguishable.
             log.warning("subgen capability probe: /status returned %d", r.status_code)
-            return SubgenCapabilities.unreachable()
+            return SubgenCapabilities.unreachable(classify_probe_failure(status=r.status_code))
 
         # Extract version from the body. Patched + vanilla both use the
         # 'version' key but the shape may vary across upstream versions.

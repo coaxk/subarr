@@ -368,6 +368,15 @@ _EXPECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
         "docker_tier",
         "onboarding_step",
         "onboarding_complete",
+        # #479 privacy review: both carry NO user-identifying data.
+        # subgen_probe_failure is one token from a CLOSED vocabulary
+        # (dns / refused / connect_timeout / read_timeout / timeout /
+        # tls / transport / not_probed / http_<code>) with no hostname,
+        # URL, port or exception text. subgen_target_is_default is a
+        # bool saying whether SUBGEN_URL is still the shipped default;
+        # it never carries the URL itself.
+        "subgen_probe_failure",
+        "subgen_target_is_default",
     }
 )
 
