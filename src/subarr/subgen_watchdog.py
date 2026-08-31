@@ -97,6 +97,15 @@ class SubgenWatchdog:
                 pass
             self._task = None
 
+    async def run_once(self) -> None:
+        """#252 run-now: perform exactly one probe cycle.
+
+        A public alias for the cycle the loop already runs, so app.py can
+        register a trigger without reaching into a private and so the button
+        provably does the same work as the schedule.
+        """
+        await self._probe_once()
+
     async def _run(self) -> None:
         # Initial delay so we don't slam subgen the moment app starts —
         # the boot probe just happened. First check is one interval out.

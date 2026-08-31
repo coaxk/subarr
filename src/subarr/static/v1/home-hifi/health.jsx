@@ -9,6 +9,7 @@
 
 import { apiFetch } from './api.jsx';
 import { formatRecentRow } from './log-helpers.mjs';
+import { runFailureMessage, detailFrom } from './job-run-helpers.mjs';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -71,12 +72,17 @@ function TaskRow({ t, version, onRun }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runErr, setRunErr] = useState(null);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
   const doRun = (e) => {
     e.stopPropagation();
     setRunning(true);
-    Promise.resolve(onRun && onRun(t.task_name)).finally(() => setRunning(false));
+    setRunErr(null);
+    Promise.resolve(onRun && onRun(t.task_name))
+      .then((msg) => setRunErr(msg || null))
+      .catch((err) => setRunErr(String((err && err.message) || err)))
+      .finally(() => setRunning(false));
   };
   const copyTrace = (e) => {
     e.stopPropagation();
@@ -104,6 +110,14 @@ function TaskRow({ t, version, onRun }) {
             </span>
           ) : null}
         </span>
+        {runErr && (
+          <span title={runErr} style={{
+            flex: 'none', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)', color: 'var(--error-400, #f87171)',
+          }}>
+            {runErr}
+          </span>
+        )}
         {t.can_run_now && (
           <button onClick={doRun} disabled={running}
             title="Trigger this job now"
@@ -380,10 +394,27 @@ export function HealthPage() {
   useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
 
   // #234: trigger a runnable loop on demand, then reload status.
-  const runJob = useCallback((name) =>
-    fetch(`/api/health/tasks/${encodeURIComponent(name)}/run`, { method: 'POST', credentials: 'same-origin' })
-      .then(() => load())
-      .catch(() => {}), [load]);
+  // #252: and REPORT a failure. fetch does not reject on an HTTP error status,
+  // so the previous `.then(() => load()).catch(() => {})` ran its success path
+  // on a 409 and the catch only ever saw network errors: clicking Run now on a
+  // job that could not fire did nothing observable. Harmless while the only
+  // triggers were an update poll and a feeder kick; not once coverage-cache
+  // reaches out to Bazarr, Sonarr and Plex, where not-firing is routine.
+  // Resolves to a message string on failure, or null when it ran.
+  const runJob = useCallback(async (name) => {
+    let msg = null;
+    try {
+      const res = await fetch(`/api/health/tasks/${encodeURIComponent(name)}/run`,
+        { method: 'POST', credentials: 'same-origin' });
+      let body = null;
+      try { body = await res.json(); } catch { /* not JSON; the status still tells us */ }
+      msg = runFailureMessage(res.status, detailFrom(body));
+    } catch (e) {
+      msg = String((e && e.message) || e);
+    }
+    await load();
+    return msg;
+  }, [load]);
 
   const unhealthy = (tasks || []).filter((t) => t.is_unhealthy).length;
   const dbIntegrityUnhealthy = (tasks || []).some((t) => t.task_name === 'db-integrity' && t.is_unhealthy);

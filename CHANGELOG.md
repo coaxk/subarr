@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Added
+- **Run-now reaches the jobs you actually want to trigger (#252).** The Health page could only trigger two of its background loops. It can now also run the coverage cache, the dashboard cache, the subgen watchdog and the completion watcher on demand, so a stale coverage view or an unreachable subgen can be re-checked without waiting out the interval. Anonymous telemetry says half of installs report their subgen as unreachable, which makes "check it now" the button most of them want. The scheduler is deliberately still monitor-only: a scheduler tick fires due jobs, so it would start real scans rather than refresh a view, and that deserves its own confirmation rather than a button identical to the others.
+
+### Fixed
+- **subarr's own setup docs were costing people their data (#473).** The v1.0 and v1.1 README mounted `/config`, while subarr's database has always defaulted to `/data/subarr.db`. Installs that followed those instructions lost everything on every container recreate: audio languages you had confirmed by hand, queue state, coverage history, settings. Nothing ever said so, and the generic "mount a volume" warning read as wrong to someone who had mounted exactly what they were told to. subarr now recognises that specific shape and tells you what happened, that your data is safe where it is rather than gone, and the one setting that fixes it. A `docker-compose.yml` now ships in the repo, so the setup no longer has to be copied by hand out of prose.
+- **Run now could fail silently (#252).** A trigger that did not fire reported nothing at all. `fetch` does not reject on an HTTP error status, so a failed run took the success path and the page just reloaded unchanged. The button now says why it did not run. This mattered more once the jobs above were added, because a coverage refresh calls out to Bazarr, Sonarr and Plex, where not running is an ordinary outcome rather than an exceptional one.
+- **A job that raised could return a 500 (#252).** Triggering a job whose work threw propagated the exception straight out of the endpoint, despite the code promising otherwise. It is now caught and reported as a failed run, and the message is redacted first, because integrations carry their credential in the request URL and subarr serves its own recent log.
+
+
 ## [2.5.1] - 2026-08-28
 
 **Three reported bugs, a readability win, and a security refresh.** No config changes, no migration.

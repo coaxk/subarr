@@ -187,6 +187,15 @@ class CompletionWatcher:
         for t in list(self._forced_segment_tasks):
             t.cancel()
 
+    async def run_once(self) -> None:
+        """#252 run-now: perform exactly one watcher tick.
+
+        A public alias for the cycle the loop already runs, so app.py can
+        register a trigger without reaching into a private and so the button
+        provably does the same work as the schedule.
+        """
+        await self._tick()
+
     async def _loop(self) -> None:
         log.info("completion watcher started (interval=%ds)", self._interval_s)
         while not self._stop.is_set():

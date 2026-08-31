@@ -461,6 +461,44 @@ class CoverageCache:
 DEFAULT_INTERVAL_S = 300  # 5 min
 
 
+def make_refresh_trigger(
+    cache,
+    *,
+    bundle=None,
+    bundle_provider=None,
+    probe_store=None,
+    audio_lang_store=None,
+    probe_walker=None,
+    caps_provider=None,
+):
+    """Build THE refresh call: the one the boot warm, the periodic tick and
+    the #252 run-now trigger all use.
+
+    A module-level factory rather than a closure inside the loop, so app.py can
+    build the trigger and register it BEFORE create_task. Registering from
+    inside the loop body was racy: the coroutine does not run until the event
+    loop schedules it, so a run-now arriving in that window finds no trigger.
+    The window is small in production and the failure is invisible either way,
+    because the button renders off a static registry and does not know whether
+    a trigger exists.
+
+    Assembling this argument list anywhere else would let the button drift from
+    the schedule while both went on appearing to work.
+    """
+    get_bundle = bundle_provider or (lambda: bundle)
+
+    async def _refresh():
+        return await cache.refresh(
+            get_bundle(),
+            probe_store,
+            audio_lang_store,
+            probe_walker=probe_walker,
+            caps_provider=caps_provider,
+        )
+
+    return _refresh
+
+
 async def background_refresh_loop(
     cache: CoverageCache,
     bundle=None,
@@ -471,6 +509,8 @@ async def background_refresh_loop(
     probe_walker=None,
     caps_provider=None,
     health=None,
+    app_state=None,
+    refresh=None,
 ) -> None:
     """Sleep, refresh, repeat. Exits on cancellation.
 
@@ -482,38 +522,41 @@ async def background_refresh_loop(
     every refresh, so the probe-gate's gap list populates regardless of
     the user's probe_roots config.
     """
-    get_bundle = bundle_provider or (lambda: bundle)
     # The health staleness threshold must cover the SLEEP *plus* the refresh
     # build time: refresh() takes 60-90s on large libraries, so successes land
     # interval_s + build_time apart. A flat interval_s threshold marks the pill
     # stale for the duration of every refresh (false alarm). 2x interval_s
     # tolerates a full slow cycle; only a genuinely stuck loop trips it.
     health_interval_s = interval_s * 2
+
+    # Prefer a trigger the caller already built and registered; otherwise build
+    # it here so callers passing raw arguments keep working unchanged.
+    _refresh = refresh or make_refresh_trigger(
+        cache,
+        bundle=bundle,
+        bundle_provider=bundle_provider,
+        probe_store=probe_store,
+        audio_lang_store=audio_lang_store,
+        probe_walker=probe_walker,
+        caps_provider=caps_provider,
+    )
+    if app_state is not None and refresh is None:
+        from .jobs import register_trigger
+
+        register_trigger(app_state, "coverage-cache", _refresh)
     # Initial refresh on boot if nothing cached yet — fills the snapshot
     # so the first /api/coverage request after a fresh deploy doesn't
     # block for 90s.
     if cache.get_cached() is None:
         log.info("coverage cache: no snapshot found; warming on boot")
         try:
-            await cache.refresh(
-                get_bundle(),
-                probe_store,
-                audio_lang_store,
-                probe_walker=probe_walker,
-                caps_provider=caps_provider,
-            )
+            await _refresh()
         except Exception as e:
             log.warning("coverage cache: initial warm failed: %s", e)
     while True:
         await asyncio.sleep(interval_s)
         try:
-            await cache.refresh(
-                get_bundle(),
-                probe_store,
-                audio_lang_store,
-                probe_walker=probe_walker,
-                caps_provider=caps_provider,
-            )
+            await _refresh()
             if health:
                 health.record_success("coverage-cache", expected_interval_s=health_interval_s)
         except asyncio.CancelledError:
