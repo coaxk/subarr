@@ -95,6 +95,22 @@ class TelemetryPayload:
     # the wizard was finished. Lets us see WHERE installs drop off.
     onboarding_step: int | None = None
     onboarding_complete: bool = False
+    # #479: split the `unreachable` bucket, which covered 108 genuine installs
+    # with no way to tell any of its causes apart.
+    #   subgen_probe_failure  WHY the probe failed, from a closed vocabulary
+    #                         (see subgen_client.classify_probe_failure).
+    #                         'not_probed' when the probe never ran, which is
+    #                         NOT the same as a failure. None when reachable.
+    #   subgen_target_is_default is this install still on http://subgen:9000,
+    #                         i.e. never configured. Carries no URL.
+    # ⚠️ The wire field says 'target' while its producer is named
+    # subgen_url_is_default. That is DELIBERATE, not an oversight: the
+    # payload smoke test rejects any field name containing 'url', and a
+    # field called subgen_url_* would trip it. Do not 'fix' the mismatch.
+    # Both use None for UNKNOWN, following data_persistent. Defaulting either
+    # to a real value would report a confident wrong answer fleet-wide.
+    subgen_probe_failure: str | None = None
+    subgen_target_is_default: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +133,8 @@ class TelemetryPayload:
             "docker_tier": self.docker_tier,
             "onboarding_step": self.onboarding_step,
             "onboarding_complete": self.onboarding_complete,
+            "subgen_probe_failure": self.subgen_probe_failure,
+            "subgen_target_is_default": self.subgen_target_is_default,
         }
 
 
@@ -250,15 +268,26 @@ class TelemetryCollector:
         stats = self._stats_provider() or {}
         caps = self._subgen_caps_provider()
 
-        if caps is None or not caps.reachable:
+        if caps is None:
+            # The probe never ran. Distinct from a probe that ran and
+            # failed: collapsing the two is the conflation #479 is about.
             subgen_kind = "unreachable"
             subgen_version = None
+            subgen_probe_failure = "not_probed"
+        elif not caps.reachable:
+            subgen_kind = "unreachable"
+            subgen_version = None
+            # getattr with a default because a caps object from an older
+            # path may not carry the field; a missing reason is unknown.
+            subgen_probe_failure = getattr(caps, "probe_failure", None)
         elif caps.is_subarr_subgen:
             subgen_kind = "subarr-subgen"
             subgen_version = caps.version
+            subgen_probe_failure = None
         else:
             subgen_kind = "vanilla"
             subgen_version = caps.version
+            subgen_probe_failure = None
 
         return TelemetryPayload(
             install_id=st.install_id,
@@ -268,6 +297,8 @@ class TelemetryCollector:
             os_arch=f"{platform.system()}/{platform.machine()}",
             subgen_kind=subgen_kind,
             subgen_version=subgen_version,
+            subgen_probe_failure=subgen_probe_failure,
+            subgen_target_is_default=stats.get("subgen_target_is_default"),
             integrations=stats.get("integrations") or {},
             library_bucket=stats.get("library_bucket") or "unknown",
             scheduler_enabled=bool(stats.get("scheduler_enabled")),
@@ -467,7 +498,7 @@ def make_default_stats_provider(app_state) -> Any:
     """Returns a callable suitable for TelemetryCollector(stats_provider=...)
     that pulls live data off app.state. Kept separate so tests can swap
     in a deterministic mock dict instead."""
-    from .config import settings
+    from .config import settings, subgen_url_is_default
 
     def _provider() -> dict[str, Any]:
         # Library size bucket — pulled from probe_store row count as a
@@ -551,6 +582,11 @@ def make_default_stats_provider(app_state) -> Any:
             # #202 activation funnel.
             "onboarding_step": _onboarding_step(app_state),
             "onboarding_complete": _onboarding_complete(app_state),
+            # #479: is this install still on the shipped SUBGEN_URL, i.e.
+            # never configured. Separates that from a real subgen that is
+            # down, which the single `unreachable` bucket could not. Sends
+            # no URL, only the boolean.
+            "subgen_target_is_default": subgen_url_is_default(settings.subgen_url),
         }
 
     return _provider

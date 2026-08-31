@@ -21,6 +21,9 @@ breaking config changes.
 - **Run now could fail silently (#252).** A trigger that did not fire reported nothing at all. `fetch` does not reject on an HTTP error status, so a failed run took the success path and the page just reloaded unchanged. The button now says why it did not run, and confirms when it did. This mattered more once the jobs above were added, because a coverage refresh calls out to Bazarr, Sonarr and Plex, where not running is an ordinary outcome rather than an exceptional one.
 - **A job that raised could return a 500 (#252).** Triggering a job whose work threw propagated the exception straight out of the endpoint, despite the code promising otherwise. It is now caught and reported as a failed run, and the message is redacted first, because integrations carry their credential in the request URL and subarr serves its own recent log.
 
+### Changed
+- **The log now says WHY subgen is unreachable, not just that it is (#479).** The startup probe reported one undifferentiated failure for every cause, so `subgen unreachable` could mean the hostname does not resolve, nothing is listening on that port, a firewall is dropping the connection, or something answered that was not subgen at all. Those need four different fixes. The warning now names which one it was, for example `subgen capability probe: /status unreachable (dns)`. Anonymous telemetry carries the same single token, so we can finally tell an install with a genuinely broken connection from one that simply never configured subgen. It never carries your hostname, URL or port.
+
 ### Docs
 - **Tuning Lab settings reference expanded (#450).** Every setting is now described with what it does and when to change it, rather than only what it is called.
 
