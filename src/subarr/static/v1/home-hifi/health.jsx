@@ -73,6 +73,7 @@ function TaskRow({ t, version, onRun }) {
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
   const [runErr, setRunErr] = useState(null);
+  const [ranOk, setRanOk] = useState(false);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
   const doRun = (e) => {
@@ -80,7 +81,17 @@ function TaskRow({ t, version, onRun }) {
     setRunning(true);
     setRunErr(null);
     Promise.resolve(onRun && onRun(t.task_name))
-      .then((msg) => setRunErr(msg || null))
+      .then((msg) => {
+        setRunErr(msg || null);
+        // A successful manual run is otherwise INVISIBLE. It deliberately does
+        // not touch task_health, so the "ok <ago>" column does not move and the
+        // page looks identical to before the click. Recording it there would be
+        // worse: last_success_at feeds the staleness alarm, so a manual run on
+        // a loop whose SCHEDULE has died would silence the very warning that
+        // says so. A transient confirmation closes the feedback loop without
+        // touching the health signal.
+        if (!msg) { setRanOk(true); setTimeout(() => setRanOk(false), 2500); }
+      })
       .catch((err) => setRunErr(String((err && err.message) || err)))
       .finally(() => setRunning(false));
   };
@@ -110,6 +121,13 @@ function TaskRow({ t, version, onRun }) {
             </span>
           ) : null}
         </span>
+        {ranOk && !runErr && (
+          <span style={{
+            flex: 'none', fontSize: 'var(--text-2xs)', color: 'var(--success-500, #22c55e)',
+          }}>
+            ran
+          </span>
+        )}
         {runErr && (
           <span title={runErr} style={{
             flex: 'none', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis',
