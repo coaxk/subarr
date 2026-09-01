@@ -533,6 +533,21 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
         "syn",
     }
 
+    # [#485] A FORCED sidecar is not full coverage. subarr already treats
+    # embedded forced tracks this way (has_usable_embedded_english excludes
+    # them, coverage reports EN(forced), #79 built forced_only_subgen_will_skip
+    # around it) but sidecars never got the same rule, so `<stem>.en.forced.srt`
+    # counted as English coverage.
+    #
+    # That is a closed loop rather than a theoretical gap: subarr's own #364
+    # WRITES `.en.forced.srt`, and #475 made that the default naming. So subarr
+    # produced a forced sidecar, counted it as coverage, and then refused to
+    # queue the full transcription the user actually wanted.
+    #
+    # Same bug fixed on the subgen side in subarr-subgen v4.24, reported
+    # upstream as McCloudS/subgen#358.
+    from .forced_segment import _FORCED_TOKEN
+
     langs: set[str] = set()
     for p in sidecars:
         name = p.rsplit("/", 1)[-1].lower()
@@ -541,6 +556,11 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
         # Strip .srt, then split on dots AND hyphens to extract every
         # potential lang-shaped token regardless of separator style.
         tokens = re.split(r"[.\-]", name[:-4])
+        # Checked against TOKENS, never as a substring: a real episode in the
+        # test library is titled "Forced Labour", and a substring test would
+        # silently stop counting its subtitles.
+        if _FORCED_TOKEN in tokens:
+            continue
         found_lang = None
         for tok in reversed(tokens):
             if 2 <= len(tok) <= 3 and tok.isalpha():
