@@ -96,6 +96,37 @@ def canonical_to_fs(canonical: str) -> Path:
     return target
 
 
+# #483: roots already reported as ambiguous, so a hot path does not log on
+# every call. Process-local and best-effort; the point is that the operator
+# sees it once, not that the count is exact.
+_warned_ambiguous_roots: set[str] = set()
+
+
+def _warn_ambiguous_root(root: Path, a: Library, b: Library) -> None:
+    """Surface two libraries sharing a filesystem root.
+
+    The tie-break below is a reasonable guess, not a truth: from the path
+    alone these libraries are indistinguishable. build_libraries rejects a
+    duplicate arr_prefix for exactly this reason, but cannot reject a
+    duplicate fs_root, because invalid library config is handled fail-soft
+    by falling back to the single default library, which would silently
+    delete the user's second library instead of fixing it.
+    """
+    key = str(root)
+    if key in _warned_ambiguous_roots:
+        return
+    _warned_ambiguous_roots.add(key)
+    log.warning(
+        "libraries %r and %r share fs_root %s; a path under it cannot be "
+        "attributed from the filesystem alone. Preferring the configured "
+        "library over the default. Give them distinct roots to remove the "
+        "ambiguity.",
+        a.slug or "(default)",
+        b.slug or "(default)",
+        key,
+    )
+
+
 def fs_to_canonical(p: Path) -> str:
     """Inverse of canonical_to_fs: find the owning library (longest-matching
     fs_root) and emit its canonical, prefixing '@<slug>/' for non-default
@@ -109,8 +140,30 @@ def fs_to_canonical(p: Path) -> str:
             rel = PurePosixPath(rp.relative_to(root).as_posix())
         except ValueError:
             continue
-        if best is None or len(root.parts) > len(best[0].parts):
+        if best is None:
             best = (root, rel, lib)
+            continue
+        best_root, _best_rel, best_lib = best
+        depth, best_depth = len(root.parts), len(best_root.parts)
+        if depth > best_depth:
+            best = (root, rel, lib)
+        elif depth == best_depth:
+            # #483: an EQUAL-length match is genuinely ambiguous. This used to
+            # be decided by list order, and library 0 is always first, so two
+            # libraries sharing an fs_root handed every path to the default and
+            # silently dropped the '@<slug>/' head. That head selects the
+            # library, hence the subgen_prefix, so losing it produced a
+            # wrong-but-plausible subgen path, a 404, and subarr reporting
+            # "file removed" for a file that was sitting right there.
+            #
+            # Prefer the EXPLICITLY configured library over the catch-all
+            # default: a user who created a second library rooted at the same
+            # place clearly meant files there to belong to it. Between two
+            # slugged libraries it stays list-ordered, which is arbitrary but
+            # deterministic; nothing in the path can distinguish them.
+            _warn_ambiguous_root(root, best_lib, lib)
+            if lib.slug and not best_lib.slug:
+                best = (root, rel, lib)
     if best is None:
         raise PathOutsideRootError(str(p))
     _, rel, lib = best
