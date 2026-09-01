@@ -7,6 +7,14 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-09-01
+
+**Image subtitles are fillable, and our own setup docs were losing your data.**
+
+No config changes, no migration. Run-now also reaches the background jobs you actually want to trigger.
+
+If you followed the v1.0 or v1.1 README, read the #473 entry below before anything else. That setup put subarr's database on a path that is wiped on every container recreate, so confirmed audio languages, queue state and settings have been disappearing each restart with nothing saying so. This release detects that exact shape and tells you, your data is recoverable where it is, and a `docker-compose.yml` now ships in the repo so the setup no longer has to be copied by hand out of prose.
+
 ### Added
 - **Image-only subtitles can now actually be filled (#458).** A PGS or VobSub track is a sequence of pictures: it cannot be searched, restyled, retimed or read as text. Those tracks no longer count as subtitle coverage, so the files carrying them show up as the genuine gaps they are. Detecting them was only half of it, because such files are overwhelmingly English-audio and subgen refuses those via `SKIP_IF_AUDIO_LANGUAGES`. subarr now sends a per-request bypass so they can be transcribed, and Coverage offers a bulk action for the whole set, since 128 rows is far too many to click one at a time. The bulk action only appears against a subgen new enough to honour the flag, so it can never silently re-skip every file. Reported on r/radarr by a user who had patched it locally.
 - **Run-now reaches the jobs you actually want to trigger (#252).** The Health page could only trigger two of its background loops. It can now also run the coverage cache, the dashboard cache, the subgen watchdog and the completion watcher on demand, so a stale coverage view or an unreachable subgen can be re-checked without waiting out the interval. Anonymous telemetry says half of installs report their subgen as unreachable, which makes "check it now" the button most of them want. The scheduler is deliberately still monitor-only: a scheduler tick fires due jobs, so it would start real scans rather than refresh a view, and that deserves its own confirmation rather than a button identical to the others.
