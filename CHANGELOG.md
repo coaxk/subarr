@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **subarr counted its own forced subtitles as full coverage (#485).** A `.en.forced.srt` sidecar next to a video was read as English coverage, so Coverage under-reported the gap and the manual queue refused the file with "An English subtitle already exists on disk". This is a closed loop rather than a corner case: subarr's own forced-segment feature writes exactly those files, and the previous release made that the default naming. So subarr produced a forced sidecar, counted it as coverage, and then declined to produce the full subtitle you actually wanted. Forced sidecars no longer count, in either naming order, matching how subarr has always treated forced tracks embedded in the video. Verified against 3,820 real subtitle filenames from a live library with no change to any other result.
+
 ## [2.6.0] - 2026-09-01
 
 **Image subtitles are fillable, and our own setup docs were losing your data.**
