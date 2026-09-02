@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from ..integrations import IntegrationError
 from ..paths import PathOutsideRootError, canonical_to_fs, strip_arr_prefix
+from ..arr_resolve import resolve_episode_target
 from ..audio_lang_store import resolve_audio_language_override
 
 router = APIRouter(prefix="/api", tags=["coverage"])
@@ -81,7 +82,26 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
     resolved_via: str = ""
     series_id: int | None = None
 
-    if req.sonarr_episode_id is not None:
+    # [#485] The canonical the row already carries is AUTHORITATIVE. coverage
+    # builds its episode-file maps per instance and puts the right path on the
+    # row; re-deriving it from an episode id against instance-0 Sonarr resolved
+    # to a different library's file entirely. Prefer what we were given, and use
+    # the arr lookup only for provenance, scoped to the owning library.
+    if req.canonical_path:
+        canonical = req.canonical_path.strip().strip("/")
+        resolved_via = "canonical_path"
+        if req.sonarr_episode_id is not None:
+            _p, series_id = await resolve_episode_target(
+                bundle,
+                sonarr_episode_id=req.sonarr_episode_id,
+                canonical_hint=canonical,
+            )
+            resolved_via = f"canonical_path+sonarr_episode_id={req.sonarr_episode_id}"
+
+    elif req.sonarr_episode_id is not None:
+        # No canonical to scope by. This is the OLD behaviour and it is wrong on
+        # a multi-instance install; kept so callers that genuinely have no
+        # canonical keep working. The frontend always sends one now.
         if not bundle.sonarr.is_configured():
             raise HTTPException(503, detail="sonarr not configured; cannot resolve episode id")
         try:
@@ -110,9 +130,6 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         canonical = strip_arr_prefix(arr_path)
         resolved_via = f"sonarr_episode_id={req.sonarr_episode_id}"
 
-    elif req.canonical_path:
-        canonical = req.canonical_path.strip().strip("/")
-        resolved_via = "canonical_path"
     else:
         raise HTTPException(400, detail="must provide sonarr_episode_id or canonical_path")
 

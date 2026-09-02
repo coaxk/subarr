@@ -150,6 +150,25 @@ def _sonarr_handler_for(series, eps_by_sid, files_by_sid):
             return httpx.Response(200, json=eps_by_sid.get(int(req.url.params.get("seriesId")), []))
         if p == "/api/v3/episodefile":
             return httpx.Response(200, json=files_by_sid.get(int(req.url.params.get("seriesId")), []))
+        # [#485] SINGLE-item lookups. The coverage build only ever uses the
+        # collection endpoints above, so this handler never served these and a
+        # caller that used them silently got a 404. That is exactly the path the
+        # queue and scheduler take, which is part of why the cross-instance bug
+        # went unnoticed: no fixture exercised it.
+        if p.startswith("/api/v3/episode/"):
+            want = int(p.rsplit("/", 1)[-1])
+            for eps in eps_by_sid.values():
+                for e in eps:
+                    if e.get("id") == want:
+                        return httpx.Response(200, json=e)
+            return httpx.Response(404)
+        if p.startswith("/api/v3/episodefile/"):
+            want = int(p.rsplit("/", 1)[-1])
+            for files in files_by_sid.values():
+                for f in files:
+                    if f.get("id") == want:
+                        return httpx.Response(200, json=f)
+            return httpx.Response(404)
         return httpx.Response(404)
 
     return _h

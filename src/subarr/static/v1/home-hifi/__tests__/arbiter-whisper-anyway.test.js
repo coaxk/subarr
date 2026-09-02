@@ -25,7 +25,13 @@ describe('queueRow', () => {
     const [url, opts] = spy.mock.calls[0];
     expect(url).toBe('/api/coverage/queue');
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body)).toEqual({ sonarr_episode_id: 42 });
+    // [#485] CHANGED DELIBERATELY: the canonical now travels WITH the id.
+    // Sending the id alone left the backend unable to tell which Sonarr
+    // instance owned it, so it could resolve to another library's file.
+    expect(JSON.parse(opts.body)).toEqual({
+      sonarr_episode_id: 42,
+      canonical_path: '/foo/bar.mkv',
+    });
   });
 
   it('falls back to canonical_path when sonarr_episode_id is absent', async () => {
