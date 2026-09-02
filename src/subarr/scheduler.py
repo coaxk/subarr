@@ -27,8 +27,8 @@ from typing import Any
 
 from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
-from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical, strip_arr_prefix
+from .arr_resolve import resolve_episode_target
+from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
 from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
@@ -530,18 +530,22 @@ class Scheduler:
         title = item_dict.get("title", "?")
         series_id: int | None = None
 
-        if sonarr_ep_id and self._bundle.sonarr.is_configured():
-            try:
-                ep = await self._bundle.sonarr.episode(sonarr_ep_id)
-                series_id = ep.get("seriesId")
-                ep_file_id = ep.get("episodeFileId")
-                if ep_file_id:
-                    ep_file = await self._bundle.sonarr.episode_file(ep_file_id)
-                    arr_path = ep_file.get("path")
-                    if arr_path:
-                        canonical = strip_arr_prefix(arr_path)
-            except IntegrationError as e:
-                return None, f"{title}: sonarr resolve failed: {e}"
+        # [#485] The item's own canonical is AUTHORITATIVE and this used to
+        # overwrite it with a lookup against instance-0 Sonarr. Episode ids are
+        # unique only WITHIN an instance, so on a multi-instance install that
+        # resolved to a different library's file and the scheduler queued the
+        # WRONG episode, unattended and with no guard in this path.
+        if sonarr_ep_id:
+            resolved, resolved_series_id = await resolve_episode_target(
+                self._bundle,
+                sonarr_episode_id=sonarr_ep_id,
+                canonical_hint=canonical,
+            )
+            if resolved_series_id is not None:
+                series_id = resolved_series_id
+            # Only fill a canonical we do NOT already have.
+            if not canonical:
+                canonical = resolved
 
         if not canonical:
             return None, f"{title}: no canonical path"
@@ -579,21 +583,21 @@ class Scheduler:
         canonical: str | None = None
         series_id: int | None = None
 
-        if item.bazarr_episode_id and self._bundle.sonarr.is_configured():
-            try:
-                ep = await self._bundle.sonarr.episode(item.bazarr_episode_id)
-                series_id = ep.get("seriesId")
-                ep_file_id = ep.get("episodeFileId")
-                if ep_file_id:
-                    ep_file = await self._bundle.sonarr.episode_file(ep_file_id)
-                    arr_path = ep_file.get("path")
-                    if arr_path:
-                        canonical = strip_arr_prefix(arr_path)
-            except IntegrationError as e:
-                return None, f"{item.title}: sonarr resolve failed: {e}"
-
-        if not canonical:
-            canonical = item.canonical_path
+        # [#485] Same fix as _enqueue_from_item. The item already carries the
+        # right path (coverage resolves episode files PER INSTANCE); this used
+        # to prefer an instance-0 lookup over it and could target another
+        # library's file entirely.
+        canonical = item.file_canonical_path or item.canonical_path
+        if item.bazarr_episode_id:
+            resolved, resolved_series_id = await resolve_episode_target(
+                self._bundle,
+                sonarr_episode_id=item.bazarr_episode_id,
+                canonical_hint=canonical,
+            )
+            if resolved_series_id is not None:
+                series_id = resolved_series_id
+            if not canonical:
+                canonical = resolved
 
         if not canonical:
             return None, f"{item.title}: no canonical path"

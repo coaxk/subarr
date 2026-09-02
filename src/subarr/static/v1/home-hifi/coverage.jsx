@@ -2246,9 +2246,15 @@ export function imageOnlyRows(rows) {
 }
 
 export function coverageQueueBody(row, { ignoreForced = false, bypassSkip = false } = {}) {
-  const body = row._sonarr_episode_id
-    ? { sonarr_episode_id: row._sonarr_episode_id }
-    : { canonical_path: row._canonical_path };
+  // [#485] Send BOTH when we have both. Sonarr episode ids are unique only
+  // WITHIN an instance, so the id alone left the backend no way to know which
+  // library owned it: it resolved against instance 0 and, on a multi-instance
+  // install, targeted a completely different library's file. The canonical
+  // carries the '@slug' head that identifies the owning Sonarr, so it has to
+  // travel with the id rather than instead of it.
+  const body = {};
+  if (row._sonarr_episode_id) body.sonarr_episode_id = row._sonarr_episode_id;
+  if (row._canonical_path) body.canonical_path = row._canonical_path;
   if (row._radarr_movie_id) body.radarr_movie_id = row._radarr_movie_id;
   // #317 Slice B: "transcribe a full sub anyway" — tell subgen to ignore the
   // forced-only embedded sub for THIS job (gated on subgen capability upstream).

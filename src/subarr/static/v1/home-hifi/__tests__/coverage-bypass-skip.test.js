@@ -34,8 +34,13 @@ describe('coverageQueueBody bypass_skip', () => {
       { _sonarr_episode_id: 77, _canonical_path: 'TV/x.mkv' },
       { bypassSkip: true },
     );
+    // [#485] CHANGED DELIBERATELY. This used to assert the canonical was
+    // OMITTED when an episode id was present, which is exactly the bug:
+    // the id alone cannot tell the backend which Sonarr instance owns it,
+    // so it resolved against instance 0 and could target another library's
+    // file. The canonical must travel WITH the id.
     expect(body.sonarr_episode_id).toBe(77);
-    expect(body.canonical_path).toBeUndefined();
+    expect(body.canonical_path).toBe('TV/x.mkv');
     expect(body.bypass_skip).toBe(true);
   });
 });
