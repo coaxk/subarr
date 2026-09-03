@@ -431,8 +431,36 @@ def rebuild_libraries(s: Settings) -> None:
         subgen_prefix=s.subgen_media_prefix,
         arr_prefix=s.arr_path_prefix,
     )
+    # [#483] Distinguish "nothing configured" from "could not read what is
+    # configured". load_overrides() collapses both to {}, and acting on that
+    # emptiness silently DELETED every non-default library for one load. Every
+    # canonical built in that window lost its '@slug' head, then self-healed on
+    # the next successful read, which is why it was so hard to pin down.
+    raw, read_ok = config_store.load_overrides_result()
+    if not read_ok:
+        existing = getattr(s, "libraries", None)
+        if existing:
+            # Keep what we already resolved. A stale library set is strictly
+            # better than a silently truncated one: the wrong canonical is
+            # written into scan history and provenance, and looks legitimate.
+            log.error(
+                "config overrides unreadable; KEEPING the %d library/libraries already "
+                "loaded rather than degrading to the default. Library config edits will "
+                "not take effect until the store is readable again.",
+                len(existing),
+            )
+            return
+        # First load and we cannot read the store. There is nothing to keep, so
+        # the default is the only option, but say so loudly: canonicals will
+        # lack their '@slug' until this resolves.
+        log.error(
+            "config overrides unreadable at first load; falling back to the single "
+            "default library. Canonical paths will not carry a library head until "
+            "the store is readable and libraries are rebuilt."
+        )
+
     try:
-        raw_extras = config_store.load_overrides().get("libraries", [])
+        raw_extras = raw.get("libraries", [])
         if not isinstance(raw_extras, list):
             raw_extras = []
         libs = build_libraries(default_lib, raw_extras)
