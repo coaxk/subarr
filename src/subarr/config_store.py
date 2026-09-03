@@ -61,13 +61,23 @@ def _preserve_corrupt(p: Path) -> None:
         log.error("config overrides corrupt and could not be preserved", exc_info=True)
 
 
-def _read_strict(p: Path) -> dict:
-    """Current overrides for the WRITE path. Returns {} if the file is absent.
-    RAISES ConfigStoreError if the file EXISTS but cannot be read (transient IO)
-    — the caller must not overwrite it. A present-but-corrupt file is preserved
-    (renamed aside) and read as {}."""
+def _read_result(p: Path) -> tuple[dict, bool]:
+    """Read the store, reporting whether we actually got what is configured.
+
+    Returns ``(data, read_ok)``.
+
+    ``read_ok`` is False ONLY when the file exists and we could not obtain its
+    real contents. An ABSENT file is a successful read of nothing, because a
+    user with no overrides is not a failure.
+
+    [#483] The distinction matters because callers act on emptiness. Collapsing
+    "could not read" into "nothing configured" silently deleted the user's
+    libraries for one load, and every canonical built in that window lost its
+    ``@slug`` head. RAISES ConfigStoreError on transient IO so the WRITE path
+    still refuses to overwrite a file it could not read.
+    """
     if not p.is_file():
-        return {}
+        return {}, True
     try:
         raw = p.read_text("utf-8")
     except OSError as e:
@@ -75,21 +85,45 @@ def _read_strict(p: Path) -> dict:
     try:
         data = json.loads(raw)
     except ValueError:
+        # Corrupt: preserved aside, but we still LOST what was configured, so
+        # this is a failed read even though nothing raised.
         _preserve_corrupt(p)
-        return {}
-    return dict(data) if isinstance(data, dict) else {}
+        return {}, False
+    return (dict(data) if isinstance(data, dict) else {}), True
+
+
+def _read_strict(p: Path) -> dict:
+    """Current overrides for the WRITE path. Returns {} if the file is absent.
+    RAISES ConfigStoreError if the file EXISTS but cannot be read (transient IO)
+    — the caller must not overwrite it. A present-but-corrupt file is preserved
+    (renamed aside) and read as {}."""
+    return _read_result(p)[0]
+
+
+def load_overrides_result() -> tuple[dict, bool]:
+    """[#483] Read path that reports whether the read SUCCEEDED.
+
+    Prefer this over ``load_overrides()`` anywhere an empty result would be
+    ACTED ON rather than merely defaulted. ``rebuild_libraries`` is the
+    motivating case: an unreadable store made it drop every configured library.
+    """
+    with _lock:
+        try:
+            return _read_result(store_path())
+        except ConfigStoreError:
+            log.warning("config overrides temporarily unreadable; using none this load", exc_info=True)
+            return {}, False
 
 
 def load_overrides() -> dict:
     """Read path (boot / config.load). Fail-soft: never raises. A transient read
     error yields {} without touching the file; a corrupt file is preserved and
-    yields {} — so config always loads and a bad read never becomes a wipe."""
-    with _lock:
-        try:
-            return _read_strict(store_path())
-        except ConfigStoreError:
-            log.warning("config overrides temporarily unreadable; using none this load", exc_info=True)
-            return {}
+    yields {} — so config always loads and a bad read never becomes a wipe.
+
+    ⚠️ This cannot tell "nothing configured" from "could not read". If your
+    caller ACTS on emptiness rather than defaulting, use load_overrides_result().
+    """
+    return load_overrides_result()[0]
 
 
 def _write(data: dict) -> None:
