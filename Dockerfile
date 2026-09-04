@@ -23,12 +23,26 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 # fixed in +deb13u3 while the cached layer still had u2). CI passes the current
 # UTC date, so this layer expires once a day and every scan + published image
 # gets current packages. Referenced in the RUN so the value actually busts it.
+#
+# The trailing `pip install --upgrade pip` is BUILD-TIME hygiene, not a
+# shipped-image fix (pip is deleted again after the app install below). The
+# `apt-get upgrade` above structurally CANNOT reach it: python:3.12-slim
+# installs pip into /usr/local/lib/python3.12/site-packages via get-pip, so no
+# Debian package owns it (`dpkg -S` on that path finds no match) and apt has
+# nothing to upgrade. Debian's own python3-pip is 25.1.1 anyway, below the
+# 26.2.0 floor. Several of the pip CVEs are wheel-install path traversals
+# (CVE-2026-8643 lets a malicious entry point name overwrite arbitrary files),
+# and installing wheels from PyPI is exactly what the next layer does, so the
+# build runs under a patched resolver. Unpinned on purpose, same reasoning as
+# `apt-get upgrade -y`: a pin goes stale and re-opens the class. It rides the
+# APT_REFRESH layer so it inherits the daily cache-bust.
 ARG APT_REFRESH=0
 RUN echo "apt-refresh=${APT_REFRESH}" \
     && apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix passwd util-linux \
     && apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip
 
 WORKDIR /app
 
@@ -49,7 +63,24 @@ COPY src/ ./src/
 # onnxruntime/numpy pair as [vad], listed separately so it can diverge later).
 # The small silero-lang95 model is NOT baked; pulled + checksum-verified lazily
 # on first forced-segment scan, same opt-in pattern as [vad]'s silero VAD model.
-RUN pip install --no-cache-dir ".[vad,qe-onnx,lid]"
+# Nothing in a running subarr container installs packages: the entrypoint is
+# shell, the healthcheck and CMD are `python`. So pip is build-time-only, and
+# shipping it is pure attack surface plus a permanent CVE feed. Deleting it
+# beats upgrading it, because upgrading CANNOT win: pip carries its
+# dependencies vendored, `pip/_vendor/vendor.txt` pins setuptools==70.3.0 in
+# every version to date, and CVE-2025-47273 against it is not fixed until
+# setuptools 78.1.1. pip 26.2.1 also ships a licenses/ tree that makes those
+# vendored pins visible to trivy for the first time, so merely upgrading
+# TRADED six pip CVEs for two fixable HIGHs (setuptools + msgpack) and turned
+# the trivy gate red. Measured, not assumed: trivy on the published image, an
+# upgrade-only build and this one gave 6 / 3 / 0 pip-family findings, with
+# fixable HIGH/CRITICAL at 0 / 2 / 0.
+# ensurepip is cleared too, or `python -m ensurepip` restores pip 25.0.1 from
+# the wheel bundled in the stdlib — the ORIGINAL vulnerable version, which
+# trivy never flagged because it does not scan inside .whl files.
+RUN pip install --no-cache-dir ".[vad,qe-onnx,lid]" \
+    && pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.12/ensurepip/_bundled
 
 # #237: non-root runtime. Create a default subarr user/group (1000:1000,
 # overridable at runtime via PUID/PGID by the entrypoint). HF_HOME moves the QE

@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Security
+- **The published image no longer ships pip.** Nothing in a running subarr container installs packages, so pip was only ever needed while the image was being built, but it stayed in the finished image carrying six published advisories. The most serious of them lets a malicious package overwrite files outside its install directory during an install. It was invisible to the patching already in place: the build refreshes Debian packages every time, and pip is not a Debian package here, so that refresh could never see it. Upgrading pip does not fix it either, because pip carries its own dependencies bundled inside itself and every release to date pins a version of one of them with its own unfixed advisory, so an upgrade trades six findings for two. pip is now removed once it has finished installing subarr, which clears all six and introduces none. Verified by scanning the published image, an upgrade-only build and this one. The application itself is completely unchanged.
+
 ## [2.6.1] - 2026-09-03
 
 **Multi-library and multi-Sonarr setups could act on the wrong file.**
