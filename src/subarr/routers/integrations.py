@@ -219,8 +219,14 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
             # panel can show "Vision pre-filter active / inactive" with
             # the resolved model name, instead of users discovering it
             # only when a vision call fails.
+            # Reset so a model pulled outside subarr is picked up, then hand
+            # resolve_vision_model the names from the tags call above. Without
+            # that argument it re-GETs /api/tags for the same payload, which at
+            # the Settings page's 8s poll doubled the request rate forever.
             client.reset_vision_cache()
-            vision_resolved = await client.resolve_vision_model()
+            vision_resolved = await client.resolve_vision_model(
+                installed=[m.get("name", "") for m in models if isinstance(m, dict)]
+            )
             return {
                 "name": name,
                 "online": True,

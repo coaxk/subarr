@@ -7,6 +7,26 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Security
+- **The published image no longer ships pip.** Nothing in a running subarr container installs packages, so pip was only ever needed while the image was being built, but it stayed in the finished image carrying six published advisories. The most serious of them lets a malicious package overwrite files outside its install directory during an install. It was invisible to the patching already in place: the build refreshes Debian packages every time, and pip is not a Debian package here, so that refresh could never see it. Upgrading pip does not fix it either, because pip carries its own dependencies bundled inside itself and every release to date pins a version of one of them with its own unfixed advisory, so an upgrade trades six findings for two. pip is now removed once it has finished installing subarr, which clears all six and introduces none. Verified by scanning the published image, an upgrade-only build and this one. The application itself is completely unchanged.
+
+### Fixed
+- **The Settings page asked Ollama for the same model list twice on every refresh.** The integrations health check reads your installed models for the status panel, then worked out which vision model to use by asking Ollama for that exact list a second time. That page refreshes every 8 seconds, so it was a permanently doubled request rate for data it was already holding. It now reuses what it just fetched. Nothing you see changes, and it still notices a model you pull outside subarr.
+
+## [2.6.1] - 2026-09-03
+
+**Multi-library and multi-Sonarr setups could act on the wrong file.**
+
+Four fixes, all in how subarr works out which library a file belongs to. No config changes, no migration. If you run a single Sonarr and a single library, none of these could affect you and this release changes nothing for you.
+
+All four were reported by @AztecGuyGDL, with database extracts and API responses that made them findable.
+
+### Fixed
+- **Queueing an episode could act on a completely different show (#485).** On setups running more than one Sonarr, subarr identified an episode by an id that is only unique *within* one Sonarr, then looked it up in the wrong one. Clicking transcribe on one show could resolve to an unrelated episode in another library. On the manual page a separate check happened to block it, so it showed up as a confusing refusal; the automatic queue had no such check and could have transcribed the wrong episode and written a subtitle beside the wrong show. subarr now identifies the episode by its own library's Sonarr. Single-Sonarr setups were never affected and behave identically.
+- **Two libraries sharing a folder could lose track of which one a file belonged to (#483).** When two libraries pointed at the same filesystem root, files under it were silently attributed to the default library, which meant subtitles were requested for the wrong location. subarr now prefers the library you explicitly configured, and says so in the log when two libraries are genuinely indistinguishable.
+- **A config read blip could silently drop your extra libraries (#483).** subarr stores extra library definitions in a settings file. If that file could not be read for a moment, subarr treated it as "no extra libraries are configured" rather than "could not read what is configured", and quietly fell back to a single library for that load. Anything recorded during that window lost the marker saying which library a file belonged to, which on a multi-library setup produced a valid-looking but wrong path: subtitles were requested for the wrong location, and the file was reported as missing from disk. It corrected itself on the next successful read, which is what made it so hard to catch. subarr now keeps the libraries it already has when the settings file cannot be read, and says so plainly in the log instead of carrying on as if nothing were configured. Only multi-library setups were affected.
+- **subarr counted its own forced subtitles as full coverage (#485).** A `.en.forced.srt` sidecar next to a video was read as English coverage, so Coverage under-reported the gap and the manual queue refused the file with "An English subtitle already exists on disk". This is a closed loop rather than a corner case: subarr's own forced-segment feature writes exactly those files, and the previous release made that the default naming. So subarr produced a forced sidecar, counted it as coverage, and then declined to produce the full subtitle you actually wanted. Forced sidecars no longer count, in either naming order, matching how subarr has always treated forced tracks embedded in the video. Verified against 3,820 real subtitle filenames from a live library with no change to any other result.
+
 ## [2.6.0] - 2026-09-01
 
 **Image subtitles are fillable, and our own setup docs were losing your data.**

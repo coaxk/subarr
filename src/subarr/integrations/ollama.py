@@ -201,7 +201,7 @@ class OllamaClient:
         models = data.get("models", []) if isinstance(data, dict) else []
         return [m.get("name", "") for m in models if isinstance(m, dict)]
 
-    async def resolve_vision_model(self) -> str | None:
+    async def resolve_vision_model(self, installed: list[str] | None = None) -> str | None:
         """#232: figure out which vision-capable model to use right now.
 
         Logic:
@@ -216,13 +216,21 @@ class OllamaClient:
              state, the text model would hallucinate.
 
         Result is cached on the instance until reset_vision_cache() is
-        called (Settings save / model pull completion clears it)."""
+        called (Settings save / model pull completion clears it).
+
+        `installed` lets a caller that has ALREADY fetched /api/tags hand the
+        model names in rather than making us fetch the identical payload a
+        second time. The integrations-health probe does exactly that: it reads
+        the model list for its badges, resets this cache so an externally
+        pulled model is noticed, and would otherwise re-GET /api/tags on every
+        poll for data it is already holding."""
         if self._vision_model_resolved is not None:
             return self._vision_model_resolved or None
         if not self._configured:
             self._vision_model_resolved = ""
             return None
-        installed = await self.installed_models()
+        if installed is None:
+            installed = await self.installed_models()
         if not installed:
             self._vision_model_resolved = ""
             return None
