@@ -4,6 +4,16 @@
 *.bundle.js.map text eol=lf
 src/subarr/static/v1/**/*.html text eol=lf
 
+# Every shell script here is executed on Linux: docker-entrypoint.sh is COPYd
+# into the image, deploy/scripts/install.sh is run by users, the rest are
+# dev/ops helpers run under WSL. A Windows checkout with core.autocrlf=true
+# rewrites them to CRLF, which turns the shebang into `#!/bin/sh\r` and makes
+# the kernel look for an interpreter that does not exist. The image then dies
+# with `exec /usr/local/bin/docker-entrypoint.sh: no such file or directory`,
+# naming the script rather than the cause. CI checks out LF so it never sees
+# this; only local builds break. Same reasoning as the .githooks pin below.
+*.sh text eol=lf
+
 # Git hooks are POSIX sh — pin to LF so a CRLF shebang (#!/bin/sh\r) can't
 # break execution on Linux/macOS (incl. CI clones).
 .githooks/* text eol=lf
