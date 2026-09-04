@@ -10,6 +10,9 @@ breaking config changes.
 ### Security
 - **The published image no longer ships pip.** Nothing in a running subarr container installs packages, so pip was only ever needed while the image was being built, but it stayed in the finished image carrying six published advisories. The most serious of them lets a malicious package overwrite files outside its install directory during an install. It was invisible to the patching already in place: the build refreshes Debian packages every time, and pip is not a Debian package here, so that refresh could never see it. Upgrading pip does not fix it either, because pip carries its own dependencies bundled inside itself and every release to date pins a version of one of them with its own unfixed advisory, so an upgrade trades six findings for two. pip is now removed once it has finished installing subarr, which clears all six and introduces none. Verified by scanning the published image, an upgrade-only build and this one. The application itself is completely unchanged.
 
+### Fixed
+- **The Settings page asked Ollama for the same model list twice on every refresh.** The integrations health check reads your installed models for the status panel, then worked out which vision model to use by asking Ollama for that exact list a second time. That page refreshes every 8 seconds, so it was a permanently doubled request rate for data it was already holding. It now reuses what it just fetched. Nothing you see changes, and it still notices a model you pull outside subarr.
+
 ## [2.6.1] - 2026-09-03
 
 **Multi-library and multi-Sonarr setups could act on the wrong file.**

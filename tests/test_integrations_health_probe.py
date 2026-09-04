@@ -6,9 +6,11 @@ fire-and-forget fix.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from subarr.integrations import IntegrationError
+from subarr.integrations.ollama import OllamaClient
 from subarr.routers.integrations import _probe
 
 
@@ -84,3 +86,42 @@ async def test_both_fail_marks_offline_no_dangling_task():
         "bazarr_badges",
     )
     assert out["online"] is False
+
+
+# The ollama probe must cost ONE /api/tags per poll, not two.
+
+
+@pytest.mark.asyncio
+async def test_ollama_probe_fetches_tags_once():
+    """The ollama probe used to GET /api/tags TWICE on every poll: once for the
+    model list, then it reset the vision cache and called resolve_vision_model(),
+    which re-fetched the identical payload through installed_models(). The
+    Settings page polls this every 8s, so that is a doubled request forever for
+    data already in hand. The resolution itself must still work, hence the
+    vision_model_resolved assertion below."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200,
+                json={"models": [{"name": "qwen2.5vl:7b"}, {"name": "qwen2.5:7b"}]},
+            )
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.33.3"})
+        return httpx.Response(404)
+
+    c = OllamaClient(base_url="http://ollama.test", model="qwen2.5:7b", vision_model="auto")
+    c._configured = True
+    c._client = httpx.AsyncClient(base_url="http://ollama.test", transport=httpx.MockTransport(handler))
+
+    out = await _probe("ollama", c, "ollama_models")
+
+    assert out["online"] is True
+    assert out["badges"]["models"] == 2
+    assert out["badges"]["vision_model_resolved"] == "qwen2.5vl:7b"
+    assert calls.count("/api/tags") == 1, "expected 1 /api/tags per probe, got %d: %r" % (
+        calls.count("/api/tags"),
+        calls,
+    )
