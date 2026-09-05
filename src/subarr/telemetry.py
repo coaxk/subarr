@@ -448,7 +448,14 @@ class TelemetryCollector:
 
 
 def _onboarding_step(app_state) -> int | None:
-    """#202: coarse furthest/current onboarding step (0-11). Best-effort."""
+    """#202: coarse furthest/current onboarding step (0..MAX_STEP, currently 0-12). Best-effort.
+
+    The range moves whenever the wizard gains a step, and has twice: the
+    stored integer means a different screen before and after each
+    insertion. Any analysis of this field has to bucket by subarr_version
+    first, so do not treat the numbers as comparable across releases.
+    See onboarding.STEP_* and the frontend-parity test beside them.
+    """
     try:
         return int(app_state.onboarding.get().step)
     except Exception:
