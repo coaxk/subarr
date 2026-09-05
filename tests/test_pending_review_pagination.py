@@ -91,3 +91,127 @@ def test_default_request_still_works_for_existing_callers(app_with_stub):
     body = app_with_stub.get(PENDING).json()
     assert body["count"] == 450
     assert 0 < len(body["items"]) <= 450
+
+
+# ── Server-side Review ordering (#448/#449 follow-on) regressions ───────────
+# Phase 2 pins down `_sort_pending_review_rows` in audio_lang.py: media rank
+# (only media_type == "movie" is rank 1/last; every missing / episode / show /
+# legacy / unknown value is TV), case-insensitive casefold title order, and a
+# deterministic canonical-identity tie-break that ignores snapshot traversal.
+
+
+def _review_item(title, media_type, path):
+    """A suspect snapshot item -> exactly one pending Review row. `media_type`
+    None omits the key (models 'missing/unknown'); 'movie' sorts after every
+    TV-ish value. `path` is both the file and canonical identity."""
+    item = {
+        "file_canonical_path": path,
+        "canonical_path": path,
+        "title": title,
+        "audio_label_suspect": True,
+    }
+    if media_type is not None:
+        item["media_type"] = media_type
+    return item
+
+
+def test_mixed_media_and_case_insensitive_title_ordering(app_with_stub):
+    # TV/episode plus missing/legacy-media rows all sort BEFORE movies, and
+    # titles are alphabetical case-insensitively within each bucket — even when
+    # the snapshot traversal order is deliberately unsorted (movies interleaved
+    # with TV, titles out of order, mixed case).
+    rows = [
+        _review_item("mango", "movie", "Movies/mango.mkv"),
+        _review_item("Zulu", "episode", "TV/Ep/Zulu.mkv"),
+        _review_item("Hotel", "movie", "Movies/Hotel.mkv"),
+        _review_item("India", "movie", "Movies/India.mkv"),
+        _review_item("apple", "episode", "TV/Ep/apple.mkv"),
+        _review_item("Bravo", "show", "TV/Show/Bravo.mkv"),
+        _review_item("echo", "series", "TV/Legacy/echo.mkv"),  # legacy media value
+        _review_item("Delta", None, "TV/Season/Delta.mkv"),  # missing media_type
+    ]
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+
+    items = app_with_stub.get(PENDING, params={"limit": 100, "offset": 0}).json()["items"]
+    got = [it["canonical_path"] for it in items]
+    assert got == [
+        # TV bucket (rank 0) first — casefold-alphabetical:
+        "TV/Ep/apple.mkv",  # lowercase 'a' sorts before uppercase-leading titles
+        "TV/Show/Bravo.mkv",
+        "TV/Season/Delta.mkv",  # missing media_type -> TV
+        "TV/Legacy/echo.mkv",  # legacy "series" value -> TV
+        "TV/Ep/Zulu.mkv",
+        # then all movies (rank 1), casefold-alphabetical:
+        "Movies/Hotel.mkv",
+        "Movies/India.mkv",
+        "Movies/mango.mkv",
+    ]
+    # Explicit case-insensitivity proofs (raw ASCII ordering would differ):
+    # 'Z'(90) < 'a'(97), so a case-sensitive sort would place Zulu before apple…
+    assert got.index("TV/Ep/apple.mkv") < got.index("TV/Ep/Zulu.mkv")
+    # …and a lowercase-leading title must not sink behind uppercase-leading ones.
+    assert got.index("TV/Ep/apple.mkv") == 0
+    # Media rank beats title: movie "Hotel" still trails every TV row incl. "Zulu".
+    assert got.index("TV/Ep/Zulu.mkv") < got.index("Movies/Hotel.mkv")
+
+
+def test_equal_titles_break_deterministically_by_canonical_identity(app_with_stub):
+    # Rows that normalize to the SAME title ("the show") must order by canonical
+    # identity ascending — never by snapshot traversal order. The traversal is
+    # seeded in the OPPOSITE (descending-identity) order to prove the tie-break
+    # (not the input order) decides; a synthetic row with a None file path
+    # exercises the canonical_path fallback.
+    rows = [
+        _review_item("THE SHOW", None, "ZZZ.mkv"),
+        {
+            # Bazarr-synthetic: file_canonical_path is None, keyed only on canonical.
+            "file_canonical_path": None,
+            "canonical_path": "MMM.mkv",
+            "title": "The Show",
+            "audio_label_suspect": True,
+        },
+        _review_item("the show", None, "AAA.mkv"),
+    ]
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+
+    items = app_with_stub.get(PENDING, params={"limit": 100, "offset": 0}).json()["items"]
+    got = [it["canonical_path"] for it in items]
+    # Identities ascend AAA.mkv < MMM.mkv < ZZZ.mkv, independent of the ZZZ/MMM/AAA
+    # traversal order above.
+    assert got == ["AAA.mkv", "MMM.mkv", "ZZZ.mkv"]
+    assert got != ["ZZZ.mkv", "MMM.mkv", "AAA.mkv"], "must not follow snapshot order"
+
+
+def test_server_side_order_is_stable_across_small_pages(app_with_stub):
+    # The authoritative order must be applied BEFORE offset/limit slicing, so
+    # page membership is deterministic: paging a mixed set in small pages and
+    # concatenating must reproduce the full sorted order (disjoint + exhaustive).
+    tv_titles = ["apple", "Bravo", "Charlie", "delta", "EchoEp", "foxtrot", "GolfShow", "hotel"]
+    mv_titles = [
+        "AppleMovie",
+        "bananaMovie",
+        "CherryMovie",
+        "deltaMovie",
+        "EchoMovie",
+        "figMovie",
+        "GrapeMovie",
+        "honeyMovie",
+    ]
+    tv_rows = [
+        _review_item(t, {1: "show", 3: None, 5: "series"}.get(i, "episode"), f"TV/{t}.mkv")
+        for i, t in enumerate(tv_titles)
+    ]
+    mv_rows = [_review_item(t, "movie", f"Movies/{t}.mkv") for t in mv_titles]
+    # Traversal deliberately unsorted: movies (which must sort last) are fed
+    # first and the TV rows are reversed, so input order is nowhere near output.
+    rows = mv_rows + list(reversed(tv_rows))
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+
+    expected = [f"TV/{t}.mkv" for t in tv_titles] + [f"Movies/{m}.mkv" for m in mv_titles]
+    seen: list[str] = []
+    for off in range(0, len(expected), 4):
+        page = app_with_stub.get(PENDING, params={"limit": 4, "offset": off}).json()["items"]
+        seen += [it["canonical_path"] for it in page]
+    assert seen == expected
+    assert len(seen) == len(expected)
+    assert len(set(seen)) == len(expected), "no row duplicated or skipped across pages"

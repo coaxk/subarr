@@ -10,6 +10,7 @@ GET  /api/audio-lang/pending-review?search=&limit=&offset= — coverage rows nee
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -777,6 +778,10 @@ async def pending_review(
     }
     if flag_filter != "all":
         pending = [p for p in pending if p.get("flag") == flag_filter]
+    # Sort the fully-classified, searched, filtered set into the authoritative
+    # Review order (TV first, then movies; titles case-insensitively alphabetical)
+    # immediately before slicing so page membership is deterministic (see helper).
+    pending = _sort_pending_review_rows(pending)
     total = len(pending)
     return {
         "count": total,
@@ -798,6 +803,44 @@ def _matches_pending_search(row: dict[str, Any], needle: str) -> bool:
         f"{(row.get('file_canonical_path') or row.get('canonical_path') or '')}"
     ).lower()
     return needle in hay
+
+
+def _sort_pending_review_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return `rows` in the authoritative Review ordering WITHOUT mutating any row.
+
+    Page membership must not depend on coverage-snapshot traversal order: that
+    order is itself non-deterministic across snapshots, so relying on a stable
+    sort against the CURRENT input order cannot fix page membership. The client
+    (review.jsx) only reorders rows within an already-fetched page — grouping by
+    title, splitting TV Shows vs Movies, numeric episode sort, and sinking
+    auto-multilingual rows last — so it cannot repair page membership either.
+    This helper therefore establishes an authoritative total order BEFORE the
+    offset/limit slice:
+
+      1. Media rank first: `media_type == "movie"` (rank 1) sorts AFTER every
+         other value — missing/None, "episode", "show", "series", and any
+         unknown/legacy value are all rank 0 and treated as TV, mirroring the
+         review.jsx TV/movie split (`g.media_type !== 'movie'` → TV Shows). Only
+         one TV bucket exists; no third category is introduced.
+      2. Title, compared case-insensitively via Unicode-safe `str.casefold()`.
+      3. Deterministic row identity (`file_canonical_path`, falling back to
+         `canonical_path`) breaks normalized-title ties. When both paths are
+         empty (practically impossible on real snapshot rows), a canonical JSON
+         fingerprint of the row provides a stable, orderable final fallback, so
+         equal-titled rows can never reorder on snapshot traversal.
+    """
+
+    def sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+        identity = row.get("file_canonical_path") or row.get("canonical_path") or ""
+        if not identity:
+            identity = json.dumps(row, sort_keys=True, default=str)
+        return (
+            0 if row.get("media_type") != "movie" else 1,
+            (row.get("title") or "").casefold(),
+            identity,
+        )
+
+    return sorted(rows, key=sort_key)
 
 
 # ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───
