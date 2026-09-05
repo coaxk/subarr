@@ -25,6 +25,17 @@ from subarr.onboarding import (
     MAX_STEP,
     STEP_BAZARR,
     STEP_DONE,
+    STEP_FIRST_WALK,
+    STEP_GPU,
+    STEP_MEDIA,
+    STEP_OLLAMA,
+    STEP_RADARR,
+    STEP_SONARR,
+    STEP_SPEECH,
+    STEP_STACKS,
+    STEP_SUBGEN,
+    STEP_SUBGEN_SETUP,
+    STEP_TAUTULLI,
     STEP_WELCOME,
     OnboardingStore,
 )
@@ -198,3 +209,61 @@ def test_probe_paths_not_a_directory(tmp_path: Path):
     r = probe_paths(ProbePathsRequest(media_root=str(f)), _MockRequest())
     assert r["ok"] is False
     assert "not a directory" in r["error"]
+
+
+# ─── STEP_* constants must match the frontend wizard ────────────────
+
+
+def test_step_constants_match_frontend_steps():
+    """The backend STEP_* names are only meaningful if they index the same
+    list the wizard renders. They drifted twice without anyone noticing:
+    #231 inserted subgen-setup and #384 inserted stacks, and every constant
+    after the insertion point silently became wrong. That is invisible at
+    runtime, because only MAX_STEP and STEP_DONE are read, so it surfaced
+    only when the #480 telemetry cut tried to name the step an install had
+    stopped on and got a confident wrong answer.
+
+    Parsing the JSX is deliberate: the frontend STEPS array is the authority
+    on numbering, so the test has to read it rather than a copy of it."""
+    import re
+
+    jsx = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "subarr"
+        / "static"
+        / "v1"
+        / "home-hifi"
+        / "onboarding.jsx"
+    )
+    src = jsx.read_text(encoding="utf-8")
+    block = re.search(r"const STEPS = \[(.*?)\n\];", src, re.S)
+    assert block, "could not find the STEPS array in onboarding.jsx"
+    ids = re.findall(r"id: '([a-z-]+)'", block.group(1))
+    assert ids, "parsed no step ids out of STEPS"
+
+    index = {name: i for i, name in enumerate(ids)}
+    expected = {
+        "welcome": STEP_WELCOME,
+        "paths": STEP_MEDIA,
+        "bazarr": STEP_BAZARR,
+        "sonarr": STEP_SONARR,
+        "radarr": STEP_RADARR,
+        "stacks": STEP_STACKS,
+        "tautulli": STEP_TAUTULLI,
+        "subgen": STEP_SUBGEN,
+        "subgen-setup": STEP_SUBGEN_SETUP,
+        "ollama": STEP_OLLAMA,
+        "gpu": STEP_GPU,
+        "speech": STEP_SPEECH,
+        "walk": STEP_FIRST_WALK,
+    }
+    for step_id, constant in expected.items():
+        assert step_id in index, f"{step_id} vanished from the frontend STEPS"
+        assert index[step_id] == constant, (
+            f"{step_id}: frontend index {index[step_id]} != constant {constant}"
+        )
+
+    # STEP_DONE is the resting cursor after completion = the last index.
+    assert STEP_DONE == len(ids) - 1
+    assert MAX_STEP == STEP_DONE

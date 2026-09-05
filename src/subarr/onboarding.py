@@ -21,9 +21,9 @@ Design choices:
 
 - **Step numbering** is a contiguous resume cursor 0..MAX_STEP. The wizard
   frontend owns the rendering and the exact step list; the backend only tracks
-  the integer and clamps it. Two steps are frontend-only and not separately
-  numbered here (subgen-setup, and the #378 "More stacks" pointer), so the
-  named STEP_* constants below are documentation, not a 1:1 index map.
+  the integer and clamps it. The named STEP_* constants mirror that list
+  exactly and a test parses the frontend array to keep them honest, because
+  they silently drifted twice when steps were inserted mid-list.
 """
 
 from __future__ import annotations
@@ -39,24 +39,33 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
-# Canonical step indices — keep in sync with frontend.
+# Canonical step indices — a true 1:1 map of the frontend STEPS array in
+# static/v1/home-hifi/onboarding.jsx, guarded by
+# tests/test_onboarding.py::test_step_constants_match_frontend_steps, which
+# parses that array rather than trusting a copy of it.
+#
+# These drifted twice before that guard existed. #231 inserted subgen-setup and
+# #384 inserted stacks, and every constant after each insertion point silently
+# became wrong. Nothing broke at runtime, because only MAX_STEP and STEP_DONE
+# are actually read, so the error stayed invisible until the #480 telemetry cut
+# tried to name the step an install had stopped on. A stale index there does not
+# fail, it answers confidently and wrongly about which screen loses users.
 STEP_WELCOME = 0
 STEP_MEDIA = 1
 STEP_BAZARR = 2
 STEP_SONARR = 3
 STEP_RADARR = 4
-STEP_TAUTULLI = 5
-STEP_SUBGEN = 6
-STEP_OLLAMA = 7
-STEP_GPU = 8
-STEP_SPEECH = 9  # #111 — speech-aware audio (silero VAD) opt-in
-STEP_FIRST_WALK = 10
-# #378 Phase 5: the wizard gained the optional frontend-only "More stacks" step,
-# so the last reachable frontend index is now 12. Two frontend-only steps are
-# interspersed among the named constants below (subgen-setup after STEP_SUBGEN,
-# stacks after STEP_RADARR), so those names are documentation, not a 1:1 index
-# map — only MAX_STEP and STEP_DONE are read at runtime. STEP_DONE is the resume
-# cursor's resting index after completion = the final step index.
+STEP_STACKS = 5  # #384 — optional pointer to Settings ▸ Instances
+STEP_TAUTULLI = 6
+STEP_SUBGEN = 7
+STEP_SUBGEN_SETUP = 8  # #231 — guided hardware-matched model setup
+STEP_OLLAMA = 9
+STEP_GPU = 10
+STEP_SPEECH = 11  # #111 — speech-aware audio (silero VAD) opt-in
+STEP_FIRST_WALK = 12
+
+# The resume cursor's resting index after completion = the final step index,
+# hence equal to STEP_FIRST_WALK.
 STEP_DONE = 12
 
 # Maximum step value the API accepts. STEP_DONE marks completion.
