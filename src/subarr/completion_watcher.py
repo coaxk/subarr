@@ -235,12 +235,22 @@ class CompletionWatcher:
         caps = self._caps_provider()
         if caps is not None and caps.reachable and not caps.has_queue:
             if not self._warned_no_queue:
+                # A missing /queue means the running CODE is vanilla, which is
+                # NOT the same as "the image is vanilla" -- and saying the
+                # latter sends the operator looking in the wrong place. See
+                # coaxk/subarr-subgen#59, where subarr-subgen was pulled
+                # correctly and UPDATE=True made its launcher download vanilla
+                # subgen.py over our patched one at every start.
                 log.warning(
                     "completion watcher: subgen has no /queue endpoint "
-                    "(compat mode — vanilla subgen). %d pending provenance "
-                    "entries won't auto-complete via queue polling. "
-                    "File-watch fallback is v1.x; for now, restart subgen "
-                    "or use subarr-subgen image for auto-completion.",
+                    "(compat mode). %d pending provenance entries won't "
+                    "auto-complete via queue polling. Either subgen is the "
+                    "vanilla upstream image, or it IS subarr-subgen but is "
+                    "running vanilla code because UPDATE / LAUNCHER_UPDATE / "
+                    "BRANCH made its launcher re-download subgen.py over the "
+                    "patched one (subarr-subgen#59; fixed in image "
+                    "2026.08.1-r7, and unsetting those vars fixes it on any "
+                    "build). File-watch fallback is v1.x.",
                     len(pending),
                 )
                 self._warned_no_queue = True

@@ -157,6 +157,11 @@ class ScanRunner:
                 "Scan submission requires the /batch endpoint, which "
                 "vanilla mccloud/subgen doesn't ship. Switch to "
                 "ghcr.io/coaxk/subarr-subgen for full functionality. "
+                "If you are ALREADY on that image, check the subgen "
+                "container for UPDATE / LAUNCHER_UPDATE / BRANCH: upstream's "
+                "launcher re-downloads subgen.py over the patched one at "
+                "startup, so the image is right and the running code is not "
+                "(subarr-subgen#59). "
                 "See docs at https://github.com/coaxk/subarr#compat-mode"
             )
 
