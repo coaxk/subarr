@@ -665,6 +665,7 @@ async def pending_review(
     flag_filter: str = Query(
         "all", alias="flag", pattern="^(all|suspect|unknown|track_mismatch|multilingual)$"
     ),
+    grouped: bool = Query(False, description="page complete groups (#494) instead of individual files"),
 ) -> dict[str, Any]:
     """v1.1-O Layer 4: surface coverage rows that need user audio-lang
     verification — suspect or unknown flags set, no existing verification.
@@ -675,7 +676,23 @@ async def pending_review(
     Classification (track-mismatch -> auto-multi -> verified skip ->
     suspect/unknown) always runs over the COMPLETE pending set; search and
     page slicing are applied only after classification, so precedence is
-    unaffected by pagination and `count` is the total matching rows."""
+    unaffected by pagination and `count` is the total matching rows.
+
+    `grouped=true` (#494) switches paging from FILES to COMPLETE GROUPS so
+    Review never splits one show/movie across pages. The pipeline order is
+    fixed and identical in both modes: classify the full set (precedence above)
+    -> `_matches_pending_search` over individual rows -> flag filter ->
+    `_sort_pending_review_rows` (#493 deterministic order) -> THEN group -> page
+    GROUPS -> flatten every row of each selected group into `items`. Filtering
+    happens per-row BEFORE grouping, so a search/flag that matches only some of
+    a would-be group's rows admits just those rows (and that group only if it
+    still has matching rows). `count` stays the total matching FILES;
+    `group_count` is the matching groups; `limit`/`offset`/`page_count`/
+    `has_more` address GROUPS; no group is ever file-capped or split. Group
+    identity is library slug + media lane + the Sonarr series / Radarr movie id
+    from the source row's nested `bazarr` data, with safe canonical fallbacks
+    when absent - never bare title (see `_pending_group_key`). Default mode
+    (grouped omitted/false) is unchanged."""
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
     # #406: key the multilingual lane on the STORE source (not the snapshot's
@@ -747,25 +764,32 @@ async def pending_review(
             flag = "unknown"
         if not flag:
             continue
-        pending.append(
-            {
-                "canonical_path": it.get("canonical_path"),
-                "file_canonical_path": file_path,
-                "title": it.get("title"),
-                "episode_number": it.get("episode_number"),
-                "original_language": it.get("original_language"),
-                "audio_langs": it.get("audio_langs"),
-                "flag": flag,
-                "notes": it.get("audio_label_notes"),
-                # media_type ('movie' | 'episode'/'show') lets the Review UI
-                # split the list into TV Shows vs Movies, mirroring Coverage.
-                "media_type": it.get("media_type"),
-                # #378: library provenance — reuse the label coverage already
-                # emitted on this row (no re-resolution needed).
-                "library": it.get("library"),
-                **extra,
-            }
-        )
+        entry = {
+            "canonical_path": it.get("canonical_path"),
+            "file_canonical_path": file_path,
+            "title": it.get("title"),
+            "episode_number": it.get("episode_number"),
+            "original_language": it.get("original_language"),
+            "audio_langs": it.get("audio_langs"),
+            "flag": flag,
+            "notes": it.get("audio_label_notes"),
+            # media_type ('movie' | 'episode'/'show') lets the Review UI
+            # split the list into TV Shows vs Movies, mirroring Coverage.
+            "media_type": it.get("media_type"),
+            # #378: library provenance — reuse the label coverage already
+            # emitted on this row (no re-resolution needed).
+            "library": it.get("library"),
+            **extra,
+        }
+        # Grouped mode needs the Arr identity this public row contract drops.
+        # Retain it on a reserved internal key (stripped before serialization)
+        # so grouping never has to reconstruct identity from title (#494).
+        _bazarr = it.get("bazarr") if isinstance(it.get("bazarr"), dict) else {}
+        entry[_REVIEW_RESERVED_PREFIX + "identity"] = {
+            "sonarr_id": _bazarr.get("sonarr_id"),
+            "radarr_id": _bazarr.get("radarr_id"),
+        }
+        pending.append(entry)
     # Case-insensitive search over the client-visible review fields, applied to
     # the FULLY-CLASSIFIED pending set (before any slicing). Mirrors the haystack
     # the Review UI built client-side so behavior is preserved server-side.
@@ -783,6 +807,23 @@ async def pending_review(
     # immediately before slicing so page membership is deterministic (see helper).
     pending = _sort_pending_review_rows(pending)
     total = len(pending)
+    if grouped:
+        group_count, groups, items, page_count, has_more = _group_and_page(pending, limit, offset)
+        return {
+            # `count` keeps FILE semantics in both modes: total matching files.
+            "count": total,
+            "counts_by_flag": counts_by_flag,
+            "flag": flag_filter,
+            "group_count": group_count,
+            "limit": limit,
+            "offset": offset,
+            "page_count": page_count,
+            "has_more": has_more,
+            "groups": groups,
+            "items": items,
+        }
+    # Default file-paged mode (unchanged): every item is a flat public row, with
+    # the reserved identity keys stripped so the row contract is byte-identical.
     return {
         "count": total,
         "counts_by_flag": counts_by_flag,
@@ -791,7 +832,7 @@ async def pending_review(
         "offset": offset,
         "page_count": (total + limit - 1) // limit,
         "has_more": offset + limit < total,
-        "items": pending[offset : offset + limit],
+        "items": [_pending_row_public(r) for r in pending[offset : offset + limit]],
     }
 
 
@@ -841,6 +882,123 @@ def _sort_pending_review_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         )
 
     return sorted(rows, key=sort_key)
+
+
+# ─── #494 grouped=true complete-group paging helpers ─────────────────────────
+# These run ONLY in grouped mode; default file-paging never reaches them.
+# Reserved-key prefix: internal keys never appear in the serialized response.
+_REVIEW_RESERVED_PREFIX = "_review_"
+
+
+def _pending_row_public(row: dict[str, Any]) -> dict[str, Any]:
+    """Project an internal classified row down to the public pending-review row
+    contract, dropping the reserved `_review_*` identity key added for grouped
+    mode. Preserves key order, so the default response stays byte-identical to
+    the pre-grouping contract. Never mutates `row`."""
+    return {k: v for k, v in row.items() if not k.startswith(_REVIEW_RESERVED_PREFIX)}
+
+
+def _row_library_slug(row: dict[str, Any]) -> str:
+    """Library slug for a classified row: from its provenance `library` label
+    when present (real coverage rows always carry it), else from the canonical
+    `@<slug>/` head of its file/canonical path. The default library's slug is
+    '' (matches `paths._split_canonical`'s fail-soft semantics)."""
+    lib = row.get("library")
+    if isinstance(lib, dict) and lib.get("slug") is not None:
+        return str(lib.get("slug"))
+    head = row.get("file_canonical_path") or row.get("canonical_path") or ""
+    if head.startswith("@"):
+        return head[1:].split("/", 1)[0]
+    return ""
+
+
+def _pending_group_key(row: dict[str, Any]) -> str:
+    """Stable group identity for ONE classified row. Never bare title: distinct
+    same-titled shows/movies in different libraries (or with different Arr
+    identities) must not merge, and Review must never reconstruct identity from
+    title. A group = one series (all its episode rows) or one movie. Ladder:
+
+      1. library slug + media lane + the applicable Arr identity read from the
+         source row's nested `bazarr` data: `bazarr.radarr_id` for movie rows,
+         `bazarr.sonarr_id` for every non-movie row (episode/show/series/
+         missing/legacy media -> the Sonarr/series lane, matching #493's
+         media-ordering bucket).
+      2. When the Arr identity is absent, fall back to the row's canonical
+         group/root (`canonical_path` - the series/movie folder), which is
+         library-namespaced by its `@<slug>/` head when non-default.
+      3. Only when no canonical root exists either, a deterministic
+         file/canonical identity fallback (`file_canonical_path`, else
+         `canonical_path`, else '').
+    """
+    is_movie = (row.get("media_type") or "").strip() == "movie"
+    lane = "movie" if is_movie else "series"
+    identity = row.get(_REVIEW_RESERVED_PREFIX + "identity") or {}
+    arr = identity.get("radarr_id") if is_movie else identity.get("sonarr_id")
+    slug = _row_library_slug(row)
+    if arr is not None and str(arr) != "":
+        return f"lib:{slug}|{lane}:{arr}"
+    root = row.get("canonical_path") or ""
+    if root:
+        return f"lib:{slug}|{lane}:root:{root}"
+    file_id = row.get("file_canonical_path") or row.get("canonical_path") or ""
+    return f"lib:{slug}|{lane}:file:{file_id}"
+
+
+def _group_and_page(
+    rows: list[dict[str, Any]], limit: int, offset: int
+) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]], int, bool]:
+    """Group already-filtered, already-#493-sorted rows deterministically and
+    page the GROUPS (not files). Returns (group_count, selected-group-metadata,
+    flattened-public-items, page_count, has_more).
+
+    Group order and row-within-group order are the caller's #493 order (groups
+    appear in the order their first row appears; rows keep their sort order
+    inside the group). Display metadata comes from each group's FIRST
+    deterministically ordered row. Does NOT mutate `rows` or any row dict - the
+    only mutations are to freshly-created internal group containers."""
+    ordered: list[dict[str, Any]] = []
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = _pending_group_key(row)
+        group = by_key.get(key)
+        if group is None:
+            group = {
+                "key": key,
+                "rows": [row],
+                # display metadata from the first deterministically-ordered row
+                "title": row.get("title"),
+                "media_type": row.get("media_type"),
+                "library": row.get("library"),
+                "canonical_root": row.get("canonical_path"),
+            }
+            by_key[key] = group
+            ordered.append(group)
+        else:
+            group["rows"].append(row)
+    group_count = len(ordered)
+    page_count = (group_count + limit - 1) // limit if group_count else 0
+    has_more = offset + limit < group_count
+    selected = ordered[offset : offset + limit]
+    groups: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    for group in selected:
+        groups.append(
+            {
+                "key": group["key"],
+                "title": group["title"],
+                "media_type": group["media_type"],
+                "library": group["library"],
+                "canonical_root": group["canonical_root"],
+                "file_count": len(group["rows"]),
+            }
+        )
+        for row in group["rows"]:
+            public = _pending_row_public(row)
+            # Linkage so Review can render server-selected groups without
+            # reconstructing identity from title.
+            public["group_key"] = group["key"]
+            items.append(public)
+    return group_count, groups, items, page_count, has_more
 
 
 # ─── v1.2 Layer 3: robust Whisper detection (subarr-subgen v4.5+) ───
