@@ -192,8 +192,18 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
   // #310: one unified selection. Track-mismatch rows are selectable too — the
   // bulk bar partitions the selection by flag and offers Swap/Dismiss for the
   // track-mismatch half, language-assign for the rest.
-  const epIds = eps.map((e) => e.file_canonical_path || e.canonical_path);
+  // #494 P1-S4: `series` is a complete server-selected group, so eps.length IS
+  // the truthful per-group matching-file count (== series.file_count). "Select
+  // all" adds every rendered row's explicit path below — never an implicit
+  // group-level mutation.
+  const epIds = groupExplicitPaths(series);
   const checkedCount = epIds.filter((id) => epSelection.has(id)).length;
+  const countUnit = series.media_type === 'movie'
+    ? (eps.length === 1 ? 'file' : 'files')
+    : (eps.length === 1 ? 'ep' : 'eps');
+  const ariaUnit = series.media_type === 'movie'
+    ? (eps.length === 1 ? 'file' : 'files')
+    : (eps.length === 1 ? 'episode' : 'episodes');
   const allChecked = epIds.length > 0 && checkedCount === epIds.length;
   const indeterminate = checkedCount > 0 && !allChecked;
   return (
@@ -212,7 +222,7 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
         <CheckBox checked={allChecked}
                   indeterminate={indeterminate}
                   onChange={() => onToggleSelectAll(epIds, !allChecked)}
-                  label={`Select all ${eps.length} episodes of ${series.title}`} />
+                  label={`Select all ${eps.length} ${ariaUnit} of ${series.title}`} />
         <span style={{ color: 'var(--fg-3)', fontSize: 'var(--text-xs)' }}>
           {expanded ? '▾' : '▸'}
         </span>
@@ -224,8 +234,9 @@ function SeriesGroup({ series, expanded, onToggleExpand, selected, onToggleSelec
             </span>
           )}
         </span>
-        <span className="mono num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
-          {eps.length} {eps.length === 1 ? 'ep' : 'eps'}
+        <span className="mono num" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}
+          title={`${eps.length} matching file${eps.length === 1 ? '' : 's'} in this group`}>
+          {eps.length} {countUnit}
         </span>
         <span className="mono" style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
           {checkedCount > 0 ? `${checkedCount} selected` : ''}
@@ -327,36 +338,200 @@ export function acceptMultilingualBody(row) {
   };
 }
 
+// #494 P3-S2: the explicit per-file paths of a rendered server group. SeriesGroup's
+// "Select all" and every bulk path resolve each row's `file_canonical_path ||
+// canonical_path`; this is the single source so a complete rendered group maps to
+// EVERY matching explicit file path — never an implicit group-level mutation. Pure
+// + non-mutating, exported for the Phase-3 selection regressions. A group produced
+// by arrangeServerGroups carries `.items`; this also tolerates a bare {items:[...]}.
+export function groupExplicitPaths(group) {
+  return (group?.items || []).map((e) => e.file_canonical_path || e.canonical_path);
+}
+
+// #494 P2-S5: pure decision for Review's `audio-lang-verified` listener. While
+// a Review-originated language/multilingual batch is in flight, `gate` is a Set
+// of the batch's explicit file paths. The listener must NOT trigger Review's own
+// pending-review refetch for each file in that batch — the batch issues exactly
+// ONE authoritative silent refetch when it finishes. Events for files OUTSIDE
+// the batch (an arena live-sweep landing mid-batch, a single-file modal verify on
+// another file) still refetch so external verification is never dropped, and an
+// event with no trackable identity is not suppressed (we can't prove it belongs
+// to the batch). The global event itself is always dispatched — only Review's
+// reaction here is gated, leaving other listeners untouched. Pure + non-mutating
+// so it is unit-testable without a DOM (Phase 3). Exported for those tests.
+//   gate      — null when no Review bulk batch is in flight, else a Set of paths.
+//   eventPath — the verifying file's file_canonical_path (from event.detail).
+// Returns true when Review should run its silent pending-review refetch.
+export function shouldRefetchAfterVerify(gate, eventPath) {
+  if (!gate) return true;             // normal operation: refetch per verify
+  if (gate.size === 0) return false;  // armed but no identity to match -> Review batch
+  return !gate.has(eventPath);        // suppress the batch's own files only
+}
+
 // P3: build the /api/audio-lang/pending-review query string for server-side
 // search + page slicing. The server validates these (search max_length=200,
 // limit 1..500, offset >= 0) and applies search before slicing. Exported for
 // tests. Empty search is omitted so the URL stays clean.
-export function buildReviewQuery({ search = '', flag = 'all', limit = 200, offset = 0 }) {
+//
+// #494: Review alone opts into the additive grouped mode — the server then
+// pages COMPLETE groups (limit/offset address groups, not files). Grouped mode
+// is the Review default because Review is this helper's only caller; the
+// non-group /pending-review consumers (coverage/chrome/dashboard) build their
+// own queries and are untouched.
+export function buildReviewQuery({ search = '', flag = 'all', limit = 200, offset = 0, grouped = true }) {
   const q = new URLSearchParams();
   const s = (search || '').trim();
   if (s) q.set('search', s);
   if (flag && flag !== 'all') q.set('flag', flag);
   q.set('limit', String(limit));
   q.set('offset', String(offset));
+  if (grouped) q.set('grouped', 'true');
   return q.toString();
 }
 
 // P3: derive pagination facts from the server's TRUTHFUL total (`count` is the
 // total matching rows, not the page length) and the current page. Exported for
 // tests. hasNext/hasPrev drive the disabled boundaries of the page controls.
-export function computePagination({ count = 0, limit = 200, offset = 0 }) {
-  const total = Math.max(0, count || 0);
+//
+// #494: the same unit-agnostic math pages by whichever total the server pages —
+// FILES by default (legacy contract, `total`/`count` are files) or GROUPS in
+// grouped mode. Review passes grouped=true + groupCount so pageNumber/range/
+// next/previous describe group pages, while `count` (matching files) is still
+// carried through for the truthful file-total labels. Legacy callers/tests pass
+// no grouped flag and keep the exact prior file behavior.
+export function computePagination({ count = 0, limit = 200, offset = 0, grouped = false, groupCount = 0 }) {
+  const fileCount = Math.max(0, count || 0);
   const size = Math.max(1, limit || 1);
-  const totalPages = Math.max(1, Math.ceil(total / size));
+  // The paging-unit total: groups in grouped mode, files otherwise (legacy).
+  const unitTotal = grouped ? Math.max(0, groupCount || 0) : fileCount;
+  const totalPages = Math.max(1, Math.ceil(unitTotal / size));
   return {
-    total,
+    // `total` keeps its legacy meaning (files) unless grouped — Review derives
+    // its group range/next/prev from the group total and reads file totals from
+    // `fileCount`/`count` below.
+    total: unitTotal,
+    fileCount,
+    groupCount: grouped ? unitTotal : 0,
     totalPages,
     pageNumber: Math.floor(offset / size) + 1,
-    shownStart: total === 0 ? 0 : offset + 1,
-    shownEnd: Math.min(offset + size, total),
+    shownStart: unitTotal === 0 ? 0 : offset + 1,
+    shownEnd: Math.min(offset + size, unitTotal),
     hasPrev: offset > 0,
-    hasNext: offset + size < total,
+    hasNext: offset + size < unitTotal,
   };
+}
+
+// #494: arrange the server's grouped response for rendering. The backend pages
+// complete groups and flattens every row of the selected groups into `items`,
+// stamping each row with its group's stable `group_key`. This helper rebuilds
+// the render groups from `groups[]` (the authority for which groups exist, in
+// what order) by pulling each group's rows out of `items` via that link — it
+// never re-derives membership from `title`, never re-applies the flag filter,
+// and never drops a returned row. The only ordering we apply is presentation-
+// level WITHIN a group (numeric episode order, auto-multilingual last), which
+// cannot change group membership or how many rows a group shows. Pure + non-
+// mutating so it is safe in render and testable in isolation. Exported for the
+// Phase-3 rendering regressions.
+export function arrangeServerGroups({ groups = [], items = [] }) {
+  const byKey = new Map();
+  for (const it of items || []) {
+    const k = it?.group_key ?? '';
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(it);
+  }
+  const buildGroup = (meta) => {
+    // Copy so the episode sort below never mutates the shared byKey buckets.
+    const rows = (byKey.get(meta?.key) || []).slice();
+    rows.sort((a, b) =>
+      (a.episode_number || '').localeCompare(b.episode_number || '', undefined, { numeric: true })
+    );
+    const ordered = sortPendingRows(rows);  // #406: auto-multilingual rows sink last
+    const first = ordered[0] || {};
+    return {
+      // Stable backend identity — never the bare title, so duplicate display
+      // titles stay distinct groups (distinct React keys and expansion state).
+      key: meta?.key,
+      title: meta?.title ?? '(unknown)',
+      media_type: meta?.media_type,
+      library: meta?.library,
+      canonical_root: meta?.canonical_root,
+      // Truthful per-group matching count == rows actually rendered below.
+      file_count: ordered.length,
+      original_language: first.original_language,
+      items: ordered,
+    };
+  };
+  const arranged = (groups || []).map(buildGroup);
+  const tvGroups = arranged.filter((g) => g.media_type !== 'movie');
+  const movieGroups = arranged.filter((g) => g.media_type === 'movie');
+  const pageFileCount = arranged.reduce((sum, g) => sum + g.items.length, 0);
+  return { groups: arranged, tvGroups, movieGroups, pageFileCount };
+}
+
+// #494 P2-S5/P3-S3: the shared per-file verification batch driver used by both
+// Review bulk actions — language-assign (`applyBulk`) and multilingual accept
+// (`acceptSelected`). It encapsulates the bulk-event contract so it can be unit
+// tested without a DOM:
+//   - arms the bulk-in-flight gate (setGate) with the batch's explicit paths
+//     BEFORE the first file is processed, so the `audio-lang-verified` listener
+//     (shouldRefetchAfterVerify) suppresses Review's per-file refetch for the
+//     whole batch;
+//   - one `emitVerified(path, body)` per SUCCESSFUL file (never on a failed or a
+//     skipped null-body file) — the global event still reaches arena/other
+//     consumers exactly as before;
+//   - clears the gate in a finally (success AND error cleanup) via clearGate,
+//     then calls `refetchAfterBatch` exactly once — the single authoritative
+//     silent pending-review refetch for the batch.
+// The per-file mutation transport (the fetch + evidence) lives inside the
+// caller's injected `submit` — this helper never restructures it — and
+// `afterBatch` (remember-for-future in applyBulk) still runs inside the
+// gate-guarded try, before the gate clears. Pure of DOM/React and exported for
+// the Phase-3 bulk-event regressions; the component only wires real fetches,
+// the window dispatch, the gate ref, and fetchPending in here.
+export async function runVerifyBatch({
+  items,               // queue of batch units (explicit paths for applyBulk, rows for acceptSelected)
+  total,               // progress denominator (paths.length / rows.length)
+  submit,              // async (unit) => verifyBody|null  — build body + POST; null => skip; throw => failure
+  pathOf,              // (unit) => explicit path          — gate membership + event detail identity
+  emitVerified,        // (path, verifyBody) => void       — one global event per successful file
+  onProgress,          // (done, total, errors) => void
+  setGate,             // (Set) => void                    — arm bulkGateRef.current
+  clearGate,           // () => void                       — clear in success AND error cleanup
+  finish,              // () => void                       — post-batch UI state (bulkRunning off, clear selection)
+  afterBatch,          // async (ctx) => void              — optional gate-guarded post-worker work (remember-for-future)
+  refetchAfterBatch,   // () => void                       — THE one authoritative refetch, after gate clear
+  concurrency = 4,     // cap like the original 4-worker loops
+}) {
+  const units = (items || []).slice();
+  const stats = { done: 0, errors: 0 };
+  const bump = () => onProgress && onProgress(stats.done, total, stats.errors);
+  setGate(new Set(units.map((u) => pathOf(u)).filter(Boolean)));
+  async function worker() {
+    while (units.length) {
+      const unit = units.shift();
+      let body;
+      try {
+        body = await submit(unit);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('bulk verify failed for', pathOf(unit), e);
+        stats.errors += 1; stats.done += 1; bump();
+        continue;
+      }
+      if (!body) { stats.done += 1; bump(); continue; }  // empty builder -> skip, no fetch, no emit
+      emitVerified(pathOf(unit), body);                   // exactly one global event per success
+      stats.done += 1; bump();
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.max(1, concurrency) }, () => worker()));
+    if (afterBatch) await afterBatch(stats);
+  } finally {
+    clearGate();
+    if (finish) finish();
+  }
+  refetchAfterBatch();
+  return { done: stats.done, errors: stats.errors };
 }
 
 
@@ -507,6 +682,13 @@ export function ReviewPage() {
   // P3-S4: a request sequence token so a stale response (from an older query or
   // page) can never overwrite a newer one — the fetch guard in fetchPending.
   const fetchSeq = useRef(0);
+  // #494 P2-S5: bulk-in-flight gate. Non-null (a Set of the batch's explicit file
+  // paths) while a Review-originated applyBulk/acceptSelected batch is running.
+  // The `audio-lang-verified` listener reads it to skip Review's own per-file
+  // pending-review refetch during the batch; the batch performs one authoritative
+  // refetch when it finishes. A ref (not state) so arming/clearing never triggers
+  // a re-render or re-subscribes the event listener.
+  const bulkGateRef = useRef(null);
   // Selection: file_canonical_path (or canonical_path) for each ticked episode.
   const [epSelection, setEpSelection] = useState(() => new Set());
   // Series-level expansion state.
@@ -573,21 +755,27 @@ export function ReviewPage() {
     setIsRefetching(true);
     const startedAt = Date.now();
     try {
-      const q = buildReviewQuery({ search: debouncedSearch, flag: filter, limit, offset });
+      const q = buildReviewQuery({ search: debouncedSearch, flag: filter, limit, offset, grouped: true });
       const r = await fetch(`/api/audio-lang/pending-review?${q}`, {
         credentials: 'same-origin',
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const payload = await r.json();
       const items = payload?.items || [];
+      const groups = payload?.groups;                     // present in grouped mode
+      const isGrouped = Array.isArray(groups);
       if (seq !== fetchSeq.current) return;  // a newer query/page won the race
-      // P3-S2: empty-last-page recovery — if rows were deleted between fetches
-      // so this page is now past the end, step back to the previous valid page
-      // and refetch instead of leaving a blank invalid page. Guarded by the
-      // seq check above so a stale empty response can't step the offset back
-      // while a newer fetch is in flight. The offset change below re-triggers
-      // fetchPending via the query effect.
-      if (items.length === 0 && (payload?.count || 0) > 0 && offset > 0) {
+      // P3-S2 / #494 empty-last-page recovery — if a page became empty between
+      // fetches (e.g. its whole group was resolved/ignored), step back to the
+      // previous valid page and refetch instead of leaving a blank invalid page.
+      // In grouped mode an "empty page" means no GROUPS landed on it and the
+      // page total is measured in groups; `offset` here is a group offset too.
+      // Guarded by the seq check above so a stale empty response can't step the
+      // offset back while a newer fetch is in flight. The offset change below
+      // re-triggers fetchPending via the query effect.
+      const pageEmpty = isGrouped ? groups.length === 0 : items.length === 0;
+      const pageTotal = isGrouped ? (payload?.group_count || 0) : (payload?.count || 0);
+      if (pageEmpty && pageTotal > 0 && offset > 0) {
         setOffset(Math.max(0, offset - limit));
         return;
       }
@@ -614,7 +802,20 @@ export function ReviewPage() {
 
   useEffect(() => {
     fetchPending();
-    const onVerified = () => fetchPending({ silent: true });
+    // #494 P2-S5: Review's own per-file language/multilingual batches dispatch
+    // `audio-lang-verified` once per successful file. While such a batch is in
+    // flight (bulkGateRef.current holds the batch's explicit paths), skip Review's
+    // own pending-review refetch for each batch file — the batch issues exactly
+    // ONE authoritative silent refetch when it finishes (see applyBulk/
+    // acceptSelected). Events for files OUTSIDE the batch still refetch. The
+    // global event is always dispatched to every listener; only Review's reaction
+    // here is gated, so arena/other consumers are unaffected.
+    const onVerified = (e) => {
+      const eventPath = e && e.detail && e.detail.file_canonical_path;
+      if (shouldRefetchAfterVerify(bulkGateRef.current, eventPath)) {
+        fetchPending({ silent: true });
+      }
+    };
     window.addEventListener('audio-lang-verified', onVerified);
     return () => window.removeEventListener('audio-lang-verified', onVerified);
   }, [fetchPending]);
@@ -730,9 +931,13 @@ export function ReviewPage() {
       console.error('bulk track-mismatch dismiss failed', e);
     } finally {
       setBusyPath(null);
+      // #494 P2-S6: dismissing removes these rows from the queue — drop their
+      // explicit paths from the selection so a stale "N files selected" count
+      // can't linger after the refetch (mirrors swapTrackBulk's clear below).
+      clearSelection();
       fetchPending({ silent: true });
     }
-  }, [fetchPending]);
+  }, [fetchPending, clearSelection]);
 
   // #310: swap many flagged track-mismatches at once. The per-file swap is heavy
   // (probe → mkvpropedit → re-probe), so the server loops it and does ONE
@@ -826,53 +1031,23 @@ export function ReviewPage() {
     fetchPending({ silent: true });
   }, [fetchIgnored, fetchPending]);
 
-  // Filter + group by series.
-  const { groups, tvGroups, movieGroups, totalCounts } = useMemo(() => {
-    const allItems = data?.items || [];
+  // #494: render the SERVER's complete, filtered, grouped result. The backend
+  // applies search + the flag filter per-row BEFORE grouping and pages whole
+  // groups, so `groups[]` is the authority for which groups exist and in what
+  // order, and every returned group carries all of its matching rows. We never
+  // re-group by title, never re-apply the flag filter, and never change group
+  // membership here (see arrangeServerGroups). Only the flag-pill totals come
+  // from the searched-set counts_by_flag so pills stay stable across a filter.
+  const { groups, tvGroups, movieGroups, pageFileCount, totalCounts } = useMemo(() => {
+    const arranged = arrangeServerGroups({ groups: data?.groups, items: data?.items });
     const countsByFlag = data?.counts_by_flag || {};
     const counts = {
       all: Object.values(countsByFlag).reduce((sum, count) => sum + count, 0) || data?.count || 0,
       suspect: 0, unknown: 0, track_mismatch: 0, multilingual: 0,
       ...countsByFlag,
     };
-    // P3-S1: the server applies the case-insensitive search (over title /
-    // episode / canonical-path) before slicing; here we only apply the flag-pill
-    // filter over the returned page — search no longer filters client-side.
-    const filtered = allItems.filter((it) =>
-      filter === 'all' || it.flag === filter
-    );
-    const byTitle = new Map();
-    for (const it of filtered) {
-      const t = it.title || '(unknown)';
-      if (!byTitle.has(t)) {
-        byTitle.set(t, {
-          title: t,
-          original_language: it.original_language,
-          media_type: it.media_type,
-          items: [],
-        });
-      }
-      byTitle.get(t).items.push(it);
-    }
-    // Sort each series's episodes by episode_number, series alphabetical.
-    for (const g of byTitle.values()) {
-      g.items.sort((a, b) => {
-        const an = a.episode_number || '';
-        const bn = b.episode_number || '';
-        return an.localeCompare(bn, undefined, { numeric: true });
-      });
-      // #406: within a group, auto-multilingual rows render last (low priority).
-      g.items = sortPendingRows(g.items);
-    }
-    const groups = Array.from(byTitle.values()).sort((a, b) =>
-      a.title.localeCompare(b.title)
-    );
-    // Split into TV Shows vs Movies (mirrors Coverage). media_type 'movie' →
-    // Movies; everything else (episode / show / unknown) → TV Shows.
-    const tvGroups = groups.filter((g) => g.media_type !== 'movie');
-    const movieGroups = groups.filter((g) => g.media_type === 'movie');
-    return { groups, tvGroups, movieGroups, totalCounts: counts };
-  }, [data, filter]);
+    return { ...arranged, totalCounts: counts };
+  }, [data]);
 
   // #310: track-mismatch rows are now selectable alongside language-assignable
   // ones, so split the current selection by flag — each half gets its own bulk
@@ -916,68 +1091,68 @@ export function ReviewPage() {
     if (!window.confirm(confirmText)) return;
     setBulkRunning(true);
     setBulkProgress({ done: 0, total: paths.length, errors: 0 });
-    let done = 0; let errors = 0;
-    // Run 4 at a time. Each runs through the existing per-file endpoint
-    // so propagation + Bazarr sync happens for every one.
-    const queue = paths.slice();
-    async function worker() {
-      while (queue.length) {
-        const p = queue.shift();
-        try {
-          // #406: multilingual mode submits the full checked set; otherwise the
-          // single bulkLang. Empty selection -> builder returns null -> skip.
-          const verifyBody = buildVerifyBody(p, assignCodes);
-          if (!verifyBody) { done += 1; setBulkProgress({ done, total: paths.length, errors }); continue; }
-          const r = await fetch('/api/audio-lang/verifications', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ ...verifyBody, confidence: 1.0, evidence: { bulk: true } }),
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          // Dispatch the verified event so the list updates incrementally.
-          window.dispatchEvent(new CustomEvent('audio-lang-verified', {
-            // #406: dispatch the ACTUAL assigned code (codes[0] in multi mode),
-            // not the single-select bulkLang — arena listens and would otherwise
-            // tag a live sweep with the wrong language.
-            detail: { file_canonical_path: p, lang_code: verifyBody.lang_code },
-          }));
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error('bulk verify failed for', p, e);
-          errors += 1;
+    // #494 P2-S5/P3-S3: delegate to the shared runVerifyBatch runner — it arms
+    // and clears the bulk-in-flight gate, emits one global audio-lang-verified
+    // event per successful file, and performs exactly ONE authoritative silent
+    // refetch after the whole batch (see shouldRefetchAfterVerify / the comment
+    // on runVerifyBatch).
+    await runVerifyBatch({
+      items: paths,
+      total: paths.length,
+      // #406: multilingual mode submits the full checked set; otherwise the
+      // single bulkLang. Empty selection -> builder returns null -> runner skips.
+      submit: async (p) => {
+        const verifyBody = buildVerifyBody(p, assignCodes);
+        if (!verifyBody) return null;
+        const r = await fetch('/api/audio-lang/verifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ ...verifyBody, confidence: 1.0, evidence: { bulk: true } }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return verifyBody;
+      },
+      pathOf: (p) => p,
+      // Dispatch the global verified event for arena/other consumers. Review's own
+      // listener is gated off for this batch's files (#494 P2-S5), so this single
+      // dispatch does NOT trigger a per-file Review refetch here. #406: dispatch
+      // the ACTUAL assigned code (codes[0] in multi mode), not the single-select
+      // bulkLang — arena listens and would otherwise tag a live sweep wrong.
+      emitVerified: (p, body) => window.dispatchEvent(new CustomEvent('audio-lang-verified', {
+        detail: { file_canonical_path: p, lang_code: body.lang_code },
+      })),
+      onProgress: (done, total, errors) => setBulkProgress({ done, total, errors }),
+      setGate: (s) => { bulkGateRef.current = s; },
+      clearGate: () => { bulkGateRef.current = null; },
+      finish: () => { setBulkRunning(false); clearSelection(); },
+      // #226: if requested, declare one durable intent rule per distinct
+      // series/movie in the selection. Best-effort — failures here never fail
+      // the per-file bulk above (the primary action); they bump the error count.
+      // Runs inside the gate-guarded try (before the gate clears) as in the
+      // original hand-rolled loop.
+      afterBatch: async (ctx) => {
+        if (!rememberFuture || multilingualMode) return;
+        const prefixes = distinctSeriesPrefixes(paths, data?.items || []);
+        for (const prefix of prefixes) {
+          try {
+            const r = await fetch('/api/audio-lang/series-intent', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ series_prefix: prefix, lang_code: bulkLang }),
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error('series-intent declare failed for', prefix, e);
+            ctx.errors += 1;
+            setBulkProgress({ done: ctx.done, total: paths.length, errors: ctx.errors });
+          }
         }
-        done += 1;
-        setBulkProgress({ done, total: paths.length, errors });
-      }
-    }
-    await Promise.all([worker(), worker(), worker(), worker()]);
-    // #226: if requested, declare one durable intent rule per distinct
-    // series/movie in the selection. Best-effort — failures here never fail
-    // the per-file bulk above (the primary action); they bump the error count.
-    if (rememberFuture && !multilingualMode) {
-      const prefixes = distinctSeriesPrefixes(paths, data?.items || []);
-      for (const prefix of prefixes) {
-        try {
-          const r = await fetch('/api/audio-lang/series-intent', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ series_prefix: prefix, lang_code: bulkLang }),
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error('series-intent declare failed for', prefix, e);
-          errors += 1;
-          setBulkProgress({ done, total: paths.length, errors });
-        }
-      }
-    }
-    setBulkRunning(false);
-    clearSelection();
-    // Refetch in case some verifies failed; ensures the list is honest.
-    fetchPending({ silent: true });
+      },
+      refetchAfterBatch: () => fetchPending({ silent: true }),
+    });
   }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data]);
 
   // #406: "Accept (keep as detected)" — confirm each selected multilingual row's
@@ -989,38 +1164,35 @@ export function ReviewPage() {
     if (!rows.length) return;
     setBulkRunning(true);
     setBulkProgress({ done: 0, total: rows.length, errors: 0 });
-    let done = 0; let errors = 0;
-    const queue = rows.slice();
-    async function worker() {
-      while (queue.length) {
-        const row = queue.shift();
+    // #494 P2-S5/P3-S3: same shared runVerifyBatch mechanics as applyBulk (gate
+    // arm/clear + one global event per successful file + one final refetch).
+    await runVerifyBatch({
+      items: rows,
+      total: rows.length,
+      // Re-submit each row's OWN detected set as a user verdict. Rows missing
+      // lang_codes return null -> runner skips them (counted done, no fetch/emit).
+      submit: async (row) => {
         const body = acceptMultilingualBody(row);
-        const p = row.file_canonical_path || row.canonical_path;
-        if (!body) { done += 1; setBulkProgress({ done, total: rows.length, errors }); continue; }
-        try {
-          const r = await fetch('/api/audio-lang/verifications', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ ...body, confidence: 1.0, evidence: { accept_multi: true } }),
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          window.dispatchEvent(new CustomEvent('audio-lang-verified', {
-            detail: { file_canonical_path: p, lang_code: body.lang_code },
-          }));
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error('accept multilingual failed for', p, e);
-          errors += 1;
-        }
-        done += 1;
-        setBulkProgress({ done, total: rows.length, errors });
-      }
-    }
-    await Promise.all([worker(), worker(), worker(), worker()]);
-    setBulkRunning(false);
-    clearSelection();
-    fetchPending({ silent: true });
+        if (!body) return null;
+        const r = await fetch('/api/audio-lang/verifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ ...body, confidence: 1.0, evidence: { accept_multi: true } }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return body;
+      },
+      pathOf: (row) => row.file_canonical_path || row.canonical_path,
+      emitVerified: (p, body) => window.dispatchEvent(new CustomEvent('audio-lang-verified', {
+        detail: { file_canonical_path: p, lang_code: body.lang_code },
+      })),
+      onProgress: (done, total, errors) => setBulkProgress({ done, total, errors }),
+      setGate: (s) => { bulkGateRef.current = s; },
+      clearGate: () => { bulkGateRef.current = null; },
+      finish: () => { setBulkRunning(false); clearSelection(); },
+      refetchAfterBatch: () => fetchPending({ silent: true }),
+    });
   }, [selMultiRows, fetchPending, clearSelection]);
 
   const filterPills = [
@@ -1031,8 +1203,12 @@ export function ReviewPage() {
     { id: 'multilingual', label: `multilingual (${totalCounts.multilingual})` },  // #406
   ];
   const selectedCount = epSelection.size;
-  // P3-S2: pagination facts from the server's truthful total count.
-  const pagination = computePagination({ count: data?.count, limit, offset });
+  // #494 P1-S2: Review pages GROUPS. group_count drives page number/range/prev/
+  // next; data.count (matching files) stays available for the truthful file
+  // totals shown alongside the group labels.
+  const pagination = computePagination({
+    count: data?.count, groupCount: data?.group_count, limit, offset, grouped: true,
+  });
 
   return (
     <main className="main-canvas" style={{
@@ -1120,28 +1296,36 @@ export function ReviewPage() {
           ))}
         </div>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num">
-          {groups.length} {groups.length === 1 ? 'series' : 'series'}, {groups.reduce((s, g) => s + g.items.length, 0)} files
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }} className="num"
+          title="Pagination is by group; files shown are the complete matching files of the groups on this page.">
+          {groups.length} {groups.length === 1 ? 'group' : 'groups'} ·{' '}
+          {pageFileCount} of {pagination.fileCount} matching file{pagination.fileCount === 1 ? '' : 's'} shown
         </span>
       </div>
 
-      {/* P3-S2: server-side pagination — total from the server `count`, prev/next
-          disabled at the boundaries, and a page-size selector. Changing the page
-          size resets to the first page. Buttons are disabled mid-refetch so a
-          pending response can't be double-stepped past the end. */}
+      {/* P3-S2 / #494: server-side pagination now pages COMPLETE GROUPS. Group
+          range, page number, and prev/next boundaries come from the server's
+          group_count, and the page-size selector is groups per page (limit still
+          means "rows/offset slots", but the server addresses those slots to
+          groups). Changing the page size resets to the first group page. Buttons
+          are disabled mid-refetch so a pending response can't be double-stepped
+          past the end. */}
       {data && pagination.total > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '2px 2px 6px' }}>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
-            {pagination.shownStart}–{pagination.shownEnd} of {pagination.total}
+            Group {pagination.shownStart}–{pagination.shownEnd} of {pagination.groupCount}
+            <span style={{ color: 'var(--fg-3)', marginLeft: 8 }}>
+              · {pagination.fileCount} matching file{pagination.fileCount === 1 ? '' : 's'}
+            </span>
           </span>
           <label style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
             fontSize: 'var(--text-xs)', color: 'var(--fg-3)',
           }}>
-            Page size
+            Groups per page
             <select value={limit}
               onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}
-              aria-label="Page size"
+              aria-label="Groups per page"
               style={{
                 height: 24, padding: '0 6px', background: 'var(--bg-1)', color: 'var(--fg-0)',
                 border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-2xs)',
@@ -1151,7 +1335,7 @@ export function ReviewPage() {
           </label>
           <span style={{ flex: 1 }} />
           <button className="btn sm" disabled={!pagination.hasPrev || isRefetching}
-            aria-label="Previous page"
+            aria-label="Previous group page"
             onClick={() => setOffset(Math.max(0, offset - limit))}>
             ‹ Prev
           </button>
@@ -1159,7 +1343,7 @@ export function ReviewPage() {
             Page {pagination.pageNumber} of {pagination.totalPages}
           </span>
           <button className="btn sm" disabled={!pagination.hasNext || isRefetching}
-            aria-label="Next page"
+            aria-label="Next group page"
             onClick={() => setOffset(offset + limit)}>
             Next ›
           </button>
@@ -1253,9 +1437,9 @@ export function ReviewPage() {
           )}
           {data && groups.length === 0 && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-2)' }}>
-              {pagination.total === 0 && !search.trim()
+              {filter === 'all' && !search.trim()
                 ? "🎉 Nothing pending. Audio-language data looks clean across your library."
-                : `No items match the "${filter}" filter${search.trim() ? ' or your search' : ''}.`}
+                : `No groups match the "${filter}" filter${search.trim() ? ' or your search' : ''}.`}
             </div>
           )}
           {[
@@ -1277,10 +1461,13 @@ export function ReviewPage() {
                 </div>
                 {section.list.map((g) => (
                   <SeriesGroup
-                    key={g.title}
+                    // #494: stable backend group key (never the title) — React
+                    // identity and expansion state stay correct when duplicate
+                    // display titles render as separate groups.
+                    key={g.key}
                     series={g}
-                    expanded={expandedSeries.has(g.title)}
-                    onToggleExpand={() => toggleExpand(g.title)}
+                    expanded={expandedSeries.has(g.key)}
+                    onToggleExpand={() => toggleExpand(g.key)}
                     epSelection={epSelection}
                     onToggleSelectAll={toggleSelectAll}
                     onToggleEp={toggleEp}
