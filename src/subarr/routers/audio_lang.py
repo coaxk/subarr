@@ -660,8 +660,17 @@ async def pending_review(
     search: str | None = Query(
         None, max_length=200, description="case-insensitive substring over title/episode/path"
     ),
-    limit: int = Query(200, ge=1, le=500, description="page size (default 200, matching the historical cap)"),
-    offset: int = Query(0, ge=0, description="row offset into the fully-classified, searched set"),
+    limit: int = Query(
+        200,
+        ge=1,
+        le=500,
+        description="page size in files, or number of groups when grouped=true (default 200)",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="file offset, or group offset when grouped=true, after classification and filtering",
+    ),
     flag_filter: str = Query(
         "all", alias="flag", pattern="^(all|suspect|unknown|track_mismatch|multilingual)$"
     ),
@@ -692,7 +701,9 @@ async def pending_review(
     identity is library slug + media lane + the Sonarr series / Radarr movie id
     from the source row's nested `bazarr` data, with safe canonical fallbacks
     when absent - never bare title (see `_pending_group_key`). Default mode
-    (grouped omitted/false) is unchanged."""
+    (grouped omitted/false) is unchanged. In grouped mode, a complete group may
+    contribute more files than the requested group page size; this is intentional
+    because files are never capped inside a selected group."""
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
     # #406: key the multilingual lane on the STORE source (not the snapshot's
@@ -784,7 +795,9 @@ async def pending_review(
         # Grouped mode needs the Arr identity this public row contract drops.
         # Retain it on a reserved internal key (stripped before serialization)
         # so grouping never has to reconstruct identity from title (#494).
-        _bazarr = it.get("bazarr") if isinstance(it.get("bazarr"), dict) else {}
+        _bazarr: dict[str, Any] = {}
+        if isinstance(it.get("bazarr"), dict):
+            _bazarr = it["bazarr"]
         entry[_REVIEW_RESERVED_PREFIX + "identity"] = {
             "sonarr_id": _bazarr.get("sonarr_id"),
             "radarr_id": _bazarr.get("radarr_id"),

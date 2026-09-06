@@ -8,7 +8,8 @@
 // no client-side re-group by title, no re-filter by flag, no row cap.
 import { describe, it, expect } from 'vitest';
 import {
-  arrangeServerGroups, groupExplicitPaths, buildVerifyBody, acceptMultilingualBody,
+  arrangeServerGroups, groupExplicitPaths, pruneSelectionAgainstRows,
+  buildVerifyBody, acceptMultilingualBody,
 } from '../review.jsx';
 
 // Build a pending-review row stamped with the server's stable group_key link.
@@ -96,6 +97,40 @@ describe('groupExplicitPaths — complete-group selection (#494 P3-S2)', () => {
       .toEqual(['/a', '/b']);
     expect(groupExplicitPaths({ items: [] })).toEqual([]);
     expect(groupExplicitPaths(undefined)).toEqual([]);
+  });
+});
+
+describe('pruneSelectionAgainstRows — page-scoped selection stays honest after an authoritative refetch', () => {
+  // Rows that remain on the authoritative page after the refetch.
+  const rows = [
+    ep('gA', { file: '/m/keep-a.mkv', canonical: '/m/keep-a.mkv' }),
+    ep('gB', { file: '/m/keep-b.mkv', canonical: '/m/keep-b.mkv' }),
+  ];
+
+  it('keeps selected ids that still exist on the page and drops ids no longer visible', () => {
+    const sel = new Set(['/m/keep-a.mkv', '/m/gone-a.mkv', '/m/ghost.mkv']);
+    // The non-batch refetch authoritatively dropped /m/gone-a.mkv and /m/ghost.mkv
+    // (reviewed/dismissed elsewhere) — only IDs that remain on the page survive.
+    const pruned = pruneSelectionAgainstRows(rows, sel);
+    expect([...pruned]).toEqual(['/m/keep-a.mkv']);
+  });
+
+  it('returns the SAME Set instance when nothing was removed (no redundant re-render)', () => {
+    const sel = new Set(['/m/keep-a.mkv', '/m/keep-b.mkv']);
+    expect(pruneSelectionAgainstRows(rows, sel)).toBe(sel);
+  });
+
+  it('resolves canonical_path fallback ids and tolerates an empty selection or empty page', () => {
+    const fallbackOnly = [ep('gB', { canonical: '/m/keep-b.mkv' })];
+    const sel = new Set(['/m/keep-b.mkv']);
+    expect([...pruneSelectionAgainstRows(fallbackOnly, sel)]).toEqual(['/m/keep-b.mkv']);
+
+    expect(pruneSelectionAgainstRows([], new Set(['/m/keep-a.mkv'])).size).toBe(0);
+    // Empty selection still resolves to the empty page result (never crashes).
+    expect([...pruneSelectionAgainstRows(rows, new Set())]).toEqual([]);
+    // An absent page (no rows returned) authoritatively clears nothing that remains
+    // on screen — an empty result prunes everything selected.
+    expect(pruneSelectionAgainstRows(undefined, new Set(['/m/keep-a.mkv'])).size).toBe(0);
   });
 });
 

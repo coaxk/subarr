@@ -348,6 +348,25 @@ export function groupExplicitPaths(group) {
   return (group?.items || []).map((e) => e.file_canonical_path || e.canonical_path);
 }
 
+// epSelection is page-scoped: its ids are the explicit paths of rendered rows. An
+// authoritative setData() following a NON-batch refetch (manual Refresh, a foreign
+// audio-lang-verified event, per-file swap/dismiss cleanup) can serve a smaller
+// page, dropping previously-selected rows. Prune against the incoming page's own
+// explicit row ids so selectedCount never counts vanished rows after the refetch.
+// Pure + non-mutating; returns the SAME Set when nothing was removed so the
+// caller's functional update short-circuits. Exported for seam tests.
+export function pruneSelectionAgainstRows(visibleRows, epSelection) {
+  const visible = new Set(
+    (visibleRows || []).map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean)
+  );
+  let changed = false;
+  const next = new Set();
+  for (const id of epSelection || []) {
+    if (visible.has(id)) next.add(id); else changed = true;
+  }
+  return changed ? next : epSelection;
+}
+
 // #494 P2-S5: pure decision for Review's `audio-lang-verified` listener. While
 // a Review-originated language/multilingual batch is in flight, `gate` is a Set
 // of the batch's explicit file paths. The listener must NOT trigger Review's own
@@ -780,6 +799,12 @@ export function ReviewPage() {
         return;
       }
       setData(payload);
+      // #494 P2-S6: prune the page-scoped selection to rows still present on this
+      // authoritative page. A non-batch refetch (manual Refresh, a foreign
+      // audio-lang-verified event, per-file swap/dismiss cleanup) removes rows;
+      // keeping their ids in epSelection would inflate "N files selected" with
+      // rows that are no longer shown. No-op when nothing disappeared.
+      setEpSelection((prev) => (prev.size ? pruneSelectionAgainstRows(items, prev) : prev));
       setError(null);
       setLastRefreshedAt(Date.now());
     } catch (e) {
@@ -914,6 +939,9 @@ export function ReviewPage() {
   const dismissTrackBulk = useCallback(async (items) => {
     const paths = items.map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean);
     if (!paths.length) return;
+    // P2-S6: single bulk flow guard — block while a language/multilingual batch
+    // is running or any per-row/other-bulk track op is in flight.
+    if (busyPath || bulkRunning) return;
     if (!window.confirm(
       `Dismiss ${paths.length} track-mismatch prompt${paths.length === 1 ? '' : 's'}? `
       + `They'll be hidden until re-enabled.`
@@ -937,7 +965,7 @@ export function ReviewPage() {
       clearSelection();
       fetchPending({ silent: true });
     }
-  }, [fetchPending, clearSelection]);
+  }, [fetchPending, clearSelection, busyPath, bulkRunning]);
 
   // #310: swap many flagged track-mismatches at once. The per-file swap is heavy
   // (probe → mkvpropedit → re-probe), so the server loops it and does ONE
@@ -945,6 +973,9 @@ export function ReviewPage() {
   const swapTrackBulk = useCallback(async (items) => {
     const paths = items.map((it) => it.file_canonical_path || it.canonical_path).filter(Boolean);
     if (!paths.length) return;
+    // P2-S6: single bulk flow guard — never interleave with a language/multilingual
+    // batch (bulkRunning) or another per-row/bulk track op (busyPath).
+    if (busyPath || bulkRunning) return;
     if (!window.confirm(
       `Swap the default audio track to the original language for ${paths.length} file${paths.length === 1 ? '' : 's'}?\n\n`
       + `In-place, lossless, reversible (no re-encode). subgen will then transcribe the original `
@@ -972,7 +1003,7 @@ export function ReviewPage() {
       clearSelection();
       fetchPending({ silent: true });
     }
-  }, [fetchPending, clearSelection]);
+  }, [fetchPending, clearSelection, busyPath, bulkRunning]);
 
   // #316: per-title ignore ("I don't want subs here"). The ignored list is a
   // managed set; ignoring suppresses gap flagging + auto-queue for that title.
@@ -1052,7 +1083,9 @@ export function ReviewPage() {
   // #310: track-mismatch rows are now selectable alongside language-assignable
   // ones, so split the current selection by flag — each half gets its own bulk
   // action (you can't assign a language to a track-mismatch, or swap a track on
-  // a plain language row). Looked up against data.items, not the filtered view.
+  // a plain language row). Rows resolve straight from the server page
+  // (data.items), which is already the complete filtered/grouped result (#494)
+  // — there is no separate client-side filtered view left to drift from.
   const { selTmItems, selAssignPaths, selMultiRows } = useMemo(() => {
     const items = data?.items || [];
     const sel = items.filter((it) => epSelection.has(it.file_canonical_path || it.canonical_path));
@@ -1077,6 +1110,10 @@ export function ReviewPage() {
   const applyBulk = useCallback(async () => {
     // #310: only the language-assignable rows — track-mismatch rows in the same
     // selection are handled by Swap all / Dismiss all instead.
+    // P2-S6: one bulk flow at a time. bulkRunning flags this language/multilingual
+    // batch; busyPath flags per-row track ops AND track-mismatch bulk swap/dismiss
+    // (as '__bulk__'). Bail before prompting so two bulk POSTs can't interleave.
+    if (busyPath || bulkRunning) return;
     const paths = selAssignPaths;
     if (!paths.length) return;
     // #457: ONE source of truth for what gets assigned. This same array is
@@ -1153,13 +1190,16 @@ export function ReviewPage() {
       },
       refetchAfterBatch: () => fetchPending({ silent: true }),
     });
-  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data]);
+  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data, busyPath, bulkRunning]);
 
   // #406: "Accept (keep as detected)" — confirm each selected multilingual row's
   // OWN detected set as a user verdict (source='user'). Per-row (each carries its
   // own lang_codes), distinct from the uniform bulk-assign. Reuses the 4-worker
   // progress pattern; rows missing lang_codes are skipped (builder returns null).
   const acceptSelected = useCallback(async () => {
+    // P2-S6: single bulk flow guard (see applyBulk). busyPath covers per-row and
+    // track-bulk ops; bulkRunning covers language/multilingual batches.
+    if (busyPath || bulkRunning) return;
     const rows = selMultiRows;
     if (!rows.length) return;
     setBulkRunning(true);
@@ -1193,7 +1233,7 @@ export function ReviewPage() {
       finish: () => { setBulkRunning(false); clearSelection(); },
       refetchAfterBatch: () => fetchPending({ silent: true }),
     });
-  }, [selMultiRows, fetchPending, clearSelection]);
+  }, [selMultiRows, fetchPending, clearSelection, busyPath, bulkRunning]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
