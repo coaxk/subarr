@@ -308,9 +308,7 @@ def _caps_handler(caps: dict | None):
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/status":
-            return httpx.Response(
-                200, json={"version": "Subgen 2026.08.1, stable-ts 2.19.1 (docker)"}
-            )
+            return httpx.Response(200, json={"version": "Subgen 2026.08.1, stable-ts 2.19.1 (docker)"})
         if request.url.path == "/queue":
             body = {"queued": [], "processing": [], "idle": True}
             if caps is not None:
