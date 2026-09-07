@@ -41,6 +41,57 @@ from .subtitle_retime import retime_srt
 
 log = logging.getLogger(__name__)
 
+
+def choose_srt_sidecar(stem: str, names: list[str]) -> str | None:
+    """Pick which sibling .srt is the one subgen just wrote, from `names`.
+
+    [#499] This used to be "prefer <stem>.en.srt, else the first glob hit".
+    Both halves were wrong in practice:
+
+    - Subgen can embed its own name and the model into the filename
+      (SHOW_IN_SUBNAME_SUBGEN / SHOW_IN_SUBNAME_MODEL), producing
+      `<stem>.subgen.large-v3.eng.srt`. That is not `<stem>.en.srt`, so the
+      real output fell through to the fallback.
+    - The fallback was glob order, i.e. filesystem order. With any other
+      sibling present, which file got scored was effectively arbitrary. The
+      reporter measured aftercare grading a stale 763-cue file while subgen's
+      actual 1,317-cue output sat beside it.
+
+    Ranking, best first:
+      0. the exact `<stem>.en.srt` (unchanged; what most installs produce)
+      1. carries subgen's marker AND an English tag (`.en.` or `.eng.`)
+      2. carries subgen's marker, language unknown
+      3. any other sibling
+      4. a `.forced.` sidecar, which subarr writes itself (#364) and which is a
+         handful of foreign-dialogue cues, never a full transcript
+
+    Ties break on the sorted name so the answer never depends on the order the
+    filesystem happened to return.
+    """
+    prefix = f"{stem}."
+    siblings = [n for n in names if n.startswith(prefix) and n.lower().endswith(".srt")]
+    if not siblings:
+        return None
+
+    exact = f"{stem}.en.srt"
+    if exact in siblings:
+        return exact
+
+    def rank(name: str) -> tuple[int, str]:
+        tail = name[len(stem) :].lower()
+        if ".forced." in tail:
+            return (4, name)
+        subgen = ".subgen." in tail or tail.startswith(".subgen.")
+        english = ".en." in tail or ".eng." in tail
+        if subgen and english:
+            return (1, name)
+        if subgen:
+            return (2, name)
+        return (3, name)
+
+    return min(siblings, key=rank)
+
+
 WATCHER_INTERVAL_S = 30
 # Bazarr task IDs vary across versions. Discovered at runtime by matching
 # both job_id AND name fields. Hint order = priority: first match wins.
@@ -525,9 +576,8 @@ class CompletionWatcher:
             log.warning("forced-segment at-import scan failed for %s: %s", canonical_path, e)
 
     def _find_srt_sidecar(self, video_canonical: str) -> str | None:
-        """Locate the .srt subgen wrote next to the video. Subgen's default
-        naming is <basename>.en.srt; fall back to any .srt sharing the
-        basename if the language tag differs."""
+        """Locate the .srt subgen wrote next to the video. See
+        choose_srt_sidecar() for the ranking and why it is not just a glob."""
         try:
             # #134: library-aware resolve (@slug/ heads).
             full = canonical_to_fs(video_canonical)
@@ -537,17 +587,12 @@ class CompletionWatcher:
             return None
         stem = full.stem
         parent = full.parent
-        # Preferred: <stem>.en.srt
-        candidate = parent / f"{stem}.en.srt"
-        if candidate.exists():
-            return str(candidate)
-        # Fallback: any sibling .srt sharing the stem
         try:
-            for p in parent.glob(f"{stem}*.srt"):
-                return str(p)
+            names = [p.name for p in parent.glob(f"{stem}*.srt")]
         except OSError:
-            pass
-        return None
+            return None
+        chosen = choose_srt_sidecar(stem, names)
+        return str(parent / chosen) if chosen else None
 
     async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int, canonical_path: str) -> None:
         bz = self._bazarr_for(canonical_path)
