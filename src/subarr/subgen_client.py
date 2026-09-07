@@ -129,8 +129,11 @@ class SubgenCapabilities:
     has_queue: bool
     has_batch: bool
     is_subarr_subgen: bool
-    # v4.3 capability: POST /batch accepts audio_language_override query
-    # param that bypasses SKIP_IF_AUDIO_LANGUAGES + seeds Whisper source.
+    # v4.3 capability: POST /batch accepts an audio_language_override query
+    # param. NOTE it SUBSTITUTES the declared language into the
+    # SKIP_IF_AUDIO_LANGUAGES check rather than bypassing it (#498), so
+    # declaring a language subgen skips will SKIP the file. It also seeds
+    # the Whisper source language.
     # Detected via the /queue response's capabilities.audio_language_override
     # flag (only the v4.3+ patch ships it). Vanilla and v4.2 → False.
     audio_language_override: bool = False
@@ -223,6 +226,13 @@ class SubgenCapabilities:
     # gate on (see subgen_capacity). None on older subgen that doesn't publish
     # it → the gate stays disabled (dormant-safe).
     concurrent_transcriptions: int | None = None
+    # [#498] The connected subgen's effective SKIP_IF_AUDIO_LANGUAGES list as
+    # 2-letter ISO-639-1 codes (subarr-subgen v4.28+). None means the build
+    # does not advertise it, which is NOT the same as an empty list: empty
+    # means 'skips nothing', None means 'cannot tell'. The override resolver
+    # relies on that distinction to decide whether forwarding a verified
+    # English value would skip the file rather than transcribe it.
+    skip_audio_languages: tuple[str, ...] | None = None
     # v4.15 capability (#317 Slice B): subgen honours a per-REQUEST
     # ignore_forced flag on POST /batch (overrides the global
     # IGNORE_FORCED_SUBTITLES for one job). subarr gates its "transcribe a full
@@ -261,6 +271,7 @@ class SubgenCapabilities:
             "subarr_subgen_patch_rev": self.subarr_subgen_patch_rev,
             "release_tag": self.release_tag,
             "concurrent_transcriptions": self.concurrent_transcriptions,
+            "skip_audio_languages": self.skip_audio_languages,
             "request_ignore_forced": self.request_ignore_forced,
             "probe_failure": self.probe_failure,
         }
@@ -433,6 +444,7 @@ class SubgenClient:
         bypass_skip = False
         runtime_config = False
         concurrent_transcriptions: int | None = None
+        skip_audio_languages: tuple[str, ...] | None = None
         request_ignore_forced = False
         patch_rev: str | None = None
         release_tag: str | None = None
@@ -478,6 +490,15 @@ class SubgenClient:
                                 if isinstance(_ct, int) and not isinstance(_ct, bool) and _ct > 0
                                 else None
                             )
+                            # [#498] Absent on pre-v4.28 builds, and absent must
+                            # stay None rather than becoming () -- () would read
+                            # as 'this subgen skips nothing', which is exactly the
+                            # optimistic guess that silently stops transcription.
+                            _sal = caps_block.get("skip_audio_languages")
+                            if isinstance(_sal, list):
+                                skip_audio_languages = tuple(
+                                    str(c).strip().lower() for c in _sal if isinstance(c, str) and c.strip()
+                                )
                 except ValueError:
                     pass
         except httpx.HTTPError:
@@ -492,6 +513,7 @@ class SubgenClient:
             reachable=True,
             version=version,
             has_queue=has_queue,
+            skip_audio_languages=skip_audio_languages,
             has_batch=has_batch,
             is_subarr_subgen=is_subarr_subgen,
             audio_language_override=audio_language_override,

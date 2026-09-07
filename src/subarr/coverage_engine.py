@@ -961,6 +961,23 @@ def _attach_probe_movie(
     if not item.canonical_path:
         return
     candidates = idx.get(item.canonical_path) or []
+    # [#497] The index is keyed by the movie DIRECTORY, so a renamed or replaced
+    # movie can leave a probe entry for the OLD file sitting beside the current
+    # one. Taking candidates[0] unconditionally could therefore attach the old
+    # file's audio and subtitle facts to this row and mark it verified.
+    #
+    # Where the row already knows its own file, require the probe to be for that
+    # file. The Radarr construction path sets file_canonical_path explicitly; the
+    # Bazarr-wanted path does not, and with nothing to match against the first
+    # candidate still wins exactly as before. This is the movie-side parity of
+    # the filename filter the episode path has always had.
+    #
+    # Filtered BEFORE the emptiness check on purpose: a probe of a different file
+    # must leave the row unprobed (so it can be probed properly) rather than
+    # verified against the wrong data, while a genuinely recorded probe FAILURE
+    # still surfaces as probe_failed.
+    if item.file_canonical_path:
+        candidates = [c for c in candidates if c[0] == item.file_canonical_path]
     if not candidates:
         if (failed_idx or {}).get(item.canonical_path):
             item.verification_state = "probe_failed"

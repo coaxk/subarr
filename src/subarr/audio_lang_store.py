@@ -492,6 +492,7 @@ def resolve_audio_language_override(
     *,
     caller: str = "queue",
     log: "logging.Logger | None" = None,
+    skip_audio_languages: "tuple[str, ...] | list[str] | None" = None,
 ) -> str | None:
     """Look up the user-verified audio language for `canonical` and
     decide whether to forward it to subgen as audio_language_override.
@@ -500,11 +501,16 @@ def resolve_audio_language_override(
     verification passes the evidence gate, else None. (#358: was 3-letter;
     subgen parses the override via LanguageCode.from_string which accepts any
     form, so the 2-letter canonical the store now holds is forwarded as-is.)
-    None means "let subgen detect from audio" — never returns an English code
-    because subgen's default SKIP_IF_AUDIO_LANGUAGES=eng makes it redundant.
+    None means "let subgen detect from audio".
+
+    `skip_audio_languages` is the connected subgen's effective
+    SKIP_IF_AUDIO_LANGUAGES list (subarr-subgen v4.28+ advertises it on /queue).
+    None means the build does not advertise it, i.e. we cannot tell.
 
     Evidence gate (#105):
-      - lang missing or 'en'/'eng' → no override (no point)
+      - lang missing → no override
+      - lang is English → forwarded ONLY when we can see subgen does not skip
+        English audio; withheld when it does, and withheld when unknown (#498)
       - source field empty → REFUSE (corrupt store entry)
       - confidence < 0.5 → REFUSE (likely Tautulli-signal-only guess)
       - else → forward, with structured log at INFO
@@ -547,8 +553,45 @@ def resolve_audio_language_override(
     src = (verification.source or "").strip().lower()
     conf = float(getattr(verification, "confidence", 0.0) or 0.0)
 
-    if not lang or lang in ("en", "eng"):
+    if not lang:
         return None
+
+    # #498: English is special, and not for the reason the old guard implied.
+    # subgen's audio_language_override SUBSTITUTES the declared language into the
+    # skip check rather than bypassing it:
+    #
+    #     if audio_language_override is not None:
+    #         audio_langs = [audio_language_override]
+    #     ...
+    #     if any(lang in skip_audio_languages for lang in audio_langs):
+    #         return True   # skip
+    #
+    # So forwarding 'en' to an install running SKIP_IF_AUDIO_LANGUAGES=eng puts
+    # the file ON the skip list, which is the opposite of what the user who
+    # verified it wanted. It was therefore excluded outright, at the cost of
+    # silently discarding that verification on installs that skip nothing.
+    #
+    # Forward it only when we can SEE that the connected subgen will not skip it
+    # (subarr-subgen v4.28+ advertises the effective list via /queue). Unknown
+    # means withhold: guessing wrong in that direction stops transcription
+    # silently, which is far worse than merely failing to start it.
+    #
+    # Deliberately scoped to English. A verified non-English language is
+    # forwarded exactly as before even when subgen would skip it, because
+    # changing that alters behaviour well beyond the reported bug.
+    if lang in ("en", "eng"):
+        if skip_audio_languages is None:
+            return None
+        skips = {str(code).strip().lower() for code in skip_audio_languages}
+        if skips & {"en", "eng"}:
+            _log.info(
+                "%s: no override for %s — verified English, but this subgen skips "
+                "English audio (%s), so declaring it would skip the file",
+                caller,
+                scrub(canonical),
+                sorted(skips & {"en", "eng"}),
+            )
+            return None
 
     if not src:
         _log.warning(
