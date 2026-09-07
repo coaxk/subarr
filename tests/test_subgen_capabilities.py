@@ -294,3 +294,77 @@ async def test_image_and_forced_capabilities_are_independent():
     await c.aclose()
     assert caps.ignore_forced_subtitles is True
     assert caps.ignore_image_subtitles is False
+
+
+# ── #498: skip_audio_languages parsing ────────────────────────────────────────
+# The load-bearing link for #498 is this parse, not the resolver: subarr decides
+# whether to forward a verified English audio language from what it reads here.
+# None and () are DIFFERENT answers and the distinction drives behaviour, so both
+# are pinned, along with the shapes a malformed or older build could send.
+
+
+def _caps_handler(caps: dict | None):
+    """A patched-subgen transport whose /queue carries `caps` (omitted if None)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/status":
+            return httpx.Response(200, json={"version": "Subgen 2026.08.1, stable-ts 2.19.1 (docker)"})
+        if request.url.path == "/queue":
+            body = {"queued": [], "processing": [], "idle": True}
+            if caps is not None:
+                body["capabilities"] = caps
+            return httpx.Response(200, json=body)
+        return httpx.Response(404)
+
+    return handler
+
+
+async def _probe(caps: dict | None):
+    c = _make_client(httpx.MockTransport(_caps_handler(caps)))
+    out = await c.probe_capabilities()
+    await c.aclose()
+    return out
+
+
+@pytest.mark.asyncio
+async def test_skip_audio_languages_parsed_and_normalised():
+    caps = await _probe({"skip_audio_languages": ["EN", " ja "]})
+    assert caps.skip_audio_languages == ("en", "ja")
+
+
+@pytest.mark.asyncio
+async def test_empty_skip_list_is_not_none():
+    """'skips nothing' must be () and NOT None. Collapsing the two is exactly the
+    optimistic guess that would forward English to an install that skips it."""
+    caps = await _probe({"skip_audio_languages": []})
+    assert caps.skip_audio_languages == ()
+    assert caps.skip_audio_languages is not None
+
+
+@pytest.mark.asyncio
+async def test_absent_capability_stays_none_on_older_builds():
+    """Pre-v4.28 subgen does not advertise it. Absent must read None, i.e.
+    'cannot tell', so the resolver keeps withholding."""
+    caps = await _probe({"audio_language_override": True})
+    assert caps.skip_audio_languages is None
+
+
+@pytest.mark.asyncio
+async def test_no_capabilities_block_at_all_stays_none():
+    caps = await _probe(None)
+    assert caps.skip_audio_languages is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_values_are_filtered_not_crashed():
+    """A wrong-typed member must not take the whole capability probe down with
+    it, and must not land in the tuple as a stray value."""
+    caps = await _probe({"skip_audio_languages": ["en", None, 7, "", "  ", "fr"]})
+    assert caps.skip_audio_languages == ("en", "fr")
+
+
+@pytest.mark.asyncio
+async def test_non_list_value_is_ignored_rather_than_trusted():
+    """A scalar where a list belongs means we cannot tell, not 'skips nothing'."""
+    caps = await _probe({"skip_audio_languages": "eng"})
+    assert caps.skip_audio_languages is None
