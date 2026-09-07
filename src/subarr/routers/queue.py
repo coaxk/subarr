@@ -595,6 +595,12 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
         canonical,
         caller="requeue",
         log=log,
+        # [#498] Let the resolver see whether this subgen would skip the
+        # language it is about to declare. None on builds that do not
+        # advertise it, which the resolver treats as 'cannot tell'.
+        skip_audio_languages=getattr(
+            getattr(request.app.state, "subgen_caps", None), "skip_audio_languages", None
+        ),
     )
     # #169: route through the pending queue like manual submit. enqueue carries
     # the #229 audio_language_override on the row; the feeder applies it at
