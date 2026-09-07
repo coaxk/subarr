@@ -148,4 +148,36 @@ describe('runVerifyBatch (#494 P2-S5/P3-S3) — the shared per-file batch driver
     expect(state.log[state.log.length - 1]).toBe('refetch:after-clear');
     expect(res).toEqual({ done: 9, errors: 0 });
   });
+
+  it('an afterBatch throw still clears the gate, runs finish, and refetches exactly once after clear — and the ORIGINAL error is rethrown', async () => {
+    const paths = ['/a.mkv', '/b.mkv'];
+    const boom = new Error('remember-for-future failed');
+    const { hooks, state } = harness();
+    // The batch's own files all succeed; AFTER them a single afterBatch step
+    // throws. Cleanup + the authoritative refetch must still happen even though
+    // the batch as a whole rejects.
+    await expect(
+      runVerifyBatch({
+        items: paths, total: 2, concurrency: 1,
+        submit: () => ({ lang_code: 'es' }), pathOf: (p) => p,
+        emitVerified: hooks.emitVerified, onProgress: hooks.onProgress,
+        setGate: hooks.setGate, clearGate: hooks.clearGate, finish: hooks.finish,
+        afterBatch: async () => { throw boom; },
+        refetchAfterBatch: hooks.refetchAfterBatch,
+      })
+    ).rejects.toThrow('remember-for-future failed');
+    // Both files progressed and emitted while armed; then clear + finish ran.
+    expect(emits(state.log).map((l) => l.slice(5))).toEqual(paths);
+    expect(state.log).toContain('clear');
+    expect(state.log).toContain('finish');
+    // Exactly one authoritative refetch, and it happened only AFTER the gate
+    // cleared (not masked/skipped by the afterBatch throw).
+    const refetches = state.log.filter((l) => l.startsWith('refetch:'));
+    expect(refetches).toHaveLength(1);
+    expect(state.log[state.log.length - 1]).toBe('refetch:after-clear');
+    const clearIdx = state.log.indexOf('clear');
+    expect(state.log.indexOf('refetch:after-clear')).toBeGreaterThan(clearIdx);
+    // Cleanup ran before the refetch (gate cleared + finish, then refetch).
+    expect(state.log.indexOf('finish')).toBeLessThan(state.log.indexOf('refetch:after-clear'));
+  });
 });

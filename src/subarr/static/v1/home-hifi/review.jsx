@@ -411,32 +411,47 @@ export function buildReviewQuery({ search = '', flag = 'all', limit = 200, offse
 // P3: derive pagination facts from the server's TRUTHFUL total (`count` is the
 // total matching rows, not the page length) and the current page. Exported for
 // tests. hasNext/hasPrev drive the disabled boundaries of the page controls.
-//
-// #494: the same unit-agnostic math pages by whichever total the server pages —
-// FILES by default (legacy contract, `total`/`count` are files) or GROUPS in
-// grouped mode. Review passes grouped=true + groupCount so pageNumber/range/
-// next/previous describe group pages, while `count` (matching files) is still
-// carried through for the truthful file-total labels. Legacy callers/tests pass
-// no grouped flag and keep the exact prior file behavior.
-export function computePagination({ count = 0, limit = 200, offset = 0, grouped = false, groupCount = 0 }) {
-  const fileCount = Math.max(0, count || 0);
+// This legacy FILE pagination contract remains shared with Aftercare.
+export function computePagination({ count = 0, limit = 200, offset = 0 }) {
+  const total = Math.max(0, count || 0);
   const size = Math.max(1, limit || 1);
-  // The paging-unit total: groups in grouped mode, files otherwise (legacy).
-  const unitTotal = grouped ? Math.max(0, groupCount || 0) : fileCount;
-  const totalPages = Math.max(1, Math.ceil(unitTotal / size));
+  const totalPages = Math.max(1, Math.ceil(total / size));
   return {
-    // `total` keeps its legacy meaning (files) unless grouped — Review derives
-    // its group range/next/prev from the group total and reads file totals from
-    // `fileCount`/`count` below.
-    total: unitTotal,
-    fileCount,
-    groupCount: grouped ? unitTotal : 0,
+    total,
     totalPages,
     pageNumber: Math.floor(offset / size) + 1,
-    shownStart: unitTotal === 0 ? 0 : offset + 1,
-    shownEnd: Math.min(offset + size, unitTotal),
+    shownStart: total === 0 ? 0 : offset + 1,
+    shownEnd: Math.min(offset + size, total),
     hasPrev: offset > 0,
-    hasNext: offset + size < unitTotal,
+    hasNext: offset + size < total,
+  };
+}
+
+// #494 P1-S2: Review pages COMPLETE GROUPS server-side. The payload still
+// carries the truthful matching-FILE total (`count`) alongside the group total
+// (`group_count`), and the page controls address GROUP slots. This Review-only
+// helper derives prev/next/range/page-number from the group total while keeping
+// `fileCount` (== count) around for the "N matching files" labels. Kept separate
+// from computePagination (the shared legacy file helper) so the legacy path is
+// never switched onto group math by a stray flag — grouped state stays entirely
+// Review-side.
+export function computeReviewGroupPagination({ count = 0, groupCount = 0, limit = 200, offset = 0 }) {
+  const fileCount = Math.max(0, count || 0);
+  const groupTotal = Math.max(0, groupCount || 0);
+  const size = Math.max(1, limit || 1);
+  const totalPages = Math.max(1, Math.ceil(groupTotal / size));
+  return {
+    // `total` is the GROUP total in grouped mode; `fileCount` stays the truthful
+    // matching-file total the payload reported.
+    total: groupTotal,
+    fileCount,
+    groupCount: groupTotal,
+    totalPages,
+    pageNumber: Math.floor(offset / size) + 1,
+    shownStart: groupTotal === 0 ? 0 : offset + 1,
+    shownEnd: Math.min(offset + size, groupTotal),
+    hasPrev: offset > 0,
+    hasNext: offset + size < groupTotal,
   };
 }
 
@@ -501,12 +516,18 @@ export function arrangeServerGroups({ groups = [], items = [] }) {
 //   - clears the gate in a finally (success AND error cleanup) via clearGate,
 //     then calls `refetchAfterBatch` exactly once — the single authoritative
 //     silent pending-review refetch for the batch.
+// The refetch is unconditional: even when a worker or `afterBatch` throws, the
+// gate is cleared, `finish` (UI cleanup) runs, and exactly one refetch still
+// happens AFTER the clear — a throw from the batch must never leave the list
+// stale because cleanup was skipped. The batch's original exception is
+// preserved and rethrown (a cleanup/refetch failure never masks it); on the
+// clean path the accumulated `{done, errors}` stats are returned.
 // The per-file mutation transport (the fetch + evidence) lives inside the
 // caller's injected `submit` — this helper never restructures it — and
-// `afterBatch` (remember-for-future in applyBulk) still runs inside the
-// gate-guarded try, before the gate clears. Pure of DOM/React and exported for
-// the Phase-3 bulk-event regressions; the component only wires real fetches,
-// the window dispatch, the gate ref, and fetchPending in here.
+// `afterBatch` (remember-for-future in applyBulk) still runs before the gate
+// clears. Pure of DOM/React and exported for the Phase-3 bulk-event regressions;
+// the component only wires real fetches, the window dispatch, the gate ref, and
+// fetchPending in here.
 export async function runVerifyBatch({
   items,               // queue of batch units (explicit paths for applyBulk, rows for acceptSelected)
   total,               // progress denominator (paths.length / rows.length)
@@ -523,6 +544,7 @@ export async function runVerifyBatch({
 }) {
   const units = (items || []).slice();
   const stats = { done: 0, errors: 0 };
+  let failure;
   const bump = () => onProgress && onProgress(stats.done, total, stats.errors);
   setGate(new Set(units.map((u) => pathOf(u)).filter(Boolean)));
   async function worker() {
@@ -545,11 +567,33 @@ export async function runVerifyBatch({
   try {
     await Promise.all(Array.from({ length: Math.max(1, concurrency) }, () => worker()));
     if (afterBatch) await afterBatch(stats);
+  } catch (firstErr) {
+    // Preserve the batch/afterBatch exception so the caller sees the ORIGINAL
+    // failure — never a masked version from the cleanup/refetch below.
+    failure = firstErr;
   } finally {
-    clearGate();
-    if (finish) finish();
+    // Gate clear and UI cleanup are attempted INDEPENDENTLY: a throw in one
+    // must not skip the other.
+    try {
+      clearGate();
+    } catch (clearErr) {
+      if (failure === undefined) failure = clearErr;    // only surface clear errors on the clean path
+    }
+    try {
+      if (finish) finish();
+    } catch (finishErr) {
+      if (failure === undefined) failure = finishErr;   // only surface finish errors on the clean path
+    }
   }
-  refetchAfterBatch();
+  // Exactly one authoritative refetch — and only ever AFTER the gate cleared and
+  // UI cleanup ran, even when the batch above threw. A refetch failure must not
+  // mask an original batch exception.
+  try {
+    refetchAfterBatch();
+  } catch (refetchErr) {
+    if (failure === undefined) failure = refetchErr;
+  }
+  if (failure !== undefined) throw failure;
   return { done: stats.done, errors: stats.errors };
 }
 
@@ -1245,9 +1289,11 @@ export function ReviewPage() {
   const selectedCount = epSelection.size;
   // #494 P1-S2: Review pages GROUPS. group_count drives page number/range/prev/
   // next; data.count (matching files) stays available for the truthful file
-  // totals shown alongside the group labels.
-  const pagination = computePagination({
-    count: data?.count, groupCount: data?.group_count, limit, offset, grouped: true,
+  // totals shown alongside the group labels (computeReviewGroupPagination, NOT
+  // the shared computePagination — the legacy file helper stays Review-agnostic
+  // for Aftercare and the non-grouped tests).
+  const pagination = computeReviewGroupPagination({
+    count: data?.count, groupCount: data?.group_count, limit, offset,
   });
 
   return (
