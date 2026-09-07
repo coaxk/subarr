@@ -175,6 +175,12 @@ async def coverage_queue(req: CoverageQueueRequest, request: Request) -> dict:
         canonical,
         caller="coverage_queue",
         log=log,
+        # [#498] Let the resolver see whether this subgen would skip the
+        # language it is about to declare. None on builds that do not
+        # advertise it, which the resolver treats as 'cannot tell'.
+        skip_audio_languages=getattr(
+            getattr(request.app.state, "subgen_caps", None), "skip_audio_languages", None
+        ),
     )
 
     # #66/#116 slice 6: route through the pending queue (throttled), instead of
