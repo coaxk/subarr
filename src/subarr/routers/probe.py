@@ -22,6 +22,16 @@ class WalkRequest(BaseModel):
     recursive: bool = True  # currently always recursive; kept for future
 
 
+# [#506] Bounded so one click cannot queue the whole library. 500 matches the
+# rollup walker's own per-folder ceiling, and a Review page selection is far
+# smaller than that in practice.
+MAX_REPROBE_PATHS = 500
+
+
+class ReprobeRequest(BaseModel):
+    canonical_paths: list[str]
+
+
 @router.get("/probe")
 async def probe_endpoint(request: Request, path: str = Query("")) -> dict:
     canonical = path.strip().strip("/")
@@ -66,6 +76,51 @@ async def start_walk(req: WalkRequest, request: Request) -> dict:
         raise HTTPException(404, detail=f"not a directory: {canonical!r}")
     walker = request.app.state.probe_walker
     state = await walker.start_walk(canonical)
+    return state.to_dict()
+
+
+@router.post("/probe/reprobe")
+async def force_reprobe(req: ReprobeRequest, request: Request) -> dict:
+    """[#506] Re-probe specific files, bypassing the mtime/size cache.
+
+    The cache is keyed on (path, mtime, size) and self-invalidates when either
+    moves, so an ordinary re-walk already picks up most edits. It cannot see a
+    language-tag correction: 'und' -> 'eng' is the same byte length, so an
+    in-place tag edit can leave size identical, and a tool that preserves mtime
+    leaves both matching. The row then keeps reporting the old language with no
+    way to refresh it, which is what this endpoint is for.
+
+    Returns the same WalkState shape as /probe/walk, so the existing
+    /probe/walk/{id} and /probe/walk/{id}/events endpoints track it unchanged.
+    """
+    paths: list[str] = []
+    seen: set[str] = set()
+    for raw in req.canonical_paths:
+        c = (raw or "").strip().strip("/")
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        paths.append(c)
+    if not paths:
+        raise HTTPException(400, detail="canonical_paths must contain at least one path")
+    if len(paths) > MAX_REPROBE_PATHS:
+        raise HTTPException(
+            400,
+            detail=(
+                f"too many paths: {len(paths)} > {MAX_REPROBE_PATHS}. "
+                "Re-probe a smaller selection, or run a full walk."
+            ),
+        )
+    # Containment check up front: one bad path fails the whole request rather
+    # than silently probing the rest, so the caller is not left guessing which
+    # of their selection was dropped.
+    for c in paths:
+        try:
+            canonical_to_fs(c)
+        except PathOutsideRootError:
+            raise HTTPException(400, detail=f"path escapes media root: {c!r}")
+    walker = request.app.state.probe_walker
+    state = await walker.probe_paths(paths, force=True)
     return state.to_dict()
 
 
