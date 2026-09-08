@@ -188,6 +188,19 @@ def _filter_reason(item: CoverageItem, rules: AutoQueueRules) -> str | None:
     # capability, so this clears itself the moment subgen can actually fill it.
     if item.image_only_subgen_will_skip:
         return "embedded English is image-based (PGS/VobSub); subgen will skip it"
+    # [#505] Exactly the same shape, and it was missing. A forced-only English
+    # track is NOT coverage, so the row is correctly eligible -- but subgen
+    # counts it as an existing English subtitle and refuses unless
+    # IGNORE_FORCED_SUBTITLES is on. The flag was already computed during
+    # scoring, serialised, and shown in Coverage as `forced_skip`; nothing
+    # consulted it here, so these rows were queued every scheduled walk and
+    # refused every time. Reported by AztecGuyGDL: ~15 files requeued on a
+    # 15-minute cycle, forever, with both sides behaving as designed.
+    #
+    # Set from subgen's RUNTIME capability like its image sibling, so it clears
+    # itself the moment the operator turns IGNORE_FORCED_SUBTITLES on.
+    if item.forced_only_subgen_will_skip:
+        return "embedded English is forced-only; subgen will skip it"
     if rules.require_monitored and item.monitored is False:
         return "not monitored"
     if item.score < rules.min_score:
