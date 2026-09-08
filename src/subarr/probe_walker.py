@@ -277,9 +277,23 @@ class ProbeWalker:
     # ------------------------------------------------------------------
     _EAGER_LABEL = "__eager__"
 
-    async def probe_paths(self, canonical_paths: list[str]) -> WalkState:
+    async def probe_paths(self, canonical_paths: list[str], force: bool = False) -> WalkState:
         """Probe a specific set of canonical paths. Skips files already
-        cached (mtime/size match) and records failures. Deduped: if an
+        cached (mtime/size match) and records failures.
+
+        [#506] `force` skips the cache READ, so a file whose mtime and size are
+        unchanged is probed anyway. The cache is keyed on (path, mtime, size) and
+        self-invalidates when either moves, which covers most edits -- but a
+        language-tag correction is the case it cannot see: 'und' -> 'eng' is the
+        same byte length, so an in-place tag edit can leave size identical, and a
+        tool that preserves mtime leaves both matching. The entry then stands
+        forever and Review keeps showing the old language.
+
+        Deliberately skips the READ rather than deleting the entry first: deleting
+        up front destroys good data if the re-probe then fails, so the old entry
+        survives until a new one replaces it.
+
+        Deduped: if an
         eager walk is already running, the existing WalkState is returned
         instead of starting a parallel one (so back-to-back coverage
         refreshes don't stack identical probe passes)."""
@@ -304,12 +318,14 @@ class ProbeWalker:
         walk_id = uuid.uuid4().hex[:16]
         state = WalkState(walk_id, self._EAGER_LABEL)
         self._walks[walk_id] = state
-        task = asyncio.create_task(self._run_targeted(state, paths), name=f"probe-eager-{walk_id}")
+        task = asyncio.create_task(
+            self._run_targeted(state, paths, force=force), name=f"probe-eager-{walk_id}"
+        )
         self._tasks[walk_id] = task
         task.add_done_callback(lambda t, wid=walk_id: self._tasks.pop(wid, None))
         return state
 
-    async def _run_targeted(self, state: WalkState, canonical_paths: list[str]) -> None:
+    async def _run_targeted(self, state: WalkState, canonical_paths: list[str], force: bool = False) -> None:
         try:
             state.total_files = len(canonical_paths)
             log.info("eager probe %s: %d wanted files", state.id, state.total_files)
@@ -329,11 +345,14 @@ class ProbeWalker:
                         state.errors.append({"path": canonical, "error": f"stat: {e}"})
                         state.processed += 1
                         return
-                    cached = self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
-                    if cached is not None:
-                        state.cached_hits += 1
-                        state.processed += 1
-                        return
+                    # [#506] force skips the cache read entirely, so a tag-only
+                    # edit that left mtime and size untouched is still re-probed.
+                    if not force:
+                        cached = self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
+                        if cached is not None:
+                            state.cached_hits += 1
+                            state.processed += 1
+                            return
                     await self._probe_and_record(state, canonical, p, st)
 
             await asyncio.gather(*(_one(c) for c in canonical_paths))

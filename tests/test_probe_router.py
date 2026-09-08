@@ -337,3 +337,64 @@ def test_coverage_attaches_embedded_en_from_probe_cache(app_with_stub, monkeypat
     # Score: −3000 from embedded, +100 non-english, +50 monitored = −2850.
     assert item["score"] <= -2000
     assert any("embedded" in reason for reason in item["score_reasons"])
+
+
+# ── #506: POST /api/probe/reprobe ────────────────────────────────────────────
+# Force a re-probe of specific files, bypassing the (path, mtime, size) cache.
+# The cache self-invalidates when mtime or size moves, which covers most edits,
+# but a language-tag correction can leave both untouched ('und' -> 'eng' is the
+# same byte length), so Review keeps showing the old language with no way to
+# refresh it. Reported by AztecGuyGDL after correcting files with Tdarr.
+
+
+def _plant(name="ReprobeMe.mkv"):
+    from subarr.config import settings
+
+    folder = settings.media_root / "Movies" / "Reprobe"
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / name
+    f.write_bytes(b"x" * 64)
+    return "Movies/Reprobe/" + name
+
+
+def test_reprobe_requires_at_least_one_path(app_with_stub):
+    r = app_with_stub.post("/api/probe/reprobe", json={"canonical_paths": []})
+    assert r.status_code == 400
+
+
+def test_reprobe_rejects_a_path_outside_the_media_root(app_with_stub):
+    r = app_with_stub.post("/api/probe/reprobe", json={"canonical_paths": ["../../etc/passwd"]})
+    assert r.status_code == 400
+    assert "root" in r.json()["detail"].lower()
+
+
+def test_reprobe_caps_the_batch_size(app_with_stub):
+    """An unbounded list would let one click queue the whole library."""
+    r = app_with_stub.post(
+        "/api/probe/reprobe",
+        json={"canonical_paths": [f"Movies/Reprobe/f{i}.mkv" for i in range(5000)]},
+    )
+    assert r.status_code == 400
+    assert "too many" in r.json()["detail"].lower()
+
+
+def test_reprobe_starts_a_forced_walk_and_returns_its_id(app_with_stub, monkeypatch):
+    canonical = _plant()
+    seen = {}
+
+    async def _fake_probe_paths(paths, force=False):
+        seen["paths"] = list(paths)
+        seen["force"] = force
+
+        class _S:
+            def to_dict(self):
+                return {"id": "abc123", "status": "running"}
+
+        return _S()
+
+    monkeypatch.setattr(app_with_stub.app.state.probe_walker, "probe_paths", _fake_probe_paths)
+    r = app_with_stub.post("/api/probe/reprobe", json={"canonical_paths": [canonical]})
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == "abc123"
+    assert seen["paths"] == [canonical]
+    assert seen["force"] is True, "the whole point is that it bypasses the cache"
