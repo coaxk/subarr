@@ -139,3 +139,61 @@ async def test_status_non_json_200_raises_subgen_unavailable():
 
     with pytest.raises(SubgenUnavailable):
         await _client(handler).status()
+
+
+# ── #500: a 4xx from /detect_language_robust must not read as a result ───────
+# The method gated on `status_code >= 500`, so subgen's 403 ("path is outside
+# the allowed media root") and 400 ("path is required") were returned straight
+# through as if they were detections. subarr answered 200 with an object
+# carrying only `error`, and the Review UI, expecting chunks and a vote,
+# rendered nothing. Reported by Jorman as "the detection button doesn't do
+# anything". Every sibling method in this client already used `!= 200` or
+# `>= 400`; this one was the outlier.
+
+
+def _detect_handler(status: int, body: dict):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/detect_language_robust":
+            return httpx.Response(status, json=body)
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        (403, {"error": "the path is outside the allowed media root"}),
+        (400, {"error": "path is required"}),
+        (404, {"detail": "Not Found"}),
+    ],
+)
+async def test_detect_language_robust_raises_on_4xx(status, body):
+    from subarr.subgen_client import SubgenUnavailable
+
+    c = _client(_detect_handler(status, body))
+    with pytest.raises(SubgenUnavailable) as ei:
+        await c.detect_language_robust("/media/TV/x.avi")
+    await c.aclose()
+    # The status and subgen's own words must survive into the message, or the
+    # operator is told "unavailable" with no way to find out why.
+    assert str(status) in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_detect_language_robust_still_returns_a_real_detection():
+    c = _client(_detect_handler(200, {"detected_language": "en", "chunks": [], "confidence": 0.9}))
+    out = await c.detect_language_robust("/media/TV/x.avi")
+    await c.aclose()
+    assert out["detected_language"] == "en"
+
+
+@pytest.mark.asyncio
+async def test_detect_language_robust_still_raises_on_5xx():
+    from subarr.subgen_client import SubgenUnavailable
+
+    c = _client(_detect_handler(503, {"error": "model loading"}))
+    with pytest.raises(SubgenUnavailable):
+        await c.detect_language_robust("/media/TV/x.avi")
+    await c.aclose()

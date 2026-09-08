@@ -361,7 +361,18 @@ class SubgenClient:
             r = await self._client.post("/detect_language_robust", params=params)
         except httpx.HTTPError as e:
             raise SubgenUnavailable(f"subgen /detect_language_robust failed: {e}") from e
-        if r.status_code >= 500:
+        # [#500] Was `>= 500`, which let every 4xx through as if it were a
+        # detection. subgen answers 403 when the path falls outside its allowed
+        # media root (patch 0025) and 400 when the path is empty, both as a JSON
+        # body carrying only `error`. That was returned to the router, which
+        # answered 200, and the Review UI, expecting chunks and a vote, rendered
+        # nothing at all -- reported as "the detection button doesn't do
+        # anything". A path or mount misconfiguration is the single most likely
+        # cause of that 403, and it is precisely what the operator needs told.
+        #
+        # Every sibling method in this client already used `!= 200` or `>= 400`;
+        # this one was the outlier.
+        if r.status_code >= 400:
             raise SubgenUnavailable(
                 f"subgen /detect_language_robust returned {r.status_code}: {r.text[:200]}"
             )
