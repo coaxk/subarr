@@ -10,6 +10,7 @@ GET  /api/audio-lang/pending-review?search=&limit=&offset= — coverage rows nee
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -48,6 +49,81 @@ async def list_verifications(request: Request) -> dict[str, Any]:
     store = request.app.state.audio_lang
     rows = [v.to_dict() for v in store.list_all()]
     return {"count": len(rows), "verifications": rows}
+
+
+# [#506 follow-up] Strong refs to in-flight auto-reprobe tasks. CPython keeps
+# only a WEAK ref to a bare create_task, so a backgrounded ffprobe can be
+# GC-cancelled mid-flight and the row silently never refreshes -- the same trap
+# documented on the #364 forced-segment scans in completion_watcher.
+_REPROBE_TASKS: set = set()
+
+
+def verification_contradicts_probe(probe, lang_code) -> bool:
+    """[#506 follow-up] True when a user-verified language is not already what
+    the cached probe reports, i.e. re-reading the file could tell us something
+    new.
+
+    Covers both directions that matter:
+      - cache has NO language (und/None/empty) -> the encoder never tagged it,
+        and the user may have since corrected the file externally (#506).
+      - cache has a DIFFERENT definite language -> the file may have been
+        retagged externally; a cached `eng` on a file now tagged `jpn` reads
+        exactly the same as one that was never touched.
+
+    Returns False when the verified language is already present on any track,
+    because there is nothing to learn and a verification on a correctly-tagged
+    file is the common case -- it must not cost an ffprobe.
+
+    Both sides are normalised first: ffprobe emits ISO-639-2 (`jpn`) while the
+    store holds ISO-639-1 (`ja`), so a raw comparison would report a
+    contradiction on every file and re-probe the entire library one
+    verification at a time.
+    """
+    from ..langs import normalize_lang
+
+    want = normalize_lang((lang_code or "").strip()) or (lang_code or "").strip().lower()
+    if not want:
+        return False
+    if probe is None:
+        return True
+    have = set()
+    for track in getattr(probe, "audio", None) or []:
+        raw = (getattr(track, "language", None) or "").strip()
+        if not raw:
+            continue
+        have.add(normalize_lang(raw) or raw.lower())
+    have.discard("und")
+    if not have:
+        return True
+    return want not in have
+
+
+async def _reprobe_then_refresh(request: Request, canonical: str) -> None:
+    """Force one file through ffprobe, then ask for a coverage rebuild.
+
+    Ordering matters: the rebuild reads the probe cache, so refreshing before the
+    probe lands would just re-read the stale entry.
+
+    Failures are non-fatal by design. The verification itself has already
+    persisted and is the authoritative answer regardless of what the file says.
+    """
+    try:
+        walker = getattr(request.app.state, "probe_walker", None)
+        if walker is None:
+            return
+        state = await walker.probe_paths([canonical], force=True)
+        task = getattr(walker, "_tasks", {}).get(getattr(state, "id", None))
+        if task is not None:
+            await task
+        cov = getattr(request.app.state, "coverage_cache", None)
+        if cov is not None:
+            cov.request_refresh(
+                request.app.state.integrations,
+                request.app.state.probe_store,
+                request.app.state.audio_lang,
+            )
+    except Exception as e:  # noqa: BLE001 - a background refresh must never escalate
+        log.warning("auto-reprobe after verification failed for %s: %s", scrub(canonical), e)
 
 
 @router.post("/verifications")
@@ -93,6 +169,26 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
 
     # v1.1 ARCH fix #197: kick a background coverage refresh so the
     # corresponding row's chip turns green within a few seconds, not 30.
+    # [#506 follow-up] The manual Force Re-probe only helps someone who already
+    # SUSPECTS the cache is stale. A user verification that disagrees with the
+    # cached probe is subarr being TOLD its cache is wrong, so look at the file
+    # again: it may have been retagged externally since it was probed, and a tag
+    # edit can leave mtime and size untouched, which is the one change the cache
+    # cannot detect on its own.
+    #
+    # Only for `user` source -- an automatic or Whisper verdict must not spend
+    # disk IO. Multi-language verdicts are skipped: no single language to compare,
+    # same reasoning as the Sonarr propagation guard above.
+    if req.source == "user" and req.lang_class != "multi":
+        try:
+            cached_probe = request.app.state.probe_store.get(req.canonical_path)
+        except Exception:  # noqa: BLE001 - a cache read must not fail a verification
+            cached_probe = None
+        if verification_contradicts_probe(cached_probe, lang):
+            _t = asyncio.create_task(_reprobe_then_refresh(request, req.canonical_path))
+            _REPROBE_TASKS.add(_t)
+            _t.add_done_callback(_REPROBE_TASKS.discard)
+
     # #104: route through the coalescing entry point so a burst of
     # verifications collapses into a single debounced rebuild.
     cov_cache = getattr(request.app.state, "coverage_cache", None)
