@@ -79,6 +79,44 @@ async def start_walk(req: WalkRequest, request: Request) -> dict:
     return state.to_dict()
 
 
+# [#506] Strong refs: CPython holds a bare create_task() only weakly, so a
+# task with no reference can be collected mid-flight and the refresh silently
+# never happens.
+_REPROBE_REFRESH_TASKS: set[asyncio.Task] = set()
+
+
+async def _refresh_coverage_after_walk(request: Request, walk_id: str) -> None:
+    """[#506] Await a forced walk, then ask for a coverage rebuild.
+
+    The endpoint below updates the PROBE cache. The rows the user is looking at
+    are rendered from the COVERAGE snapshot, which is built FROM that cache, so
+    without this a successful force re-probe changes nothing on screen and the
+    row keeps reporting `audio: und` - the exact symptom force re-probe exists
+    to clear. Step 4 of the issue, and it was missing.
+
+    Ordering is load-bearing: the rebuild reads the probe cache, so refreshing
+    before the walk lands just re-reads the stale entry it was meant to replace.
+
+    Failures are swallowed on purpose. The probe itself has already run and been
+    stored; a rebuild is a courtesy on top of that, and the next scheduled
+    refresh will pick it up regardless.
+    """
+    try:
+        walker = getattr(request.app.state, "probe_walker", None)
+        task = getattr(walker, "_tasks", {}).get(walk_id) if walker is not None else None
+        if task is not None:
+            await task
+        cov = getattr(request.app.state, "coverage_cache", None)
+        if cov is not None:
+            cov.request_refresh(
+                request.app.state.integrations,
+                request.app.state.probe_store,
+                request.app.state.audio_lang,
+            )
+    except Exception as e:  # noqa: BLE001 - a background refresh must never escalate
+        log.warning("coverage refresh after forced re-probe %s failed: %s", walk_id, e)
+
+
 @router.post("/probe/reprobe")
 async def force_reprobe(req: ReprobeRequest, request: Request) -> dict:
     """[#506] Re-probe specific files, bypassing the mtime/size cache.
@@ -121,7 +159,16 @@ async def force_reprobe(req: ReprobeRequest, request: Request) -> dict:
             raise HTTPException(400, detail=f"path escapes media root: {c!r}")
     walker = request.app.state.probe_walker
     state = await walker.probe_paths(paths, force=True)
-    return state.to_dict()
+    body = state.to_dict()
+    # Rebuild coverage once the walk lands, so the rows actually change. Fired
+    # and not awaited: the caller gets the walk id immediately and tracks it
+    # through /probe/walk/{id} exactly as before.
+    walk_id = body.get("id")
+    if walk_id:
+        _t = asyncio.create_task(_refresh_coverage_after_walk(request, walk_id))
+        _REPROBE_REFRESH_TASKS.add(_t)
+        _t.add_done_callback(_REPROBE_REFRESH_TASKS.discard)
+    return body
 
 
 @router.get("/probe/walk/{walk_id}")

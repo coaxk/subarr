@@ -398,3 +398,148 @@ def test_reprobe_starts_a_forced_walk_and_returns_its_id(app_with_stub, monkeypa
     assert r.json()["id"] == "abc123"
     assert seen["paths"] == [canonical]
     assert seen["force"] is True, "the whole point is that it bypasses the cache"
+
+
+# ── #506 follow-up: a forced re-probe must refresh the coverage classification ─
+# The endpoint shipped in #509 updated the probe cache and stopped there. The
+# rows the user is staring at are rendered from the COVERAGE snapshot, which is
+# built from the probe cache, so without a rebuild Review keeps showing
+# `audio: und` after a successful re-probe - the exact symptom force re-probe
+# exists to clear. Step 4 of the issue ("refresh the Review/Coverage
+# classification") was simply missing.
+#
+# Two tests, deliberately: one on the worker's ORDER, one on the WIRING. #505
+# was a flag that was computed, serialised, rendered and asserted a dozen times
+# while nothing consumed it, so asserting the helper alone is not enough.
+
+
+@pytest.mark.asyncio
+async def test_the_refresh_worker_awaits_the_probe_before_rebuilding():
+    """Ordering is the whole point: the rebuild READS the probe cache, so
+    refreshing before the walk lands just re-reads the stale entry it was
+    supposed to replace."""
+    from subarr.routers.probe import _refresh_coverage_after_walk
+
+    order = []
+
+    async def _walk():
+        order.append("probe")
+
+    task = None
+
+    class _Walker:
+        def __init__(self):
+            self._tasks = {}
+
+    class _Cov:
+        def request_refresh(self, *a):
+            order.append("refresh")
+
+    class _State:
+        probe_walker = _Walker()
+        coverage_cache = _Cov()
+        integrations = object()
+        probe_store = object()
+        audio_lang = object()
+
+    class _App:
+        state = _State()
+
+    class _Req:
+        app = _App()
+
+    import asyncio as _asyncio
+
+    task = _asyncio.ensure_future(_walk())
+    _State.probe_walker._tasks["w1"] = task
+
+    await _refresh_coverage_after_walk(_Req(), "w1")
+    assert order == ["probe", "refresh"], f"got {order}"
+
+
+@pytest.mark.asyncio
+async def test_the_refresh_worker_never_escalates_a_failure():
+    """A rebuild is a courtesy on top of a probe that already happened. If the
+    walk raised, this must not surface as an unhandled task exception."""
+    from subarr.routers.probe import _refresh_coverage_after_walk
+
+    async def _boom():
+        raise RuntimeError("ffprobe exploded")
+
+    class _Walker:
+        def __init__(self):
+            self._tasks = {}
+
+    class _State:
+        probe_walker = _Walker()
+        coverage_cache = None
+        integrations = object()
+        probe_store = object()
+        audio_lang = object()
+
+    class _App:
+        state = _State()
+
+    class _Req:
+        app = _App()
+
+    import asyncio as _asyncio
+
+    _State.probe_walker._tasks["w1"] = _asyncio.ensure_future(_boom())
+    await _refresh_coverage_after_walk(_Req(), "w1")  # must not raise
+
+
+def test_reprobe_endpoint_actually_fires_the_refresh(app_with_stub, monkeypatch):
+    """The consumption test. Records at CALL time with a sync spy returning a
+    throwaway coroutine, because the real call is create_task'd and its body
+    would not run until the loop yields - well after the response returns."""
+    from subarr.routers import probe as mod
+
+    canonical = _plant()
+    calls = {}
+
+    def _spy(request, walk_id):
+        calls["walk_id"] = walk_id
+
+        async def _noop():
+            return None
+
+        return _noop()
+
+    monkeypatch.setattr(mod, "_refresh_coverage_after_walk", _spy)
+
+    async def _fake_probe_paths(paths, force=False):
+        class _S:
+            def to_dict(self):
+                return {"id": "walk-xyz", "status": "running"}
+
+        return _S()
+
+    monkeypatch.setattr(app_with_stub.app.state.probe_walker, "probe_paths", _fake_probe_paths)
+    r = app_with_stub.post("/api/probe/reprobe", json={"canonical_paths": [canonical]})
+    assert r.status_code == 200, r.text
+    assert calls.get("walk_id") == "walk-xyz", "the endpoint never scheduled the coverage refresh"
+
+
+def test_ui_reprobe_cap_matches_the_server_cap():
+    """Cross-boundary contract lock (#506).
+
+    The selection cap the UI enforces lives in review.jsx and the 400 that
+    rejects an oversized batch lives here. Nothing connected them, which is the
+    same gap that let the page-size unit drift in #514. If the UI cap were the
+    larger of the two, a user could select a batch the server refuses and get an
+    error instead of the feature.
+    """
+    import re
+    from pathlib import Path
+
+    import subarr
+    from subarr.routers.probe import MAX_REPROBE_PATHS
+
+    jsx = Path(subarr.__file__).parent / "static" / "v1" / "home-hifi" / "review.jsx"
+    m = re.search(r"export const MAX_REPROBE_PATHS\s*=\s*(\d+)", jsx.read_text(encoding="utf-8"))
+    assert m, "MAX_REPROBE_PATHS not found in review.jsx"
+    ui_cap = int(m.group(1))
+    assert ui_cap == MAX_REPROBE_PATHS, (
+        f"review.jsx caps a re-probe selection at {ui_cap} but the server rejects above {MAX_REPROBE_PATHS}"
+    )
