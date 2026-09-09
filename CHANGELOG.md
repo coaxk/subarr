@@ -7,6 +7,17 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-09-10
+
+**subarr no longer queues a file for a subtitle language your transcription service cannot produce.**
+
+One fix, completing the report that v2.7.0 half-answered. No config changes and no migration. Reported by @AztecGuyGDL, who supplied the evidence that found it after my first explanation turned out to be wrong.
+
+### Fixed
+- **Files were queued over and over for a language the transcription service can never produce (#505).** Whisper writes exactly one subtitle language per job. In translate mode that is always English, whatever the file contains; in transcribe mode it is the file's own audio language. subarr could not see which, so on a setup wanting Spanish subtitles from an English-only service it would queue a file, the service would see the English subtitle it was going to write already sitting there and refuse, and the next scheduled scan would do it again. Both sides were behaving exactly as designed and nothing connected them. The reporter had around fifteen files cycling on a fifteen minute schedule indefinitely. subarr now asks the service what it can produce and holds such a file back with a reason instead of submitting it, while still queueing anything where at least one wanted language is achievable. This needs subarr-subgen 2026.08.1-r9 or newer to take effect; on older versions subarr cannot tell what the service produces and behaves exactly as it did before.
+
+  Worth being clear about what this does and does not do: it stops the pointless cycling and explains why, it does not make the missing language appear. If your service is set to translate, it produces English only, and obtaining another language is a change to that service's configuration rather than to subarr.
+
 ## [2.7.0] - 2026-09-09
 
 **Review pages by whole shows now, and you can tell subarr to re-read a file you have corrected.**
