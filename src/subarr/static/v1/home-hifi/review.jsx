@@ -389,6 +389,40 @@ export function shouldRefetchAfterVerify(gate, eventPath) {
 
 // P3: build the /api/audio-lang/pending-review query string for server-side
 // search + page slicing. The server validates these (search max_length=200,
+// #506: force re-probe. AztecGuyGDL corrected `und` audio tags with Tdarr and
+// Review kept showing the old value, because the probe cache is keyed on
+// (path, mtime, size) and a tag edit can move neither. This is the manual
+// escape hatch: re-probe the selection, bypassing that cache.
+//
+// Mirrors MAX_REPROBE_PATHS in src/subarr/routers/probe.py, which returns 400
+// above it. test_probe_router.py reads this file and asserts the two match, so
+// it cannot drift into offering a selection the server will reject.
+export const MAX_REPROBE_PATHS = 500;
+
+// Pure so the failure path is testable without rendering. #515 is the lesson
+// behind returning a message at all: the bulk-verify runner counted its errors
+// and threw the count away when the batch ended, so a wholly failed run looked
+// identical to a clean one. A re-probe that failed must SAY so.
+export function summariseReprobe(state, requested = 0) {
+  const total = (state && state.total_files) || requested || 0;
+  const probed = (state && typeof state.probed === 'number') ? state.probed : 0;
+  const errors = (state && state.errors) || [];
+  if (state && state.status === 'error') {
+    return { ok: false, text: `Re-probe failed after ${probed} of ${total} file(s).`, errors };
+  }
+  if (state && state.status === 'cancelled') {
+    return { ok: false, text: `Re-probe cancelled after ${probed} of ${total} file(s).`, errors };
+  }
+  if (errors.length) {
+    return {
+      ok: false,
+      text: `Re-probed ${probed} of ${total} file(s). ${errors.length} failed.`,
+      errors,
+    };
+  }
+  return { ok: true, text: `Re-probed ${probed} of ${total} file(s).`, errors: [] };
+}
+
 // #514: page sizes in GROUP units. `limit` counts GROUPS in grouped mode and a
 // group expands to every file it contains, so these are an order of magnitude
 // smaller than the file-mode sizes they replaced: at the old top setting of
@@ -931,6 +965,81 @@ export function ReviewPage() {
   }, []);
 
   const clearSelection = useCallback(() => setEpSelection(new Set()), []);
+  // #506: force a re-probe of the selected files, then wait for the coverage
+  // snapshot to be REBUILT before refetching.
+  //
+  // Waiting on generated_at CHANGING, not on `refreshing` going false: the
+  // server-side rebuild is debounced, so `refreshing` is false both after it
+  // finishes and before it has started, and refetching on the second one shows
+  // the user the same stale row they just tried to fix.
+  const [reprobeState, setReprobeState] = useState({ running: false, done: 0, total: 0 });
+  const runReprobe = useCallback(async (paths) => {
+    const list = Array.from(new Set((paths || []).filter(Boolean)));
+    if (!list.length || reprobeState.running || bulkRunning) return;
+    if (list.length > MAX_REPROBE_PATHS) {
+      window.alert(`Select at most ${MAX_REPROBE_PATHS} files to re-probe at once `
+        + `(${list.length} selected). Re-probe a smaller batch, or run a full walk.`);
+      return;
+    }
+    setReprobeState({ running: true, done: 0, total: list.length });
+    let before = null;
+    try {
+      try {
+        const s0 = await fetch('/api/coverage/status', { credentials: 'same-origin' });
+        if (s0.ok) before = (await s0.json()).generated_at || null;
+      } catch { /* not fatal - we just lose the "rebuilt" signal and fall back to a timeout */ }
+
+      const r = await fetch('/api/probe/reprobe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ canonical_paths: list }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { detail = (await r.json()).detail || detail; } catch { /* keep the status */ }
+        throw new Error(detail);
+      }
+      let state = await r.json();
+      for (let i = 0; i < 600 && state && state.status === 'running'; i++) {
+        await new Promise((res) => setTimeout(res, 500));
+        const w = await fetch(`/api/probe/walk/${state.id}`, { credentials: 'same-origin' });
+        if (!w.ok) break;
+        state = await w.json();
+        setReprobeState({
+          running: true,
+          done: state.processed || 0,
+          total: state.total_files || list.length,
+        });
+      }
+
+      // The probe landed; the rows still show the OLD classification until
+      // coverage rebuilds from it. The server schedules that rebuild itself.
+      for (let i = 0; i < 40; i++) {
+        await new Promise((res) => setTimeout(res, 500));
+        try {
+          const s = await fetch('/api/coverage/status', { credentials: 'same-origin' });
+          if (!s.ok) continue;
+          const body = await s.json();
+          if (body.generated_at && body.generated_at !== before) break;
+        } catch { /* keep waiting */ }
+      }
+
+      const summary = summariseReprobe(state, list.length);
+      if (!summary.ok) {
+        const detail = summary.errors.slice(0, 5)
+          .map((e) => `  ${e.path || '?'}: ${e.error || 'unknown error'}`).join('\n');
+        window.alert(`${summary.text}\n\n${detail}`);
+      }
+    } catch (e) {
+      window.alert(`Force re-probe failed: ${e.message || e}`);
+    } finally {
+      setReprobeState({ running: false, done: 0, total: 0 });
+      fetchPending({ silent: true });
+    }
+  }, [reprobeState.running, bulkRunning, fetchPending]);
+
+
 
   // #159: per-file track-mismatch actions (swap / dismiss). busyPath disables
   // the row's buttons while a request is in flight.
@@ -1727,6 +1836,16 @@ export function ReviewPage() {
             </span>
           )}
           <span style={{ flex: 1 }} />
+          {/* #506: works on whatever is selected, so it covers all three scopes
+              the reporter asked for - one file, an arbitrary selection, or a
+              whole series/movie via the group's select-all. */}
+          <button className="btn ghost" onClick={() => runReprobe(Array.from(epSelection))}
+            disabled={bulkRunning || reprobeState.running}
+            title="Re-read the media files with ffprobe, ignoring the cached result. Use after correcting audio language tags externally (Tdarr, mkvpropedit).">
+            {reprobeState.running
+              ? `Re-probing ${reprobeState.done}/${reprobeState.total}…`
+              : `Re-probe (${selectedCount})`}
+          </button>
           <button className="btn ghost" onClick={clearSelection} disabled={bulkRunning}>
             Clear
           </button>
