@@ -4,10 +4,17 @@
 // (formatters, language normalization, filters, payload mappers) in CI.
 //
 // JSX transform MUST mirror scripts/build-frontend.mjs exactly: classic
-// runtime, React.createElement / React.Fragment. React + ReactDOM are CDN
-// globals at runtime (esbuild IIFE leaves them undefined-at-build); the setup
-// file stubs them so importing a .jsx module never ReferenceErrors. These
-// tests exercise pure logic, not rendering, so the node environment is enough.
+// runtime, React.createElement / React.Fragment. React + ReactDOM are runtime
+// GLOBALS (esbuild IIFE leaves them undefined-at-build) served from
+// static/v1/vendor/ -- they are VENDORED IN THIS REPO, not fetched from a CDN,
+// which this comment used to claim. The setup file stubs them so importing a
+// .jsx module never ReferenceErrors.
+//
+// Default environment is node because most tests exercise pure logic. The
+// component-level tests added for #517 opt into jsdom per file with a
+// `@vitest-environment jsdom` docblock and load the VENDORED React, so the
+// React under test is byte-identical to the one shipped to browsers rather
+// than a second copy pulled from npm that could drift from it.
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
