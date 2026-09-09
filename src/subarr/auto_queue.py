@@ -201,6 +201,17 @@ def _filter_reason(item: CoverageItem, rules: AutoQueueRules) -> str | None:
     # itself the moment the operator turns IGNORE_FORCED_SUBTITLES on.
     if item.forced_only_subgen_will_skip:
         return "embedded English is forced-only; subgen will skip it"
+
+    # [#505] The second cause in the same report, and the one that needed a
+    # new subgen capability to see. Whisper writes ONE language per job:
+    # translate always emits English, transcribe emits the file's own audio
+    # language. A row wanting Spanish from a translate-mode instance can never
+    # be satisfied, so queueing it is an infinite submit-refuse-requeue loop
+    # in which BOTH sides are behaving correctly. Set during scoring from the
+    # instance's advertised mode, so it clears itself if that mode changes,
+    # and never set at all against a subgen too old to advertise it.
+    if item.wanted_lang_subgen_cannot_produce:
+        return "subgen cannot produce the wanted language for this row; it would be refused"
     if rules.require_monitored and item.monitored is False:
         return "not monitored"
     if item.score < rules.min_score:

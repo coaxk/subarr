@@ -153,6 +153,12 @@ class CoverageItem:
     # connected subgen will not transcribe it. Same shape as the field above:
     # a distinct non-actionable state, not a hidden row.
     image_only_subgen_will_skip: bool = False
+    # [#505] The wanted language is one THIS subgen cannot produce at all.
+    # Whisper writes one language per job: translate always emits English,
+    # transcribe emits the file's own audio language. A row wanting Spanish
+    # from a translate-mode instance is unsatisfiable no matter how often it
+    # is queued, and queueing it anyway is an infinite refuse-requeue loop.
+    wanted_lang_subgen_cannot_produce: bool = False
     # #159: the default/first audio track isn't the show's original language but
     # a track that IS exists — transcribing the default double-translates a dub
     # (e.g. Russian show, German dub default, original Russian on track 2). The
@@ -218,6 +224,7 @@ class CoverageItem:
             "verification_state": self.verification_state,
             "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
             "image_only_subgen_will_skip": self.image_only_subgen_will_skip,
+            "wanted_lang_subgen_cannot_produce": self.wanted_lang_subgen_cannot_produce,
             "default_track_mismatch": self.default_track_mismatch,
             "mismatch_default_track_lang": self.mismatch_default_track_lang,
             "mismatch_native_track_lang": self.mismatch_native_track_lang,
@@ -1396,6 +1403,9 @@ def _score(
     transcoding_titles: set[str] | None = None,
     ignore_forced_subtitles: bool = False,
     ignore_image_subtitles: bool = False,
+    # [#505] subgen's global TRANSCRIBE_OR_TRANSLATE, as advertised by v4.29+.
+    # None means not advertised, which must gate nothing.
+    subgen_output_task: str | None = None,
 ) -> None:
     s = 0
     reasons: list[str] = []
@@ -1488,6 +1498,25 @@ def _score(
             reasons.append(
                 "subgen will skip this (English subs are image-based, PGS/VobSub)"
                 " — enable IGNORE_IMAGE_SUBTITLES on subgen to transcribe it"
+            )
+    # [#505] Can this subgen produce ANY language this row is waiting for?
+    # Only gates when the answer is knowable: an instance that does not
+    # advertise its mode, or a file whose audio language is untagged in
+    # transcribe mode, both read as unknown and are left alone. A row wanting
+    # several languages is NOT gated if even one is producible, because the
+    # producible half is real work worth queueing.
+    from .subgen_client import producible_subtitle_languages
+
+    _producible = producible_subtitle_languages(subgen_output_task, item.audio_langs)
+    if _producible is not None and item.missing_subtitles:
+        from .langs import normalize_lang
+
+        _wanted = {c for c in (normalize_lang(x) for x in item.missing_subtitles if x) if c}
+        if _wanted and not (_wanted & _producible):
+            item.wanted_lang_subgen_cannot_produce = True
+            reasons.append(
+                f"subgen cannot produce {sorted(_wanted)} (it writes "
+                f"{sorted(_producible)} only) - queueing this would be refused"
             )
     item.score = s
     item.score_reasons = reasons
@@ -1631,6 +1660,9 @@ async def build_coverage(
     # IGNORE_IMAGE_SUBTITLES. Independent of the forced cap: they govern
     # different defects, and subgen defaults this one OFF.
     ignore_image = bool(getattr(subgen_caps, "ignore_image_subtitles", False))
+    # [#505] The instance's global TRANSCRIBE_OR_TRANSLATE, advertised from
+    # v4.29. None on anything older, which reads as unknown and gates nothing.
+    subgen_task = getattr(subgen_caps, "transcribe_or_translate", None)
 
     # ── Bazarr: fan out across ALL instances; each wanted item is tagged with
     #    its source instance id (_bazarr_instance) for routing (#161 Phase 2).
@@ -1893,6 +1925,7 @@ async def build_coverage(
                 airing_soon_eps=airing_soon_ids,
                 ignore_forced_subtitles=ignore_forced,
                 ignore_image_subtitles=ignore_image,
+                subgen_output_task=subgen_task,
             )
             inst_ep_rows.append(item)
 
@@ -1923,6 +1956,7 @@ async def build_coverage(
                     plex_hints=plex_audio_hints,
                     ignore_forced_subtitles=ignore_forced,
                     ignore_image_subtitles=ignore_image,
+                    subgen_output_task=subgen_task,
                 )
             )
         ep_rows.extend(inst_ep_rows)
@@ -1987,6 +2021,7 @@ async def build_coverage(
                 just_imported_movies=radarr_recent_ids,
                 ignore_forced_subtitles=ignore_forced,
                 ignore_image_subtitles=ignore_image,
+                subgen_output_task=subgen_task,
             )
             inst_movie_rows.append(item)
 
@@ -2013,6 +2048,7 @@ async def build_coverage(
                     sources=sources,
                     ignore_forced_subtitles=ignore_forced,
                     ignore_image_subtitles=ignore_image,
+                    subgen_output_task=subgen_task,
                 )
             )
         movie_rows.extend(inst_movie_rows)
@@ -2098,6 +2134,8 @@ async def _add_bazarr_blind_synthetic_rows(
     plex_hints: dict[str, str] | None = None,
     ignore_forced_subtitles: bool = False,
     ignore_image_subtitles: bool = False,
+    # [#505] forwarded to _score so synthetic rows are gated too.
+    subgen_output_task: str | None = None,
 ) -> list[CoverageItem]:
     """Build synthetic CoverageItem rows for episodes Bazarr can't see —
     foreign-language series where the file metadata lies and Bazarr's
@@ -2296,6 +2334,7 @@ async def _add_bazarr_blind_synthetic_rows(
                 airing_soon_eps=airing_soon_ids,
                 ignore_forced_subtitles=ignore_forced_subtitles,
                 ignore_image_subtitles=ignore_image_subtitles,
+                subgen_output_task=subgen_output_task,
             )
             new_rows.append(item)
             seen_ep_ids.add(ep_id)
@@ -2332,6 +2371,8 @@ async def _add_radarr_blind_movie_rows(
     sources: dict,
     ignore_forced_subtitles: bool,
     ignore_image_subtitles: bool,
+    # [#505] forwarded to _score so blind movie rows are gated too.
+    subgen_output_task: str | None = None,
 ) -> list[CoverageItem]:
     """Surface Radarr movies missing English subtitle coverage.
 
@@ -2407,6 +2448,7 @@ async def _add_radarr_blind_movie_rows(
             just_imported_movies=radarr_recent_ids,
             ignore_forced_subtitles=ignore_forced_subtitles,
             ignore_image_subtitles=ignore_image_subtitles,
+            subgen_output_task=subgen_output_task,
         )
         new_rows.append(item)
         seen_files.add(file_canonical)

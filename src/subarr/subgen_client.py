@@ -103,6 +103,40 @@ def classify_probe_failure(exc: Exception | None = None, *, status: int | None =
     return "transport"
 
 
+def producible_subtitle_languages(mode: str | None, audio_langs: list[str] | None) -> set[str] | None:
+    """[#505] Which subtitle languages a subgen instance can produce for ONE file.
+
+    Whisper writes exactly one language per job:
+
+      translate  -> English, always, whatever the file contains
+      transcribe -> the file's own audio language
+
+    Returns None for UNKNOWN, which is different from an empty set, and the
+    distinction is load-bearing. An empty set would mean 'can produce nothing'
+    and would gate every affected row out of the queue; None means subarr
+    cannot answer and must not gate at all. Unknown covers an instance that
+    does not advertise the setting (anything below v4.29), a value we do not
+    recognise, and transcribe mode on a file whose audio language is untagged,
+    since subgen detects that itself and subarr genuinely does not know.
+
+    Deliberately NOT widened by capabilities.per_request_task. subgen accepts
+    a per-request task override, so it looks as though subarr could always ask
+    for the other mode and therefore produce either language. It cannot: the
+    production queue path (scan_runner) calls batch() with no task at all, so
+    the global setting is what runs. Counting per_request_task here would let
+    rows through that then fail in exactly the way this function exists to
+    prevent."""
+    from .langs import normalize_lang
+
+    m = (mode or "").strip().lower()
+    if m == "translate":
+        return {"en"}
+    if m != "transcribe":
+        return None
+    codes = {c for c in (normalize_lang(x) for x in (audio_langs or []) if x) if c and c not in ("und", "")}
+    return codes or None
+
+
 @dataclass(frozen=True)
 class SubgenCapabilities:
     """What this subgen build supports. Computed once at app boot.
@@ -166,6 +200,17 @@ class SubgenCapabilities:
     # for that batch only. The tuning-lab arena gates on this to drive a
     # source-transcribe AND candidate-translate through one path-based channel.
     per_request_task: bool = False
+    # [v4.29 / #505] What this instance can PRODUCE, as opposed to what it
+    # will skip. Whisper writes exactly ONE language per job: 'translate'
+    # always emits English regardless of the file, 'transcribe' emits the
+    # file's own audio language. None means the instance did not advertise
+    # it (older subgen), which must read as UNKNOWN and gate nothing.
+    transcribe_or_translate: str | None = None
+    # Renames the OUTPUT FILE without changing the language of its contents,
+    # so it is NOT the producible language and must never be used as one.
+    # Carried so a contradiction (translate mode writing a .es.srt) is
+    # visible rather than inferred from the filename.
+    subtitle_language_name: str | None = None
     # v4.10 capability: POST /asr accepts ?path= (read audio from a subgen-
     # visible path — no upload) + ?kwargs= (per-request override, folded into
     # the dedup hash) and returns the sub over HTTP. The tuning-lab arena gates
@@ -261,6 +306,8 @@ class SubgenCapabilities:
             "async_config": self.async_config,
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
+            "transcribe_or_translate": self.transcribe_or_translate,
+            "subtitle_language_name": self.subtitle_language_name,
             "asr_arena": self.asr_arena,
             "asr_vanilla_base": self.asr_vanilla_base,
             "asr_detected_language": self.asr_detected_language,
@@ -447,6 +494,8 @@ class SubgenClient:
         async_config = False
         per_request_kwargs = False
         per_request_task = False
+        transcribe_or_translate = None
+        subtitle_language_name = None
         asr_arena = False
         asr_vanilla_base = False
         asr_detected_language = False
@@ -485,6 +534,10 @@ class SubgenClient:
                             async_config = bool(caps_block.get("async_config"))
                             per_request_kwargs = bool(caps_block.get("per_request_kwargs"))
                             per_request_task = bool(caps_block.get("per_request_task"))
+                            _tot = caps_block.get("transcribe_or_translate")
+                            transcribe_or_translate = str(_tot).strip().lower() if _tot else None
+                            _sln = caps_block.get("subtitle_language_name")
+                            subtitle_language_name = str(_sln).strip() if _sln else None
                             asr_arena = bool(caps_block.get("asr_arena"))
                             asr_vanilla_base = bool(caps_block.get("asr_vanilla_base"))
                             asr_detected_language = bool(caps_block.get("asr_detected_language"))
@@ -534,6 +587,8 @@ class SubgenClient:
             async_config=async_config,
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
+            transcribe_or_translate=transcribe_or_translate,
+            subtitle_language_name=subtitle_language_name,
             asr_arena=asr_arena,
             asr_vanilla_base=asr_vanilla_base,
             asr_detected_language=asr_detected_language,
