@@ -389,6 +389,17 @@ export function shouldRefetchAfterVerify(gate, eventPath) {
 
 // P3: build the /api/audio-lang/pending-review query string for server-side
 // search + page slicing. The server validates these (search max_length=200,
+// #514: page sizes in GROUP units. `limit` counts GROUPS in grouped mode and a
+// group expands to every file it contains, so these are an order of magnitude
+// smaller than the file-mode sizes they replaced: at the old top setting of
+// 500 the endpoint returned every file of 500 shows in one response (measured
+// 9,000 rows / 2.97 MB on a 300-show pending set). The server caps grouped
+// `limit` at 100 and REFUSES above it with a 422 rather than clamping, so every
+// option here must stay at or under that cap - see _GROUP_PAGE_MAX in
+// routers/audio_lang.py. review-pagination.test.js pins both invariants.
+export const GROUP_PAGE_SIZES = [10, 25, 50, 100];
+export const DEFAULT_GROUP_PAGE_SIZE = 25;
+
 // limit 1..500, offset >= 0) and applies search before slicing. Exported for
 // tests. Empty search is omitted so the URL stays clean.
 //
@@ -397,7 +408,7 @@ export function shouldRefetchAfterVerify(gate, eventPath) {
 // is the Review default because Review is this helper's only caller; the
 // non-group /pending-review consumers (coverage/chrome/dashboard) build their
 // own queries and are untouched.
-export function buildReviewQuery({ search = '', flag = 'all', limit = 200, offset = 0, grouped = true }) {
+export function buildReviewQuery({ search = '', flag = 'all', limit = DEFAULT_GROUP_PAGE_SIZE, offset = 0, grouped = true }) {
   const q = new URLSearchParams();
   const s = (search || '').trim();
   if (s) q.set('search', s);
@@ -435,7 +446,7 @@ export function computePagination({ count = 0, limit = 200, offset = 0 }) {
 // from computePagination (the shared legacy file helper) so the legacy path is
 // never switched onto group math by a stray flag — grouped state stays entirely
 // Review-side.
-export function computeReviewGroupPagination({ count = 0, groupCount = 0, limit = 200, offset = 0 }) {
+export function computeReviewGroupPagination({ count = 0, groupCount = 0, limit = DEFAULT_GROUP_PAGE_SIZE, offset = 0 }) {
   const fileCount = Math.max(0, count || 0);
   const groupTotal = Math.max(0, groupCount || 0);
   const size = Math.max(1, limit || 1);
@@ -740,7 +751,7 @@ export function ReviewPage() {
   // page's starting row into the server's searched set.
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [limit, setLimit] = useState(200);
+  const [limit, setLimit] = useState(DEFAULT_GROUP_PAGE_SIZE);
   const [offset, setOffset] = useState(0);
   // P3-S4: a request sequence token so a stale response (from an older query or
   // page) can never overwrite a newer one — the fetch guard in fetchPending.
@@ -1416,7 +1427,7 @@ export function ReviewPage() {
                 height: 24, padding: '0 6px', background: 'var(--bg-1)', color: 'var(--fg-0)',
                 border: 'var(--border)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-2xs)',
               }}>
-              {[50, 100, 200, 500].map((n) => <option key={n} value={n}>{n}</option>)}
+              {GROUP_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
           <span style={{ flex: 1 }} />
