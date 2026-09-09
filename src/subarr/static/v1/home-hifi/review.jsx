@@ -572,7 +572,8 @@ export function arrangeServerGroups({ groups = [], items = [] }) {
 // happens AFTER the clear — a throw from the batch must never leave the list
 // stale because cleanup was skipped. The batch's original exception is
 // preserved and rethrown (a cleanup/refetch failure never masks it); on the
-// clean path the accumulated `{done, errors}` stats are returned.
+// clean path the accumulated `{done, errors, failed, cancelled, remaining}`
+// stats are returned (#515) — and the same object is handed to `finish`.
 // The per-file mutation transport (the fetch + evidence) lives inside the
 // caller's injected `submit` — this helper never restructures it — and
 // `afterBatch` (remember-for-future in applyBulk) still runs before the gate
@@ -588,18 +589,28 @@ export async function runVerifyBatch({
   onProgress,          // (done, total, errors) => void
   setGate,             // (Set) => void                    — arm bulkGateRef.current
   clearGate,           // () => void                       — clear in success AND error cleanup
-  finish,              // () => void                       — post-batch UI state (bulkRunning off, clear selection)
+  finish,              // (stats) => void                  — post-batch UI state; receives the FINAL stats (#515)
   afterBatch,          // async (ctx) => void              — optional gate-guarded post-worker work (remember-for-future)
   refetchAfterBatch,   // () => void                       — THE one authoritative refetch, after gate clear
+  shouldStop,          // () => boolean                    — #515: polled before each dequeue; true = start nothing else
   concurrency = 4,     // cap like the original 4-worker loops
 }) {
   const units = (items || []).slice();
-  const stats = { done: 0, errors: 0 };
+  // #515: `failed` names the units whose submit threw, in completion order, and
+  // `remaining` the ones never started because shouldStop() went true. Both are
+  // paths (via pathOf) so the caller can hand them straight back to the
+  // selection. `errors` may exceed failed.length: afterBatch bumps it for
+  // failures that have no file path (a series-intent rule declaration).
+  const stats = { done: 0, errors: 0, failed: [], cancelled: false, remaining: [] };
   let failure;
   const bump = () => onProgress && onProgress(stats.done, total, stats.errors);
+  const stopRequested = () => !!(shouldStop && shouldStop());
   setGate(new Set(units.map((u) => pathOf(u)).filter(Boolean)));
   async function worker() {
     while (units.length) {
+      // Checked BEFORE dequeuing, so a unit is either fully attempted or never
+      // touched — there is no third state for the caller to reason about.
+      if (stopRequested()) break;
       const unit = units.shift();
       let body;
       try {
@@ -607,6 +618,7 @@ export async function runVerifyBatch({
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error('bulk verify failed for', pathOf(unit), e);
+        stats.failed.push(pathOf(unit));
         stats.errors += 1; stats.done += 1; bump();
         continue;
       }
@@ -617,7 +629,10 @@ export async function runVerifyBatch({
   }
   try {
     await Promise.all(Array.from({ length: Math.max(1, concurrency) }, () => worker()));
-    if (afterBatch) await afterBatch(stats);
+    stats.cancelled = stopRequested();
+    stats.remaining = units.map((u) => pathOf(u)).filter(Boolean);
+    // A stopped batch declares no durable rule: the user just said "not this".
+    if (afterBatch && !stats.cancelled) await afterBatch(stats);
   } catch (firstErr) {
     // Preserve the batch/afterBatch exception so the caller sees the ORIGINAL
     // failure — never a masked version from the cleanup/refetch below.
@@ -631,7 +646,7 @@ export async function runVerifyBatch({
       if (failure === undefined) failure = clearErr;    // only surface clear errors on the clean path
     }
     try {
-      if (finish) finish();
+      if (finish) finish(stats);
     } catch (finishErr) {
       if (failure === undefined) failure = finishErr;   // only surface finish errors on the clean path
     }
@@ -645,9 +660,76 @@ export async function runVerifyBatch({
     if (failure === undefined) failure = refetchErr;
   }
   if (failure !== undefined) throw failure;
-  return { done: stats.done, errors: stats.errors };
+  return {
+    done: stats.done, errors: stats.errors, failed: stats.failed.slice(),
+    cancelled: stats.cancelled, remaining: stats.remaining.slice(),
+  };
 }
 
+
+// #515: what a bulk batch has to say once it is over. Pure of state: the
+// component keeps the last result and this only renders it. `failed` and
+// `remaining` are the explicit paths the runner reported; `errors` can exceed
+// failed.length when a remember-for-future rule declaration failed (those have
+// a series prefix, not a file path, so they are counted but not listed).
+const BULK_RESULT_MAX_PATHS = 8;
+export function bulkResultSummary(r) {
+  const failedFiles = (r.failed || []).length;
+  const remaining = (r.remaining || []).length;
+  const applied = Math.max(0, (r.done || 0) - failedFiles);
+  const ruleFailures = Math.max(0, (r.errors || 0) - failedFiles);
+  const lines = [];
+  if (r.cancelled) {
+    lines.push(`Stopped: ${applied} applied, ${failedFiles} failed, ${remaining} not attempted.`);
+  }
+  if ((r.errors || 0) > 0) {
+    lines.push(`${r.errors} of ${r.total} failed.`);
+  }
+  if (ruleFailures > 0) {
+    lines.push(`${ruleFailures} remember-for-future rule${ruleFailures === 1 ? '' : 's'} could not be saved.`);
+  }
+  return { lines, failedFiles, remaining, applied, ruleFailures };
+}
+
+function BulkResultBanner({ result, onDismiss }) {
+  const s = bulkResultSummary(result);
+  const listed = (result.failed || []).slice(0, BULK_RESULT_MAX_PATHS);
+  const more = (result.failed || []).length - listed.length;
+  const stillSelected = s.failedFiles + s.remaining;
+  return (
+    <div role="status" aria-live="polite"
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 12,
+        padding: 'var(--row-cozy)', marginBottom: 8,
+        background: 'var(--bg-2)',
+        border: '1px solid var(--error-500)',
+        borderRadius: 'var(--radius-lg)',
+        fontSize: 'var(--text-xs)', color: 'var(--fg-1)',
+      }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: 'var(--error-500)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>
+          {s.lines.join(' ')}
+        </div>
+        {listed.length > 0 && (
+          <ul className="mono" style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
+            {listed.map((p) => <li key={p} style={{ wordBreak: 'break-all' }}>{p}</li>)}
+            {more > 0 && <li style={{ listStyle: 'none', color: 'var(--fg-3)' }}>+{more} more</li>}
+          </ul>
+        )}
+        <div style={{ marginTop: 6, color: 'var(--fg-3)' }}>
+          {stillSelected > 0 && (
+            s.failedFiles > 0
+              ? `The ${stillSelected} file${stillSelected === 1 ? ' is' : 's are'} still selected — fix the cause and Apply again. `
+              : `The ${stillSelected} file${stillSelected === 1 ? '' : 's'} not attempted ${stillSelected === 1 ? 'is' : 'are'} still selected — Apply again to resume. `
+          )}
+          {s.failedFiles > 0 && 'Each failure is logged with its error in the browser console.'}
+        </div>
+      </div>
+      <button className="btn ghost sm" onClick={onDismiss} aria-label="Dismiss" title="Dismiss"
+        style={{ padding: '0 8px' }}>✕</button>
+    </div>
+  );
+}
 
 // [#453] Renamed or deleted files leave rows keyed on the OLD canonical path.
 // Nothing in the coverage path checks whether a file still exists, so re-walking
@@ -811,6 +893,17 @@ export function ReviewPage() {
   const [bulkLang, setBulkLang] = useState('fr');
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, errors: 0 });
+  // #515: the outcome of the LAST batch, kept after the batch has ended and
+  // rendered OUTSIDE the selection bar. The previous surface for failures was
+  // the progress chip, which lived under `bulkRunning && selectedCount > 0`
+  // and was unmounted by the batch's own `finish` — so "400 failed" flashed
+  // for one frame and was gone. null = nothing to say (clean run, or dismissed).
+  const [bulkResult, setBulkResult] = useState(null);
+  // #515: Stop. The ref is what the runner polls between units (a re-render
+  // per poll would be pointless); the state is only so the button can read
+  // "Stopping…" the moment it is clicked rather than on the next progress tick.
+  const bulkStopRef = useRef(false);
+  const [bulkStopping, setBulkStopping] = useState(false);
   // #226: also declare a durable series/movie language rule so FUTURE
   // downloads (new episodes, re-grabbed movies) inherit the language.
   const [rememberFuture, setRememberFuture] = useState(true);
@@ -940,6 +1033,17 @@ export function ReviewPage() {
     return () => window.removeEventListener('audio-lang-verified', onVerified);
   }, [fetchPending]);
 
+  // #515: a bulk batch is now minutes long, and the nav rail is plain <a href>,
+  // so one click on "Coverage" mid-batch tore down the JS context and dropped
+  // the rest of the queue with nothing recording it. Arm the browser's own
+  // leave-page prompt for exactly as long as a batch is running.
+  useEffect(() => {
+    if (!bulkRunning) return undefined;
+    const guard = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [bulkRunning]);
+
   const openReview = useCallback((detail) => {
     window.dispatchEvent(new CustomEvent('open-audio-review', { detail }));
   }, []);
@@ -971,6 +1075,27 @@ export function ReviewPage() {
   }, []);
 
   const clearSelection = useCallback(() => setEpSelection(new Set()), []);
+
+  // #515: shared end-of-batch for applyBulk and acceptSelected. Runs inside the
+  // runner's `finish`, i.e. in the SAME commit that turns bulkRunning off, so
+  // there is no intermediate render in which the outcome can be lost.
+  //   - failed and never-attempted rows STAY selected (the bar stays mounted,
+  //     Apply is one click away); everything that succeeded is dropped from
+  //     the selection and leaves the list on the refetch that follows.
+  //   - anything worth saying is parked in bulkResult, which renders outside
+  //     the selection bar and survives until dismissed or the next batch.
+  // The refetch that follows prunes the selection against the server's rows,
+  // so a "failed" row that the server nevertheless resolved cannot linger.
+  const finishBatch = useCallback((stats, total) => {
+    setBulkRunning(false);
+    setBulkStopping(false);
+    const keep = new Set([...(stats.failed || []), ...(stats.remaining || [])]);
+    setEpSelection(keep);
+    const noteworthy = stats.errors > 0 || stats.cancelled;
+    setBulkResult(noteworthy ? { ...stats, total, at: Date.now() } : null);
+  }, []);
+  const stopBatch = useCallback(() => { bulkStopRef.current = true; setBulkStopping(true); }, []);
+
   // #506: force a re-probe of the selected files, then wait for the coverage
   // snapshot to be REBUILT before refetching.
   //
@@ -1297,6 +1422,8 @@ export function ReviewPage() {
     }
     if (!window.confirm(confirmText)) return;
     setBulkRunning(true);
+    setBulkResult(null);
+    bulkStopRef.current = false;
     setBulkProgress({ done: 0, total: paths.length, errors: 0 });
     // #494 P2-S5/P3-S3: delegate to the shared runVerifyBatch runner — it arms
     // and clears the bulk-in-flight gate, emits one global audio-lang-verified
@@ -1332,7 +1459,8 @@ export function ReviewPage() {
       onProgress: (done, total, errors) => setBulkProgress({ done, total, errors }),
       setGate: (s) => { bulkGateRef.current = s; },
       clearGate: () => { bulkGateRef.current = null; },
-      finish: () => { setBulkRunning(false); clearSelection(); },
+      shouldStop: () => bulkStopRef.current,
+      finish: (stats) => finishBatch(stats, paths.length),
       // #226: if requested, declare one durable intent rule per distinct
       // series/movie in the selection. Best-effort — failures here never fail
       // the per-file bulk above (the primary action); they bump the error count.
@@ -1360,7 +1488,7 @@ export function ReviewPage() {
       },
       refetchAfterBatch: () => fetchPending({ silent: true }),
     });
-  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, clearSelection, rememberFuture, data, busyPath, bulkRunning]);
+  }, [selAssignPaths, bulkLang, multilingualMode, bulkLangs, fetchPending, finishBatch, rememberFuture, data, busyPath, bulkRunning]);
 
   // #406: "Accept (keep as detected)" — confirm each selected multilingual row's
   // OWN detected set as a user verdict (source='user'). Per-row (each carries its
@@ -1373,6 +1501,8 @@ export function ReviewPage() {
     const rows = selMultiRows;
     if (!rows.length) return;
     setBulkRunning(true);
+    setBulkResult(null);
+    bulkStopRef.current = false;
     setBulkProgress({ done: 0, total: rows.length, errors: 0 });
     // #494 P2-S5/P3-S3: same shared runVerifyBatch mechanics as applyBulk (gate
     // arm/clear + one global event per successful file + one final refetch).
@@ -1400,10 +1530,11 @@ export function ReviewPage() {
       onProgress: (done, total, errors) => setBulkProgress({ done, total, errors }),
       setGate: (s) => { bulkGateRef.current = s; },
       clearGate: () => { bulkGateRef.current = null; },
-      finish: () => { setBulkRunning(false); clearSelection(); },
+      shouldStop: () => bulkStopRef.current,
+      finish: (stats) => finishBatch(stats, rows.length),
       refetchAfterBatch: () => fetchPending({ silent: true }),
     });
-  }, [selMultiRows, fetchPending, clearSelection, busyPath, bulkRunning]);
+  }, [selMultiRows, fetchPending, finishBatch, busyPath, bulkRunning]);
 
   const filterPills = [
     { id: 'all',     label: `all (${totalCounts.all})` },
@@ -1696,6 +1827,12 @@ export function ReviewPage() {
         </div>
       </div>
 
+      {/* #515: outcome of the last batch. Deliberately OUTSIDE the selection
+          bar: it must survive the selection being cleared, the list refetching,
+          and the user scrolling away. Only rendered when there is something
+          to say — a clean run's evidence is the rows leaving the list. */}
+      {bulkResult && <BulkResultBanner result={bulkResult} onDismiss={() => setBulkResult(null)} />}
+
       {/* Bulk action bar — sticky at the bottom when anything is selected. */}
       {selectedCount > 0 && (
         <div style={{
@@ -1840,6 +1977,17 @@ export function ReviewPage() {
                 </span>
               )}
             </span>
+          )}
+          {/* #515: the only way to stop a running batch used to be closing the
+              tab. Stop lets in-flight requests finish (each one commits on its
+              own server-side) and starts nothing else; what was not attempted
+              stays selected. */}
+          {bulkRunning && (
+            <button className="btn ghost" onClick={stopBatch}
+              disabled={bulkStopping}
+              title="Let the requests already in flight finish, then stop. Files already applied stay applied; the rest stay selected.">
+              {bulkStopping ? 'Stopping…' : 'Stop'}
+            </button>
           )}
           <span style={{ flex: 1 }} />
           {/* #506: works on whatever is selected, so it covers all three scopes

@@ -90,7 +90,7 @@ describe('runVerifyBatch (#494 P2-S5/P3-S3) — the shared per-file batch driver
     expect(state.log[state.log.length - 1]).toBe('refetch:after-clear');
     // Cleanup (bulkRunning off + selection clear) runs on the success path too.
     expect(state.log).toContain('finish');
-    expect(res).toEqual({ done: 3, errors: 0 });
+    expect(res).toEqual({ done: 3, errors: 0, failed: [], cancelled: false, remaining: [] });
   });
 
   it('a failed file emits nothing yet still clears the gate and still triggers the single authoritative refetch (failure cleanup)', async () => {
@@ -113,7 +113,70 @@ describe('runVerifyBatch (#494 P2-S5/P3-S3) — the shared per-file batch driver
     expect(state.log).toContain('clear');
     expect(state.log).toContain('finish');
     expect(refetches(state.log)).toHaveLength(1);
-    expect(res).toEqual({ done: 3, errors: 1 });
+    expect(res).toEqual({ done: 3, errors: 1, failed: ['/bad.mkv'], cancelled: false, remaining: [] });
+  });
+
+  // #515: the count was returned and then discarded by both callers, and the
+  // only render of it lived under state that the batch's own completion
+  // falsified. The runner now names WHICH units failed and hands the final
+  // stats to `finish`, so the caller can keep exactly those rows selected in
+  // the same commit that ends the batch - no second render to lose them in.
+  it('#515: names every failed unit in order and hands the final stats to finish', async () => {
+    const submit = async (p) => {
+      if (p.startsWith('/bad')) throw new Error('HTTP 401');
+      return { lang_code: 'es' };
+    };
+    const { hooks, state } = harness();
+    let seenByFinish;
+    const res = await runVerifyBatch({
+      items: ['/bad1.mkv', '/ok.mkv', '/bad2.mkv'], total: 3, concurrency: 1,
+      submit, pathOf: (p) => p,
+      emitVerified: hooks.emitVerified, onProgress: hooks.onProgress,
+      setGate: hooks.setGate, clearGate: hooks.clearGate,
+      finish: (stats) => { seenByFinish = stats; hooks.finish(); },
+      refetchAfterBatch: hooks.refetchAfterBatch,
+    });
+    expect(res.failed).toEqual(['/bad1.mkv', '/bad2.mkv']);
+    expect(res.errors).toBe(2);
+    // finish sees the SAME numbers the caller gets back - not a pre-batch zero.
+    expect(seenByFinish).toBeDefined();
+    expect(seenByFinish.failed).toEqual(['/bad1.mkv', '/bad2.mkv']);
+    expect(seenByFinish.errors).toBe(2);
+    expect(seenByFinish.done).toBe(3);
+    expect(state.log).toContain('finish');
+  });
+
+  // #515: a batch is now minutes long and had no way to stop short of closing
+  // the tab. `shouldStop` is polled before each unit is dequeued: in-flight
+  // requests finish (each POST commits independently server-side), nothing
+  // else is started, and the caller learns exactly which paths were never
+  // attempted so it can leave them selected.
+  it('#515: shouldStop halts the queue after in-flight units - unattempted paths are reported, afterBatch is skipped, cleanup and the single refetch still run', async () => {
+    let stop = false;
+    const submit = async (p) => {
+      if (p === '/a.mkv') stop = true;   // user hits Stop while the first file is in flight
+      return { lang_code: 'es' };
+    };
+    const { hooks, state } = harness();
+    let afterBatchRan = false;
+    const res = await runVerifyBatch({
+      items: ['/a.mkv', '/b.mkv', '/c.mkv'], total: 3, concurrency: 1,
+      submit, pathOf: (p) => p,
+      shouldStop: () => stop,
+      emitVerified: hooks.emitVerified, onProgress: hooks.onProgress,
+      setGate: hooks.setGate, clearGate: hooks.clearGate, finish: hooks.finish,
+      afterBatch: async () => { afterBatchRan = true; },
+      refetchAfterBatch: hooks.refetchAfterBatch,
+    });
+    // The in-flight file completed and emitted; nothing after it was started.
+    expect(emits(state.log)).toEqual(['emit:/a.mkv']);
+    expect(res).toEqual({ done: 1, errors: 0, failed: [], cancelled: true, remaining: ['/b.mkv', '/c.mkv'] });
+    // A durable remember-for-future rule must not be declared for a series the
+    // user just stopped applying to.
+    expect(afterBatchRan).toBe(false);
+    expect(state.log).toContain('clear');
+    expect(state.log).toContain('finish');
+    expect(refetches(state.log)).toHaveLength(1);
   });
 
   it('skipped null bodies (empty selection) never emit but still count as done, and the batch refetches once', async () => {
@@ -129,7 +192,7 @@ describe('runVerifyBatch (#494 P2-S5/P3-S3) — the shared per-file batch driver
     expect(emits(state.log)).toHaveLength(1);
     expect(state.log).toContain('progress:2/2/0');  // the skipped file counts as done
     expect(refetches(state.log)).toHaveLength(1);
-    expect(res).toEqual({ done: 2, errors: 0 });
+    expect(res).toEqual({ done: 2, errors: 0, failed: [], cancelled: false, remaining: [] });
   });
 
   it('default 4-worker concurrency still yields one emit per file and one refetch (no double events)', async () => {
@@ -146,7 +209,7 @@ describe('runVerifyBatch (#494 P2-S5/P3-S3) — the shared per-file batch driver
     expect(state.decisions.every((d) => d.refetch === false)).toBe(true); // all suppressed while armed
     expect(refetches(state.log)).toHaveLength(1);
     expect(state.log[state.log.length - 1]).toBe('refetch:after-clear');
-    expect(res).toEqual({ done: 9, errors: 0 });
+    expect(res).toEqual({ done: 9, errors: 0, failed: [], cancelled: false, remaining: [] });
   });
 
   it('an afterBatch throw still clears the gate, runs finish, and refetches exactly once after clear — and the ORIGINAL error is rethrown', async () => {
