@@ -345,7 +345,13 @@ export function acceptMultilingualBody(row) {
 // + non-mutating, exported for the Phase-3 selection regressions. A group produced
 // by arrangeServerGroups carries `.items`; this also tolerates a bare {items:[...]}.
 export function groupExplicitPaths(group) {
-  return (group?.items || []).map((e) => e.file_canonical_path || e.canonical_path);
+  // [#517] .filter(Boolean) like every sibling path-collection site. A row
+  // with neither path put `undefined` into epSelection, which is a member
+  // the rendered rows can never match, so selectedCount and allChecked both
+  // drifted from what the user could actually see.
+  return (group?.items || [])
+    .map((e) => e.file_canonical_path || e.canonical_path)
+    .filter(Boolean);
 }
 
 // epSelection is page-scoped: its ids are the explicit paths of rendered rows. An

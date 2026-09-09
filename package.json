@@ -2,6 +2,10 @@
   "name": "subarr-frontend-build",
   "version": "0.0.0",
   "private": true,
+  "//engines": "Matches the node-version in .github/workflows. Declared because jsdom 30 silently installed here and could not load on CI Node 20: engines is ADVISORY by default, so npm install succeeded and the harness passed locally while never running in CI.",
+  "engines": {
+    "node": ">=20.19"
+  },
   "description": "Build-time tooling for the subarr static SPA bundles. Not published.",
   "type": "module",
   "scripts": {
@@ -13,6 +17,7 @@
   },
   "devDependencies": {
     "esbuild": "0.28.2",
+    "jsdom": "27.4.0",
     "vitest": "4.1.11"
   }
 }

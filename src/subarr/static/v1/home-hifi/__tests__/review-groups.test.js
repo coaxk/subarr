@@ -205,3 +205,27 @@ describe('arrangeServerGroups consumes the server filtered payload as-is — no 
     expect(out.some((g) => g.key === 'gGhost')).toBe(false);
   });
 });
+
+// #517: groupExplicitPaths omitted the .filter(Boolean) that every sibling
+// path-collection site has. A row carrying neither path contributed
+// `undefined` to epSelection, which no rendered row can ever match, so
+// selectedCount and allChecked drifted from what the user could see.
+describe('groupExplicitPaths drops pathless rows (#517)', () => {
+  it('never yields undefined for a row with no path at all', () => {
+    const group = {
+      items: [
+        { file_canonical_path: 'TV/S/e1.mkv' },
+        { canonical_path: 'TV/S' },
+        { title: 'no paths at all' },
+      ],
+    };
+    const paths = groupExplicitPaths(group);
+    expect(paths).toEqual(['TV/S/e1.mkv', 'TV/S']);
+    expect(paths.some((p) => !p)).toBe(false);
+  });
+
+  it('is unchanged for well-formed rows', () => {
+    const group = { items: [{ file_canonical_path: 'a' }, { file_canonical_path: 'b' }] };
+    expect(groupExplicitPaths(group)).toEqual(['a', 'b']);
+  });
+});

@@ -880,3 +880,93 @@ def test_ui_page_size_options_cannot_exceed_the_server_group_cap():
         f"default is {_GROUP_PAGE_DEFAULT}; a client that omits limit and one "
         f"that sends the UI default would page differently"
     )
+
+
+# ─── #517: the grouped response shape was pinned by nothing ──────────────────
+# Mutation testing found this: making the grouped branch return
+# counts_by_flag={}, page_count=0 and flag="WRONG" left all 19 tests green.
+# counts_by_flag is CONSUMED (it drives the flag pill labels in Review), so
+# that mutation zeroes every pill in the UI with the suite fully passing. The
+# default branch had _PENDING_KEYS_DEFAULT; the grouped branch had no
+# equivalent.
+
+_PENDING_KEYS_GROUPED = (
+    "count",
+    "counts_by_flag",
+    "flag",
+    "group_count",
+    "limit",
+    "offset",
+    "page_count",
+    "has_more",
+    "groups",
+    "items",
+)
+
+
+def test_grouped_response_shape_is_pinned(app_with_stub):
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [
+            _review_coverage_item("Alpha", root="TV/Alpha", sonarr_id=1),
+            _review_coverage_item("Beta", root="TV/Beta", sonarr_id=2, flag="unknown"),
+        ]
+    )
+    body = _grouped(app_with_stub, limit=10, offset=0)
+    assert tuple(body.keys()) == _PENDING_KEYS_GROUPED
+
+
+def test_grouped_mode_still_reports_the_flag_counts(app_with_stub):
+    """The pills read these. Returning {} here is invisible to every other test
+    and silently zeroes the whole filter bar."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [
+            _review_coverage_item("Alpha", root="TV/Alpha", sonarr_id=1, flag="suspect"),
+            _review_coverage_item("Beta", root="TV/Beta", sonarr_id=2, flag="unknown"),
+        ]
+    )
+    body = _grouped(app_with_stub, limit=10, offset=0)
+    assert body["counts_by_flag"].get("suspect") == 1
+    assert body["counts_by_flag"].get("unknown") == 1
+    assert body["flag"] == "all"
+
+
+def test_grouped_page_count_is_reported_in_groups(app_with_stub):
+    """page_count was computed, serialised, and asserted by nothing."""
+    rows = [_review_coverage_item(f"S{i}", root=f"TV/S{i}", sonarr_id=i) for i in range(1, 6)]
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+    body = _grouped(app_with_stub, limit=2, offset=0)
+    assert body["group_count"] == 5
+    assert body["page_count"] == 3, "5 groups at 2 per page is 3 pages"
+
+
+def test_grouped_search_and_flag_filter_combine(app_with_stub):
+    """They were tested separately. counts_by_flag is computed AFTER search but
+    BEFORE the flag filter, which is the interaction neither covered."""
+    rows = [
+        _review_coverage_item("Alpha", root="TV/Alpha", sonarr_id=1, flag="suspect"),
+        _review_coverage_item("Alphabet", root="TV/Alphabet", sonarr_id=2, flag="unknown"),
+        _review_coverage_item("Zeta", root="TV/Zeta", sonarr_id=3, flag="suspect"),
+    ]
+    app_with_stub.app.state.coverage_cache = _SnapCache(rows)
+    body = _grouped(app_with_stub, search="Alpha", flag="suspect", limit=10, offset=0)
+    titles = [g["title"] for g in body["groups"]]
+    assert titles == ["Alpha"], f"got {titles}"
+    # counts reflect the SEARCH but not the flag filter, so the pills still show
+    # what switching filter would reveal within the current search.
+    assert body["counts_by_flag"].get("unknown") == 1
+
+
+def test_the_bazarr_provenance_contract_is_what_coverage_actually_emits():
+    """The grouping fixture hand-writes bazarr.sonarr_id / bazarr.radarr_id and
+    claims it mirrors CoverageItem.to_dict(). Nothing asserted that it still
+    does. Rename either key upstream and every test here passes while grouping
+    silently degrades to the canonical-root fallback -- which for episodes is
+    the series folder, so there is no user-visible symptom either. The fixture
+    would be measuring itself."""
+    from subarr.coverage_engine import CoverageItem
+
+    d = CoverageItem(title="X", media_type="episode", canonical_path="TV/X").to_dict()
+    assert "bazarr" in d, "coverage no longer emits a nested bazarr block"
+    assert {"sonarr_id", "radarr_id"} <= set(d["bazarr"]), (
+        f"the keys grouping identifies rows by are gone: {sorted(d['bazarr'])}"
+    )
