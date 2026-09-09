@@ -750,17 +750,35 @@ async def sample(
     )
 
 
+# ─── #514 page-size bounds ───────────────────────────────────────────
+# `limit` counts FILES in the default mode and GROUPS when grouped=true, so the
+# two modes need different ceilings. A group is a whole show: 500 groups is
+# every file of 500 shows in ONE response (measured at 9,000 rows / 2.97 MB on
+# a 300-show pending set, a 34x increase on the default request), and a
+# json.dumps that size blocks the event loop. Grouped mode also needs its own
+# smaller DEFAULT, because a client that omits `limit` must not land above the
+# ceiling that same mode enforces.
+_FILE_PAGE_MAX = 500
+_FILE_PAGE_DEFAULT = 200
+_GROUP_PAGE_MAX = 100
+_GROUP_PAGE_DEFAULT = 25
+
+
 @router.get("/pending-review")
 async def pending_review(
     request: Request,
     search: str | None = Query(
         None, max_length=200, description="case-insensitive substring over title/episode/path"
     ),
-    limit: int = Query(
-        200,
+    limit: int | None = Query(
+        None,
         ge=1,
-        le=500,
-        description="page size in files, or number of groups when grouped=true (default 200)",
+        le=_FILE_PAGE_MAX,
+        description=(
+            "page size: FILES by default (default 200, max 500), or GROUPS when "
+            "grouped=true (default 25, max 100 - a group expands to every file "
+            "it contains)"
+        ),
     ),
     offset: int = Query(
         0,
@@ -800,6 +818,24 @@ async def pending_review(
     (grouped omitted/false) is unchanged. In grouped mode, a complete group may
     contribute more files than the requested group page size; this is intentional
     because files are never capped inside a selected group."""
+    # #514: resolve the page size against THIS mode's bounds. Refused rather
+    # than clamped: a silent clamp would page the server by a smaller stride
+    # than the client advances its offset by, so it would SKIP groups instead
+    # of merely returning fewer of them.
+    if grouped:
+        if limit is None:
+            limit = _GROUP_PAGE_DEFAULT
+        elif limit > _GROUP_PAGE_MAX:
+            raise HTTPException(
+                422,
+                detail=(
+                    f"limit counts GROUPS when grouped=true and is capped at "
+                    f"{_GROUP_PAGE_MAX} (got {limit}); each group expands to "
+                    f"every file it contains"
+                ),
+            )
+    elif limit is None:
+        limit = _FILE_PAGE_DEFAULT
     audio_lang_store = request.app.state.audio_lang
     verifications = audio_lang_store.get_all_as_lookup()
     # #406: key the multilingual lane on the STORE source (not the snapshot's

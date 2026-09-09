@@ -3,11 +3,12 @@
 // review-multiselect.test.js convention of exercising review.jsx's exported
 // helpers without rendering.
 import { describe, it, expect } from 'vitest';
-import { buildReviewQuery, computePagination, computeReviewGroupPagination } from '../review.jsx';
+import { buildReviewQuery, computePagination, computeReviewGroupPagination,
+  GROUP_PAGE_SIZES, DEFAULT_GROUP_PAGE_SIZE } from '../review.jsx';
 
 describe('buildReviewQuery', () => {
   it('Review opts into grouped mode by default (grouped=true) with an empty search omitted', () => {
-    expect(buildReviewQuery({})).toBe('limit=200&offset=0&grouped=true');
+    expect(buildReviewQuery({})).toBe('limit=25&offset=0&grouped=true');
   });
 
   it('includes a trimmed search when present', () => {
@@ -23,7 +24,7 @@ describe('buildReviewQuery', () => {
   it('grouped=false keeps the legacy default-mode URL (no grouped param)', () => {
     // #494: non-group /pending-review consumers keep the old contract; the
     // builder can opt out for callers/tests that still page files.
-    expect(buildReviewQuery({ grouped: false })).toBe('limit=200&offset=0');
+    expect(buildReviewQuery({ grouped: false })).toBe('limit=25&offset=0');
     expect(buildReviewQuery({ search: 'x', limit: 50, offset: 60, grouped: false }))
       .toBe('search=x&limit=50&offset=60');
   });
@@ -149,5 +150,32 @@ describe('buildReviewQuery — explicit grouped mode keeps the byte-identical se
   it('legacy grouped:false omits the mode entirely (exact old URL bytes)', () => {
     const q = buildReviewQuery({ search: 'a/b&c', flag: 'suspect', limit: 25, offset: 75, grouped: false });
     expect(q).toBe('search=a%2Fb%26c&flag=suspect&limit=25&offset=75');
+  });
+});
+
+// #514: `limit` counts GROUPS, and a group expands to every file it contains.
+// The page-size options were left in FILE units when the unit changed, so the
+// default request returned ~6,000 rows / 2 MB where it used to return 200 rows
+// / 58 KB, and the top setting returned the entire pending set. These pin the
+// two invariants that stop that recurring.
+describe('group page sizes (#514)', () => {
+  // Mirrors _GROUP_PAGE_MAX in src/subarr/routers/audio_lang.py. The server
+  // REFUSES a larger grouped limit with a 422 rather than clamping, so an
+  // option above this would be a page size the UI offers and the server
+  // rejects. tests/test_pending_review_pagination.py locks the two together
+  // by reading this file, so this literal cannot drift on its own.
+  const SERVER_GROUP_LIMIT_MAX = 100;
+
+  it('never offers a page size the server would refuse', () => {
+    expect(Math.max(...GROUP_PAGE_SIZES)).toBeLessThanOrEqual(SERVER_GROUP_LIMIT_MAX);
+  });
+
+  it('defaults to one of the sizes it actually offers', () => {
+    expect(GROUP_PAGE_SIZES).toContain(DEFAULT_GROUP_PAGE_SIZE);
+  });
+
+  it('offers ascending, non-duplicated sizes', () => {
+    expect([...GROUP_PAGE_SIZES].sort((a, b) => a - b)).toEqual(GROUP_PAGE_SIZES);
+    expect(new Set(GROUP_PAGE_SIZES).size).toBe(GROUP_PAGE_SIZES.length);
   });
 });

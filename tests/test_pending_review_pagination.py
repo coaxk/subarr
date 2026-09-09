@@ -762,3 +762,121 @@ def test_default_mode_keeps_file_offset_limit_semantics(app_with_stub):
         "@libA/TV/Show/Season 1/e3.mkv",
         "@libA/TV/Show/Season 1/e4.mkv",
     ]
+
+
+# ─── #514: `limit` means GROUPS in grouped mode, so its ceiling must too ──────
+# #496 changed the unit of `limit` from files to groups but left the bound at
+# le=500. A group is a whole show, so 500 groups flattens to every file of 500
+# shows in ONE response: measured at 9,000 rows / 2.97 MB on a 300-show set, a
+# 34x increase on the default request, and json.dumps of that size blocks the
+# event loop. Pagination stopped bounding anything.
+#
+# The ceiling is tightened rather than clamped: a silent clamp would make the
+# server page by a smaller stride than the client advances by, which SKIPS
+# groups instead of merely returning fewer. Safe to tighten because grouped
+# mode has never shipped in a release - #496 landed today - so no deployed
+# client can be sending a larger value.
+
+
+def _grouped_raw(app_with_stub, **params):
+    """Grouped GET returning the RESPONSE, not the body: these assert on status."""
+    q = {"grouped": "true"}
+    q.update(params)
+    return app_with_stub.get(PENDING, params=q)
+
+
+def test_grouped_limit_above_the_group_cap_is_rejected(app_with_stub):
+    """A group page size larger than the cap must be refused outright, not
+    silently reduced. 422 is the honest answer; a clamp would desynchronise the
+    client's offset stride from the server's page size."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [_review_coverage_item("Show", root="TV/Show", sonarr_id=1)]
+    )
+    r = _grouped_raw(app_with_stub, limit=101, offset=0)
+    assert r.status_code == 422, r.text
+
+
+def test_grouped_limit_at_the_group_cap_is_accepted(app_with_stub):
+    """The cap itself is a valid request - off-by-one guard on the bound."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [_review_coverage_item("Show", root="TV/Show", sonarr_id=1)]
+    )
+    r = _grouped_raw(app_with_stub, limit=100, offset=0)
+    assert r.status_code == 200, r.text
+    assert r.json()["limit"] == 100
+
+
+def test_file_mode_keeps_its_own_larger_ceiling(app_with_stub):
+    """The tightened cap is GROUPED-ONLY. File mode pages individual rows, so
+    500 files is still a bounded, reasonable response and must keep working -
+    this is the regression guard on not tightening both modes at once."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [_review_coverage_item("Show", root="TV/Show", sonarr_id=1)]
+    )
+    r = app_with_stub.get(PENDING, params={"limit": 500, "offset": 0})
+    assert r.status_code == 200, r.text
+    assert r.json()["limit"] == 500
+
+
+def test_grouped_default_page_size_is_the_group_default_not_the_file_one(app_with_stub):
+    """The defense-in-depth half. A client that omits `limit` must not be handed
+    a page size ABOVE the ceiling its own mode enforces - which is exactly what
+    the shared default of 200 did once `limit` started counting groups."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [_review_coverage_item("Show", root="TV/Show", sonarr_id=1)]
+    )
+    body = _grouped(app_with_stub)
+    assert body["limit"] == 25
+
+
+def test_file_mode_default_page_size_is_unchanged(app_with_stub):
+    """Regression guard: making the parameter optional must not move the
+    default any existing caller already relies on."""
+    app_with_stub.app.state.coverage_cache = _SnapCache(
+        [_review_coverage_item("Show", root="TV/Show", sonarr_id=1)]
+    )
+    body = app_with_stub.get(PENDING).json()
+    assert body["limit"] == 200
+
+
+def test_ui_page_size_options_cannot_exceed_the_server_group_cap():
+    """Cross-boundary contract lock (#514).
+
+    The page-size options live in review.jsx and the ceiling that refuses them
+    lives here, in Python. Nothing connected the two, which is how `limit`
+    changed unit from files to groups in #496 while the selector kept offering
+    file-sized values - the UI advertised 500 and the server happily obliged
+    with every file of 500 shows.
+
+    Now the server REFUSES above the cap (422) rather than clamping, so a UI
+    option above it would be a page size the user can pick and the server will
+    reject. This reads the shipped .jsx so the two cannot drift apart silently:
+    raise either side alone and this goes red.
+    """
+    import re
+    from pathlib import Path
+
+    import subarr
+    from subarr.routers.audio_lang import _GROUP_PAGE_DEFAULT, _GROUP_PAGE_MAX
+
+    jsx = Path(subarr.__file__).parent / "static" / "v1" / "home-hifi" / "review.jsx"
+    text = jsx.read_text(encoding="utf-8")
+
+    sizes_m = re.search(r"export const GROUP_PAGE_SIZES\s*=\s*\[([^\]]*)\]", text)
+    assert sizes_m, "GROUP_PAGE_SIZES not found in review.jsx"
+    sizes = [int(n) for n in re.findall(r"\d+", sizes_m.group(1))]
+    assert sizes, "GROUP_PAGE_SIZES parsed empty"
+
+    default_m = re.search(r"export const DEFAULT_GROUP_PAGE_SIZE\s*=\s*(\d+)", text)
+    assert default_m, "DEFAULT_GROUP_PAGE_SIZE not found in review.jsx"
+    default = int(default_m.group(1))
+
+    assert max(sizes) <= _GROUP_PAGE_MAX, (
+        f"review.jsx offers a group page size of {max(sizes)} but the server "
+        f"refuses anything above {_GROUP_PAGE_MAX}"
+    )
+    assert default == _GROUP_PAGE_DEFAULT, (
+        f"review.jsx defaults to {default} groups but the server's grouped "
+        f"default is {_GROUP_PAGE_DEFAULT}; a client that omits limit and one "
+        f"that sends the UI default would page differently"
+    )
