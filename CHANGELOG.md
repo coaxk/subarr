@@ -7,6 +7,20 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-09-09
+
+**Review pages by whole shows now, and you can tell subarr to re-read a file you have corrected.**
+
+Two features and two fixes. No config changes and no migration. Everything here came from a reported problem: two from @AztecGuyGDL, one from @Jorman, and one that @xiaden both reported and implemented.
+
+### Added
+- **Review pages by complete shows and films instead of by file (#494).** Paging through Review used to cut wherever the row count ran out, so a show with more episodes than fit on a page was split across two, and a bulk action could only ever reach the part of it you could see. Review now pages whole groups: a series or a film arrives complete or not at all, and selecting a group selects every one of its files regardless of how many there are. The page size is now counted in shows rather than files, so the options have changed accordingly. Reported and implemented by @xiaden.
+- **Force re-probe: tell subarr to re-read a file whose details you have corrected (#506).** subarr remembers what it found inside each media file and only looks again when the file changes size or timestamp. That is right almost always, and wrong for exactly one common case: correcting an audio language tag in place, with a tool like Tdarr or mkvpropedit, can change neither. The file was correct, MediaInfo agreed, and subarr kept showing the old value with no way to refresh it short of editing the database by hand. Select any rows in Review and use Re-probe, and subarr reads those files again from scratch, ignoring what it had remembered, then rebuilds the affected rows. It works on one file, on any selection, or on a whole series through the group selection. subarr also does this by itself now when you confirm an audio language that disagrees with what it had on record, since that is the same situation arriving from the other direction. Reported by @AztecGuyGDL.
+
+### Fixed
+- **Files whose only English subtitle is a forced one were queued again every time (#505).** A forced subtitle covers the foreign lines in a scene, not the dialogue, so it is not English coverage and subarr is right to see the file as needing work. The transcription service counts it as an existing English subtitle and refuses the job unless you have told it otherwise. subarr already worked out that this would happen, showed it in Coverage, and then never consulted its own finding when deciding what to queue, so those files were submitted on every scheduled walk and refused every time. The reporter had about fifteen of them cycling on a fifteen minute schedule. subarr now holds those files back and says why, and releases them by itself if you turn on the setting that makes the service accept them. Note this was one of two causes of repeated queueing in that report; the other, where the language you want cannot be produced by your transcription service at all, is still being worked on.
+- **Detecting the audio language could fail silently, leaving the button looking broken (#500).** When subarr asks the transcription service to listen to a file and identify the language, a refusal from that service was read as though it were a successful answer containing nothing. The result was a button that appeared to do nothing at all: no language, no error, no explanation. The reporter had a library of older .avi files with no language recorded, which is exactly the case this feature exists for. Refusals are now reported with the reason the service gave, so a failure says what went wrong instead of looking like an inert button.
+
 ## [2.6.2] - 2026-09-07
 
 **subarr could read the wrong file, and could discard an audio language you had verified.**
