@@ -38,6 +38,26 @@ describe('bulkResultSummary (#515)', () => {
     ]);
   });
 
+  // #516: propagation failures are not batch failures (the row verified
+  // locally and left the list) but they are noteworthy, and 400 identical
+  // ones must read as ONE line.
+  it('reports propagation failures grouped by reason, separately from batch failures', () => {
+    const s = bulkResultSummary({
+      done: 3, total: 3, errors: 0, failed: [], cancelled: false, remaining: [],
+      propagationFailures: [
+        { path: '/a', reason: 'episode_file_unresolved', detail: 'stale snapshot' },
+        { path: '/b', reason: 'episode_file_unresolved', detail: 'stale snapshot' },
+        { path: '/c', reason: 'put_failed', detail: 'HTTP 500' },
+      ],
+    });
+    expect(s.lines).toEqual([]);
+    expect(s.propagation).toEqual([
+      { reason: 'episode_file_unresolved', count: 2, detail: 'stale snapshot' },
+      { reason: 'put_failed', count: 1, detail: 'HTTP 500' },
+    ]);
+    expect(s.propagationCount).toBe(3);
+  });
+
   it('tolerates a stats object missing the optional arrays', () => {
     const s = bulkResultSummary({ done: 1, total: 1, errors: 0 });
     expect(s.lines).toEqual([]);

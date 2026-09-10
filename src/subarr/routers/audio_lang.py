@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -214,19 +215,29 @@ async def _propagate_to_sonarr(
     per-episodeFile language record. Closes the bazarr-blind loop.
 
     Steps:
-      1. Resolve canonical_path → series via the (already-fetched)
-         Sonarr series list; find episodeFile matching the path.
-      2. Resolve lang_code (en, fre, ger…) → Sonarr language ID via
-         /api/v3/language reference table (cached per process).
+      1. Resolve canonical_path → episodeFile id via the cached coverage
+         snapshot (episode id) plus one GET /episode/{id}.
+      2. Resolve lang_code (en, fre, ger…) → Sonarr language ID via the
+         /api/v3/language reference table, memoized PER CLIENT INSTANCE
+         (#516 — it was documented as cached and was not). A miss forces
+         exactly one refresh before giving up, so a language added by a
+         Sonarr upgrade is found without waiting out the TTL.
       3. PUT the episodeFile with updated `languages` field.
-    Returns {attempted: True, ok: bool, detail: ...}."""
+
+    Returns {attempted: True, ok: bool, detail: ...}. #516: every `ok: False`
+    also carries a machine-readable `reason` — one of `not_configured`,
+    `episode_file_unresolved`, `language_fetch_failed`, `language_unsupported`,
+    `put_failed` — so a caller can group a 400-file batch's identical failures
+    into one line. This travels inside an HTTP 200 on purpose: the LOCAL
+    verification did persist, and the callers that read only `r.ok` were the
+    defect, not the status code."""
     from ..integrations import IntegrationError
 
     bundle = request.app.state.integrations
     # #161 P3: PUT the episodeFile on the Sonarr that owns this row's library.
     sonarr = bundle.client_for("sonarr", library_for_canonical(canonical_path).sonarr_id)
     if not sonarr.is_configured():
-        return {"attempted": True, "ok": False, "detail": "Sonarr not configured"}
+        return {"attempted": True, "ok": False, "reason": "not_configured", "detail": "Sonarr not configured"}
 
     # Find the episodeFile id for this canonical_path by walking the
     # in-process episode-file path map the coverage cache populates.
@@ -247,23 +258,40 @@ async def _propagate_to_sonarr(
                     except IntegrationError as e:
                         log.debug("propagation episode lookup failed: %s", e)
     if not ep_file_id:
+        # The path is a separate field so the UI can group on `detail`; the
+        # stale-snapshot case makes every file in a batch fail with this one
+        # message and the user needs ONE line saying so, not 400.
         return {
             "attempted": True,
             "ok": False,
-            "detail": f"couldn't resolve episodeFile id for path {canonical_path!r}",
+            "reason": "episode_file_unresolved",
+            "path": canonical_path,
+            "detail": (
+                "couldn't resolve this file's Sonarr episodeFile id from the coverage "
+                "snapshot — the snapshot may be stale (refresh Coverage and retry)"
+            ),
         }
 
     # Resolve the language name. Sonarr's /language returns
     # [{id: 1, name: "English"}, {id: 2, name: "French"}, ...].
-    try:
-        langs = await sonarr.languages()
-    except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"sonarr /language fetch failed: {safe_error(e)}"}
     name = _iso_to_sonarr_name(lang_code)
-    target = next(
-        (l for l in langs if (l.get("name") or "").lower() == name.lower()),
-        None,
-    )
+
+    def _match(langs):
+        return next((l for l in langs if (l.get("name") or "").lower() == name.lower()), None)
+
+    try:
+        target = _match(await sonarr.languages())
+        if target is None:
+            # #516: the memo may predate a Sonarr upgrade that added this
+            # language. One forced refresh, then an honest failure.
+            target = _match(await sonarr.languages(refresh=True))
+    except IntegrationError as e:
+        return {
+            "attempted": True,
+            "ok": False,
+            "reason": "language_fetch_failed",
+            "detail": f"sonarr /language fetch failed: {safe_error(e)}",
+        }
     if target is None:
         # #358: honest degradation — Sonarr can't represent this language, but
         # the local verification + subgen override (the parts that actually fix
@@ -272,6 +300,7 @@ async def _propagate_to_sonarr(
         return {
             "attempted": True,
             "ok": False,
+            "reason": "language_unsupported",
             "detail": (
                 f"Sonarr can't represent {name!r} (not in its language list) — "
                 "your local verification and the subgen override still apply; "
@@ -285,7 +314,12 @@ async def _propagate_to_sonarr(
             languages=[{"id": target["id"], "name": target["name"]}],
         )
     except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"sonarr PUT failed: {safe_error(e)}"}
+        return {
+            "attempted": True,
+            "ok": False,
+            "reason": "put_failed",
+            "detail": f"sonarr PUT failed: {safe_error(e)}",
+        }
     log.info(
         "sonarr propagation OK: episodeFile=%s language=%s (id=%s) via user verification on %s",
         ep_file_id,
@@ -315,12 +349,52 @@ async def _propagate_to_sonarr(
 # don't list/match on every verify. #161 P3: was a single module-global.
 _bazarr_sync_task_ids: dict[str, str] = {}
 
+# #516: `update_series` is a FULL Sonarr metadata sync. One per propagated file
+# was tolerable under a 200-file ceiling; #496 removed the ceiling. Within this
+# window after a sync fires, further requests for the same instance are
+# coalesced into ONE trailing sync scheduled for the end of the window — so a
+# 400-file batch costs two syncs, and the trailing one runs after every PUT in
+# the burst has landed (each request is only made after its own PUT).
+BAZARR_SYNC_COALESCE_S = 30.0
+_bazarr_sync_last_fired: dict[str, float] = {}
+_bazarr_sync_trailing: dict[str, asyncio.Task] = {}
+
+
+def _reset_bazarr_sync_state() -> None:
+    """Test hook: forget discovered task ids, fire times and trailing syncs."""
+    _bazarr_sync_task_ids.clear()
+    _bazarr_sync_last_fired.clear()
+    for t in _bazarr_sync_trailing.values():
+        t.cancel()
+    _bazarr_sync_trailing.clear()
+
+
+async def _fire_bazarr_sync_later(bazarr, key: str, task_id: str, delay: float) -> None:
+    """The trailing sync for a coalesced burst. Best-effort like the immediate
+    one: its outcome can only be logged, since the requests it covers have
+    already returned."""
+    from ..integrations import IntegrationError
+
+    try:
+        await asyncio.sleep(max(0.0, delay))
+        await bazarr.trigger_task(task_id)
+        _bazarr_sync_last_fired[key] = time.monotonic()
+        log.info("bazarr sync triggered (trailing, coalesced burst): task=%s", task_id)
+    except IntegrationError as e:
+        log.warning("trailing bazarr sync failed for %s: %s", key, safe_error(e))
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001 - a fire-and-forget task must log, not die silently at GC
+        log.warning("trailing bazarr sync raised for %s: %s", key, safe_error(e))
+
 
 async def _trigger_bazarr_sync(bundle, canonical_path: str) -> dict[str, Any]:
     """Trigger Bazarr's update_series task on the instance that OWNS this row's
     library — the metadata sync that pulls fresh series + episode info from
     Sonarr. Bounded (~few seconds even on large libraries) and idempotent.
-    Returns {ok, detail}."""
+    Returns {attempted, ok, detail|task, coalesced}. `coalesced: True` means a
+    sync fired within BAZARR_SYNC_COALESCE_S and one trailing sync will cover
+    this request."""
     from ..integrations import IntegrationError
 
     bazarr = bundle.client_for("bazarr", library_for_canonical(canonical_path).bazarr_id)
@@ -346,12 +420,29 @@ async def _trigger_bazarr_sync(bundle, canonical_path: str) -> dict[str, Any]:
         if task_id is None:
             return {"attempted": False, "detail": "no update_series task discovered in Bazarr"}
 
+    now = time.monotonic()
+    last = _bazarr_sync_last_fired.get(key)
+    if last is not None and now - last < BAZARR_SYNC_COALESCE_S:
+        trailing = _bazarr_sync_trailing.get(key)
+        if trailing is None or trailing.done():
+            delay = BAZARR_SYNC_COALESCE_S - (now - last)
+            _bazarr_sync_trailing[key] = asyncio.create_task(
+                _fire_bazarr_sync_later(bazarr, key, task_id, delay)
+            )
+        return {"attempted": True, "ok": True, "task": task_id, "coalesced": True}
+
     try:
         await bazarr.trigger_task(task_id)
     except IntegrationError as e:
-        return {"attempted": True, "ok": False, "detail": f"bazarr trigger failed: {safe_error(e)}"}
+        return {
+            "attempted": True,
+            "ok": False,
+            "detail": f"bazarr trigger failed: {safe_error(e)}",
+            "coalesced": False,
+        }
+    _bazarr_sync_last_fired[key] = time.monotonic()
     log.info("bazarr sync triggered: task=%s", task_id)
-    return {"attempted": True, "ok": True, "task": task_id}
+    return {"attempted": True, "ok": True, "task": task_id, "coalesced": False}
 
 
 def _iso_to_sonarr_name(code: str) -> str:

@@ -7,6 +7,7 @@
 
 import { Glyph, StatusDot, LangTag, LibraryChip } from './atoms.jsx';
 import { useLanguagePicks } from './languages.mjs';
+import { propagationFailure } from './audio-lang-propagation.mjs';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -1141,14 +1142,14 @@ function BatchReviewModal() {
   const [activeSampleIdx, setActiveSampleIdx] = useState(0);
   const [track, setTrack] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [stats, setStats] = useState({ confirmed: 0, skipped: 0 });
+  const [stats, setStats] = useState({ confirmed: 0, skipped: 0, sonarrFailed: 0 });
 
   // Load pending list when opened.
   useEffect(() => {
     const handler = async () => {
       setOpen(true);
       setIdx(0);
-      setStats({ confirmed: 0, skipped: 0 });
+      setStats({ confirmed: 0, skipped: 0, sonarrFailed: 0 });
       try {
         const r = await fetch('/api/audio-lang/pending-review', { credentials: 'same-origin' });
         const d = await r.json();
@@ -1204,7 +1205,7 @@ function BatchReviewModal() {
     if (!cur) return;
     setSaving(true);
     try {
-      await fetch('/api/audio-lang/verifications', {
+      const r = await fetch('/api/audio-lang/verifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -1216,7 +1217,17 @@ function BatchReviewModal() {
           evidence: { notes: cur.notes || [], track, batch: true },
         }),
       });
-      setStats(s => ({ ...s, confirmed: s.confirmed + 1 }));
+      // #516: this used to count a confirm without reading the response at
+      // all, so a 500 was a ✓. Now: a non-2xx is the failure it is, and a 200
+      // whose propagation block says Sonarr was not updated is counted
+      // separately so the batch header tells the truth.
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const pf = propagationFailure(await r.json().catch(() => null));
+      setStats(s => ({
+        ...s,
+        confirmed: s.confirmed + 1,
+        sonarrFailed: s.sonarrFailed + (pf ? 1 : 0),
+      }));
       advance();
     } catch (e) {
       alert('Save failed: ' + (e.message || e));
@@ -1255,6 +1266,12 @@ function BatchReviewModal() {
               {idx + 1} of {items.length} ·
               <span style={{ color: 'var(--success-500, #22d3a1)', marginLeft: 6 }}>✓ {stats.confirmed}</span> ·
               <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>skipped {stats.skipped}</span>
+              {stats.sonarrFailed > 0 && (
+                <span style={{ color: 'var(--warn-500, #f59e0b)', marginLeft: 6 }}
+                  title="Saved in subarr, but Sonarr was not updated for these files, so Bazarr still sees the old language.">
+                  · Sonarr not updated {stats.sonarrFailed}
+                </span>
+              )}
             </div>
           </div>
           <button className="btn ghost" onClick={close} style={{ fontSize: 'var(--text-2xs)' }}>
@@ -1685,6 +1702,15 @@ export function AudioReviewModal() {
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // #516: the verification is saved even when Sonarr was not updated;
+      // say so before the modal goes, or the user never learns it.
+      const pf = propagationFailure(await r.json().catch(() => null));
+      if (pf) {
+        window.alert(
+          `Saved in subarr, but Sonarr was not updated for this file:\n\n${pf.detail}\n\n`
+          + 'Bazarr will keep seeing the old audio language until Sonarr is updated.'
+        );
+      }
       // v1.1-O fix #193/#197: dispatch detail with file path so listeners
       // can do OPTIMISTIC local row updates (chip turns green immediately)
       // rather than waiting for the next coverage poll.
