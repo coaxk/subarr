@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,12 @@ def _parse_blob(raw: str) -> tuple[dict[str, Any] | None, str | None]:
         return None, f"json: {e.msg} at col {e.colno}"
 
 
+def _running_uid() -> int | None:
+    """The uid the app process runs as (None where the platform has no uids)."""
+    getuid = getattr(os, "getuid", None)
+    return getuid() if getuid else None
+
+
 @router.get("/mode", response_model=ModeResponse)
 def get_mode() -> ModeResponse:
     path: Path = settings.subgen_compose_path
@@ -60,6 +67,23 @@ def get_mode() -> ModeResponse:
         raise HTTPException(503, detail=f"subgen compose not found at {path}")
     try:
         text = path.read_text(encoding="utf-8")
+    except PermissionError:
+        # #524: the entrypoint drops to PUID:PGID before starting the app, so a
+        # file a root `docker exec` shell can read (OMV writes its generated
+        # compose files root-only) is still refused here. Say exactly that;
+        # "HTTP 503" sent one user hunting through his mounts for an hour.
+        uid = _running_uid()
+        who = f"subarr (running as uid {uid})" if uid is not None else "subarr"
+        raise HTTPException(
+            503,
+            detail=(
+                f"{who} is not allowed to read {path}: permission denied. The file is "
+                "probably readable only by root (a root shell inside the container CAN "
+                "read it, the app cannot). Either make it readable on the host "
+                "(chmod o+r), or run subarr with a PUID/PGID that can read it. This "
+                "panel is optional; nothing else in subarr needs the file."
+            ),
+        )
     except OSError as e:
         raise HTTPException(503, detail=f"could not read subgen compose: {e}")
 

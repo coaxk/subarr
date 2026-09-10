@@ -28,6 +28,7 @@ import {
   deriveTitle, groupRulesAlphabetically, activeLadderLetters,
 } from './lang-rules-util.mjs';
 import { instanceSubRows } from './instance-health-util.mjs';
+import { modeErrorMessage } from './mode-error.mjs';
 
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -1010,7 +1011,8 @@ function SubgenKwargsCard() {
     let cancelled = false;
     fetch('/api/mode', { credentials: 'same-origin' })
       .then(async r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // #524: surface the server's own explanation, not just the status.
+        if (!r.ok) throw new Error(modeErrorMessage(r.status, await r.json().catch(() => null)));
         return r.json();
       })
       .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
@@ -1031,8 +1033,9 @@ function SubgenKwargsCard() {
     return (
       <SectionCard label="Per-language tuning (subarr-subgen)">
         <div style={{ padding: 14, color: 'var(--fg-2)', fontSize: 'var(--text-sm)' }}>
-          Couldn't read subgen's compose: <span className="mono">{String(error.message || error)}</span>.
-          {' '}This panel needs <span className="mono">SUBGEN_COMPOSE_PATH</span> mounted into subarr.
+          Couldn't read subgen's compose: <span className="mono">{String(error.message || error)}</span>
+          {' '}This optional panel needs <span className="mono">SUBGEN_COMPOSE_PATH</span> mounted into subarr
+          and readable by the user subarr runs as.
         </div>
       </SectionCard>
     );
