@@ -93,7 +93,14 @@ beforeEach(() => {
   window.alert = () => {};
 });
 
+// Unmount, do not just wipe the DOM: unmounting runs the effect cleanups
+// (the 250 ms search debounce, the refetch padding) so no timer fires after
+// vitest tears the jsdom window down. Wiping innerHTML left those timers
+// armed, and one landing after teardown threw "window is not defined" from
+// inside React: a flake that passed or failed on timing alone.
+const roots = [];
 afterEach(() => {
+  for (const r of roots.splice(0)) r.unmount();
   document.body.innerHTML = '';
 });
 
@@ -111,6 +118,7 @@ async function renderReview() {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
+  roots.push(root);
   root.render(React.createElement(ReviewPage));
   await until(() => container.querySelector('input[aria-label^="Select all"]'),
     { what: 'the group row to render' });

@@ -284,6 +284,46 @@ async def _test_tautulli(body: TestRequest) -> dict[str, Any]:
     }
 
 
+# #479: what to check for each probe-failure class. Keyed on the closed
+# vocabulary from subgen_client.classify_probe_failure; `http_<code>` is
+# handled by prefix. The re-measure put `refused` first among configured-but-
+# broken installs, so that hint carries the most specific instruction.
+_PROBE_HINTS = {
+    "dns": (
+        "This hostname does not resolve from inside the subarr container. On Docker that "
+        "usually means subgen is on a different network, or its container has another name; "
+        "the host's LAN IP works from anywhere."
+    ),
+    "refused": (
+        "The host answered but nothing is listening on that port. Check the port (subgen's "
+        "default is 9000) and that the subgen container is actually running."
+    ),
+    "connect_timeout": (
+        "Nothing answered in time. A firewall, a wrong IP, or a container that is still starting."
+    ),
+    "timeout": "Nothing answered in time. A firewall, a wrong IP, or a container that is still starting.",
+    "read_timeout": (
+        "Connected, but subgen did not respond. It may still be loading its Whisper model; "
+        "try again in a minute."
+    ),
+    "tls": "TLS failed. subgen serves plain http by default; check the scheme in the URL.",
+    "transport": "Could not reach that URL from inside the subarr container.",
+    "not_probed": "The connection has not been tested yet.",
+}
+
+
+def probe_failure_hint(cause: str | None) -> str:
+    """A one-sentence instruction for a probe-failure class. Always non-empty:
+    an unknown class gets the generic transport hint rather than nothing."""
+    if cause and cause.startswith("http_"):
+        code = cause[5:]
+        return (
+            f"Something answered at that URL, but it is not a healthy subgen (HTTP {code}). "
+            "A reverse proxy, a different service on that port, or subgen itself erroring."
+        )
+    return _PROBE_HINTS.get(cause or "", _PROBE_HINTS["transport"])
+
+
 async def _test_subgen(body: TestRequest) -> dict[str, Any]:
     from ..subgen_client import SubgenClient
 
@@ -291,7 +331,17 @@ async def _test_subgen(body: TestRequest) -> dict[str, Any]:
     try:
         caps = await c.probe_capabilities()
         if not caps.reachable:
-            return {"ok": False, "version": None, "detail": None, "error": "subgen not reachable at this URL"}
+            # #479: say WHY. The wizard renders `hint`; `error` names the
+            # cause so a plain-text renderer is still informative.
+            cause = getattr(caps, "probe_failure", None) or "transport"
+            return {
+                "ok": False,
+                "version": None,
+                "detail": None,
+                "error": f"subgen not reachable at this URL ({cause})",
+                "cause": cause,
+                "hint": probe_failure_hint(cause),
+            }
         kind = "subarr-subgen" if caps.is_subarr_subgen else "vanilla (compat mode)"
         return {
             "ok": True,

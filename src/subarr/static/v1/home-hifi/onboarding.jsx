@@ -11,6 +11,7 @@ import { Wordmark, StatusDot } from './atoms.jsx';
 // declarations resolved at render time via ESM live bindings.)
 import { LibrariesEditor } from './libraries-editor.jsx';
 import { SubgenSetupFlow } from './subgen-setup.jsx';
+import { readyToTest, continueLabelFor } from './onboarding-test-policy.mjs';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -202,6 +203,12 @@ export function TestResult({ result }) {
           <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500)' }}>
             {result.error}
           </span>
+        </div>
+      )}
+      {/* #479: the server says what to check for this failure class. */}
+      {!isOk && result.hint && (
+        <div style={{ paddingLeft: 18, fontSize: 'var(--text-xs)', color: 'var(--fg-1)', lineHeight: 1.5 }}>
+          {result.hint}
         </div>
       )}
     </div>
@@ -449,10 +456,28 @@ function StepPaths({ progress, setField, probeResult, onProbe }) {
 }
 
 
-function StepIntegration({ step, progress, setField, testResult, onTest, isTesting }) {
+export function StepIntegration({ step, progress, setField, testResult, onTest, isTesting, autoTestDelayMs = 800 }) {
   const svc = step.service;
   const urlKey = `${svc}_url`;
   const apiKeyKey = `${svc}_api_key`;
+  // #479: test by itself once the fields settle. Configured-but-broken
+  // subgen URLs held at 15% of installs; a wrong port is cheapest to catch
+  // while the user is still looking at the field. One test per distinct
+  // (url, key) pair, debounced so typing does not fire a probe per keystroke.
+  const url = progress[urlKey] || '';
+  const key = progress[apiKeyKey] || '';
+  const lastAutoTested = React.useRef(null);
+  React.useEffect(() => {
+    if (!readyToTest(svc, progress)) return undefined;
+    const sig = `${url} ${key}`;
+    if (lastAutoTested.current === sig) return undefined;
+    const id = setTimeout(() => {
+      lastAutoTested.current = sig;
+      onTest();
+    }, autoTestDelayMs);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svc, url, key]);
   // #141: anticipatory prefill. Once the user has entered ONE working URL
   // (most commonly Sonarr first), every later integration step on the same
   // host probably wants the same scheme+host with that service's default
@@ -1009,12 +1034,15 @@ export function OnboardingPage() {
 
   const step = STEPS[state.step];
   const isLast = state.step === STEPS.length - 1;
-  const continueLabel = isLast ? 'Finish setup →' : 'Continue →';
+  // #479: a failed test on this step does not block, but the button says
+  // "anyway" so skipping past a dead URL is a choice the user can see.
+  const continueLabel = continueLabelFor({ isLast, testResult: step.service ? testResult : null });
 
   // Continue gating per step:
   // - paths needs media_root non-empty
   // - integration steps don't require test-pass (we let users continue
-  //   knowing they're skipping the test — better than blocking)
+  //   knowing they're skipping the test — better than blocking); the label
+  //   changes instead (#479)
   // - all others always continue-able
   let canContinue = true;
   if (step.id === 'paths' && !state.progress.media_root) canContinue = false;
