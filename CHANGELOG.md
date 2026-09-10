@@ -7,6 +7,18 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.3] - 2026-09-10
+
+**A stray default is gone, and subarr can now tell whether its setup wizard was ever opened.**
+
+One fix and one measurement. No config changes and no migration you will notice: the database gains one column on first boot, as usual.
+
+### Fixed
+- **The Plex URL defaulted to a private address that belonged to nobody's network but the developer's (#529).** Fresh installs saw `http://192.168.1.105:32400` pre-filled in Settings and the wizard as if it were a suggestion. It now defaults to empty, the same as Jellyfin, and empty means "Plex is not configured". If you set `PLEX_URL` yourself nothing changes. Found while auditing the README, which had also drifted eight releases behind and is now current.
+
+### Changed
+- **Telemetry now says whether the onboarding page was ever rendered (#480).** Forty-four percent of installs never finish setup, and almost all of those sit on the very first screen. That was ambiguous between "opened the wizard and stopped" and "never opened the UI at all", which need opposite fixes. The wizard now records the first time it renders and the daily ping carries that as one true/false. No timestamp, no path, nothing identifying; the full payload is still visible under Settings → Telemetry, and opting out still turns all of it off.
+
 ## [2.7.2] - 2026-09-10
 
 **Bulk verify tells you what failed, a 200 no longer hides a Sonarr write that never landed, and the Logs page no longer leaks.**
