@@ -39,6 +39,37 @@ import httpx
 
 from .config import settings
 
+# The conventional docker socket path. A bind-mount of this into the container
+# is the most common way people give subarr docker access (the Logs page
+# already finds it by itself through the docker SDK).
+DEFAULT_SOCKET = "/var/run/docker.sock"
+
+
+def resolve_discovery_endpoint(cfg, socket_exists=None) -> dict[str, Any] | None:
+    """Where discovery should talk to, or None when there is nowhere.
+
+    #524: this used to be decided inline in app.py as "either env var is
+    set", so a mounted /var/run/docker.sock enabled the Logs page (docker SDK
+    finds it) but left onboarding auto-detect saying "discovery not
+    configured", while the router's own advice said "or mount
+    /var/run/docker.sock". Precedence: explicit proxy URL, explicit socket
+    path (reported even if absent, so a wrong setting fails loudly rather than
+    silently switching), then the conventional socket if it is present.
+    """
+    import os
+
+    exists = socket_exists or os.path.exists
+    proxy = (getattr(cfg, "docker_proxy_url", "") or "").strip()
+    if proxy:
+        return {"kind": "proxy", "endpoint": proxy, "source": "SUBARR_DOCKER_PROXY_URL"}
+    sock = (getattr(cfg, "docker_socket_path", "") or "").strip()
+    if sock:
+        return {"kind": "socket", "endpoint": sock, "source": "SUBARR_DOCKER_SOCKET_PATH"}
+    if exists(DEFAULT_SOCKET):
+        return {"kind": "socket", "endpoint": DEFAULT_SOCKET, "source": "mounted"}
+    return None
+
+
 log = logging.getLogger(__name__)
 
 
