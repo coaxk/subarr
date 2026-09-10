@@ -1,8 +1,7 @@
+# #524: the chooser used to carry two contact links into Discussions categories
+# that do not exist (Discussions is not enabled on this repo), so the two most
+# inviting buttons on the "New issue" page were dead ends. Questions and
+# support go through the templates below until Discussions is deliberately
+# turned on, at which point the links can come back pointing at real
+# categories.
 blank_issues_enabled: false
-contact_links:
-  - name: Support / Questions
-    url: https://github.com/coaxk/subarr/discussions/categories/support
-    about: For help and troubleshooting, use Discussions instead of Issues.
-  - name: Feature Ideas
-    url: https://github.com/coaxk/subarr/discussions/categories/ideas
-    about: For early-stage ideas and brainstorming, start a Discussion first.
