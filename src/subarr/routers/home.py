@@ -68,6 +68,64 @@ async def _build_dashboard(state) -> dict[str, Any]:
         "gpu": gpu,
         "next_run": next_run,
         "activity": activity,
+        # #479: None, or {since, seconds, consecutive, cause, hint}. The
+        # dashboard shows a persistent banner once this has lasted a while.
+        "subgen_outage": _subgen_outage_block(state),
+    }
+
+
+def _format_outage(seconds: float) -> str:
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    return f"{s // 86400}d {(s % 86400) // 3600}h"
+
+
+def _subgen_outage_block(state) -> dict[str, Any] | None:
+    """#479: the watchdog's view of a subgen outage, with the same hint the
+    connection test gives for that failure class. None when reachable, or
+    when there is no watchdog to ask."""
+    wd = getattr(state, "subgen_watchdog", None)
+    if wd is None:
+        return None
+    try:
+        o = wd.outage()
+    except Exception:  # noqa: BLE001 - a dashboard block must never fail the dashboard
+        return None
+    if not o:
+        return None
+    from .onboarding import probe_failure_hint
+
+    return {**o, "hint": probe_failure_hint(o.get("cause"))}
+
+
+def _subgen_tile(state) -> dict[str, Any] | None:
+    """#479: the subgen tile reads the watchdog's outage, not only the cached
+    caps. The watchdog keeps the last GOOD caps through an outage (right for
+    restart detection), so `caps.reachable` alone stayed True for the whole
+    of a weeks-long outage and the tile stayed green."""
+    caps = getattr(state, "subgen_caps", None)
+    if caps is None:
+        return None
+    outage = _subgen_outage_block(state)
+    reachable = bool(caps.reachable) and outage is None
+    if outage is not None:
+        extra = f"unreachable for {_format_outage(outage['seconds'])} ({outage['cause']})"
+    elif caps.is_subarr_subgen:
+        extra = "subarr-subgen"
+    else:
+        extra = "vanilla — compat mode" if caps.reachable else "unreachable"
+    return {
+        "name": "subgen",
+        "status": "ok" if reachable else "error",
+        "version": caps.version or "?",
+        "ping": 0,
+        "extra": extra,
+        "configured": True,
     }
 
 
@@ -317,23 +375,10 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
     probes = await asyncio.gather(*probe_coros)
     out = [_to_tile(p) for p in probes]
 
-    # Add subgen tile from cached caps.
-    caps = getattr(state, "subgen_caps", None)
-    if caps is not None:
-        out.append(
-            {
-                "name": "subgen",
-                "status": "ok" if caps.reachable else "error",
-                "version": caps.version or "?",
-                "ping": 0,
-                "extra": (
-                    "subarr-subgen"
-                    if caps.is_subarr_subgen
-                    else ("vanilla — compat mode" if caps.reachable else "unreachable")
-                ),
-                "configured": True,
-            }
-        )
+    # Add subgen tile from cached caps + the watchdog's outage view (#479).
+    tile = _subgen_tile(state)
+    if tile is not None:
+        out.append(tile)
 
     # Add Ollama tile — it's a standalone client on app.state, not part
     # of the integrations bundle. Probe via /api/tags (cheap — lists
