@@ -8,10 +8,17 @@ Endpoints used:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ..config import settings
 from .base import IntegrationClient
+
+# #516: Sonarr's /language reference table changes on a Sonarr UPGRADE, not per
+# request, so an hour is generous. A miss on a cached table is handled by the
+# caller asking for `refresh=True` once (see routers/audio_lang.py), so the TTL
+# only bounds how long a stale-but-sufficient table is served.
+LANGUAGES_TTL_S = 3600.0
 
 
 class SonarrClient(IntegrationClient):
@@ -24,6 +31,11 @@ class SonarrClient(IntegrationClient):
             base_url=url if key else "",
             headers={"X-Api-Key": key} if key else None,
         )
+        # #516: per-INSTANCE memo of /language. The bundle holds one client per
+        # configured Sonarr for the process lifetime and rebuilds them on a
+        # credential change, so this is "per process until reconfigured".
+        self._languages_cache: list[dict[str, Any]] | None = None
+        self._languages_cached_at: float = 0.0
 
     async def status(self) -> dict[str, Any]:
         return await self._get("/api/v3/system/status")
@@ -54,11 +66,28 @@ class SonarrClient(IntegrationClient):
         we map episodeFileId → path locally."""
         return await self._get("/api/v3/episodefile", params={"seriesId": series_id})
 
-    async def languages(self) -> list[dict[str, Any]]:
+    async def languages(self, *, refresh: bool = False) -> list[dict[str, Any]]:
         """Sonarr's language reference table. v1.1.1 #219: needed to map
         ISO codes (en, fr, ger) → Sonarr's numeric language IDs before we
-        PUT episode-file language updates."""
-        return await self._get("/api/v3/language")
+        PUT episode-file language updates.
+
+        #516: memoized on this instance for LANGUAGES_TTL_S. `refresh=True`
+        bypasses and replaces the memo — the propagation path uses it once
+        when a language is missing from the cached table, so a language added
+        by a Sonarr upgrade is found without waiting out the TTL. A failed
+        fetch raises and leaves the memo untouched, so a transient error can
+        never be cached as an empty table."""
+        now = time.monotonic()
+        if (
+            not refresh
+            and self._languages_cache is not None
+            and now - self._languages_cached_at < LANGUAGES_TTL_S
+        ):
+            return self._languages_cache
+        table = await self._get("/api/v3/language")
+        self._languages_cache = table
+        self._languages_cached_at = now
+        return table
 
     async def update_episode_file_languages(
         self,

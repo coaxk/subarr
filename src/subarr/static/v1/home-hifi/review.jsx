@@ -12,6 +12,7 @@ import { StatusDot, LibraryChip } from './atoms.jsx';
 import { AudioReviewModal } from './coverage.jsx';
 import { distinctSeriesPrefixes } from './lang-rules-util.mjs';
 import { useLanguagePicks } from './languages.mjs';
+import { propagationFailure, groupPropagationFailures } from './audio-lang-propagation.mjs';
 
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
@@ -678,6 +679,10 @@ export function bulkResultSummary(r) {
   const remaining = (r.remaining || []).length;
   const applied = Math.max(0, (r.done || 0) - failedFiles);
   const ruleFailures = Math.max(0, (r.errors || 0) - failedFiles);
+  // #516: verified locally but Sonarr not updated. Not a batch failure (the
+  // row left the list), reported separately and grouped by reason.
+  const propagation = groupPropagationFailures(r.propagationFailures);
+  const propagationCount = (r.propagationFailures || []).length;
   const lines = [];
   if (r.cancelled) {
     lines.push(`Stopped: ${applied} applied, ${failedFiles} failed, ${remaining} not attempted.`);
@@ -688,7 +693,7 @@ export function bulkResultSummary(r) {
   if (ruleFailures > 0) {
     lines.push(`${ruleFailures} remember-for-future rule${ruleFailures === 1 ? '' : 's'} could not be saved.`);
   }
-  return { lines, failedFiles, remaining, applied, ruleFailures };
+  return { lines, failedFiles, remaining, applied, ruleFailures, propagation, propagationCount };
 }
 
 function BulkResultBanner({ result, onDismiss }) {
@@ -696,20 +701,45 @@ function BulkResultBanner({ result, onDismiss }) {
   const listed = (result.failed || []).slice(0, BULK_RESULT_MAX_PATHS);
   const more = (result.failed || []).length - listed.length;
   const stillSelected = s.failedFiles + s.remaining;
+  // Batch failures are errors (red). Propagation-only outcomes are warnings
+  // (amber): the verification itself is saved.
+  const tone = s.lines.length > 0 ? 'var(--error-500)' : 'var(--warn-500, #f59e0b)';
   return (
     <div role="status" aria-live="polite"
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 12,
         padding: 'var(--row-cozy)', marginBottom: 8,
         background: 'var(--bg-2)',
-        border: '1px solid var(--error-500)',
+        border: `1px solid ${tone}`,
         borderRadius: 'var(--radius-lg)',
         fontSize: 'var(--text-xs)', color: 'var(--fg-1)',
       }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ color: 'var(--error-500)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>
-          {s.lines.join(' ')}
-        </div>
+        {s.lines.length > 0 && (
+          <div style={{ color: 'var(--error-500)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>
+            {s.lines.join(' ')}
+          </div>
+        )}
+        {/* #516: the request succeeded, the local verification is saved, and
+            Sonarr was still not updated - one line per distinct reason. */}
+        {s.propagationCount > 0 && (
+          <div style={{ marginTop: s.lines.length ? 8 : 0 }}>
+            <div style={{ color: 'var(--warn-500, #f59e0b)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>
+              Verified locally, but Sonarr was not updated for {s.propagationCount} file{s.propagationCount === 1 ? '' : 's'}.
+            </div>
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
+              {s.propagation.map((g) => (
+                <li key={g.reason}>
+                  <span className="mono num">{g.count}×</span> {g.detail}
+                </li>
+              ))}
+            </ul>
+            <div style={{ marginTop: 4, color: 'var(--fg-3)' }}>
+              subarr and subgen use your verification. Bazarr still sees Sonarr's old
+              language for these until Sonarr is updated.
+            </div>
+          </div>
+        )}
         {listed.length > 0 && (
           <ul className="mono" style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 'var(--text-2xs)', color: 'var(--fg-2)' }}>
             {listed.map((p) => <li key={p} style={{ wordBreak: 'break-all' }}>{p}</li>)}
@@ -1091,7 +1121,7 @@ export function ReviewPage() {
     setBulkStopping(false);
     const keep = new Set([...(stats.failed || []), ...(stats.remaining || [])]);
     setEpSelection(keep);
-    const noteworthy = stats.errors > 0 || stats.cancelled;
+    const noteworthy = stats.errors > 0 || stats.cancelled || (stats.propagationFailures || []).length > 0;
     setBulkResult(noteworthy ? { ...stats, total, at: Date.now() } : null);
   }, []);
   const stopBatch = useCallback(() => { bulkStopRef.current = true; setBulkStopping(true); }, []);
@@ -1425,6 +1455,10 @@ export function ReviewPage() {
     setBulkResult(null);
     bulkStopRef.current = false;
     setBulkProgress({ done: 0, total: paths.length, errors: 0 });
+    // #516: a 200 can still carry `sonarr_propagation.ok === false`. Collected
+    // here (not as a runner failure: the row DID verify) and handed to
+    // finishBatch with the runner's stats.
+    const propagationFailures = [];
     // #494 P2-S5/P3-S3: delegate to the shared runVerifyBatch runner — it arms
     // and clears the bulk-in-flight gate, emits one global audio-lang-verified
     // event per successful file, and performs exactly ONE authoritative silent
@@ -1445,6 +1479,8 @@ export function ReviewPage() {
           body: JSON.stringify({ ...verifyBody, confidence: 1.0, evidence: { bulk: true } }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const pf = propagationFailure(await r.json().catch(() => null));
+        if (pf) propagationFailures.push({ path: p, ...pf });
         return verifyBody;
       },
       pathOf: (p) => p,
@@ -1460,7 +1496,7 @@ export function ReviewPage() {
       setGate: (s) => { bulkGateRef.current = s; },
       clearGate: () => { bulkGateRef.current = null; },
       shouldStop: () => bulkStopRef.current,
-      finish: (stats) => finishBatch(stats, paths.length),
+      finish: (stats) => finishBatch({ ...stats, propagationFailures }, paths.length),
       // #226: if requested, declare one durable intent rule per distinct
       // series/movie in the selection. Best-effort — failures here never fail
       // the per-file bulk above (the primary action); they bump the error count.
@@ -1504,6 +1540,7 @@ export function ReviewPage() {
     setBulkResult(null);
     bulkStopRef.current = false;
     setBulkProgress({ done: 0, total: rows.length, errors: 0 });
+    const propagationFailures = [];   // #516, as in applyBulk
     // #494 P2-S5/P3-S3: same shared runVerifyBatch mechanics as applyBulk (gate
     // arm/clear + one global event per successful file + one final refetch).
     await runVerifyBatch({
@@ -1521,6 +1558,8 @@ export function ReviewPage() {
           body: JSON.stringify({ ...body, confidence: 1.0, evidence: { accept_multi: true } }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const pf = propagationFailure(await r.json().catch(() => null));
+        if (pf) propagationFailures.push({ path: body.canonical_path, ...pf });
         return body;
       },
       pathOf: (row) => row.file_canonical_path || row.canonical_path,
@@ -1531,7 +1570,7 @@ export function ReviewPage() {
       setGate: (s) => { bulkGateRef.current = s; },
       clearGate: () => { bulkGateRef.current = null; },
       shouldStop: () => bulkStopRef.current,
-      finish: (stats) => finishBatch(stats, rows.length),
+      finish: (stats) => finishBatch({ ...stats, propagationFailures }, rows.length),
       refetchAfterBatch: () => fetchPending({ silent: true }),
     });
   }, [selMultiRows, fetchPending, finishBatch, busyPath, bulkRunning]);

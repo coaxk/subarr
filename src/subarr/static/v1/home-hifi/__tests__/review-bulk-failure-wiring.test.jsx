@@ -198,6 +198,44 @@ describe('bulk verify failure surface (#515)', () => {
   });
 });
 
+// #516: a 200 does not mean the write landed. The local verification persists
+// and the response carries `sonarr_propagation: {attempted, ok, reason, detail}`;
+// every caller read only `r.ok`, so 400 files could leave Review "successfully"
+// while Sonarr still recorded English for all of them.
+describe('propagation failures inside a 200 are surfaced (#516)', () => {
+  const unresolved = {
+    attempted: true, ok: false, reason: 'episode_file_unresolved',
+    detail: "couldn't resolve this file's Sonarr episodeFile id from the coverage snapshot",
+  };
+
+  it('names how many files Sonarr was not updated for, and why, after a batch every POST accepted', async () => {
+    net = makeNet({ rows: 3, verify: async () => ({ status: 200, body: { verified: true, sonarr_propagation: unresolved } }) });
+    const c = await renderReview();
+    await selectAllAndApply(c);
+    await batchFinished(c);
+
+    expect(posts).toHaveLength(3);
+    const t = text(c);
+    // The rows DID verify locally, so they leave the list and the selection
+    // clears - this is not a failure of the batch...
+    expect(t).not.toMatch(/of 3 failed/);
+    expect(t).not.toMatch(/files? selected/);
+    // ...but the user must learn that Sonarr was not updated, once, with the
+    // reason, not 400 times or never.
+    expect(t, `no propagation surface: ${t}`).toMatch(/Sonarr was not updated for 3 files/);
+    expect(t).toContain('coverage snapshot');
+    expect((t.match(/coverage snapshot/g) || []).length).toBe(1);
+  });
+
+  it('a clean propagation shows nothing', async () => {
+    net = makeNet({ rows: 2, verify: async () => ({ status: 200, body: { verified: true, sonarr_propagation: { attempted: true, ok: true } } }) });
+    const c = await renderReview();
+    await selectAllAndApply(c);
+    await batchFinished(c);
+    expect(text(c)).not.toMatch(/Sonarr was not updated/);
+  });
+});
+
 describe('bulk verify is interruptible and guarded (#515)', () => {
   // Hold every verification POST open until the test releases it, so the
   // batch is observably "running" for as long as the assertion needs.
