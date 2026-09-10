@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 from typing import AsyncIterator
 
 import docker
@@ -192,13 +193,47 @@ class DockerOps:
         except NotFound:
             raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
 
+        # #526: this used to leak. On consumer disconnect the pump thread stayed
+        # blocked in the SDK generator until the CONTAINER exited, and every
+        # further line scheduled a `q.put()` coroutine on the loop with nobody
+        # consuming - the queue filled at 1024 and each subsequent put parked
+        # as a Task forever. subgen's progress output produced thousands per
+        # second: an event-loop stall and a "Task was destroyed but it is
+        # pending" flood (#524). Three changes:
+        #   1. the SDK stream is kept and CLOSED from the async side, which is
+        #      the one thing that makes the blocked iterator return;
+        #   2. lines are offered with put_nowait via call_soon_threadsafe and
+        #      DROPPED on a full queue - a log tail may lose lines under
+        #      backpressure, it may not park a task per line;
+        #   3. `stop` is a thread Event checked before each offer.
         q: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1024)
         loop = asyncio.get_running_loop()
-        stop = asyncio.Event()
+        stop = threading.Event()
+        stream = container.logs(stream=True, follow=True, tail=tail)
+
+        def _offer(item: str | None) -> None:
+            # Runs ON the loop thread. Never blocks, never creates a Task.
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                if item is None:
+                    # The end-of-stream marker must land: make room for it.
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    q.put_nowait(None)
+                # else: dropped under backpressure, by design
+
+        def _post(item: str | None) -> None:
+            try:
+                loop.call_soon_threadsafe(_offer, item)
+            except RuntimeError:
+                pass  # loop closed: nobody is listening any more
 
         def _pump():
             try:
-                for chunk in container.logs(stream=True, follow=True, tail=tail):
+                for chunk in stream:
                     if stop.is_set():
                         break
                     if not chunk:
@@ -207,13 +242,15 @@ class DockerOps:
                         line = chunk.decode("utf-8", errors="replace").rstrip("\r\n")
                     else:
                         line = str(chunk).rstrip("\r\n")
-                    asyncio.run_coroutine_threadsafe(q.put(line), loop)
-            except Exception as e:
+                    if stop.is_set():
+                        break
+                    _post(line)
+            except Exception as e:  # noqa: BLE001 - a closed socket surfaces as a variety of errors; all mean "done"
                 log.debug("log pump exited: %s", e)
             finally:
-                asyncio.run_coroutine_threadsafe(q.put(None), loop)
+                _post(None)
 
-        thread = asyncio.create_task(asyncio.to_thread(_pump))
+        worker = asyncio.create_task(asyncio.to_thread(_pump))
         try:
             while True:
                 line = await q.get()
@@ -222,8 +259,15 @@ class DockerOps:
                 yield line
         finally:
             stop.set()
-            # The blocking generator inside docker SDK will keep running until
-            # the connection closes from its end; we can't interrupt it cleanly.
-            # The thread will finish on its own when the container stream ends
-            # or the underlying socket is broken. Mark done; don't await.
-            thread.add_done_callback(lambda _: None)
+            try:
+                stream.close()
+            except Exception as e:  # noqa: BLE001 - best effort; the stop flag still ends the thread on its next chunk
+                log.debug("log stream close failed: %s", e)
+            # Let the worker unwind now that the stream is closed; never wait
+            # on it longer than the socket teardown should take.
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception as e:  # noqa: BLE001
+                log.debug("log pump worker ended with: %s", e)
