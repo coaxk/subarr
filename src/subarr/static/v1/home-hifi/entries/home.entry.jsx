@@ -14,6 +14,7 @@ import {
   useLiveDashboard,
 } from '../dashboard.jsx';
 import { fmtTime } from '../atoms.jsx';
+import { SubgenOutageBanner } from '../subgen-outage-banner.jsx';
 
 function App() {
   // Live clock (1s tick) — purely client-side.
@@ -35,6 +36,9 @@ function App() {
         <SubRail section="overview" activeId="dashboard" />
         <main className="main-canvas">
           <PageHeader now={now} />
+          {/* #479: a subgen that has been unreachable for a while is the one
+              thing on this page that stops everything else from happening. */}
+          <SubgenOutageBanner outage={live && live.subgen_outage} />
           <NoAuthWarningCard />
           <WelcomeCard />
           <FirstWalkCta data={live} />

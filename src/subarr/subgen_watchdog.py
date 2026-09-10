@@ -75,6 +75,26 @@ class SubgenWatchdog:
         # restart is confirmed evidence-side in mark_orphaned_before, which
         # won't orphan items still present in subgen's live queue.)
         self._consecutive_unreachable = 0
+        # #479: the outage the probe loop has observed, if any. Keeping the
+        # OLD caps on a failed probe is right for restart detection, but it
+        # left app.state.subgen_caps.reachable == True for the whole outage,
+        # so the dashboard tile stayed green while subgen was dead for weeks.
+        # These are the facts that let the dashboard say otherwise.
+        self._unreachable_since: float | None = None
+        self._last_failure_cause: str | None = None
+
+    def outage(self) -> dict[str, Any] | None:
+        """The current outage, or None. An outage is >= _BOUNCE_MIN_UNREACHABLE
+        consecutive failed probes (a single miss is a blip). `since` is the
+        FIRST failed probe of the streak; `cause` follows the latest one."""
+        if self._consecutive_unreachable < _BOUNCE_MIN_UNREACHABLE or self._unreachable_since is None:
+            return None
+        return {
+            "since": self._unreachable_since,
+            "seconds": max(0.0, time.time() - self._unreachable_since),
+            "consecutive": self._consecutive_unreachable,
+            "cause": self._last_failure_cause or "transport",
+        }
 
     @property
     def _subgen(self):
@@ -147,7 +167,14 @@ class SubgenWatchdog:
         if not new.reachable:
             log.debug("subgen watchdog: not reachable on probe; keeping old caps")
             self._consecutive_unreachable += 1
+            if self._unreachable_since is None:
+                self._unreachable_since = time.time()
+            self._last_failure_cause = getattr(new, "probe_failure", None) or "transport"
             return
+
+        # Reachable: whatever outage was running is over.
+        self._unreachable_since = None
+        self._last_failure_cause = None
 
         if old is None or not getattr(old, "reachable", False):
             # We didn't have a reachable baseline before — adopt the new
