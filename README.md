@@ -309,7 +309,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `BAZARR_URL` / `BAZARR_API_KEY` | `http://bazarr:6767` / — | Bazarr endpoint + key; subarr's gaps/coverage mirrors Bazarr's wanted list. Core. |
 | `SONARR_URL` / `SONARR_API_KEY` | `http://sonarr:8989` / — | Series metadata, original language, mediainfo. |
 | `RADARR_URL` / `RADARR_API_KEY` | `http://radarr:7878` / — | Movie metadata. |
-| `PLEX_URL` / `PLEX_TOKEN` | your Plex URL / — | Targeted library refresh after a sub lands. |
+| `PLEX_URL` / `PLEX_TOKEN` | — / — | Targeted library refresh after a sub lands. Optional; unset means Plex is not configured. |
 | `JELLYFIN_URL` / `JELLYFIN_API_KEY` | your Jellyfin URL / — | Targeted library refresh after a sub lands. Optional; coexists with Plex (subtitles fan out to both). Create the key in Jellyfin Dashboard → API Keys. |
 | `TAUTULLI_URL` / `TAUTULLI_API_KEY` | `http://tautulli:8181` / — | Audio-track hints from your Plex history. |
 | `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint (optional AI features). |

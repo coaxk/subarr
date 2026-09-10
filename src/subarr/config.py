@@ -320,7 +320,11 @@ def load() -> Settings:
         subgen_media_prefix=_env_or("SUBGEN_MEDIA_PREFIX", "/media"),
         db_path=Path(_env_or("SUBARR_DB_PATH", "/data/subarr.db")),
         port=int(_env_or("SUBARR_PORT", "9922")),
-        plex_url=_env_or("PLEX_URL", "http://192.168.1.105:32400"),
+        # #529: no default. This carried a private LAN address from the dev box
+        # for two years; there is no sensible default for a Plex URL, and an
+        # empty one means "not configured", exactly like JELLYFIN_URL. Read
+        # directly (not _env_or) so an explicit PLEX_URL= stays empty too.
+        plex_url=os.environ.get("PLEX_URL", "").strip(),
         plex_token=os.environ.get("PLEX_TOKEN", ""),
         plex_section=_env_or("PLEX_SECTION", "all"),
         plex_path_prefix=os.environ.get("PLEX_PATH_PREFIX", ""),
