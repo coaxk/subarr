@@ -15,7 +15,19 @@ import asyncio
 import pytest
 
 from subarr.routers.onboarding import TestRequest, _test_subgen, probe_failure_hint
-from subarr.subgen_client import SubgenCapabilities, SubgenClient
+
+
+def _live_client_class():
+    # ⚠️ Resolve at CALL time, not import time. Other suites reload
+    # subarr.subgen_client, after which a class imported at the top of this
+    # file is a stale object; _test_subgen re-imports the module when it runs,
+    # so the patch has to land on whatever sys.modules holds now. Patching the
+    # stale class passed locally (small run, no reload) and probed the real
+    # network on CI.
+    import importlib
+
+    mod = importlib.import_module("subarr.subgen_client")
+    return mod.SubgenClient, mod.SubgenCapabilities
 
 
 @pytest.mark.parametrize(
@@ -43,10 +55,12 @@ def test_unknown_cause_still_gets_a_generic_hint():
 
 
 def _unreachable(monkeypatch, cause: str):
-    async def fake_probe(self):
-        return SubgenCapabilities.unreachable(cause)
+    client_cls, caps_cls = _live_client_class()
 
-    monkeypatch.setattr(SubgenClient, "probe_capabilities", fake_probe)
+    async def fake_probe(self):
+        return caps_cls.unreachable(cause)
+
+    monkeypatch.setattr(client_cls, "probe_capabilities", fake_probe)
 
 
 def test_response_carries_cause_and_hint_on_failure(monkeypatch):
@@ -75,12 +89,14 @@ def test_a_live_refused_port_is_classified_without_a_mock():
 
 
 def test_success_response_carries_no_cause(monkeypatch):
+    client_cls, caps_cls = _live_client_class()
+
     async def fake_probe(self):
-        return SubgenCapabilities(
+        return caps_cls(
             reachable=True, version="2026.08.1", is_subarr_subgen=True, has_queue=True, has_batch=True
         )
 
-    monkeypatch.setattr(SubgenClient, "probe_capabilities", fake_probe)
+    monkeypatch.setattr(client_cls, "probe_capabilities", fake_probe)
     r = asyncio.run(_test_subgen(TestRequest(url="http://subgen:9000")))
     assert r["ok"] is True
     assert r.get("cause") is None
