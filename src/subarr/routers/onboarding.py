@@ -426,9 +426,25 @@ async def auto_detect(request: Request) -> dict[str, Any]:
     """
     disc = getattr(request.app.state, "docker_discovery", None)
     if disc is None:
-        return {"available": False, "reason": "discovery not configured", "services": {}}
+        return {
+            "available": False,
+            "reason": (
+                "no Docker access: mount /var/run/docker.sock into the subarr container "
+                "(read-only is fine) or set SUBARR_DOCKER_PROXY_URL to a socket proxy"
+            ),
+            "services": {},
+        }
     if not await disc.reachable():
-        return {"available": False, "reason": "docker not reachable", "services": {}}
+        # #524: the socket is there but the app cannot use it. As a non-root
+        # process (PUID) the usual cause is the socket's group/mode.
+        return {
+            "available": False,
+            "reason": (
+                f"docker not reachable via {getattr(disc, '_endpoint', 'the configured endpoint')}; "
+                "if that is a mounted socket, subarr runs as PUID/PGID and needs read access to it"
+            ),
+            "services": {},
+        }
 
     candidates = await disc.discover()
     # Group by service — wizard picks one candidate per service (or

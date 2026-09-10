@@ -372,7 +372,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_VAD_DIR` / `SUBARR_LID_DIR` | beside DB | Override VAD / LID model directories. |
 | `NVIDIA_SMI_PATH` | — | Path to `nvidia-smi` for the GPU card. |
 | `SUBGEN_CONTAINER` / `SUBGEN_COMPOSE_PATH` | `subgen` / path | subgen container name + compose path for guided setup. |
-| `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup. |
+| `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup's auto-detect. Neither is needed when `/var/run/docker.sock` is mounted into the container; set the proxy URL to use a socket proxy instead. |
 | `SUBARR_TELEMETRY_ENDPOINT` | `https://telemetry.subarr.com/v1/ping` | Anonymous telemetry receiver (see [Telemetry](#telemetry)). Set to empty to opt out. |
 
 ## Known limitations (v2.7)

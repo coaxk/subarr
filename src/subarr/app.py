@@ -1053,17 +1053,17 @@ async def lifespan(app_: FastAPI):
     # disabled if neither SUBARR_DOCKER_PROXY_URL nor a socket path
     # is configured. The wizard probes via GET /api/discovery and
     # gracefully falls back to manual entry when unavailable.
-    if settings.docker_proxy_url or settings.docker_socket_path:
-        from .docker_discovery import DockerDiscovery
+    # #524: a mounted /var/run/docker.sock counts too. It already made the
+    # Logs page work; auto-detect said "not configured" on the same mount.
+    from .docker_discovery import DockerDiscovery, resolve_discovery_endpoint
 
+    ep = resolve_discovery_endpoint(settings)
+    if ep is not None:
         app_.state.docker_discovery = DockerDiscovery(
-            base_url=settings.docker_proxy_url or None,
-            unix_socket=settings.docker_socket_path or None,
+            base_url=ep["endpoint"] if ep["kind"] == "proxy" else None,
+            unix_socket=ep["endpoint"] if ep["kind"] == "socket" else None,
         )
-        log.info(
-            "docker discovery enabled (transport=%s)",
-            "proxy" if settings.docker_proxy_url else "socket",
-        )
+        log.info("docker discovery enabled (transport=%s, via %s)", ep["kind"], ep["source"])
     else:
         app_.state.docker_discovery = None
 
