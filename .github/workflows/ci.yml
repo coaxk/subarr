@@ -1,5 +1,5 @@
 # Lint + test + workflow-security gate.
-#   - lint:    ruff check + ruff format --check on every push + PR
+#   - lint:    ruff check + ruff format --check + README freshness on every push + PR
 #   - test:    full pytest suite on PRs (pushes to main run it in release.yml
 #              before publish, so we don't double-run the suite there)
 #   - zizmor:  GitHub Actions security audit (pinned actions, least-privilege
@@ -30,6 +30,9 @@ jobs:
       - run: pip install ruff==0.15.15
       - run: ruff check src/ tests/
       - run: ruff format --check src/ tests/
+      # The README sat at 2.5 through 2.7.2 because nothing checked it. Fails
+      # when its version markers lag pyproject.toml (major.minor).
+      - run: python scripts/check_readme_freshness.py
 
   test:
     # PRs only — pushes to main run pytest in release.yml before publish.

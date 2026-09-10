@@ -4,8 +4,8 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
-[![status](https://img.shields.io/badge/status-v2.5-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-1696_passing-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![status](https://img.shields.io/badge/status-v2.7-violet)](https://github.com/coaxk/subarr)
+[![tests](https://img.shields.io/badge/tests-2095_python_%2B_235_frontend-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -15,15 +15,17 @@ Subarr decides what subtitles are actually missing across your library, which pr
 
 ---
 
-## New in 2.5
+## New in 2.7
 
-**Jellyfin, beside Plex.** subarr now refreshes Jellyfin the same way it has always refreshed Plex: when a subtitle lands, the owning item gets refreshed so the sub shows up without waiting for a scheduled scan. Point subarr at both and it fans out to both — Plex users lose nothing, Jellyfin users stop scanning manually, and mixed households are a supported setup rather than a compromise. Configure it in Settings → Integrations or with `JELLYFIN_URL` / `JELLYFIN_API_KEY`.
+**Review works in whole shows, and subarr stops queueing what your transcription service cannot produce.** Both came from user reports, and both close loops that used to run silently.
 
-- **No path mapping to work out.** subarr reads your server's own library locations and derives the path prefix itself, for **both** Jellyfin and Plex. The old "No Plex Section" trap where you had to hand-set `PLEX_PATH_PREFIX` is gone. Explicit env vars still win if you set them.
-- **Foreign-language scenes in English media get their own forced subtitle.** A film that drops into Russian for a scene now gets a `.forced.en.srt` covering just those segments, instead of nothing or a full transcription. Detection runs locally (a small ONNX language-ID model, no torch, no cloud) and validated on 1706 real windows from a live library. Off by default — turn it on under Settings → Rules, or `SUBARR_FORCED_SEGMENT_ENABLED=1`.
-- **SQLite stays intact on a network share.** If `/data` lands on NFS or SMB, subarr now picks a journal mode that survives it instead of using WAL, which is unsafe over network filesystems. Local installs are unchanged. Keeping `/data` on local disk is still the recommendation, and the Health page still says so.
+- **Review pages by complete shows and films (2.7.0).** A series arrives on the page whole or not at all, and selecting it selects every file it has, so a bulk action reaches the whole show rather than the part that fit on screen. The page size is counted in shows. Reported and implemented by @xiaden.
+- **Force re-probe (2.7.0).** Corrected an audio-language tag in place with Tdarr or mkvpropedit? That changes neither size nor timestamp, so subarr kept the old reading. Select rows in Review and use Re-probe to read them again from scratch. subarr also does this by itself when a language you confirm disagrees with what it had on record.
+- **No more queueing for a language the service cannot produce (2.7.1).** Whisper writes one subtitle language per job: in translate mode that is always English, in transcribe mode the file's own language. subarr now asks subgen what it can produce and holds back a file wanting anything else, with the reason shown, instead of submitting it to be refused on every scan. Needs `ghcr.io/coaxk/subarr-subgen` 2026.08.1-r9 or newer; on older builds behaviour is unchanged.
+- **Bulk verify tells you what failed (2.7.2).** Failed rows stay selected with the count and file names on screen, there is a Stop button, and the browser warns before you leave mid-batch. A Sonarr propagation that did not land is reported as such instead of as success, and if you turn propagation on, a 400-file batch now costs two Bazarr syncs rather than 400.
+- **The Logs page no longer leaks (2.7.2).** Leaving it used to keep a reader running against subgen's container log until subgen restarted.
 
-*Previously: automatic subtitle re-timing on by default, plus honestly-represented multilingual audio, in 2.4; separate Sonarr/Radarr/Bazarr stacks — multi-instance — in 2.3, see [Multiple stacks (instances)](#multiple-stacks-instances); Bazarr-parity blacklist / forced / per-title-ignore controls in 2.2; authentication on by default and a non-root container in 2.0 (see [Upgrading](#upgrading-to-20)); guided subgen setup and Swagger/OpenAPI at `/docs` in 1.6; multi-library and arm64 images in 1.5; Job Aftercare in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
+*Previously: image-only subtitles can be filled, forced subtitles named so Bazarr sees them, search and paging on Review and Aftercare, the image no longer ships pip, in 2.6; Jellyfin beside Plex with path-prefix auto-detect for both, forced subtitles for foreign scenes in English media, and a network-safe SQLite journal mode, in 2.5; automatic subtitle re-timing and honestly-represented multilingual audio in 2.4; multi-instance stacks in 2.3, see [Multiple stacks (instances)](#multiple-stacks-instances); Bazarr-parity blacklist / forced / per-title-ignore controls in 2.2; authentication on by default and a non-root container in 2.0 (see [Upgrading](#upgrading-to-20)); guided subgen setup and Swagger/OpenAPI at `/docs` in 1.6; multi-library and arm64 images in 1.5; Job Aftercare in 1.4; the Tuning Lab and audio-language verification in 1.2; speech-aware audio (silero VAD) in 1.1. See the [changelog](CHANGELOG.md) for the full history.*
 
 ### Upgrading to 2.0
 
@@ -88,7 +90,7 @@ The wizard tries to auto-detect Sonarr/Radarr/Bazarr/Tautulli/subgen on your exi
 
 After onboarding you can edit any integration's URL and API key (and the Plex token) directly in Settings, with test-connection and live apply. Values you set via env vars stay authoritative and show as read-only.
 
-**Why `:rw` on the media mount.** Subarr's sidecar mismatch detector renames orphaned `.srt` files whose basename drifted from the video. Read-only blocks this. If you don't want it, set `SUBARR_SIDECAR_RENAME=0` and mount `:ro`, the rest of the product works.
+**Why `:rw` on the media mount.** subarr writes subtitle files next to your media: the `.srt` subgen produces, the forced-segment sidecars, and the renames you approve from the sidecar mismatch detector (it only suggests; nothing is renamed until you click). Mount `:ro` and every write fails; coverage, review and the queue still work, but nothing lands.
 
 ### Hardened deployment (optional)
 
@@ -131,7 +133,7 @@ The most-asked question. Quick answer.
 | You have | What to do |
 |---|---|
 | Vanilla `mccloud/subgen` | Keep it. Add subarr next to it. Subarr detects vanilla and runs in compat mode. Coverage, provenance, scheduling, audio-language review all work. You miss calibrated multi-chunk detection and queue cancel, both require our subgen patches. |
-| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 22 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
+| `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 49 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
 | No subgen yet | Start with `ghcr.io/coaxk/subarr-subgen`. Everything works on day one. |
 | You run Bazarr only | Subarr adds a coordination layer beside Bazarr. Bazarr keeps doing what it does. Subarr surfaces what is actually missing, schedules the work, and writes results back. |
 
@@ -152,10 +154,10 @@ Subarr's value compounds with: multi-language libraries, three or more Bazarr pr
 | Surface | Function |
 |---|---|
 | Dashboard | Live column-as-stage pipeline (discovered → probing → bazarr-wanted → transcribing → written-back), GPU widget, integration health, next scheduled run, recent activity |
-| Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue. **(2.2) Transcribe a full sub** on forced-only files (an embedded sub that only covers foreign dialogue) without flipping subgen's global forced-subs knob |
+| Coverage | Scored gap list (tree-by-show or flat), score-gradient sort, reason chips (no-track, embedded-only, bazarr-wanted, audio-mislabel, low-score, unmonitored). **Probe-gate:** only files subarr has verified appear as gaps; un-probed files sit in a sticky "Analyzing" bucket (with a Probe-now action) and "Couldn't analyze" surfaces failures — nothing silently dropped. Bulk select + apply rule + queue. **(2.2) Transcribe a full sub** on forced-only files (an embedded sub that only covers foreign dialogue) without flipping subgen's global forced-subs knob. **(2.6) Image-only subtitles** (PGS/VobSub) count as no text coverage and can be filled. **(2.7) Held-back rows say why**: a file wanting a language your subgen cannot produce is shown, not submitted |
 | Library | Tree across all series and movies. Audio / sub / runtime columns with probe-state indicators. **(2.2) Per-title ignore** inline (suppress a whole show or one file) and **blacklist a bad provider sub** on any video |
 | Queue | Featured Queue: Processing, Queued, Lost-on-restart, Issues, Recently done. Per-row and **bulk** requeue / remove / cancel (multi-select across every section). **Pending backlog** with **step-wise reorder + pause/resume + target-depth** — subarr holds its own queue in front of subgen and feeds it at a set depth instead of flooding. **Every submission routes through it** (1.4) — manual scans and requeues included — so nothing stampedes subgen; manual still jumps the line and starts near-instantly. **Backfill gaps** drains the whole verified-gap backlog at low priority |
-| Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, Layer 3 Whisper detection inline. **Default-track mismatch (1.4):** flags files whose default audio is not the original language (the double-translation trap) with a one-click in-place track swap (`mkvpropedit`) or dismiss, single or bulk. **Speech-aware clip selection (1.1):** the player lands on actual dialogue via silero VAD, with a speech-detected badge |
+| Review | Manual audio-language verification queue with audio player, multi-track support, batch cycle, Layer 3 Whisper detection inline. **(2.7) Pages by whole show**, with search; select a show and every file comes with it. **(2.7) Force re-probe** re-reads files you corrected externally. **(2.7) Bulk verify** keeps failures on screen, can be stopped, and reports when Sonarr was not updated. **Default-track mismatch (1.4):** flags files whose default audio is not the original language (the double-translation trap) with a one-click in-place track swap (`mkvpropedit`) or dismiss, single or bulk. **Speech-aware clip selection (1.1):** the player lands on actual dialogue via silero VAD, with a speech-detected badge |
 | Aftercare | **(1.4)** Post-transcription quality review: every finished job is judged for failures + readability and surfaced (page + header pill + dashboard panel) with a country flag, language, source tag, composite score, and a legend. Requeue from the row, or **blacklist a bad provider sub (2.2)** straight to Bazarr. Flags problems, never a confident grade |
 | Rules | Auto-queue rules with score thresholds, language filters, custom-format pre-classification. **(2.2)** An "Other subtitle controls" card signposts every force / ignore / language control to the page where it lives |
 | Tuning Lab | Config arena: sweep Whisper recipes against your live subgen, judged by a validated tournament judge across multiple strata clips. Per-language herd view, global recipe leaderboard, and an Audio language issues panel surfacing mislabeled / bilingual / multi-track files from on-demand sweeps and the opt-in library-wide scan |
@@ -257,6 +259,10 @@ Once a verification exists, every downstream submission carries it through an ev
 **Do I need Tautulli?** No, but you get NOW PLAYING boost, just-imported boost, and per-user language profiles if you have it. Without Tautulli the scheduler still works, it just has one fewer priority signal.
 
 **Will this work with Jellyfin?** Yes. Add Jellyfin in Settings (URL + API key) and it runs alongside Plex — a landed subtitle refreshes both. Emby isn't supported yet; open a feature request if you want it.
+
+**Why does Coverage say my subgen "cannot produce" Spanish?** Because it cannot. Whisper writes one subtitle language per job: in translate mode that is always English, whatever the audio is; in transcribe mode it is the file's own audio language. If you want Spanish subtitles for Spanish audio, subgen has to be in transcribe mode; if you want them for English audio, no Whisper setup produces that. subarr (2.7.1, with subarr-subgen r9 or newer) shows the row and holds it back rather than submitting a job that would be refused every scan. The fix is in subgen's configuration, not in subarr.
+
+**The Logs page or the per-language tuning panel says it can't read something.** Both are optional and each needs one mount. Logs streams subgen's container output and needs the Docker socket (`/var/run/docker.sock:/var/run/docker.sock:ro`) or a socket proxy. The tuning panel reads subgen's compose file at `SUBGEN_COMPOSE_PATH`, and that file has to be readable by the user subarr runs as (`PUID`), not just by root: a root `docker exec` shell can read a root-only file that the app cannot. Nothing else in subarr depends on either.
 
 ## Multiple media locations (libraries)
 
@@ -369,11 +375,14 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup. |
 | `SUBARR_TELEMETRY_ENDPOINT` | `https://telemetry.subarr.com/v1/ping` | Anonymous telemetry receiver (see [Telemetry](#telemetry)). Set to empty to opt out. |
 
-## Known limitations (v2.5)
+## Known limitations (v2.7)
 
 Transparent before you install.
 
-- Requires `ghcr.io/coaxk/subarr-subgen` for calibrated Layer 3 detection, queue cancel, curated per-language `initial_prompt`s, and the safe-decode preset. Vanilla subgen works in compat mode but you miss these.
+- Requires `ghcr.io/coaxk/subarr-subgen` for calibrated Layer 3 detection, queue cancel, curated per-language `initial_prompt`s, the safe-decode preset, image-only subtitle filling, and the 2.7.1 gate that stops queueing languages subgen cannot produce (r9 or newer). Vanilla subgen works in compat mode but you miss these.
+- Whisper produces one subtitle language per job, and in translate mode that language is English. subarr can tell you a wanted language is unproducible and stop asking; it cannot make it appear. See [Common questions](#common-questions).
+- The Logs page needs the Docker socket and the per-language tuning panel needs subgen's compose file mounted and readable by `PUID`. Both are optional; without the mount each says so and the rest of subarr is unaffected.
+- Turning on `SONARR_PROPAGATE_AUDIO_LANG` makes each verification also update Sonarr and trigger a Bazarr sync. It is off by default, and a failure to update Sonarr is reported in the UI but is not retried automatically.
 - The default-track swap needs `mkvtoolnix` (`mkvpropedit`) in the runtime image — it ships in `ghcr.io/coaxk/subarr`; detection + the Review UI work regardless, the swap action just needs the binary present.
 - Single-admin authentication. subarr ships a real built-in login (forced by default, with sessions, throttling, and managed API keys), but it's one admin account — no per-user accounts, roles, or audit. For multi-user, put it behind a reverse proxy (Authelia / Caddy / Traefik) and set `SUBARR_AUTH_DISABLED=1`.
 - Auto-update is intentionally absent. Update notifications appear in the UI; you run the upgrade.
@@ -491,8 +500,8 @@ The Settings panel shows the current vs latest version per product with release 
 |---|---|
 | Backend | Python 3.12 + FastAPI + httpx. Async throughout. |
 | Storage | Single SQLite file, default `/data/subarr.db` (override with `SUBARR_DB_PATH`). Hand-rolled migrations runner. |
-| Frontend | React 18 + esbuild. CDN React. Bundles committed so `pip install` ships a working SPA. |
-| Subgen drive | HTTP. 22 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
+| Frontend | React 18 + esbuild. React is vendored in the repo and served from it (no CDN), so the tests run against the exact React that ships. Bundles committed so `pip install` ships a working SPA. |
+| Subgen drive | HTTP. 49 small patches over upstream McCloudS/subgen. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen). |
 | Discovery | Read-only Docker API via [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy). |
 | Telemetry receiver | Cloudflare Worker + D1. Open source at [`coaxk/subarr-telemetry`](https://github.com/coaxk/subarr-telemetry). |
 
@@ -506,14 +515,14 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## Roadmap
 
-**v2.5 (this release):**
+**v2.7 (this release):**
 
-- **Jellyfin media-server backend** (shipped): targeted item refresh when a sub lands, coexisting with Plex — configure either or both.
-- **Path-prefix auto-detect** (shipped): subarr derives the prefix from the server's own library locations, for Jellyfin and Plex alike. Explicit env vars still override.
-- **Forced subtitles for foreign scenes** (shipped): local, no-torch language ID over English media produces a `.forced.en.srt` for the foreign segments. Off by default.
-- **Network-filesystem-safe SQLite journal mode** (shipped): `/data` on NFS or SMB no longer runs WAL.
+- **Whole-show Review paging** (shipped, 2.7.0): a series is on the page whole or not at all; selecting it selects every file.
+- **Force re-probe** (shipped, 2.7.0): re-read files corrected externally, and automatically when a verification contradicts the cached probe.
+- **Unproducible-language gate** (shipped, 2.7.1): subgen advertises what it can write; subarr holds back the rest with a reason.
+- **Honest bulk verify** (shipped, 2.7.2): failures stay on screen, Stop, leave-page guard, Sonarr propagation outcome surfaced, Bazarr syncs coalesced.
 
-*Previously: automatic subtitle re-timing and honest multilingual audio (2.4); multi-instance stacks (2.3); Bazarr-parity blacklist / forced / ignore controls (2.2); security hardening, non-root container, and activation (2.0); guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
+*Previously: image-only subtitle filling, Bazarr-visible forced-subtitle names, Review/Aftercare search and paging, pip removed from the image (2.6); Jellyfin beside Plex, path-prefix auto-detect, forced subtitles for foreign scenes, network-safe SQLite journal mode (2.5); automatic subtitle re-timing and honest multilingual audio (2.4); multi-instance stacks (2.3); Bazarr-parity blacklist / forced / ignore controls (2.2); security hardening, non-root container, and activation (2.0); guided subgen setup (1.6); Job Aftercare, default-track mismatch fix, and queue authority (1.4); the Tuning Lab, verified audio, and the global recipe leaderboard (1.2); speech-aware audio (1.1). See the [changelog](CHANGELOG.md).*
 
 **Later** — still on the list:
 
@@ -523,9 +532,9 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 ## The subgen patch story
 
-Subarr drives subgen through 22 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
+Subarr drives subgen through 49 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
 
-The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tagged releases: `v2026.05.3-r9` current (Blackwell/RTX 50xx CUDA 12.8, gnupg CVE patch, the verified "strongpad" segmentation baked in as the default, plus the tuned Whisper kwargs, a runtime `/config` endpoint that powers guided setup's live-apply, and a GPU device-guard entrypoint), with `latest` and per-version tags.
+The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tags are `<upstream version>-r<patch revision>`: `2026.08.1-r9` is current (upstream 2026.08.1; Blackwell/RTX 50xx CUDA 12.8, the verified "strongpad" segmentation as the default, tuned Whisper kwargs, a runtime `/config` endpoint that powers guided setup's live-apply, a GPU device-guard entrypoint, and from r9 the advertised transcribe/translate mode and output language that 2.7.1's gate reads), with `latest` and per-revision tags. subarr checks the revision, not just the upstream version, when it tells you an update is available.
 
 You do not need our patched image. See the "I already have subgen" table at the top.
 
@@ -537,8 +546,10 @@ cd subarr
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[dev]
 PYTHONPATH=src uvicorn subarr.app:app --reload --port 9922
-PYTHONPATH=src pytest -q                    # 1159 passing
+PYTHONPATH=src pytest -q                    # 2095 passing (about 20 min locally, 4 in CI)
 npm install && npm run build:frontend       # SPA bundles
+npm run test:frontend                       # 235 passing, including component tests against the vendored React
+python scripts/check_readme_freshness.py    # CI fails if this README's version markers lag pyproject
 ```
 
 ## Related
