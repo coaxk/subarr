@@ -7,6 +7,19 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.4] - 2026-09-11
+
+**subarr now tells you when it cannot reach subgen: as you type the address, and for as long as it stays down.**
+
+Two changes, one cause. No config changes and no migration. Both come from measuring the fleet rather than from a report: roughly one install in seven has a subgen address that does not work, and a handful were running real libraries against a dead transcription service for weeks with nothing on screen saying so.
+
+### Added
+- **The setup wizard tests each connection by itself, and says what is wrong (#479).** Type a URL and, once you stop, subarr probes it without you pressing Test. When subgen does not answer, the result names the cause and what to check: nothing listening on that port (the most common case: a wrong port or a stopped container), a hostname that does not resolve from inside the container, a reverse proxy or a different service answering, TLS on a plain-http port. A failed test does not block you, but the button reads "Continue anyway" so skipping past a dead address is a choice you can see. The Settings test button gives the same hints.
+- **A persistent notice when subgen has been unreachable for more than ten minutes (#479).** The dashboard now says how long it has been down, why, that nothing is being transcribed meanwhile, and what to check, with a link to Settings. You can dismiss it; it comes back for the next outage.
+
+### Fixed
+- **The subgen tile on the dashboard stayed green during an outage.** The background check that watches subgen keeps the last good reading through a failure, which is right for spotting restarts but meant the tile reported "ok" from stale data for as long as the outage lasted, up to a day at a time. It now reads "unreachable for 3d 4h (refused)" from the first confirmed failure.
+
 ## [2.7.3] - 2026-09-10
 
 **A stray default is gone, and subarr can now tell whether its setup wizard was ever opened.**
