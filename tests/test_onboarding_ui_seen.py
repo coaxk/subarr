@@ -82,12 +82,23 @@ def test_stats_provider_reports_the_flag(store):
     assert _onboarding_ui_seen(SimpleNamespace()) is None
 
 
-def test_payload_carries_onboarding_ui_seen(db_path):
-    from tests.test_telemetry import _FakeCaps, _make_collector
+def _collector(db_path, stats):
+    # Same shape as test_telemetry's helper, inlined: CI runs pytest with
+    # PYTHONPATH=src and no `tests` package on the path, so a cross-file
+    # import of that helper passes locally and fails there.
+    from subarr.telemetry import TelemetryCollector
 
-    stats = {"onboarding_ui_seen": True}
-    c = _make_collector(db_path, stats=stats, caps=_FakeCaps())
-    d = c.build_payload().to_dict()
+    caps = SimpleNamespace(reachable=True, version="2026.08.1", is_subarr_subgen=True)
+    return TelemetryCollector(
+        db_path=db_path,
+        endpoint="",
+        subarr_version="v2.7.2",
+        stats_provider=lambda: stats,
+        subgen_caps_provider=lambda: caps,
+    )
+
+
+def test_payload_carries_onboarding_ui_seen(db_path):
+    d = _collector(db_path, {"onboarding_ui_seen": True}).build_payload().to_dict()
     assert d["onboarding_ui_seen"] is True
-    c2 = _make_collector(db_path, stats={}, caps=_FakeCaps())
-    assert c2.build_payload().to_dict()["onboarding_ui_seen"] is None
+    assert _collector(db_path, {}).build_payload().to_dict()["onboarding_ui_seen"] is None
