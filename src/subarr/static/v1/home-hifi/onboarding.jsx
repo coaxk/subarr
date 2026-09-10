@@ -85,6 +85,11 @@ const Api = {
     const r = await fetch('/api/onboarding/complete', { method: 'POST' });
     return r.ok ? r.json() : null;
   },
+  // #480: tell the backend the wizard actually rendered. Fire-and-forget;
+  // the store keeps only the first time, so repeat mounts cost nothing.
+  seen() {
+    return fetch('/api/onboarding/seen', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+  },
 };
 
 
@@ -886,6 +891,7 @@ export function OnboardingPage() {
     // the wizard, but an explicit reconfigure request opens it from step 0
     // (fields pre-fill from current settings via the GET state).
     const reconfigure = new URLSearchParams(window.location.search).has('reconfigure');
+    Api.seen();
     Api.getState().then((st) => {
       if (st) {
         if (st.is_complete && !reconfigure) {

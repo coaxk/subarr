@@ -182,6 +182,10 @@ class OnboardingState:
     progress: dict[str, Any]
     created_at: float
     updated_at: float
+    # #480: the FIRST time the onboarding page rendered on this install, or
+    # None if it never has. Telemetry reports the boolean so "sits at step 0"
+    # can be split into "saw the first screen" and "never opened the UI".
+    ui_seen_at: float | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -198,6 +202,7 @@ class OnboardingState:
             "progress": _mask_progress(self.progress),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "ui_seen": self.ui_seen_at is not None,
         }
 
 
@@ -219,7 +224,7 @@ class OnboardingStore:
 
     def get(self) -> OnboardingState:
         row = self._conn.execute(
-            "SELECT step, completed_at, progress_json, created_at, updated_at "
+            "SELECT step, completed_at, progress_json, created_at, updated_at, ui_seen_at "
             "FROM onboarding_state WHERE id = 1"
         ).fetchone()
         if row is None:  # belt-and-braces; _ensure_row already ran
@@ -235,7 +240,18 @@ class OnboardingStore:
             progress=progress,
             created_at=row[3],
             updated_at=row[4],
+            ui_seen_at=row[5],
         )
+
+    def mark_ui_seen(self) -> OnboardingState:
+        """#480: the onboarding page rendered. Keeps the FIRST time only, and
+        is deliberately not touched by reset(): the question telemetry asks is
+        "was the wizard ever seen", not "since the last re-run"."""
+        self._conn.execute(
+            "UPDATE onboarding_state SET ui_seen_at = COALESCE(ui_seen_at, ?) WHERE id = 1",
+            (time.time(),),
+        )
+        return self.get()
 
     # ─── Write ─────────────────────────────────────────────────────
 

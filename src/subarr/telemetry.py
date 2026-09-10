@@ -111,6 +111,10 @@ class TelemetryPayload:
     # to a real value would report a confident wrong answer fleet-wide.
     subgen_probe_failure: str | None = None
     subgen_target_is_default: bool | None = None
+    # #480: has the onboarding page EVER rendered on this install. Splits
+    # "stopped at Welcome" from "never opened the UI". None = unknown (no
+    # store), never a confident False.
+    onboarding_ui_seen: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +139,7 @@ class TelemetryPayload:
             "onboarding_complete": self.onboarding_complete,
             "subgen_probe_failure": self.subgen_probe_failure,
             "subgen_target_is_default": self.subgen_target_is_default,
+            "onboarding_ui_seen": self.onboarding_ui_seen,
         }
 
 
@@ -313,6 +318,7 @@ class TelemetryCollector:
             docker_tier=int(stats.get("docker_tier") or 1),
             onboarding_step=stats.get("onboarding_step"),
             onboarding_complete=bool(stats.get("onboarding_complete")),
+            onboarding_ui_seen=stats.get("onboarding_ui_seen"),
         )
 
     async def send_now(self) -> tuple[bool, str | None]:
@@ -470,6 +476,15 @@ def _onboarding_complete(app_state) -> bool:
         return False
 
 
+def _onboarding_ui_seen(app_state) -> bool | None:
+    """#480: has the onboarding page ever rendered. None when there is no
+    store to ask, so an unknown is never reported as a confident False."""
+    try:
+        return app_state.onboarding.get().ui_seen_at is not None
+    except Exception:
+        return None
+
+
 def _walks_per_day_30d(app_state) -> float:
     """Coverage activity: scans created in the last 30 days / 30. Fixed
     divisor keeps it comparable across installs (a new install reports a
@@ -589,6 +604,7 @@ def make_default_stats_provider(app_state) -> Any:
             # #202 activation funnel.
             "onboarding_step": _onboarding_step(app_state),
             "onboarding_complete": _onboarding_complete(app_state),
+            "onboarding_ui_seen": _onboarding_ui_seen(app_state),
             # #479: is this install still on the shipped SUBGEN_URL, i.e.
             # never configured. Separates that from a real subgen that is
             # down, which the single `unreachable` bucket could not. Sends
