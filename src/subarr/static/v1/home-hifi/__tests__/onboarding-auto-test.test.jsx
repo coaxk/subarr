@@ -26,7 +26,11 @@ beforeEach(() => {
   tests = [];
 });
 
+// Unmount so the auto-test debounce is cleared by its effect cleanup before
+// the jsdom window goes (see review-bulk-failure-wiring.test.jsx).
+const roots = [];
 afterEach(() => {
+  for (const r of roots.splice(0)) r.unmount();
   document.body.innerHTML = '';
 });
 
@@ -59,7 +63,9 @@ function Host({ initial, result }) {
 async function render(initial, result) {
   const container = document.createElement('div');
   document.body.appendChild(container);
-  ReactDOM.createRoot(container).render(React.createElement(Host, { initial, result }));
+  const root = ReactDOM.createRoot(container);
+  roots.push(root);
+  root.render(React.createElement(Host, { initial, result }));
   await until(() => container.querySelector('input'), { what: 'the URL input' });
   return container;
 }

@@ -60,7 +60,11 @@ beforeEach(() => {
   window.fetch = stub;
 });
 
+// Unmount so effect cleanups clear their timers before the jsdom window goes
+// (see the note in review-bulk-failure-wiring.test.jsx).
+const roots = [];
 afterEach(() => {
+  for (const r of roots.splice(0)) r.unmount();
   document.body.innerHTML = '';
 });
 
@@ -68,6 +72,7 @@ async function renderReview() {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
+  roots.push(root);
   root.render(React.createElement(ReviewPage));
   // let effects run and their promises settle
   for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
