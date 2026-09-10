@@ -133,6 +133,14 @@ async def complete(request: Request) -> dict[str, Any]:
     return state.to_dict()
 
 
+@router.post("/onboarding/seen")
+def mark_seen(request: Request) -> dict[str, Any]:
+    """#480: the wizard page rendered. Idempotent; the store keeps the first
+    time. Fired by the onboarding page on mount so telemetry can tell "opened
+    the wizard and stopped at Welcome" from "never opened the UI"."""
+    return request.app.state.onboarding.mark_ui_seen().to_dict()
+
+
 @router.post("/onboarding/reset")
 def reset(request: Request) -> dict[str, Any]:
     state = request.app.state.onboarding.reset()

@@ -377,6 +377,9 @@ _EXPECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
         # it never carries the URL itself.
         "subgen_probe_failure",
         "subgen_target_is_default",
+        # #480 privacy review: a bool saying whether the onboarding page was
+        # ever rendered. No timestamp, no path, no identity.
+        "onboarding_ui_seen",
     }
 )
 
