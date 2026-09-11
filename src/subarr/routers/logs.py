@@ -8,6 +8,7 @@ import json
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
+from ..config import settings
 from ..docker_client import DockerUnavailable
 from ..error_detail import safe_error
 
@@ -31,7 +32,10 @@ async def logs_events(request: Request, tail: int = Query(200, ge=0, le=5000)) -
             # the EventSource transport error and is ambiguous in the browser.
             # The frontend listens for this to render a "can't reach Docker"
             # panel with the socket-mount fix instead of spinning silently.
-            yield f"event: stream_error\ndata: {json.dumps(safe_error(e))}\n\n"
+            # #536: say WHICH failure. `container` is the configured name from
+            # settings, never text lifted out of the exception.
+            payload = {"detail": safe_error(e), "reason": e.reason, "container": settings.subgen_container}
+            yield f"event: stream_error\ndata: {json.dumps(payload)}\n\n"
         except asyncio.CancelledError:
             return
 

@@ -35,7 +35,24 @@ _PROGRESS_RE = re.compile(
 
 
 class DockerUnavailable(RuntimeError):
-    pass
+    """Docker could not serve the request. `reason` says which kind:
+
+    - ``socket``: the client could not be created or the daemon is unreachable
+      (no socket mounted, wrong proxy URL, permission denied).
+    - ``container_not_found``: the daemon answered, but nothing is named
+      ``SUBGEN_CONTAINER``. #536: this used to render as a socket problem and
+      sent an operator with a one-letter typo off to fix a mount that was fine.
+    """
+
+    def __init__(self, message: str, *, reason: str = "socket"):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _container_not_found() -> DockerUnavailable:
+    return DockerUnavailable(
+        f"container {settings.subgen_container!r} not found", reason="container_not_found"
+    )
 
 
 class DockerOps:
@@ -51,7 +68,7 @@ class DockerOps:
             try:
                 self._client = docker.from_env()
             except Exception as e:
-                raise DockerUnavailable(f"docker.from_env() failed: {e}") from e
+                raise DockerUnavailable(f"docker.from_env() failed: {e}", reason="socket") from e
         return self._client
 
     def close(self) -> None:
@@ -68,7 +85,7 @@ class DockerOps:
             try:
                 container = client.containers.get(settings.subgen_container)
             except NotFound:
-                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+                raise _container_not_found()
             container.restart(timeout=timeout)
 
         await asyncio.to_thread(_do)
@@ -79,7 +96,7 @@ class DockerOps:
             try:
                 c = client.containers.get(settings.subgen_container)
             except NotFound:
-                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+                raise _container_not_found()
             attrs = c.attrs
             state = attrs.get("State", {}) or {}
             return {
@@ -119,7 +136,7 @@ class DockerOps:
             try:
                 c = client.containers.get(settings.subgen_container)
             except NotFound:
-                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+                raise _container_not_found()
             attrs = c.attrs
             env_list = ((attrs.get("Config") or {}).get("Env")) or []
             env = dict(e.split("=", 1) for e in env_list if "=" in e)
@@ -150,7 +167,7 @@ class DockerOps:
             try:
                 container = client.containers.get(settings.subgen_container)
             except NotFound:
-                raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+                raise _container_not_found()
             # docker logs(tail=N) returns the last N lines as bytes.
             raw = container.logs(tail=tail, stream=False, timestamps=False)
             if isinstance(raw, bytes):
@@ -191,7 +208,7 @@ class DockerOps:
         try:
             container = client.containers.get(settings.subgen_container)
         except NotFound:
-            raise DockerUnavailable(f"container {settings.subgen_container!r} not found")
+            raise _container_not_found()
 
         # #526: this used to leak. On consumer disconnect the pump thread stayed
         # blocked in the SDK generator until the CONTAINER exited, and every
@@ -232,22 +249,31 @@ class DockerOps:
                 pass  # loop closed: nobody is listening any more
 
         def _pump():
+            # #537: a chunk is NOT a line. docker-py yields a TTY container's
+            # log one BYTE per chunk (`_stream_raw_result`, chunk_size=1) and a
+            # non-TTY container's one multiplexed frame per chunk, which may
+            # carry several lines or half of one. Reassemble on newlines.
+            buf = b""
             try:
                 for chunk in stream:
                     if stop.is_set():
                         break
                     if not chunk:
                         continue
-                    if isinstance(chunk, bytes):
-                        line = chunk.decode("utf-8", errors="replace").rstrip("\r\n")
-                    else:
-                        line = str(chunk).rstrip("\r\n")
-                    if stop.is_set():
-                        break
-                    _post(line)
+                    buf += chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8", errors="replace")
+                    while True:
+                        nl = buf.find(b"\n")
+                        if nl < 0:
+                            break
+                        raw, buf = buf[:nl], buf[nl + 1 :]
+                        if stop.is_set():
+                            break
+                        _post(raw.decode("utf-8", errors="replace").rstrip("\r"))
             except Exception as e:  # noqa: BLE001 - a closed socket surfaces as a variety of errors; all mean "done"
                 log.debug("log pump exited: %s", e)
             finally:
+                if buf and not stop.is_set():
+                    _post(buf.decode("utf-8", errors="replace").rstrip("\r"))
                 _post(None)
 
         worker = asyncio.create_task(asyncio.to_thread(_pump))

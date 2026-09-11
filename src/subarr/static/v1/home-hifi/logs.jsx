@@ -4,6 +4,7 @@
 const { useState, useEffect, useRef, useMemo } = React;
 
 import { LOG_SOURCES } from './log-helpers.mjs';
+import { streamErrorPanel } from './logs-stream-error.mjs';
 
 const LEVEL_COLORS = {
   ERROR: '#ef4444',
@@ -60,7 +61,7 @@ export function LogsPage() {
       es.addEventListener('stream_error', (e) => {
         let msg = e.data || '';
         try { msg = JSON.parse(msg); } catch { /* already plain */ }
-        setStreamError(msg || 'Docker is unavailable.');
+        setStreamError(msg || { reason: 'socket', detail: 'Docker is unavailable.' });
         setConnected(false);
       });
       // #209 fix: backend emits 'event: log' (not default 'message'), so we
@@ -168,27 +169,21 @@ export function LogsPage() {
         fontSize: 12, lineHeight: 1.45,
       }}>
         {filtered.length === 0 && (streamError ? (
+          // #536: two different failures, two different panels: a missing
+          // socket, or a SUBGEN_CONTAINER that names nothing.
           <div style={{ padding: 32, maxWidth: 660, margin: '0 auto' }}>
             <div style={{ color: 'var(--error-500, #ef4444)', fontWeight: 600, fontSize: 'var(--text-md)', marginBottom: 8 }}>
-              Can't reach Docker
+              {streamErrorPanel(streamError).title}
             </div>
             <div style={{ color: 'var(--fg-2)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
-              The Logs viewer streams subgen's container log, which needs Docker
-              socket access — and subarr's container can't reach it, so there's
-              nothing to show here.
-              <br /><br />
-              Give the subarr container the socket: bind-mount{' '}
-              <code style={{ color: 'var(--fg-1)' }}>/var/run/docker.sock</code>{' '}
-              (read-only is fine) into subarr, or point it at a socket-proxy, then
-              reload. Everything else in subarr works without it — only this Logs
-              viewer needs it.
+              {streamErrorPanel(streamError).body}
             </div>
             <div className="mono" style={{
               marginTop: 14, padding: '8px 10px', background: 'var(--bg-1)',
               borderRadius: 'var(--radius-md)', color: 'var(--fg-3)',
               fontSize: 'var(--text-2xs)', wordBreak: 'break-all',
             }}>
-              {String(streamError)}
+              {streamErrorPanel(streamError).detail}
             </div>
           </div>
         ) : (
