@@ -273,6 +273,14 @@ function StepWelcome({ onAutoDetect, detectedCount, autoDetectError, dataPersist
         This setup takes about 4 minutes. You can skip optional integrations and
         configure them later from Settings.
       </p>
+      {/* #535: the one page that says what the next steps ask for, what to have
+          ready (URLs, API keys, the media path) and what "done" looks like. */}
+      <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.55, maxWidth: 540 }}>
+        Not sure what you will need? The{' '}
+        <a href="https://github.com/coaxk/subarr/blob/main/docs/first-run.md" target="_blank" rel="noopener noreferrer"
+           style={{ color: 'var(--violet-400)' }}>first-run guide</a>{' '}
+        lists what each step asks for and where to find it.
+      </p>
       <div style={{
         padding: '14px 16px',
         background: 'var(--bg-2)',
@@ -286,8 +294,8 @@ function StepWelcome({ onAutoDetect, detectedCount, autoDetectError, dataPersist
           <button className="btn" onClick={onAutoDetect}>Detect my stack</button>
         </div>
         <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
-          If your *arr containers run alongside subarr with a docker socket proxy mounted,
-          I can fill in URLs (and optionally API keys) for you. {detectedCount > 0 && (
+          If your *arr containers run alongside subarr and the Docker socket (or a
+          socket proxy) is mounted, I can fill in URLs (and optionally API keys) for you. {detectedCount > 0 && (
             <span style={{ color: 'var(--violet-400)', fontWeight: 600 }}> Detected {detectedCount} service(s) on this host.</span>
           )}
         </span>
@@ -306,9 +314,10 @@ function StepWelcome({ onAutoDetect, detectedCount, autoDetectError, dataPersist
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Auto-detect unavailable</div>
             <div style={{ color: 'var(--fg-2)' }}>{autoDetectError}</div>
             <div style={{ marginTop: 6, color: 'var(--fg-3)' }}>
-              To enable: mount the docker socket (or a tecnativa/docker-socket-proxy)
-              into subarr at <code className="mono">/var/run/docker.sock</code> and
-              restart. See <code className="mono">deploy/templates/tier2-socket-proxy.compose.yaml</code>.
+              To enable: mount the docker socket into subarr at{' '}
+              <code className="mono">/var/run/docker.sock</code> (read-only is fine) and
+              recreate the container, or point <code className="mono">SUBARR_DOCKER_PROXY_URL</code>{' '}
+              at a socket proxy. See <code className="mono">deploy/templates/tier2-socket-proxy.compose.yaml</code>.
               Otherwise, fill the URLs by hand on each step.
             </div>
           </div>
