@@ -7,6 +7,17 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.5] - 2026-09-11
+
+**A mounted Docker socket is enough for auto-detect, and the Logs page tells the truth about why it is empty.**
+
+Three fixes, all from one report (@Jorman on #524). No config changes and no migration.
+
+### Fixed
+- **Onboarding auto-detect ignored a mounted Docker socket (#534).** The Logs page found `/var/run/docker.sock` by itself, but auto-detect only switched on when `SUBARR_DOCKER_PROXY_URL` or `SUBARR_DOCKER_SOCKET_PATH` was set, and its own error text told you to mount the socket. Mounting it now enables both, with no env var. The boot log says which transport discovery is using and why.
+- **The Logs page said "Can't reach Docker" when `SUBGEN_CONTAINER` named a container that does not exist (#536).** A one-letter typo in the name was reported as a socket problem, with instructions to fix a mount that was already fine. The page now says "No container named X" and points at the variable.
+- **The Logs page printed one character per line for a subgen container started with `tty: true` (#537).** Docker delivers a TTY container's log a byte at a time and subarr treated every delivery as a line. Lines are reassembled now, whichever way the container was started.
+
 ## [2.7.4] - 2026-09-11
 
 **subarr now tells you when it cannot reach subgen: as you type the address, and for as long as it stays down.**
