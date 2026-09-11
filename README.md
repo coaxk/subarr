@@ -82,6 +82,8 @@ docker compose up -d
 # Open http://localhost:9922, onboarding wizard auto-detects your stack.
 ```
 
+> **Next fifteen minutes:** [docs/first-run.md](./docs/first-run.md) says what the wizard asks for, what to have ready, and what a finished setup looks like.
+
 > **Two choices that matter, everything else the wizard defaults sensibly:**
 > 1. **Which subgen.** Use `ghcr.io/coaxk/subarr-subgen` for the full feature set (queue + cancel, the Tuning Lab, per-request language overrides, calibrated multi-chunk detection). Stock `mccloud/subgen` also works in compat mode with fewer features. Details in [I already have subgen](#i-already-have-subgen-what-do-i-do) below.
 > 2. **GPU.** If you have an Nvidia GPU, pass it to your subgen container so you can run a larger Whisper model (`large-v3`). This is the single biggest lever on subtitle quality. CPU works, just slower.
