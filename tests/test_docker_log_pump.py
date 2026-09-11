@@ -171,3 +171,72 @@ def test_stream_ending_on_its_own_terminates_the_consumer():
         return await asyncio.wait_for(consume(), timeout=2.0)
 
     assert asyncio.run(go()) == ["line 1", "line 2", "line 3"]
+
+
+# #537: docker-py streams a TTY container's log one BYTE per chunk
+# (`_stream_raw_result` defaults to chunk_size=1); non-TTY containers arrive
+# one multiplexed frame per chunk, which may hold several lines or half of
+# one. The pump reassembles on newlines so both modes yield the same lines.
+
+
+class ChunkStream(FakeStream):
+    """Yields a fixed list of chunks, then blocks until closed."""
+
+    def __init__(self, chunks: list[bytes]):
+        super().__init__()
+        self.chunks = list(chunks)
+
+    def __next__(self):
+        # Scripted chunks are always delivered, even after close(): the
+        # container wrote them before it exited. Only then does close() end
+        # the stream. (Otherwise the test races the pump for the last chunk.)
+        if self.chunks:
+            return self.chunks.pop(0)
+        if self.closed or self._closed_evt.wait(0.05):
+            raise StopIteration
+        return b""
+
+
+def _collect(stream: ChunkStream, n: int) -> list[str]:
+    ops = FakeOps(stream)
+
+    async def go():
+        got = []
+        async for line in ops.stream_subgen_logs(tail=5):
+            got.append(line)
+            if len(got) == n:
+                break
+        return got
+
+    return asyncio.run(asyncio.wait_for(go(), timeout=2.0))
+
+
+def test_tty_byte_per_chunk_stream_yields_whole_lines():
+    raw = b"INFO:root:Subgen v2026.08.1\nINFO:     Uvicorn running\n"
+    stream = ChunkStream([bytes([b]) for b in raw])
+    assert _collect(stream, 2) == ["INFO:root:Subgen v2026.08.1", "INFO:     Uvicorn running"]
+
+
+def test_a_frame_holding_two_lines_yields_two_lines():
+    stream = ChunkStream([b"one\ntwo\n", b"three\n"])
+    assert _collect(stream, 3) == ["one", "two", "three"]
+
+
+def test_a_line_split_across_frames_is_joined():
+    stream = ChunkStream([b"hel", b"lo wor", b"ld\r\n", b"next\n"])
+    assert _collect(stream, 2) == ["hello world", "next"]
+
+
+def test_trailing_partial_line_is_delivered_when_the_stream_ends():
+    stream = ChunkStream([b"complete\n", b"no newline at end"])
+    ops = FakeOps(stream)
+
+    async def go():
+        got = []
+        async for line in ops.stream_subgen_logs(tail=5):
+            got.append(line)
+            if len(got) == 1:
+                stream.close()  # container exits mid-line
+        return got
+
+    assert asyncio.run(asyncio.wait_for(go(), timeout=2.0)) == ["complete", "no newline at end"]
