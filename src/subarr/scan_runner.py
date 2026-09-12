@@ -70,9 +70,23 @@ def classify_batch_outcome(status_code: int, body) -> "tuple[str, str]":
     if status_code == 200 and walked > 0 and queued == 0 and already_q > 0:
         return PATH_STATUS_OK, ""  # already in subgen's queue — it'll process
     if status_code in (401, 403):
-        return PATH_STATUS_ERROR, (
+        # #540: subgen usually SAYS why (its containment guard answers 403 with
+        # {"error": "directory is outside the allowed media root"}). Show that,
+        # and name the variable that fixes it, instead of guessing at auth.
+        reason = body.get("error") if isinstance(body, dict) else None
+        if isinstance(reason, str) and reason.strip():
+            if "allowed media root" in reason:
+                return (
+                    PATH_STATUS_ERROR,
+                    f"subgen refused the path ({status_code}): {reason}. subgen only accepts paths under "
+                    "SUBGEN_PATH_ALLOWLIST (default /media). Set it on the subgen container to the "
+                    "root(s) where your media is mounted there, e.g. /data, and recreate subgen.",
+                )
+            return PATH_STATUS_ERROR, f"subgen rejected POST /batch ({status_code}): {reason}"
+        return (
+            PATH_STATUS_ERROR,
             f"subgen rejected POST /batch ({status_code}) — check subgen auth / API key, "
-            f"or a reverse proxy in front of subgen blocking write requests"
+            "or a reverse proxy in front of subgen blocking write requests",
         )
     if status_code == 404 or (status_code == 200 and walked == 0):
         return PATH_STATUS_EMPTY, ""  # subgen walked and found nothing = file gone

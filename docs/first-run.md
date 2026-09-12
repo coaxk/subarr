@@ -32,6 +32,13 @@ mounts the same host directory at the same container path in every app.
 
 **Mount media `:rw`.** Everything else works `:ro`, but nothing lands.
 
+**Tell subgen where media lives.** `ghcr.io/coaxk/subarr-subgen` only accepts
+paths under `SUBGEN_PATH_ALLOWLIST` (default `/media`), a guard against its
+unauthenticated endpoints walking the whole container. If your media is
+mounted anywhere else inside the subgen container, set that variable on the
+**subgen** service, colon-separated for several roots: `SUBGEN_PATH_ALLOWLIST=/data`.
+Otherwise the first transcription fails with 403 "outside the allowed media root".
+
 ## 2. Auto-detect: what it needs and what it cannot do
 
 The Welcome step has a **Detect my stack** button. It asks Docker which
@@ -122,6 +129,7 @@ auto-queue are for later, and nothing forces them.
 | Logs page: "No container named X" | `SUBGEN_CONTAINER` does not match a container | `docker ps --format '{{.Names}}'` and copy the name exactly, or unset the variable |
 | subgen tuning: "not allowed to read /path" | the compose file is root-only and subarr runs as `PUID` | `chmod o+r` the file, or `chown` it to `PUID` |
 | Queue: job finishes but no `.srt` appears | media mounted `:ro`, or paths differ between subarr and subgen | `docker exec subarr touch /media/library/.w && rm` the same; compare `SUBGEN_MEDIA_PREFIX` |
+| Queue: "subgen refused the path (403): directory is outside the allowed media root" | subgen's `SUBGEN_PATH_ALLOWLIST` does not cover your media mount | set it on the subgen container to the mount root, e.g. `/data`, and recreate subgen |
 | Every tile red after a reboot | the Docker network came up after subarr | `docker restart subarr` |
 
 When none of these fit, the Logs page (subarr's own log, no socket needed)

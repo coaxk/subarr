@@ -137,6 +137,8 @@ The most-asked question. Quick answer.
 | Vanilla `mccloud/subgen` | Keep it. Add subarr next to it. Subarr detects vanilla and runs in compat mode. Coverage, provenance, scheduling, audio-language review all work. You miss calibrated multi-chunk detection and queue cancel, both require our subgen patches. |
 | `mccloud/subgen` and you want everything | Swap to `ghcr.io/coaxk/subarr-subgen`. Same upstream image plus 49 small auditable patches. Pull, change one line in your compose, restart. No data loss, no config rewrite. |
 | No subgen yet | Start with `ghcr.io/coaxk/subarr-subgen`. Everything works on day one. |
+
+> **One variable on the subgen side.** `ghcr.io/coaxk/subarr-subgen` refuses any path outside `SUBGEN_PATH_ALLOWLIST` (default `/media`). If your media is mounted at `/data` in the subgen container, set `SUBGEN_PATH_ALLOWLIST=/data` there, or every job comes back 403 "outside the allowed media root".
 | You run Bazarr only | Subarr adds a coordination layer beside Bazarr. Bazarr keeps doing what it does. Subarr surfaces what is actually missing, schedules the work, and writes results back. |
 
 You do not need to decide at install. Subarr re-probes subgen every 30 seconds and adopts new capabilities the moment you upgrade.
@@ -374,6 +376,7 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_VAD_DIR` / `SUBARR_LID_DIR` | beside DB | Override VAD / LID model directories. |
 | `NVIDIA_SMI_PATH` | — | Path to `nvidia-smi` for the GPU card. |
 | `SUBGEN_CONTAINER` / `SUBGEN_COMPOSE_PATH` | `subgen` / path | subgen container name + compose path for guided setup. |
+| `SUBGEN_PATH_ALLOWLIST` (on the **subgen** container) | `/media` | subarr-subgen only accepts paths under these colon-separated roots (`/batch`, `/asr`, `/detect_language_robust`), because they answer unauthenticated on the LAN. Set it to wherever your media is mounted inside subgen, e.g. `/data`, or every transcription is refused with 403. |
 | `SUBARR_DOCKER_PROXY_URL` / `SUBARR_DOCKER_SOCKET_PATH` | — | Docker access for guided setup's auto-detect. Neither is needed when `/var/run/docker.sock` is mounted into the container; set the proxy URL to use a socket proxy instead. |
 | `SUBARR_TELEMETRY_ENDPOINT` | `https://telemetry.subarr.com/v1/ping` | Anonymous telemetry receiver (see [Telemetry](#telemetry)). Set to empty to opt out. |
 
