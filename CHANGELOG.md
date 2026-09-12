@@ -7,6 +7,19 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.6] - 2026-09-12
+
+**A first-run guide, and the Queue page repeats what subgen said instead of guessing.**
+
+One document and two fixes, all from the same week of setup reports. No config changes and no migration.
+
+### Added
+- **A first-run guide (#535).** `docs/first-run.md`, linked from the README right after `docker compose up` and from the wizard's Welcome step: what to have ready and where each app shows its API key, what auto-detect needs and cannot do, the thirteen steps with the optional ones marked, what a finished setup looks like, and a table of red states with the command that settles each. The Welcome step's auto-detect note no longer says a socket proxy is required; a mounted socket has been enough since 2.7.5.
+
+### Fixed
+- **The Queue page blamed auth or a reverse proxy when subgen had already said why it refused a job (#540).** subarr-subgen only accepts paths under `SUBGEN_PATH_ALLOWLIST` (default `/media`) and answers a 403 that names the reason. subarr discarded that body. It now shows subgen's message and, for the allowlist case, names the variable and what to set. That variable was documented nowhere a user would look (#541); it is now in the README, the first-run guide and the subgen README.
+- **The Logs page showed raw colour codes** from subgen's access log. They are stripped.
+
 ## [2.7.5] - 2026-09-11
 
 **A mounted Docker socket is enough for auto-detect, and the Logs page tells the truth about why it is empty.**
