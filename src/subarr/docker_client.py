@@ -26,6 +26,15 @@ log = logging.getLogger(__name__)
 #   INFO:root:[ Cette nuit-là - S01E02 - TBA WEBDL-72.. ]  78% | 2040/2610 s [06:43<01:52,  5.06s/s] | Jobs: 1 processing, 0 queued
 # Filename in brackets is left-truncated to ~38 chars + ".." when long.
 # Capture: filename_prefix, pct, current_sec, total_sec, elapsed, eta, speed.
+# #540: uvicorn colours its access log; the Logs page showed the escapes
+# verbatim. CSI sequences (ESC [ ... final byte) and lone ESC + one char.
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b.")
+
+
+def strip_ansi(line: str) -> str:
+    return _ANSI_RE.sub("", line)
+
+
 _PROGRESS_RE = re.compile(
     r"\[\s*(?P<name>.+?)\s*\.{0,2}\s*\]\s+"
     r"(?P<pct>\d+)%\s+\|\s+"
@@ -268,12 +277,12 @@ class DockerOps:
                         raw, buf = buf[:nl], buf[nl + 1 :]
                         if stop.is_set():
                             break
-                        _post(raw.decode("utf-8", errors="replace").rstrip("\r"))
+                        _post(strip_ansi(raw.decode("utf-8", errors="replace").rstrip("\r")))
             except Exception as e:  # noqa: BLE001 - a closed socket surfaces as a variety of errors; all mean "done"
                 log.debug("log pump exited: %s", e)
             finally:
                 if buf and not stop.is_set():
-                    _post(buf.decode("utf-8", errors="replace").rstrip("\r"))
+                    _post(strip_ansi(buf.decode("utf-8", errors="replace").rstrip("\r")))
                 _post(None)
 
         worker = asyncio.create_task(asyncio.to_thread(_pump))

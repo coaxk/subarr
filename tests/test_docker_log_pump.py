@@ -240,3 +240,11 @@ def test_trailing_partial_line_is_delivered_when_the_stream_ends():
         return got
 
     assert asyncio.run(asyncio.wait_for(go(), timeout=2.0)) == ["complete", "no newline at end"]
+
+
+# #540: uvicorn colours its access log; a TTY-less container still carries the
+# escapes, and the Logs page showed `^[[32mINFO^[[0m` verbatim (#524).
+def test_ansi_escapes_are_stripped_from_lines():
+    raw = b'\x1b[32mINFO\x1b[0m:     1.2.3.4:1 - "\x1b[1mGET /queue HTTP/1.1\x1b[0m" \x1b[32m200 OK\x1b[0m\n'
+    stream = ChunkStream([raw])
+    assert _collect(stream, 1) == ['INFO:     1.2.3.4:1 - "GET /queue HTTP/1.1" 200 OK']
