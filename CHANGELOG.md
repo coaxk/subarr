@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Changed
+- **Whispered dialogue is no longer dropped (#543), with subarr-subgen `2026.08.1-r10`.** Generated subtitles were often missing where an actor whispers. The cause was subgen's voice-detection pre-filter, which cut quiet speech before Whisper heard it, and it also dropped some normal-volume lines under music. r10 lowers its threshold from 0.5 to 0.35. Measured on a 36-clip test corpus against the library's own subtitles: recall up from 72.6% to 74.2%, with no rise in captions where no one speaks. If you set `SUBGEN_KWARGS` yourself, your value wins; change `vad_parameters.threshold` there to get this. The Tuning Lab's help text now quotes the new shipped value.
+
 ## [2.7.6] - 2026-09-12
 
 **A first-run guide, and the Queue page repeats what subgen said instead of guessing.**

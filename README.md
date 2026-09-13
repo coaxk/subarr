@@ -539,7 +539,7 @@ Three deployment tiers (full templates in [`deploy/templates/`](deploy/templates
 
 Subarr drives subgen through 49 small patches over upstream McCloudS/subgen. Each is independent, idempotent on reapply, required for one specific subarr orchestration behaviour. Living patch stack at [`coaxk/subarr-subgen`](https://github.com/coaxk/subarr-subgen).
 
-The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tags are `<upstream version>-r<patch revision>`: `2026.08.1-r9` is current (upstream 2026.08.1; Blackwell/RTX 50xx CUDA 12.8, the verified "strongpad" segmentation as the default, tuned Whisper kwargs, a runtime `/config` endpoint that powers guided setup's live-apply, a GPU device-guard entrypoint, and from r9 the advertised transcribe/translate mode and output language that 2.7.1's gate reads), with `latest` and per-revision tags. subarr checks the revision, not just the upstream version, when it tells you an update is available.
+The maintained image is `ghcr.io/coaxk/subarr-subgen:<tag>`. Tags are `<upstream version>-r<patch revision>`: `2026.08.1-r10` is current (upstream 2026.08.1; Blackwell/RTX 50xx CUDA 12.8, the verified "strongpad" segmentation as the default, tuned Whisper kwargs, a runtime `/config` endpoint that powers guided setup's live-apply, a GPU device-guard entrypoint, from r9 the advertised transcribe/translate mode and output language that 2.7.1's gate reads, and from r10 a voice-detection threshold of 0.35 so whispered and under-score dialogue is no longer dropped before Whisper hears it), with `latest` and per-revision tags. subarr checks the revision, not just the upstream version, when it tells you an update is available.
 
 You do not need our patched image. See the "I already have subgen" table at the top.
 

@@ -77,7 +77,7 @@ const SETTING_GROUPS = [
   ]},
   { label: 'Speech detection, timestamps & language', rows: [
     ['vad_filter', 'Boolean · shipped true', 'Faster-Whisper Silero preprocessing removes detected non-speech before decoding. It is not Stable-TS vad masking. Higher impact: it can reduce hallucinations but clip soft speech.', 'Safe to tune'],
-    ['vad_parameters', 'Nested object · see below', 'Faster-Whisper Silero settings. The shipped image uses threshold .5, min speech 250 ms, min silence 500 ms, and speech pad 600 ms.', 'Advanced'],
+    ['vad_parameters', 'Nested object · see below', 'Faster-Whisper Silero settings. The shipped image uses threshold .35 (r10 and later; .5 before), min speech 250 ms, min silence 500 ms, and speech pad 600 ms.', 'Advanced'],
     ['without_timestamps', 'Upstream default false · Boolean', 'Disables timestamp tokens. Usually unsafe here: Stable-TS quality/timing features and word-level output depend on timestamps.', 'Usually leave alone'],
     ['max_initial_timestamp', 'Upstream default 1.0 s', 'Caps the first timestamp. Advanced segmentation control; normally leave alone.', 'Advanced'],
     ['word_timestamps', 'Upstream default false · Boolean', 'Requests word timestamps rather than only segment timestamps. Required by hallucination_silence_threshold and punctuation attachment controls.', 'Situational'],
@@ -101,7 +101,7 @@ const SETTING_GROUPS = [
 ];
 
 const VAD_ROWS = [
-  ['threshold', '0–1 probability · upstream .5', 'Higher makes speech harder to classify.'],
+  ['threshold', '0–1 probability · upstream .5 · shipped .35', 'Higher makes speech harder to classify. Too high drops whispered and under-score dialogue before Whisper hears it; .35 was the best balance measured (subarr #543).'],
   ['neg_threshold', 'None or 0–1 · derived about threshold - .15', 'Hysteresis for ending speech; None uses the implementation-derived value.'],
   ['min_speech_duration_ms', 'Upstream may be 0 · shipped 250', 'Discards speech chunks shorter than this.'],
   ['max_speech_duration_s', 'Upstream infinity', 'Splits very long speech regions.'],
