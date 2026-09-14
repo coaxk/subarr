@@ -13,6 +13,7 @@ import { LibrariesEditor } from './libraries-editor.jsx';
 import { SubgenSetupFlow } from './subgen-setup.jsx';
 import { readyToTest, continueLabelFor } from './onboarding-test-policy.mjs';
 
+import { initialRootsText } from './probe-roots.mjs';
 const { useState, useEffect, useCallback } = React;
 
 // Step IDs MUST match the backend's STEP_* constants (subarr/onboarding.py).
@@ -77,6 +78,11 @@ const Api = {
       body: JSON.stringify({ media_root: mediaRoot }),
     });
     return r.ok ? r.json() : { ok: false, error: `HTTP ${r.status}` };
+  },
+  async probeRootSuggestions() {
+    // #546: real folder names under the library root, instead of `TV, Movies`.
+    const r = await fetch('/api/onboarding/probe-root-suggestions', { credentials: 'same-origin' });
+    return r.ok ? r.json() : { roots: [] };
   },
   async firstWalk() {
     const r = await fetch('/api/onboarding/first-walk', { method: 'POST' });
@@ -775,16 +781,25 @@ function StepSpeech() {
 }
 
 
-function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
+export function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
   // #146: keep probe_roots in component state because the parent stores it
   // as an array; we render it as a comma-separated string for editing and
   // parse on every keystroke. Previously the onChange was a TODO no-op
   // so the user literally couldn't edit this field.
-  const initial = (progress.probe_roots && progress.probe_roots.length)
-    ? progress.probe_roots.join(', ')
-    : 'TV, Movies';
-  const [rootsText, setRootsText] = React.useState(initial);
+  // #546: never a hard-coded `TV, Movies`. Keep what was chosen; otherwise
+  // offer the folders that actually exist under the library root.
+  const [rootsText, setRootsText] = React.useState(initialRootsText(progress.probe_roots, []));
+  const touched = React.useRef(false);
+  React.useEffect(() => {
+    if (progress.probe_roots && progress.probe_roots.length) return undefined;
+    let live = true;
+    Api.probeRootSuggestions()
+      .then((s) => { if (live && !touched.current) setRootsText(initialRootsText([], s && s.roots)); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
   const handleRootsChange = (v) => {
+    touched.current = true;
     setRootsText(v);
     const parsed = v.split(',').map((s) => s.trim()).filter(Boolean);
     setField('probe_roots', parsed);
@@ -807,7 +822,7 @@ function StepWalk({ progress, setField, walkResult, onStart, isStarting }) {
         <TextInput
           value={rootsText}
           onChange={handleRootsChange}
-          placeholder="TV, Movies"
+          placeholder="folders under your library root"
         />
       </FormRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

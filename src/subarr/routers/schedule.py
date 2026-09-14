@@ -13,6 +13,7 @@ from dataclasses import fields as _dc_fields
 
 from ..auto_queue import evaluate
 from ..coverage_engine import CoverageItem, build_coverage
+from ..probe_walker import check_probe_root
 from ..schedule_store import AutoQueueRules
 
 # Constructor fields of CoverageItem — used to rebuild items from the
@@ -54,8 +55,18 @@ class RulesUpdate(BaseModel):
 @router.get("/schedule")
 async def get_schedule(request: Request) -> dict[str, Any]:
     store = request.app.state.schedule
+    schedules = []
+    for s in store.list_schedules():
+        d = s.to_dict()
+        if d.get("name") == "coverage_walk":
+            # #546: say which saved probe roots do not resolve. A missing root
+            # fails every scheduled walk, and nothing else on screen says so.
+            d["probe_roots_check"] = await asyncio.to_thread(
+                lambda roots=list(d.get("probe_roots") or []): [check_probe_root(r) for r in roots]
+            )
+        schedules.append(d)
     return {
-        "schedules": [s.to_dict() for s in store.list_schedules()],
+        "schedules": schedules,
         "rules": store.get_rules().to_dict(),
     }
 
@@ -63,6 +74,21 @@ async def get_schedule(request: Request) -> dict[str, Any]:
 @router.patch("/schedule/{name}")
 async def update_schedule(name: str, req: ScheduleUpdate, request: Request) -> dict[str, Any]:
     store = request.app.state.schedule
+    if req.probe_roots is not None:
+        # #546: refuse to save a probe root that does not exist, and name it.
+        roots = [p.strip() for p in req.probe_roots.split(",") if p.strip()]
+        checks = await asyncio.to_thread(lambda: [check_probe_root(r) for r in roots])
+        bad = [c for c in checks if not c["ok"]]
+        if bad:
+            raise HTTPException(
+                422,
+                detail={
+                    "error": "probe_roots_not_found",
+                    "roots": bad,
+                    "message": "; ".join(c["reason"] for c in bad)
+                    + ". Probe roots are folders under the library root (or @library/...).",
+                },
+            )
     try:
         updated = store.update_schedule(
             name,

@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from ..error_detail import safe_error
+from ..probe_walker import check_probe_root, suggest_probe_roots
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -717,14 +718,36 @@ async def first_walk(request: Request) -> dict[str, Any]:
     return await _kick_first_walk(request.app.state)
 
 
+@router.get("/onboarding/probe-root-suggestions")
+async def probe_root_suggestions() -> dict[str, Any]:
+    """#546: the folders that exist under the library root, so the First walk
+    step offers real names instead of `TV, Movies`."""
+    import asyncio
+
+    return {"roots": await asyncio.to_thread(suggest_probe_roots)}
+
+
 async def _kick_first_walk(app_state) -> dict[str, Any]:
     """Resolve probe_roots, persist them onto the coverage_walk schedule, and
     start the walks. Shared by the /first-walk endpoint and the #202 auto-kick on
     setup completion."""
     walker = app_state.probe_walker
     state = app_state.onboarding.get()
-    roots_raw = state.progress.get("probe_roots") or ["TV", "Movies"]
-    roots = [r.strip().strip("/") for r in roots_raw if r and r.strip()]
+    # #546: no hard-coded `TV, Movies`. With nothing chosen, offer the folders
+    # that exist; either way persist and walk only roots that resolve.
+    roots_raw = state.progress.get("probe_roots") or suggest_probe_roots()
+    cleaned = [
+        r.strip() if r.strip().startswith("@") else r.strip().strip("/") for r in roots_raw if r and r.strip()
+    ]
+    roots: list[str] = []
+    skipped_roots: list[dict[str, str]] = []
+    for r in cleaned:
+        c = check_probe_root(r)
+        if c["ok"]:
+            roots.append(r)
+        else:
+            skipped_roots.append({"root": r, "reason": c["reason"]})
+            log.warning("first-walk: skipping probe root %r: %s", r, c["reason"])
 
     # 1. Persist roots onto the schedule so ongoing walks ffprobe too.
     persist_error: str | None = None
@@ -750,6 +773,7 @@ async def _kick_first_walk(app_state) -> dict[str, Any]:
     return {
         "walks": walks,
         "schedule_probe_roots": roots,
+        "skipped_roots": skipped_roots,
         "schedule_persisted": persist_error is None,
         **({"schedule_persist_error": persist_error} if persist_error else {}),
     }
