@@ -39,6 +39,15 @@ SOURCE_SUBGENSCAN = "subgenscan"
 SOURCE_BAZARR_VIA_SUBGEN = "bazarr-via-subgen"
 SOURCE_BAZARR_EXTERNAL = "bazarr-external"
 
+# #545: what a completed job produced (subs_generated.outcome, migration 032).
+OUTCOME_WRITTEN = "written"
+OUTCOME_NO_OUTPUT = "no_output"
+
+# #545: how long auto-queue and backfill hold back a file whose last attempt
+# produced no subtitle. A file with no speech will not grow some by waiting, but
+# a file REPLACED at the same path might; a manual queue always bypasses this.
+NO_OUTPUT_COOLDOWN_S = 7 * 86400
+
 
 @dataclass
 class LedgerEntry:
@@ -53,6 +62,7 @@ class LedgerEntry:
     queued_at: float
     completed_at: float | None
     bazarr_scan_triggered_at: float | None
+    outcome: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +77,7 @@ class LedgerEntry:
             "queued_at": self.queued_at,
             "completed_at": self.completed_at,
             "bazarr_scan_triggered_at": self.bazarr_scan_triggered_at,
+            "outcome": self.outcome,
         }
 
 
@@ -140,20 +151,20 @@ class ProvenanceStore:
             rows = self._conn.execute(
                 "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
                 "       scan_id, source, subgen_version, queued_at, completed_at, "
-                "       bazarr_scan_triggered_at "
+                "       bazarr_scan_triggered_at, outcome "
                 "FROM subs_generated WHERE completed_at IS NULL"
             ).fetchall()
         return [LedgerEntry(*r) for r in rows]
 
-    def mark_completed(self, ledger_id: int, when: float | None = None) -> None:
+    def mark_completed(self, ledger_id: int, when: float | None = None, outcome: str | None = None) -> None:
         ts = when if when is not None else time.time()
         with self._lock:
             # #287: stamp the FIRST completion only — a later re-poll of the
             # same path must not overwrite the original completed_at (mirrors
             # complete_by_canonical's `completed_at IS NULL` idempotency).
             self._conn.execute(
-                "UPDATE subs_generated SET completed_at = ? WHERE id = ? AND completed_at IS NULL",
-                (ts, ledger_id),
+                "UPDATE subs_generated SET completed_at = ?, outcome = ? WHERE id = ? AND completed_at IS NULL",
+                (ts, outcome, ledger_id),
             )
 
     def mark_bazarr_triggered(self, ledger_id: int, when: float | None = None) -> None:
@@ -169,7 +180,7 @@ class ProvenanceStore:
             rows = self._conn.execute(
                 "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
                 "       scan_id, source, subgen_version, queued_at, completed_at, "
-                "       bazarr_scan_triggered_at "
+                "       bazarr_scan_triggered_at, outcome "
                 "FROM subs_generated WHERE canonical_path = ? "
                 "ORDER BY queued_at DESC LIMIT ?",
                 (canonical_path, limit),
@@ -181,7 +192,7 @@ class ProvenanceStore:
             rows = self._conn.execute(
                 "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
                 "       scan_id, source, subgen_version, queued_at, completed_at, "
-                "       bazarr_scan_triggered_at "
+                "       bazarr_scan_triggered_at, outcome "
                 "FROM subs_generated ORDER BY queued_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -200,6 +211,24 @@ class ProvenanceStore:
             ).fetchall()
         return {r[0] for r in rows}
 
+    def no_output_paths_since(self, since_epoch: float) -> set[str]:
+        """#545: canonical paths whose MOST RECENT completed job produced no
+        subtitle, completed on or after since_epoch. A later successful run of
+        the same path supersedes an earlier no-output one, so a file that was
+        fixed or replaced is not held back by its history."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.canonical_path FROM subs_generated s "
+                "WHERE s.outcome = 'no_output' "
+                "  AND s.completed_at IS NOT NULL AND s.completed_at >= ? "
+                "  AND s.completed_at = ("
+                "      SELECT MAX(t.completed_at) FROM subs_generated t "
+                "      WHERE t.canonical_path = s.canonical_path AND t.completed_at IS NOT NULL"
+                "  )",
+                (since_epoch,),
+            ).fetchall()
+        return {r[0] for r in rows}
+
     def completed_without_bazarr(self, max_age_s: int = 86400) -> list[LedgerEntry]:
         """Entries that completed transcribe but never fired Bazarr's
         scan-disk task. Retry fodder for the completion watcher.
@@ -213,11 +242,12 @@ class ProvenanceStore:
             rows = self._conn.execute(
                 "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
                 "       scan_id, source, subgen_version, queued_at, completed_at, "
-                "       bazarr_scan_triggered_at "
+                "       bazarr_scan_triggered_at, outcome "
                 "FROM subs_generated "
                 "WHERE completed_at IS NOT NULL "
                 "  AND bazarr_scan_triggered_at IS NULL "
                 "  AND series_id IS NOT NULL "
+                "  AND (outcome IS NULL OR outcome != 'no_output') "
                 "  AND completed_at >= ? "
                 "ORDER BY completed_at DESC",
                 (cutoff,),
