@@ -282,9 +282,9 @@ def test_queue_history_is_cached_within_ttl(app_with_stub, monkeypatch):
     calls = {"n": 0}
     orig = q._build_history_view
 
-    def counting(scans, live_paths, completed_paths=None):
+    def counting(*args, **kwargs):
         calls["n"] += 1
-        return orig(scans, live_paths, completed_paths)
+        return orig(*args, **kwargs)
 
     monkeypatch.setattr(q, "_build_history_view", counting)
     assert app_with_stub.get("/api/queue").status_code == 200

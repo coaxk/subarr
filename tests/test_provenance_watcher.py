@@ -163,6 +163,13 @@ def _subgen_empty_queue(req: httpx.Request) -> httpx.Response:
     sonarr_handler=_sonarr_resolver_handler, bazarr_handler=_bazarr_history_handler
 )
 def test_watcher_marks_completed_and_triggers_bazarr(app_with_stub, planted_episode_file):
+    # #545: a completed transcription leaves a subtitle next to the video, and the
+    # watcher now requires one before it records success. Plant what subgen writes.
+    from subarr.config import settings
+
+    srt = settings.media_root / "TV" / "Foreign Drama" / "Season 1" / "Foreign.Drama.S01E03.en.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n", encoding="utf-8")
+
     # Seed the ledger directly (the feeder writes provenance at drain time now;
     # this test exercises the WATCHER, so plant the in-flight row it polls).
     app_with_stub.app.state.provenance.record(

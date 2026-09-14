@@ -56,7 +56,7 @@ def select_backfill_batch(gaps, queue_depth: int, config: BackfillConfig) -> lis
     return list(gaps[:n])
 
 
-def eligible_backfill_items(items, rules, in_flight_paths=None):
+def eligible_backfill_items(items, rules, in_flight_paths=None, suppressed_paths=None):
     """The full backfill backlog: every VERIFIED gap that auto-queue *would*
     queue — ignoring the per-run cap, the dashboard-mode gate, and the
     settle-window (an explicit backfill is a deliberate "close the backlog"
@@ -76,5 +76,7 @@ def eligible_backfill_items(items, rules, in_flight_paths=None):
         max_per_run=10_000_000,
         settle_minutes=0,
     )
-    decisions = evaluate(items, eval_rules, in_flight_paths=in_flight_paths)
+    decisions = evaluate(
+        items, eval_rules, in_flight_paths=in_flight_paths, suppressed_paths=suppressed_paths
+    )
     return [d.item for d in decisions if d.action == "queue"]
