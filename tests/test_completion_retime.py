@@ -98,7 +98,8 @@ def test_retime_failure_never_raises(tmp_path, monkeypatch):
 async def test_complete_entry_retimes_before_aftercare_and_upload(monkeypatch):
     w = CompletionWatcher.__new__(CompletionWatcher)
     calls: list[str] = []
-    w._provenance = types.SimpleNamespace(mark_completed=lambda i: calls.append("mark"))
+    # #545: completion now records the outcome too, so the fake takes it.
+    w._provenance = types.SimpleNamespace(mark_completed=lambda i, **kw: calls.append("mark"))
     monkeypatch.setattr(w, "_run_retime", lambda e: calls.append("retime"))
     monkeypatch.setattr(w, "_run_aftercare", lambda e: calls.append("aftercare"))
 

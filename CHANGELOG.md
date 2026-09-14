@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **A file with no speech no longer loops forever through Auto Feed (#545, reported by @AztecGuyGDL).** On an episode with no dialogue, such as a silent cartoon, subgen's voice detection removes all of the audio and no subtitle is written. subarr still marked the job complete the moment it left subgen's queue, so the Queue said "transcribed — subtitle written", Coverage kept showing the gap, and every walk queued the same file again. subarr now checks that a subtitle actually exists. If none does, the job is recorded as producing no subtitle, the Queue lists it under Issues as "no subtitle", nothing is sent to Bazarr or Plex, and auto-queue and backfill leave that file alone for 7 days. Queueing it by hand still works. Jobs are only judged after two minutes, so a file that has just been handed to subgen is never mistaken for one that failed.
+
 ### Changed
 - **Whispered dialogue is no longer dropped (#543), with subarr-subgen `2026.08.1-r10`.** Generated subtitles were often missing where an actor whispers. The cause was subgen's voice-detection pre-filter, which cut quiet speech before Whisper heard it, and it also dropped some normal-volume lines under music. r10 lowers its threshold from 0.5 to 0.35. Measured on a 36-clip test corpus against the library's own subtitles: recall up from 72.6% to 74.2%, with no rise in captions where no one speaks. If you set `SUBGEN_KWARGS` yourself, your value wins; change `vad_parameters.threshold` there to get this. The Tuning Lab's help text now quotes the new shipped value.
 

@@ -60,6 +60,7 @@ def evaluate(
     rules: AutoQueueRules,
     in_flight_paths: set[str] | None = None,
     now: float | None = None,
+    suppressed_paths: set[str] | None = None,
 ) -> list[Decision]:
     """Apply rules to a list of coverage items.
 
@@ -82,6 +83,8 @@ def evaluate(
     """
     decisions: list[Decision] = []
     in_flight = in_flight_paths or set()
+    # #545: files whose most recent attempt produced no subtitle.
+    suppressed = suppressed_paths or set()
     now = now if now is not None else time.time()
 
     if rules.mode == MODE_DASHBOARD:
@@ -100,6 +103,16 @@ def evaluate(
         if _is_in_flight(item, in_flight):
             decisions.append(
                 Decision(item, "skip", "already in flight (scan submitted, awaiting subgen completion)")
+            )
+            continue
+        if _is_in_flight(item, suppressed):
+            decisions.append(
+                Decision(
+                    item,
+                    "skip",
+                    "last attempt produced no subtitle (likely no speech in the audio); "
+                    "held back for a cooldown, queue by hand to retry",
+                )
             )
             continue
         # Probe-gate: never auto-queue a row subarr hasn't verified by

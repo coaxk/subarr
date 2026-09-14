@@ -31,7 +31,7 @@ from .arr_resolve import resolve_episode_target
 from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
-from .provenance import SOURCE_SUBGENSCAN, ProvenanceStore
+from .provenance import NO_OUTPUT_COOLDOWN_S, ProvenanceStore, SOURCE_SUBGENSCAN
 from .scan_runner import ScanRunner
 from .scan_store import ScanStore
 from .schedule_store import (
@@ -405,7 +405,10 @@ class Scheduler:
         # what's already waiting in the feeder.
         if self._pending_queue is not None:
             in_flight |= self._pending_queue.active_paths()
-        decisions = evaluate(report.items, rules, in_flight_paths=in_flight)
+        # #545: hold back files whose most recent attempt produced no subtitle,
+        # or a file with no speech is re-queued by every walk forever.
+        suppressed = self._provenance.no_output_paths_since(time.time() - NO_OUTPUT_COOLDOWN_S)
+        decisions = evaluate(report.items, rules, in_flight_paths=in_flight, suppressed_paths=suppressed)
         queue_decisions = [d for d in decisions if d.action == "queue"]
 
         # manual_confirm: stash the queue decisions for user review;

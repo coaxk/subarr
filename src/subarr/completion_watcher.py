@@ -35,11 +35,17 @@ from .integrations import IntegrationError
 from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
-from .provenance import ProvenanceStore
+from .provenance import NO_OUTPUT_COOLDOWN_S, OUTCOME_NO_OUTPUT, OUTCOME_WRITTEN, ProvenanceStore
 from .subgen_client import SubgenClient, SubgenUnavailable
 from .subtitle_retime import retime_srt
 
 log = logging.getLogger(__name__)
+
+# #545: a job whose path has left subgen's queue but has no subtitle sidecar is
+# only judged NO OUTPUT once it is at least this old. Between the ledger row being
+# written and subgen accepting /batch, the path is in neither queue; judging it
+# then would hold back a file that is about to transcribe normally.
+NO_OUTPUT_MIN_AGE_S = 120
 
 
 def choose_srt_sidecar(stem: str, names: list[str]) -> str | None:
@@ -323,9 +329,50 @@ class CompletionWatcher:
             subgen_path = canonical_to_subgen_batch(entry.canonical_path)
             if subgen_path in in_flight:
                 continue
-            await self.complete_entry(entry)
+            # #545: left the queue is not the same as wrote a subtitle.
+            verdict = self._output_verdict(entry)
+            if verdict == "wait":
+                continue
+            if verdict == OUTCOME_NO_OUTPUT:
+                self._record_no_output(entry)
+                continue
+            await self.complete_entry(entry, outcome=verdict)
 
-    async def complete_entry(self, entry) -> None:
+    def _output_verdict(self, entry) -> str | None:
+        """#545: what a job that has left subgen's queue produced.
+
+        Returns OUTCOME_WRITTEN when a subtitle sidecar exists, OUTCOME_NO_OUTPUT
+        when none does and the job is old enough to judge, "wait" when it is
+        too young, and None when the path is not a single file (a season-folder
+        job, or a file since removed) so the existing completion runs unjudged.
+        Existence only, never mtimes: NAS clock skew would make a real
+        subtitle look stale and hold back a working file."""
+        try:
+            full = canonical_to_fs(entry.canonical_path)
+            if not full.is_file():
+                return None
+        except (OSError, PathOutsideRootError):
+            return None
+        if self._find_srt_sidecar(entry.canonical_path):
+            return OUTCOME_WRITTEN
+        if time.time() - float(entry.queued_at) < NO_OUTPUT_MIN_AGE_S:
+            return "wait"
+        return OUTCOME_NO_OUTPUT
+
+    def _record_no_output(self, entry) -> None:
+        """#545: close the ledger row as NO OUTPUT. Nothing is written back:
+        there is no subtitle to upload, retime, judge or refresh Plex for."""
+        self._provenance.mark_completed(entry.id, outcome=OUTCOME_NO_OUTPUT)
+        log.warning(
+            "completion: %s left subgen's queue with no subtitle written (no speech in the audio, "
+            "or subgen failed on it); recorded as no output, auto-queue holds it back for %d days "
+            "(ledger #%d)",
+            entry.canonical_path,
+            NO_OUTPUT_COOLDOWN_S // 86400,
+            entry.id,
+        )
+
+    async def complete_entry(self, entry, outcome: str | None = None) -> None:
         """Run the full completion flow for one ledger entry: mark it
         completed, write the .srt back to Bazarr (direct upload, falling
         back to a scan-disk trigger), and fire a Plex partial-scan.
@@ -336,7 +383,7 @@ class CompletionWatcher:
         second call merely re-stamps completed_at and re-fires harmless
         best-effort write-backs.
         """
-        self._provenance.mark_completed(entry.id)
+        self._provenance.mark_completed(entry.id, outcome=outcome)
         self._run_retime(entry)
         self._run_aftercare(entry)
         self._maybe_forced_segment(entry)  # #364: best-effort background deep-scan (never blocks)
