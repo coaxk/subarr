@@ -227,6 +227,11 @@ class Scheduler:
                         "errors": len(state.errors),
                     }
                 )
+                if state.status == "error":
+                    # #546: a probe root that does not resolve used to fail every
+                    # scheduled walk without a word. Say which, and why.
+                    detail = "; ".join(str(e.get("error", e)) for e in (state.errors or [])[:3])
+                    log.warning("coverage_walk: probe walk for %r did not run: %s", root, detail or "error")
             except Exception as e:
                 log.warning("probe walk %r failed: %s", root, e)
                 results.append({"root": root, "status": "error", "error": str(e)})

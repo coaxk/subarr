@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **A probe root that does not exist is no longer skipped in silence (#546, found on #524 by @Jorman).** The setup wizard pre-filled the walk's probe roots with `TV, Movies` whether or not those folders existed, and a library laid out as `Film` and `Serie Tv` failed every scheduled walk with "root not found" while the Rules page read "2 roots — ffprobe runs". The embedded-subtitle data behind "Skip embedded EN" was never filled by those walks. Now the Rules page names any saved root that is not found, saving one that does not exist is refused with the reason, the scheduler logs a warning when a walk's root is missing, and the wizard suggests the folders that actually exist under the library root instead of `TV, Movies`. The Rules page header, which holds Save, stays in view while you edit fields further down.
+
 ### Changed
 - **Whispered dialogue is no longer dropped (#543), with subarr-subgen `2026.08.1-r10`.** Generated subtitles were often missing where an actor whispers. The cause was subgen's voice-detection pre-filter, which cut quiet speech before Whisper heard it, and it also dropped some normal-volume lines under music. r10 lowers its threshold from 0.5 to 0.35. Measured on a 36-clip test corpus against the library's own subtitles: recall up from 72.6% to 74.2%, with no rise in captions where no one speaks. If you set `SUBGEN_KWARGS` yourself, your value wins; change `vad_parameters.threshold` there to get this. The Tuning Lab's help text now quotes the new shipped value.
 

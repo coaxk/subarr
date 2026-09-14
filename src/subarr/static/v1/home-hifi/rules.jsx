@@ -10,6 +10,7 @@
 
 import { StatusDot } from './atoms.jsx';
 
+import { missingRootsMessage } from './probe-roots.mjs';
 const { useState, useEffect, useCallback, useMemo } = React;
 
 const RULE_MODES = ['off', 'dashboard', 'manual_confirm', 'auto_queue'];
@@ -70,7 +71,10 @@ async function patchCoverageSchedule(updates) {
   });
   if (!r.ok) {
     const text = await r.text().catch(() => '');
-    throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+    // #546: a refused probe root comes back as a 422 naming the root; show that, not raw JSON.
+    let message = null;
+    try { message = JSON.parse(text)?.detail?.message || null; } catch { /* not JSON */ }
+    throw new Error(message || `HTTP ${r.status}: ${text.slice(0, 200)}`);
   }
   return r.json();
 }
@@ -226,7 +230,9 @@ function ChipListEditor({ items, onChange, kind, placeholder }) {
 // Paths are relative to SUBARR_MEDIA_ROOT (i.e. /media/library inside
 // the container). ProbeStore caches by (mtime, size) so re-walks only
 // ffprobe new/changed files.
-function ProbeRootsEditor({ value, onChange }) {
+export function ProbeRootsEditor({ value, onChange, check }) {
+  // #546: the server's per-root check, for roots still in the draft.
+  const missing = missingRootsMessage((check || []).filter((c) => c && value.includes(c.root)));
   // Internal: value is stored as a list[str] in the schedule model, but
   // we render it as a comma-separated string for editing comfort. On
   // commit (blur or Enter), we split + trim back into a list.
@@ -261,6 +267,11 @@ function ProbeRootsEditor({ value, onChange }) {
           fontSize: 'var(--text-md)', color: 'var(--fg-0)',
           fontFamily: 'var(--font-mono)',
         }} />
+      {missing && (
+        <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500, #ef4444)', lineHeight: 1.5 }}>
+          {missing}
+        </span>
+      )}
       <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
         Comma-separated paths relative to your library root. Walk runs ffprobe
         on each, populating the embedded-sub cache that "skip embedded EN"
@@ -386,6 +397,7 @@ function ModeBuild({ draft, setDraft, scheduleDraft, setScheduleDraft }) {
           </div>
           <ProbeRootsEditor
             value={scheduleDraft.probe_roots || []}
+            check={scheduleDraft.probe_roots_check}
             onChange={(v) => setSched('probe_roots', v)} />
         </Section>
       )}
@@ -1003,7 +1015,8 @@ export function RulesPage() {
 
   return (
     <main className="main-canvas" style={{ padding: '22px 24px 22px', gap: 18, overflow: 'auto' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+      {/* #546: the header holds Save; keep it in view while editing fields far down the page. */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', position: 'sticky', top: -22, zIndex: 5, background: 'var(--bg-0)', padding: '22px 0 12px', margin: '-22px 0 0' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-xs)', color: 'var(--fg-3)', marginBottom: 4 }}>
             <span style={{ color: 'var(--fg-2)' }}>Rules</span>

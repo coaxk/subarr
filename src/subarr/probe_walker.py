@@ -376,3 +376,44 @@ class ProbeWalker:
             state.status = "error"
             state.errors.append({"error": repr(e)})
             state.finished_at = time.time()
+
+
+# #546: one definition of whether a probe root resolves, shared by the schedule
+# API, the wizard and (by the same reason text) the walker itself. A root that
+# does not resolve used to fail every scheduled walk with nothing on screen.
+def check_probe_root(root: str) -> dict:
+    """{root, ok, reason}. `root` is a canonical: relative to the default library
+    root, or `@slug/...` for another library. Never raises."""
+    raw = (root or "").strip()
+    try:
+        fs = canonical_to_fs(raw.strip("/") if not raw.startswith("@") else raw)
+    except PathOutsideRootError:
+        reason = f"unknown library: {raw}" if raw.startswith("@") else f"path escapes the library root: {raw}"
+        return {"root": raw, "ok": False, "reason": reason}
+    except OSError:
+        return {"root": raw, "ok": False, "reason": f"unreadable: {raw}"}
+    try:
+        is_dir = fs.is_dir()
+    except OSError:
+        is_dir = False
+    if not is_dir:
+        return {"root": raw, "ok": False, "reason": f"root not found: {raw}"}
+    return {"root": raw, "ok": True, "reason": None}
+
+
+def suggest_probe_roots() -> list[str]:
+    """#546: the folders that actually exist directly under the default library
+    root, for the wizard to offer instead of a hard-coded `TV, Movies`."""
+    try:
+        base = canonical_to_fs("")
+        entries = sorted(base.iterdir(), key=lambda p: p.name.lower())
+    except (OSError, PathOutsideRootError):
+        return []
+    out = []
+    for p in entries:
+        try:
+            if p.is_dir() and not p.name.startswith("."):
+                out.append(p.name)
+        except OSError:
+            continue
+    return out
