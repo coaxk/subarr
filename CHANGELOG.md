@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.7] - 2026-09-14
+
+**A file with no speech stops looping through Auto Feed, a probe root that does not exist says so, and whispered dialogue reaches Whisper.**
+
+Two fixes and one change, all from reports this week. One database migration, applied automatically on first boot; no config changes.
+
 ### Fixed
 - **A file with no speech no longer loops forever through Auto Feed (#545, reported by @AztecGuyGDL).** On an episode with no dialogue, such as a silent cartoon, subgen's voice detection removes all of the audio and no subtitle is written. subarr still marked the job complete the moment it left subgen's queue, so the Queue said "transcribed — subtitle written", Coverage kept showing the gap, and every walk queued the same file again. subarr now checks that a subtitle actually exists. If none does, the job is recorded as producing no subtitle, the Queue lists it under Issues as "no subtitle", nothing is sent to Bazarr or Plex, and auto-queue and backfill leave that file alone for 7 days. Queueing it by hand still works. Jobs are only judged after two minutes, so a file that has just been handed to subgen is never mistaken for one that failed.
 - **A probe root that does not exist is no longer skipped in silence (#546, found on #524 by @Jorman).** The setup wizard pre-filled the walk's probe roots with `TV, Movies` whether or not those folders existed, and a library laid out as `Film` and `Serie Tv` failed every scheduled walk with "root not found" while the Rules page read "2 roots — ffprobe runs". The embedded-subtitle data behind "Skip embedded EN" was never filled by those walks. Now the Rules page names any saved root that is not found, saving one that does not exist is refused with the reason, the scheduler logs a warning when a walk's root is missing, and the wizard suggests the folders that actually exist under the library root instead of `TV, Movies`. The Rules page header, which holds Save, stays in view while you edit fields further down.
