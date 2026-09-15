@@ -30,44 +30,98 @@ def _client(handler) -> BazarrClient:
     return c
 
 
-def test_episodes_history_passes_sonarr_episode_id():
-    """Per-episode lookup (the provenance path) sends sonarrEpisodeId and does
-    NOT raise TypeError — the bug was the shadowing keyword-only redefinition."""
-    captured = {}
+# #550: Bazarr's history API filters on `episodeid` / `radarrid`
+# (bazarr/api/{episodes,movies}/history.py, identical in 1.6.0 and 1.6.1) and
+# silently IGNORES any other query parameter. subarr sent `sonarrEpisodeId` /
+# `radarrId` from v1.1 on, so every per-file lookup returned recent history for
+# the whole library. The old tests asserted the name subarr sent, not the name
+# Bazarr reads, so they could not fail. This stub behaves like Bazarr instead.
+_EP_ROWS = [
+    {"sonarrEpisodeId": 42, "provider": "opensubtitles", "subs_id": "a"},
+    {"sonarrEpisodeId": 99, "provider": "subdl", "subs_id": "b"},
+    {"sonarrEpisodeId": 42, "provider": "gestdown", "subs_id": "c"},
+]
+_MOVIE_ROWS = [
+    {"radarrId": 7, "provider": "opensubtitles", "subs_id": "m1"},
+    {"radarrId": 8, "provider": "subdl", "subs_id": "m2"},
+]
+
+
+def _bazarr_like(req: httpx.Request) -> httpx.Response:
+    q = req.url.params
+    if req.url.path == "/api/episodes/history":
+        rows = _EP_ROWS
+        if "episodeid" in q:
+            rows = [r for r in rows if r["sonarrEpisodeId"] == int(q["episodeid"])]
+        return httpx.Response(200, json={"data": rows, "total": len(rows)})
+    if req.url.path == "/api/movies/history":
+        rows = _MOVIE_ROWS
+        if "radarrid" in q:
+            rows = [r for r in rows if r["radarrId"] == int(q["radarrid"])]
+        return httpx.Response(200, json={"data": rows, "total": len(rows)})
+    return httpx.Response(404)
+
+
+def _ignores_filters(req: httpx.Request) -> httpx.Response:
+    """A Bazarr that ignores the id filter entirely (older, newer or broken)."""
+    if req.url.path == "/api/episodes/history":
+        return httpx.Response(200, json={"data": _EP_ROWS})
+    return httpx.Response(200, json={"data": _MOVIE_ROWS})
+
+
+def test_episodes_history_returns_only_that_episode():
+    """Per-episode lookup (the provenance and blacklist path) must reach Bazarr's
+    real filter. Also guards the old F811 shadowing: this call used to TypeError."""
+    rows = asyncio.run(_client(_bazarr_like).episodes_history(sonarr_episode_id=42))
+    assert [r["subs_id"] for r in rows] == ["a", "c"]
+
+
+def test_movies_history_returns_only_that_movie():
+    rows = asyncio.run(_client(_bazarr_like).movies_history(radarr_movie_id=7))
+    assert [r["subs_id"] for r in rows] == ["m1"]
+
+
+def test_history_sends_bazarrs_parameter_names():
+    captured = []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        captured["path"] = req.url.path
-        captured["query"] = dict(req.url.params)
-        return httpx.Response(200, json={"data": [{"provider": "opensubtitles"}]})
+        captured.append(dict(req.url.params))
+        return httpx.Response(200, json={"data": []})
 
-    rows = asyncio.run(_client(handler).episodes_history(sonarr_episode_id=42))
-    assert captured["path"] == "/api/episodes/history"
-    assert captured["query"].get("sonarrEpisodeId") == "42"
-    assert rows == [{"provider": "opensubtitles"}]
+    c = _client(handler)
+    asyncio.run(c.episodes_history(sonarr_episode_id=42))
+    asyncio.run(c.movies_history(radarr_movie_id=7))
+    assert captured[0].get("episodeid") == "42"
+    assert captured[1].get("radarrid") == "7"
+
+
+def test_history_drops_rows_for_other_items_when_bazarr_ignores_the_filter():
+    """Backstop: another item's subtitle must never come back for a per-file
+    lookup, because the blacklist panel puts a Blacklist button on every row."""
+    c = _client(_ignores_filters)
+    eps = asyncio.run(c.episodes_history(sonarr_episode_id=42))
+    movs = asyncio.run(c.movies_history(radarr_movie_id=7))
+    assert [r["subs_id"] for r in eps] == ["a", "c"]
+    assert [r["subs_id"] for r in movs] == ["m1"]
 
 
 def test_episodes_history_full_pull_still_works():
-    """The leaderboard path passes only length — must still work post-merge."""
+    """The leaderboard path passes only length and wants every row."""
     captured = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
         captured["query"] = dict(req.url.params)
-        return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"data": _EP_ROWS})
 
-    asyncio.run(_client(handler).episodes_history(length=2000))
+    rows = asyncio.run(_client(handler).episodes_history(length=2000))
     assert captured["query"].get("length") == "2000"
-    assert "sonarrEpisodeId" not in captured["query"]
+    assert "episodeid" not in captured["query"]
+    assert len(rows) == 3
 
 
-def test_movies_history_passes_radarr_id():
-    captured = {}
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        captured["query"] = dict(req.url.params)
-        return httpx.Response(200, json={"data": []})
-
-    asyncio.run(_client(handler).movies_history(radarr_movie_id=7))
-    assert captured["query"].get("radarrId") == "7"
+def test_movies_history_full_pull_still_works():
+    rows = asyncio.run(_client(_ignores_filters).movies_history(length=2000))
+    assert len(rows) == 2
 
 
 def test_error_path_raises_integration_error_not_nameerror():

@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **The blacklist panel no longer offers other files' subtitles (#550).** Asking Bazarr for one file's subtitle history sent the wrong parameter names (`sonarrEpisodeId` and `radarrId`; Bazarr's are `episodeid` and `radarrid`). Bazarr ignores parameters it does not recognise, so every lookup returned recent history for the whole library: on a live Bazarr 1.6.1, 49 of 50 rows belonged to other episodes. The blacklist panel put a Blacklist button on each of those rows, so clicking one blacklisted another item's subtitle, and the Activity page's file details showed unrelated Bazarr history. Present since v1.1; not caused by a Bazarr update. subarr now sends Bazarr's names and also drops any returned row that does not belong to the file, so a Bazarr that ignores the filter cannot bring it back.
+
 ## [2.7.7] - 2026-09-14
 
 **A file with no speech stops looping through Auto Feed, a probe root that does not exist says so, and whispered dialogue reaches Whisper.**
