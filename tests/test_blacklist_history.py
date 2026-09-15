@@ -53,6 +53,33 @@ def _bazarr_history_stub(req: httpx.Request) -> httpx.Response:
     return httpx.Response(404, json={"detail": "stub"})
 
 
+_OTHER_EPISODE_ROW = {**_PROVIDER_ROW, "subs_id": "zzz999", "sonarrSeriesId": 3, "sonarrEpisodeId": 777}
+
+
+def _bazarr_like_stub(req: httpx.Request) -> httpx.Response:
+    """#550: behaves like Bazarr. Filters on `episodeid` only and ignores every
+    other parameter, returning recent history for the whole library."""
+    if req.url.path == "/api/episodes/history":
+        rows = [_PROVIDER_ROW, _OTHER_EPISODE_ROW]
+        if "episodeid" in req.url.params:
+            rows = [r for r in rows if r["sonarrEpisodeId"] == int(req.url.params["episodeid"])]
+        return httpx.Response(200, json={"data": rows, "total": len(rows)})
+    if req.url.path == "/api/system/status":
+        return httpx.Response(200, json={"data": {"bazarr_version": "1.6.1"}})
+    return httpx.Response(404, json={"detail": "stub"})
+
+
+@pytest.mark.integrations_stub(bazarr_handler=_bazarr_like_stub)
+def test_history_endpoint_never_offers_another_items_subtitle(app_with_stub):
+    """#550: the panel for episode 42 must not list episode 777's subtitle, or its
+    Blacklist button would blacklist the wrong item in Bazarr."""
+    r = app_with_stub.get("/api/blacklist/history?media_type=episode&id=42")
+    assert r.status_code == 200
+    subs = r.json()["subtitles"]
+    assert [s["subs_id"] for s in subs] == ["abc123"]
+    assert all(s["episode_id"] == 42 for s in subs)
+
+
 @pytest.mark.integrations_stub(bazarr_handler=_bazarr_history_stub)
 def test_history_endpoint_shapes_rows(app_with_stub):
     r = app_with_stub.get("/api/blacklist/history?media_type=episode&id=42")

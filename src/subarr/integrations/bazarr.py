@@ -19,6 +19,14 @@ from . import IntegrationError
 from .base import IntegrationClient
 
 
+def _rows_for(rows: list[dict[str, Any]], id_field: str, wanted: int | None) -> list[dict[str, Any]]:
+    """#550: keep only rows belonging to `wanted`. None means no filter (the
+    leaderboard's whole-history pull)."""
+    if wanted is None:
+        return rows
+    return [r for r in rows if isinstance(r, dict) and r.get(id_field) == wanted]
+
+
 class BazarrClient(IntegrationClient):
     name = "bazarr"
 
@@ -50,21 +58,31 @@ class BazarrClient(IntegrationClient):
         self, sonarr_episode_id: int | None = None, length: int = 50
     ) -> list[dict[str, Any]]:
         """Per-episode subtitle download history (provider, score, timestamp).
-        If sonarr_episode_id supplied, Bazarr returns rows for that episode."""
+        If sonarr_episode_id supplied, only that episode's rows are returned.
+
+        #550: Bazarr's filter parameter is `episodeid` (the ROW field is
+        `sonarrEpisodeId`). Bazarr ignores unknown parameters, so the wrong name
+        returns the whole library's recent history, and the blacklist panel then
+        offers a Blacklist button on other items' subtitles. The rows are also
+        filtered here, so a Bazarr that ignores the filter still cannot do that."""
         params: dict[str, Any] = {"length": length}
         if sonarr_episode_id is not None:
-            params["sonarrEpisodeId"] = sonarr_episode_id
+            params["episodeid"] = sonarr_episode_id
         d = await self._get("/api/episodes/history", params=params)
-        return d.get("data", []) if isinstance(d, dict) else []
+        rows = d.get("data", []) if isinstance(d, dict) else []
+        return _rows_for(rows, "sonarrEpisodeId", sonarr_episode_id)
 
     async def movies_history(
         self, radarr_movie_id: int | None = None, length: int = 50
     ) -> list[dict[str, Any]]:
+        """Movie counterpart. #550: the filter parameter is `radarrid`; the row
+        field is `radarrId`."""
         params: dict[str, Any] = {"length": length}
         if radarr_movie_id is not None:
-            params["radarrId"] = radarr_movie_id
+            params["radarrid"] = radarr_movie_id
         d = await self._get("/api/movies/history", params=params)
-        return d.get("data", []) if isinstance(d, dict) else []
+        rows = d.get("data", []) if isinstance(d, dict) else []
+        return _rows_for(rows, "radarrId", radarr_movie_id)
 
     async def blacklist_episode(
         self,
