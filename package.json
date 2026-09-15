@@ -2,9 +2,9 @@
   "name": "subarr-frontend-build",
   "version": "0.0.0",
   "private": true,
-  "//engines": "Matches the node-version in .github/workflows. Declared because jsdom 30 silently installed here and could not load on CI Node 20: engines is ADVISORY by default, so npm install succeeded and the harness passed locally while never running in CI.",
+  "//engines": "Matches node-version in .github/workflows/frontend.yml and release.yml (Node 22). History: jsdom 30 once installed locally on Node 22 while CI ran Node 20 (end of life April 2026) and could not load it there, because engines is ADVISORY by default. .npmrc now sets engine-strict, so an install that does not fit this range fails on every machine instead of passing locally. The floor is jsdom 30's own minimum.",
   "engines": {
-    "node": ">=20.19"
+    "node": "^22.22.2 || >=24.15.0"
   },
   "description": "Build-time tooling for the subarr static SPA bundles. Not published.",
   "type": "module",
