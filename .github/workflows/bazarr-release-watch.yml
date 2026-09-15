@@ -1,0 +1,33 @@
+# Weekly Bazarr release watch. The logic, outcomes and test hooks live in
+# scripts/bazarr-release-watch.sh so they can be exercised locally; this file
+# only schedules it.
+
+name: bazarr-release-watch
+
+on:
+  schedule:
+    # Wednesdays 07:00 UTC. Clear of security.yml (Mon), subarr-subgen's
+    # staleness run (Thu) and subarr's (Fri).
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Bazarr stable release vs verified version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # open/update the sticky report
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: compare latest stable Bazarr to the verified version
+        run: bash scripts/bazarr-release-watch.sh
