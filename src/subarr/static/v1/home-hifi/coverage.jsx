@@ -8,6 +8,7 @@
 import { Glyph, StatusDot, LangTag, LibraryChip } from './atoms.jsx';
 import { useLanguagePicks } from './languages.mjs';
 import { propagationFailure } from './audio-lang-propagation.mjs';
+import { useTimerScope } from './lifetime-timers.mjs';
 
 const { useState, useEffect, useMemo, useCallback } = React;
 
@@ -16,6 +17,9 @@ const { useState, useEffect, useMemo, useCallback } = React;
 // paint and stays at the last successful payload on transient errors so
 // the table doesn't flash empty between polls.
 export function useLiveCoverage(intervalMs = 10000) {
+  // Timers die with the page: a detached setTimeout here refetched 2.5 s after
+  // the user had already left. See lifetime-timers.mjs.
+  const timers = useTimerScope();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -96,11 +100,11 @@ export function useLiveCoverage(intervalMs = 10000) {
       }
       // Trigger a silent refetch a few seconds out so server state
       // catches up to the optimistic update.
-      setTimeout(() => fetchOnce({ silent: true }), 2500);
+      timers.later(() => fetchOnce({ silent: true }), 2500);
     };
     window.addEventListener('audio-lang-verified', handler);
     return () => window.removeEventListener('audio-lang-verified', handler);
-  }, [fetchOnce]);
+  }, [fetchOnce, timers]);
 
   // Pref change (wanted-langs filter etc) → immediate silent refetch.
   useEffect(() => {
@@ -2784,6 +2788,9 @@ function ImageOnlyBanner({ rows, canBypass, onQueued }) {
 }
 
 export function CoveragePage() {
+  // Every timer below is scoped to this page; "Probe now" kept polling for
+  // three minutes after the user left before this. See lifetime-timers.mjs.
+  const timers = useTimerScope();
   const [groupBy, setGroupBy] = useState('tree');  // tree-by-show default — matches original subarr
   const [reasonFilter, setReasonFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -2983,8 +2990,8 @@ export function CoveragePage() {
       // Wait for the rebuild (which kicks the eager-probe) to finish, then
       // refetch so newly-probed rows surface. Capped poll so a stuck build
       // can't pin the spinner forever.
-      for (let i = 0; i < 90; i++) {
-        await new Promise(res => setTimeout(res, 2000));
+      for (let i = 0; i < 90 && timers.alive(); i++) {
+        await timers.sleep(2000);
         try {
           const s = await fetch('/api/coverage/status', { credentials: 'same-origin' })
             .then(x => (x.ok ? x.json() : null));
@@ -3016,7 +3023,7 @@ export function CoveragePage() {
       // Re-fetch coverage shortly after so user sees Bazarr updates land.
       // Bazarr's scan-disk task is async on their side; give it 10s
       // before re-reading the wanted count.
-      setTimeout(() => refetch({ fresh: true, silent: true }), 10000);
+      timers.later(() => refetch({ fresh: true, silent: true }), 10000);
     } catch (e) {
       alert(`Bazarr sync failed: ${e.message}`);
     } finally {

@@ -5,6 +5,7 @@ const { useState, useEffect, useRef, useMemo } = React;
 
 import { LOG_SOURCES } from './log-helpers.mjs';
 import { streamErrorPanel } from './logs-stream-error.mjs';
+import { useTimerScope } from './lifetime-timers.mjs';
 
 const LEVEL_COLORS = {
   ERROR: '#ef4444',
@@ -28,6 +29,9 @@ function classifyLine(line, source) {
 const SOURCES = LOG_SOURCES;  // ['subgen', 'subarr'] — #157 gap-fill
 
 export function LogsPage() {
+  // The 200 ms flush below is a timer this page owns; unmount must clear it or
+  // it writes into a page that is gone. See lifetime-timers.mjs.
+  const timers = useTimerScope();
   const [lines, setLines] = useState([]);
   const [paused, setPaused] = useState(false);
   const [follow, setFollow] = useState(true);
@@ -78,7 +82,7 @@ export function LogsPage() {
         const { source: src, level } = classifyLine(text, source);
         bufRef.current.push({ t, text, source: src, level, id: t + '-' + Math.random() });
         if (!flushTimer.current) {
-          flushTimer.current = setTimeout(() => {
+          flushTimer.current = timers.later(() => {
             flushTimer.current = null;
             if (!pausedRef.current) {
               setLines(prev => {
