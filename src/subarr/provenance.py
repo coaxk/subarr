@@ -211,6 +211,29 @@ class ProvenanceStore:
             ).fetchall()
         return {r[0] for r in rows}
 
+    def no_output_entries_since(self, since_epoch: float) -> list[LedgerEntry]:
+        """#558: rows recorded NO OUTPUT on or after since_epoch, for the
+        watcher to re-check. Before 2.7.9 a subtitle next to a video with
+        [brackets] in its name was never found, so real output was recorded as
+        none."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, canonical_path, series_id, sonarr_episode_id, radarr_movie_id, "
+                "       scan_id, source, subgen_version, queued_at, completed_at, "
+                "       bazarr_scan_triggered_at, outcome "
+                "FROM subs_generated WHERE outcome = 'no_output' "
+                "  AND completed_at IS NOT NULL AND completed_at >= ? "
+                "ORDER BY id",
+                (since_epoch,),
+            ).fetchall()
+        return [LedgerEntry(*r) for r in rows]
+
+    def set_outcome(self, ledger_id: int, outcome: str) -> None:
+        """#558: correct a recorded outcome without touching completed_at,
+        which stays the time the job actually finished."""
+        with self._lock:
+            self._conn.execute("UPDATE subs_generated SET outcome = ? WHERE id = ?", (outcome, ledger_id))
+
     def no_output_paths_since(self, since_epoch: float) -> set[str]:
         """#545: canonical paths whose MOST RECENT completed job produced no
         subtitle, completed on or after since_epoch. A later successful run of

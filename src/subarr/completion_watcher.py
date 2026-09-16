@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
-from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
+from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical, srt_sidecar_names
 from .integrations.bazarr import BazarrClient
 from .integrations.plex import PlexClient
 from .provenance import NO_OUTPUT_COOLDOWN_S, OUTCOME_NO_OUTPUT, OUTCOME_WRITTEN, ProvenanceStore
@@ -281,7 +281,34 @@ class CompletionWatcher:
         #      task hints (or Bazarr was down) and the trigger silently
         #      no-op'd. Self-healing.
         await self._pass_pending()
+        await self._pass_heal_no_output()
         await self._pass_retry_bazarr_notify()
+
+    async def _pass_heal_no_output(self) -> None:
+        """#558: undo a NO OUTPUT verdict that was wrong.
+
+        Until 2.7.9 the sidecar lookup could not see a subtitle next to a video
+        with [brackets] in its name, so real output was recorded as none: listed
+        under Queue Issues, held back for the cooldown, and every write-back step
+        skipped. A row inside the hold window whose subtitle is found now is
+        re-marked WRITTEN and runs the write-back it missed. A genuine no-output
+        row has no sidecar and is left alone, and a re-marked row is never
+        selected again, so this settles in one pass."""
+        try:
+            rows = self._provenance.no_output_entries_since(time.time() - NO_OUTPUT_COOLDOWN_S)
+        except AttributeError:
+            return  # older provenance store
+        for entry in rows:
+            if not self._find_srt_sidecar(entry.canonical_path):
+                continue
+            self._provenance.set_outcome(entry.id, OUTCOME_WRITTEN)
+            log.warning(
+                "completion: %s was recorded as no subtitle, but its subtitle is on disk (#558); "
+                "re-marked written and running the write-back it skipped (ledger #%d)",
+                entry.canonical_path,
+                entry.id,
+            )
+            await self.complete_entry(entry, outcome=OUTCOME_WRITTEN)
 
     async def _pass_pending(self) -> None:
         pending = self._provenance.pending()
@@ -634,10 +661,9 @@ class CompletionWatcher:
             return None
         stem = full.stem
         parent = full.parent
-        try:
-            names = [p.name for p in parent.glob(f"{stem}*.srt")]
-        except OSError:
-            return None
+        # #558: literal names, never a glob -- `[...]` in a release name is a
+        # character class to glob and hid the subtitle of 17% of one library.
+        names = srt_sidecar_names(parent, stem)
         chosen = choose_srt_sidecar(stem, names)
         return str(parent / chosen) if chosen else None
 
