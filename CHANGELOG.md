@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.8] - 2026-09-16
+
+**Pages stop working in the background once you leave them, and the blacklist panel only offers the file you opened.**
+
+Two fixes, both found here rather than reported. No database migration and no config changes.
+
 ### Fixed
 - **Leaving a page now stops its background work.** Several pages kept working after you navigated away. Review's re-probe kept polling the server every half second for up to five minutes; Coverage's "Probe now" did the same for three, and Coverage also refetched 2.5 seconds after any language verification and 10 seconds after a Bazarr sync; the Logs page kept a pending write. All of it ran against a page that was no longer on screen, costing requests and battery for nothing. Every page now cancels the work it started when it closes. The same leak failed the frontend test job twice on main with every test passing, because a timer landed after the test environment had been torn down.
 - **The blacklist panel no longer offers other files' subtitles (#550).** Asking Bazarr for one file's subtitle history sent the wrong parameter names (`sonarrEpisodeId` and `radarrId`; Bazarr's are `episodeid` and `radarrid`). Bazarr ignores parameters it does not recognise, so every lookup returned recent history for the whole library: on a live Bazarr 1.6.1, 49 of 50 rows belonged to other episodes. The blacklist panel put a Blacklist button on each of those rows, so clicking one blacklisted another item's subtitle, and the Activity page's file details showed unrelated Bazarr history. Present since v1.1; not caused by a Bazarr update. subarr now sends Bazarr's names and also drops any returned row that does not belong to the file, so a Bazarr that ignores the filter cannot bring it back.
