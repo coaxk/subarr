@@ -8,6 +8,7 @@ breaking config changes.
 ## [Unreleased]
 
 ### Fixed
+- **Leaving the Review page now stops its background work.** A re-probe polls the server every half second for as long as it runs, and that polling carried on after you navigated away — up to five minutes of requests and state updates against a page that was no longer on screen, plus a shorter wait after each refresh. Review now cancels every timer it started when the page closes. The same leak failed the frontend test job twice on main with every test passing, because a timer landed after the test environment had been torn down.
 - **The blacklist panel no longer offers other files' subtitles (#550).** Asking Bazarr for one file's subtitle history sent the wrong parameter names (`sonarrEpisodeId` and `radarrId`; Bazarr's are `episodeid` and `radarrid`). Bazarr ignores parameters it does not recognise, so every lookup returned recent history for the whole library: on a live Bazarr 1.6.1, 49 of 50 rows belonged to other episodes. The blacklist panel put a Blacklist button on each of those rows, so clicking one blacklisted another item's subtitle, and the Activity page's file details showed unrelated Bazarr history. Present since v1.1; not caused by a Bazarr update. subarr now sends Bazarr's names and also drops any returned row that does not belong to the file, so a Bazarr that ignores the filter cannot bring it back.
 
 ## [2.7.7] - 2026-09-14
