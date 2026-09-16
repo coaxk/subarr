@@ -8,6 +8,7 @@ boundaries.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path, PurePosixPath
 
 from .config import settings
@@ -296,3 +297,21 @@ def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | N
     if best.slug:
         return f"@{best.slug}/{rel}" if rel else f"@{best.slug}/"
     return rel
+
+
+def srt_sidecar_names(parent: Path, stem: str) -> list[str]:
+    """#558: names of the `<stem>*.srt` files in `parent`, compared LITERALLY.
+
+    Never a glob. In a glob, `[...]` is a character class, and release names are
+    full of brackets (`Show - S01E01 [HEVC+x265 Priority].mkv`), so
+    `parent.glob(f"{stem}*.srt")` could not match the video's own subtitle and
+    could match another video's (`Show [a]*.srt` matches `Show a.en.srt`).
+    Sorted, so the caller's choice never depends on directory order.
+    """
+    try:
+        with os.scandir(parent) as entries:
+            return sorted(
+                e.name for e in entries if e.name.startswith(stem) and e.name.endswith(".srt") and e.is_file()
+            )
+    except OSError:
+        return []

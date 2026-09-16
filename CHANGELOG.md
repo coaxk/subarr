@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Subtitles for files with [brackets] in the name are found again (#558).** Release names often carry tags like `[HEVC+x265 Priority]`, and subarr looked for the subtitle with a filename pattern in which square brackets mean "any one of these characters", so it never saw the subtitle subgen had just written. Since 2.7.7 that meant a successful job was listed under Queue Issues as "no subtitle", the file was held back from auto-queue for 7 days, and the Bazarr and Plex updates were skipped. It also, since v1.1, silently skipped the reading-speed retime, quality scoring and direct Bazarr upload for those files. On one real library 759 of 4,364 videos have brackets in the name. subarr now compares names literally. Jobs already recorded as "no subtitle" are re-checked on upgrade: any whose subtitle is on disk is marked written and gets the Bazarr and Plex updates it missed, so nothing has to be queued again by hand.
+
 ## [2.7.8] - 2026-09-16
 
 **Pages stop working in the background once you leave them, and the blacklist panel only offers the file you opened.**

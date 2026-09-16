@@ -17,6 +17,7 @@ from .subtitle_readability import (
     Cue,
     parse_srt,
 )
+from .paths import srt_sidecar_names
 from .subtitle_retime import RetimeParams, retime_srt
 
 
@@ -132,9 +133,10 @@ def _original_sidecar(video_full: Path) -> Path | None:
         preferred = parent / f"{stem}.en.srt"
         if preferred.exists():
             return preferred
-        for p in sorted(parent.glob(f"{stem}*.srt")):
-            if not _is_sync_variant(p.name):
-                return p
+        # #558: literal names, never a glob (brackets in release names).
+        for name in srt_sidecar_names(parent, stem):
+            if not _is_sync_variant(name):
+                return parent / name
     except OSError:
         pass
     return None
