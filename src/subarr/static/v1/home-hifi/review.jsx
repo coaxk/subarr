@@ -982,6 +982,34 @@ export function ReviewPage() {
     setEpSelection(new Set());
   }, [offset, limit]);
 
+  // Every timer this page starts must die with it. fetchPending's
+  // minimum-spinner padding and the re-probe polls are awaited inside DETACHED
+  // async functions, so unmounting does not reach them: React's cleanup runs,
+  // the component is gone, and those loops keep sleeping, fetching and calling
+  // setState. The re-probe poll alone is 600 x 500 ms, so leaving Review
+  // mid-re-probe kept hitting the API for five minutes. In CI the same shape
+  // failed `frontend unit tests` on main on 2026-09-11 and 2026-09-15 with
+  // every test passing and one stray `ReferenceError: window is not defined`,
+  // a padding timer landing after vitest tore the jsdom window down.
+  //
+  // `sleep` resolves ONLY while mounted. On unmount every pending timer is
+  // cleared and its promise abandoned, so each `await sleep(...)` below is also
+  // where that loop stops. tests: __tests__/review-unmount-timers.test.jsx
+  const aliveRef = useRef(true);
+  const timersRef = useRef(new Set());
+  useEffect(() => () => {
+    aliveRef.current = false;
+    for (const id of timersRef.current) clearTimeout(id);
+    timersRef.current.clear();
+  }, []);
+  const sleep = useCallback((ms) => new Promise((resolve) => {
+    const id = setTimeout(() => {
+      timersRef.current.delete(id);
+      resolve();
+    }, ms);
+    timersRef.current.add(id);
+  }), []);
+
   const fetchPending = useCallback(async ({ silent = false } = {}) => {
     // First-paint only sets `loading`; every subsequent fetch (silent or
     // user-initiated Refresh click) sets `isRefetching` so the existing
@@ -1035,13 +1063,13 @@ export function ReviewPage() {
       // not a state change — they think the button didn't fire.
       const elapsed = Date.now() - startedAt;
       const padding = Math.max(0, 350 - elapsed);
-      if (padding > 0) await new Promise(resolve => setTimeout(resolve, padding));
-      if (seq === fetchSeq.current) {
+      if (padding > 0) await sleep(padding);
+      if (aliveRef.current && seq === fetchSeq.current) {
         setIsRefetching(false);
         setLoading(false);
       }
     }
-  }, [debouncedSearch, filter, limit, offset]);
+  }, [debouncedSearch, filter, limit, offset, sleep]);
 
   useEffect(() => {
     fetchPending();
@@ -1162,8 +1190,8 @@ export function ReviewPage() {
         throw new Error(detail);
       }
       let state = await r.json();
-      for (let i = 0; i < 600 && state && state.status === 'running'; i++) {
-        await new Promise((res) => setTimeout(res, 500));
+      for (let i = 0; i < 600 && aliveRef.current && state && state.status === 'running'; i++) {
+        await sleep(500);
         const w = await fetch(`/api/probe/walk/${state.id}`, { credentials: 'same-origin' });
         if (!w.ok) break;
         state = await w.json();
@@ -1176,8 +1204,8 @@ export function ReviewPage() {
 
       // The probe landed; the rows still show the OLD classification until
       // coverage rebuilds from it. The server schedules that rebuild itself.
-      for (let i = 0; i < 40; i++) {
-        await new Promise((res) => setTimeout(res, 500));
+      for (let i = 0; i < 40 && aliveRef.current; i++) {
+        await sleep(500);
         try {
           const s = await fetch('/api/coverage/status', { credentials: 'same-origin' });
           if (!s.ok) continue;
@@ -1198,7 +1226,7 @@ export function ReviewPage() {
       setReprobeState({ running: false, done: 0, total: 0 });
       fetchPending({ silent: true });
     }
-  }, [reprobeState.running, bulkRunning, fetchPending]);
+  }, [reprobeState.running, bulkRunning, fetchPending, sleep]);
 
 
 
