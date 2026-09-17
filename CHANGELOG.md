@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Retried files leave Queue Issues (#564).** Issues listed every failed or skipped attempt from the last 24 hours, and a later attempt at the same file never cleared it. Files requeued with the bulk "Requeue" button stayed in Issues for the full day, even after they were transcribed. Queue now judges each file by its latest attempt: an earlier failure drops out as soon as a retry is waiting, running or finished, and a file that fails again shows once. The row that replaced earlier attempts is marked with how many there were. The per-row requeue button also no longer deletes the old history entry, which removed the whole scan it belonged to.
+
 ## [2.7.9] - 2026-09-17
 
 **Subtitles for files with [brackets] in the name are found again, and jobs wrongly shown as "no subtitle" repair themselves.**

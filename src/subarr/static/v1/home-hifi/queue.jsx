@@ -289,6 +289,14 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
           minWidth: 0,
         }}>{path}</span>
         <LibraryChip library={entry.library} />
+        {entry.retries > 0 && (
+          // #564: this row replaced earlier failed attempts at the same file.
+          <span className="mono" data-retries-for={path}
+            title="Earlier attempts at this file failed or were skipped; this is the latest"
+            style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+            ↻ {entry.retries} earlier attempt{entry.retries === 1 ? '' : 's'}
+          </span>
+        )}
         <span className="mono" style={{
           fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
         }}>{ageLabel}</span>
@@ -296,7 +304,7 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
           <button className="btn ghost sm"
             onClick={() => onRequeue && onRequeue(path, entry.scan_id)}
             disabled={busy}
-            title="Resubmit this path to subgen as a new scan (removes this entry)"
+            title="Resubmit this path to subgen (this entry clears once the retry is queued)"
             aria-label={`Requeue ${path}`}>
             {busy ? '…' : '↻ requeue'}
           </button>
@@ -825,11 +833,9 @@ export function QueuePage() {
         const t = await r.text().catch(() => '');
         throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
       }
-      // Requeued from a history row → drop the old failed/cancelled entry so it
-      // doesn't linger in Issues; the new attempt creates its own history row.
-      if (scanId) {
-        await fetch(`/api/queue/scan/${scanId}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
-      }
+      // #564: no DELETE of the old row. The server judges each file by its
+      // latest attempt, so the old failure leaves Issues once this retry is
+      // pending; deleting the scan also dropped any other files it held.
       await refetch({ silent: true });
     } catch (e) {
       alert(`Requeue failed: ${e.message}`);

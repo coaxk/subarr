@@ -269,24 +269,59 @@ def _hist_cache(state) -> dict:
     return c
 
 
+# #564: attempts whose failure a later attempt at the same file supersedes.
+_SUPERSEDABLE_STATUSES = frozenset({PATH_STATUS_SKIPPED, PATH_STATUS_ERROR, PATH_STATUS_ORPHANED})
+
+
 def _build_history_view(
-    scans: list, live_paths: set, completed_paths: set | None = None, no_output_paths: set | None = None
+    scans: list,
+    live_paths: set,
+    completed_paths: set | None = None,
+    no_output_paths: set | None = None,
+    active_paths: dict[str, float] | None = None,
 ) -> tuple[list[dict], dict]:
     """Flatten scans → per-path outcome rows + category counts. Pure (no app
     state) so it can run in a worker thread and be cached. The expensive bit is
     _path_outcome_chip → _infer_skip_reason (filesystem) for skipped rows.
 
     `completed_paths` (canonical paths subgen finished) relabels OK rows from
-    'queued' → 'completed' (#346)."""
+    'queued' → 'completed' (#346).
+
+    #564: each file is judged by its LATEST attempt. An older skipped, errored
+    or orphaned row is dropped when the same path has a newer attempt, or when a
+    retry is waiting in subarr's pending queue or running in subgen
+    (`live_paths`, basenames). `active_paths` maps canonical path -> when that
+    pending job was queued; it only supersedes a failure it was queued AFTER,
+    because the feeder writes a job's own scan row after queueing it and a
+    submitted job can outlive its failure by up to the orphan grace. The newest
+    row that is shown carries `retries` = how many such rows it replaced. Older
+    successful rows are kept."""
     history: list[dict] = []
     counts = {"ok": 0, "skipped": 0, "error": 0, "running": 0, "orphaned": 0}
-    for scan in scans:
+    active = active_paths or {}
+    # path -> the newest row emitted for it (None when that attempt is shown in
+    # the live section instead of history).
+    newest: dict[str, dict | None] = {}
+    ordered = sorted(scans, key=lambda sc: sc.created_at or 0.0, reverse=True)
+    for scan in ordered:
         for r in scan.results:
             basename = os.path.basename(r.path)
+            if r.status in _SUPERSEDABLE_STATUSES:
+                if r.path in newest:
+                    shown = newest[r.path]
+                    if shown is not None:
+                        shown["retries"] = shown.get("retries", 0) + 1
+                    continue
+                queued_at = active.get(r.path)
+                retry_waiting = queued_at is not None and queued_at > (scan.created_at or 0.0)
+                if retry_waiting or basename in live_paths:
+                    newest[r.path] = None
+                    continue
             # Skip if this path is currently live in subgen — already shown in
             # the processing/queued section (covers a running scan_store row and
             # a just-submitted OK row). Skipped/error/orphaned are kept.
             if basename in live_paths and r.status in (PATH_STATUS_RUNNING, PATH_STATUS_OK):
+                newest.setdefault(r.path, None)
                 continue
             outcome = _path_outcome_chip(
                 r.status,
@@ -299,22 +334,43 @@ def _build_history_view(
             cat = outcome["category"]
             if cat in counts:
                 counts[cat] += 1
-            history.append(
-                {
-                    "scan_id": scan.id,
-                    "created_at": scan.created_at,
-                    "scan_status": scan.status,
-                    "path": r.path,
-                    "outcome": outcome,
-                    "started_at": r.started_at,
-                    "finished_at": r.finished_at,
-                    "subgen_status_code": r.subgen_status_code,
-                    # #378: library provenance for the history row (canonical
-                    # path; fail-soft to library 0 — no chip on single-library).
-                    "library": library_label(r.path),
-                }
-            )
+            row = {
+                "scan_id": scan.id,
+                "created_at": scan.created_at,
+                "scan_status": scan.status,
+                "path": r.path,
+                "outcome": outcome,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+                "subgen_status_code": r.subgen_status_code,
+                # #378: library provenance for the history row (canonical
+                # path; fail-soft to library 0 — no chip on single-library).
+                "library": library_label(r.path),
+            }
+            history.append(row)
+            newest.setdefault(r.path, row)
     return history, counts
+
+
+def _pending_active_paths(request: Request) -> dict[str, float]:
+    """#564: canonical path -> when its waiting or submitted job was queued.
+    Best-effort: a missing or failing queue just means nothing is superseded."""
+    pending = getattr(request.app.state, "pending_queue", None)
+    if pending is None:
+        return {}
+    try:
+        return pending.active_queued_at()
+    except Exception as e:  # noqa: BLE001 - history must still render
+        log.debug("pending active_queued_at failed: %s", e)
+        return {}
+
+
+def _invalidate_history_cache(state) -> None:
+    """#564: force the next GET /api/queue to rebuild, so a requeue or delete is
+    reflected on the refetch that follows it rather than 5 s later."""
+    c = _hist_cache(state)
+    c["key"] = None
+    c["built_at"] = 0.0
 
 
 async def _refresh_history_cache(request: Request, history_window_s: int, cache_key: tuple) -> None:
@@ -338,8 +394,9 @@ async def _refresh_history_cache(request: Request, history_window_s: int, cache_
             pass
         completed_paths = await asyncio.to_thread(request.app.state.provenance.completed_paths_since, since)
         no_output_paths = await asyncio.to_thread(request.app.state.provenance.no_output_paths_since, since)
+        active_paths = await asyncio.to_thread(_pending_active_paths, request)
         history, counts = await asyncio.to_thread(
-            _build_history_view, scans, live_paths, completed_paths, no_output_paths
+            _build_history_view, scans, live_paths, completed_paths, no_output_paths, active_paths
         )
         c.update(key=cache_key, built_at=time.time(), history=history, counts=counts)
     except Exception as e:
@@ -438,8 +495,9 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
                 live_paths.add(os.path.basename(t["path"]))
         completed_paths = await asyncio.to_thread(request.app.state.provenance.completed_paths_since, since)
         no_output_paths = await asyncio.to_thread(request.app.state.provenance.no_output_paths_since, since)
+        active_paths = await asyncio.to_thread(_pending_active_paths, request)
         history, counts = await asyncio.to_thread(
-            _build_history_view, scans, live_paths, completed_paths, no_output_paths
+            _build_history_view, scans, live_paths, completed_paths, no_output_paths, active_paths
         )
         c.update(key=cache_key, built_at=now, history=history, counts=counts)
 
@@ -634,6 +692,7 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
     pending = request.app.state.pending_queue
     job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override)
     request.app.state.queue_feeder.kick()
+    _invalidate_history_cache(request.app.state)
     return {"job": job.id, "path": canonical, "status": "pending"}
 
 
@@ -645,6 +704,7 @@ async def delete_scan(scan_id: str, request: Request) -> dict:
     store = request.app.state.scans
     if not store.delete(scan_id):
         raise HTTPException(404, detail=f"scan {scan_id} not found")
+    _invalidate_history_cache(request.app.state)
     return {"deleted": True, "scan_id": scan_id}
 
 

@@ -288,6 +288,17 @@ class PendingQueueStore:
             ).fetchall()
         return {r[0] for r in rows}
 
+    def active_queued_at(self) -> dict[str, float]:
+        """#564: canonical path -> newest `created_at` among its pending or
+        submitted jobs. The Queue history view uses the time to tell a retry
+        queued after a failure from the job that produced the failure."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, MAX(created_at) FROM pending_queue WHERE status IN (?, ?) GROUP BY canonical_path",
+                (STATUS_PENDING, STATUS_SUBMITTED),
+            ).fetchall()
+        return {r[0]: float(r[1] or 0.0) for r in rows}
+
     def count_by_status(self) -> dict[str, int]:
         with self._lock:
             rows = self._conn.execute("SELECT status, COUNT(*) FROM pending_queue GROUP BY status").fetchall()
