@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.10] - 2026-09-17
+
+**Files you retry leave Queue Issues once the retry is on its way.**
+
+One fix to what the Queue page shows. No database migration and no config changes; the first page load after upgrading already applies it to the last 24 hours of history.
+
 ### Fixed
 - **Retried files leave Queue Issues (#564).** Issues listed every failed or skipped attempt from the last 24 hours, and a later attempt at the same file never cleared it. Files requeued with the bulk "Requeue" button stayed in Issues for the full day, even after they were transcribed. Queue now judges each file by its latest attempt: an earlier failure drops out as soon as a retry is waiting, running or finished, and a file that fails again shows once. The row that replaced earlier attempts is marked with how many there were. The per-row requeue button also no longer deletes the old history entry, which removed the whole scan it belonged to.
 
