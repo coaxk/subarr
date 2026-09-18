@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.11] - 2026-09-18
+
+**Rows stuck in "Analyzing" clear, and your audio-language verdicts survive Sonarr replacing a file.**
+
+Four fixes. No database migration and no config changes. Verdicts orphaned by earlier file replacements are carried over automatically on the first Coverage refresh after upgrading.
+
 ### Fixed
 - **WMV, MPG and other common formats are analyzed (#560).** Coverage only probed seven video formats, so readable `.wmv`, `.mpg` and `.mpeg` episodes (among others subgen transcribes) sat in "Analyzing" forever. subarr now probes the common formats subgen accepts, and a file in a format it cannot handle moves to "Couldn't analyze" instead of waiting indefinitely.
 - **Date-named episodes leave "Analyzing" (#561).** Episodes named by air date (`Show - 2026-09-08.mkv`) were matched to their analysis by an `S01E03`-style token they never contain, so a finished analysis was never used. Episodes are now matched by the exact file Sonarr reports. This also stops an older release still in the cache from being mistaken for the current file.
