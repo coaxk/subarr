@@ -261,9 +261,22 @@ def _sweep(request: Request, *, dry_run: bool) -> dict:
             "deleted_total": 0,
             "deleted_by_store": {},
             "missing": [],
+            "carried_over": 0,
         }
+    # #563: a verdict whose file Sonarr replaced is not an orphan, it just moved.
+    # Carry those over first so a prune never deletes a verdict that could have
+    # followed its episode. The dry run moves nothing, so its list can include
+    # verdicts the real prune will carry instead of deleting.
+    carried = 0
+    als = stores.get("audio_lang")
+    if not dry_run and als is not None and hasattr(als, "sweep_carry_overs"):
+        try:
+            carried = len(als.sweep_carry_overs())
+        except Exception as e:  # noqa: BLE001 - never block the prune on the carry step
+            log.warning("verdict carry-over before prune failed: %s", e)
     rep = prune_missing_multi(stores, exists=_path_exists, dry_run=dry_run)
     return {
+        "carried_over": carried,
         "safe": rep.decision.safe,
         "reason": rep.decision.reason,
         "total_paths": rep.total_paths,

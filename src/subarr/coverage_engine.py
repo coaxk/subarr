@@ -1311,6 +1311,20 @@ def _refine_audio_sources(items: list, verification_sources: dict) -> None:
             it.audio_source = _map(s)
 
 
+def _annotate_carried_verdicts(items: list, carried: dict[str, str] | None) -> None:
+    """#563 post-pass: say so on a row whose verdict was carried over from the
+    file Sonarr/Radarr replaced, so a wrong carry-over can be seen and
+    corrected in Review. In place."""
+    if not carried:
+        return
+    for it in items:
+        old = carried.get(it.file_canonical_path or "")
+        if old:
+            it.audio_label_notes.append(
+                f"language carried over from your verdict on the previous file ({old.rsplit('/', 1)[-1]})"
+            )
+
+
 def _apply_multilingual_verifications(items: list, multi_verifications: dict[str, list[str]] | None) -> None:
     """#357 post-pass: a confident-multilingual verdict (>=2 stored lang_codes)
     is the ANSWER, not a mislabel. Surface the ordered set and suppress the false
@@ -2132,6 +2146,10 @@ async def build_coverage(
             log.warning("multilingual lookup failed; skipping suppression this build", exc_info=True)
             _multi_map = None
         _apply_multilingual_verifications(items, _multi_map)
+        try:
+            _annotate_carried_verdicts(items, audio_lang_store.get_carried_lookup())
+        except Exception:  # noqa: BLE001 — a note must never block the build
+            log.warning("carried-verdict lookup failed; skipping notes this build", exc_info=True)
     # #140: mis-grouped-series detection runs LAST — it reads the final
     # (refined) audio_source per episode. Dismissed series are read from the
     # store so known-legit multilingual shows stay quiet across walks.

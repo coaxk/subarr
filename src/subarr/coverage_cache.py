@@ -56,6 +56,9 @@ _EAGER_PROBE_CAP = 400
 # or the next 5-min tick. A batch that hit the cap keeps the normal spacing.
 EAGER_FOLLOWUP_MAX_WAIT_S = 5.0
 
+# #563: minimum spacing of the verdict carry-over sweep run before a build.
+CARRY_SWEEP_INTERVAL_S = 1800.0
+
 # #167: publish gate. A build whose CRITICAL source failed (configured but
 # errored) while the cached snapshot had it healthy is a degraded build —
 # build_coverage degrades integration failures to empty data (best-effort by
@@ -181,6 +184,8 @@ class CoverageCache:
         self._debounce_handle: asyncio.TimerHandle | None = None
         # #167: consecutive degraded-build holds (see degraded_sources).
         self._consecutive_holds = 0
+        # #563: when the verdict carry-over sweep last ran (epoch; 0 = never).
+        self._last_carry_sweep = 0.0
 
     # ─── #104: debounce / coalesce ──────────────────────────────────
     @property
@@ -415,6 +420,7 @@ class CoverageCache:
                 # detected subgen upgrade / IGNORE_FORCED_SUBTITLES toggle is
                 # reflected on the next refresh without restarting this loop.
                 subgen_caps = caps_provider() if caps_provider else None
+                await self._maybe_sweep_carry_overs(audio_lang_store)
                 report = await build_coverage(
                     bundle,
                     use_tautulli=use_tautulli,
@@ -466,6 +472,23 @@ class CoverageCache:
                     self._last_refresh_done = asyncio.get_running_loop().time()
                 except RuntimeError:  # pragma: no cover
                     pass
+
+    async def _maybe_sweep_carry_overs(self, audio_lang_store) -> None:
+        """#563: move verdicts orphaned by Sonarr/Radarr file replacements onto
+        their new files before the build reads them, at most once per
+        CARRY_SWEEP_INTERVAL_S. It stats every verdict path, which is cheap
+        but not free on a network share, so it runs off the event loop and
+        never blocks the build on failure."""
+        sweep = getattr(audio_lang_store, "sweep_carry_overs", None)
+        if sweep is None or time.time() - self._last_carry_sweep < CARRY_SWEEP_INTERVAL_S:
+            return
+        self._last_carry_sweep = time.time()
+        try:
+            moved = await asyncio.to_thread(sweep)
+            if moved:
+                log.info("carried %d audio-language verdict(s) over to replaced files (#563)", len(moved))
+        except Exception as e:  # noqa: BLE001 - the sweep is an improvement, never a gate
+            log.warning("verdict carry-over sweep failed (non-fatal): %s", e)
 
     async def _kick_eager_probe(
         self, probe_walker, items: list[dict[str, Any]], refresh_args: tuple | None = None

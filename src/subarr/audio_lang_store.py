@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import sqlite3
 import threading
 import time
@@ -88,6 +90,48 @@ def _decode_lang_codes(raw: str | None) -> list[str] | None:
     return val if isinstance(val, list) else None
 
 
+# ─── #563: a verdict follows its episode across a file replacement ─────────
+_EPISODE_TOKEN = re.compile(r"(?i)(?<![a-z0-9])s(\d{1,3})[ ._-]?e(\d{1,4})")
+_SEASON_DIR = re.compile(
+    r"(?i)^(?:(?:season|series|staffel|saison|temporada|stagione|seizoen)[ ._-]*\d{1,4}|s\d{1,3}|specials?)$"
+)
+
+
+def episode_key(canonical_path: str) -> tuple[int, int] | None:
+    """(season, episode) from an SxxExx token in the file NAME, or None."""
+    m = _EPISODE_TOKEN.search(canonical_path.rsplit("/", 1)[-1])
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def series_folder(canonical_path: str) -> str | None:
+    """The show folder a file belongs to: its parent, or its grandparent when
+    the parent is a season folder. Never the library root (`TV`), so a lookup
+    can never span shows."""
+    parts = canonical_path.split("/")[:-1]
+    if parts and _SEASON_DIR.match(parts[-1]):
+        parts = parts[:-1]
+    return "/".join(parts) if len(parts) >= 2 else None
+
+
+def _like_prefix(prefix: str) -> str:
+    """A LIKE pattern for everything under `prefix/`, escaping with a backslash."""
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+
+
+def _index_videos(series_fs: Path) -> dict[tuple[int, int], list[str]]:
+    """{(season, episode): [absolute paths]} for every video file under a show."""
+    from .paths import VIDEO_EXTS
+
+    found: dict[tuple[int, int], list[str]] = {}
+    for root, _dirs, files in os.walk(series_fs):
+        for n in files:
+            if os.path.splitext(n)[1].lower() in VIDEO_EXTS:
+                k = episode_key(n)
+                if k is not None:
+                    found.setdefault(k, []).append(os.path.join(root, n))
+    return found
+
+
 class AudioLangStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +183,30 @@ class AudioLangStore:
                 ),
             )
 
-    def get(self, canonical_path: str) -> AudioLangVerification | None:
+    def get(self, canonical_path: str, *, follow_replaced: bool = False) -> AudioLangVerification | None:
+        """The verdict for this exact path, else (#226) the longest matching
+        series intent.
+
+        #563: `follow_replaced=True` first looks for a verdict orphaned when
+        Sonarr replaced this file (see `carry_over`) and moves it here. Only the
+        queue-time override opts in: it can touch the filesystem, and every
+        bulk reader stays an exact lookup."""
+        exact = self._get_exact(canonical_path)
+        if exact is not None:
+            return exact
+        if follow_replaced:
+            try:
+                carried = self.carry_over(canonical_path)
+            except Exception:  # noqa: BLE001 - a failed carry-over must not block the lookup
+                logging.getLogger(__name__).warning(
+                    "verdict carry-over failed for %s", scrub(canonical_path), exc_info=True
+                )
+                carried = None
+            if carried is not None:
+                return carried
+        return self._get_intent(canonical_path)
+
+    def _get_exact(self, canonical_path: str) -> AudioLangVerification | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT canonical_path, lang_code, source, confidence, "
@@ -159,6 +226,9 @@ class AudioLangStore:
                 lang_class=row[7] or "single",  # #357
                 lang_codes=_decode_lang_codes(row[8]),  # #357
             )
+        return None
+
+    def _get_intent(self, canonical_path: str) -> AudioLangVerification | None:
         # #226: fall through to series intent — every episode of a
         # declared-language series inherits the declaration automatically.
         # New episodes added after the declaration get covered without
@@ -257,6 +327,159 @@ class AudioLangStore:
                     lang_codes=_decode_lang_codes(r[8]),  # #357
                 )
             )
+        return out
+
+    # ─── #563: carry a verdict across a file replacement ─────────────
+
+    def find_carry_over(self, new_path: str, *, _videos: dict | None = None) -> str | None:
+        """The orphaned verdict path to move onto `new_path`, or None.
+
+        Moves only when every one of these holds:
+          - `new_path` has no verdict of its own;
+          - it names an episode (SxxExx) inside a show folder;
+          - a verdict exists for the same episode in the same show whose file
+            is GONE (two live files never share a verdict), and the show folder
+            itself reads, so an unmounted share never looks like a replacement;
+          - `new_path` is the ONLY video file for that episode in the show;
+          - every orphaned verdict for the episode agrees on the language (the
+            most recent one moves).
+        The database is checked first, so a path with no candidate costs no
+        filesystem access. `_videos` caches the show walk across a sweep."""
+        from .paths import PathOutsideRootError, canonical_to_fs
+
+        key = episode_key(new_path)
+        series = series_folder(new_path)
+        if key is None or series is None:
+            return None
+        with self._lock:
+            if self._conn.execute(
+                "SELECT 1 FROM audio_lang_verifications WHERE canonical_path = ?", (new_path,)
+            ).fetchone():
+                return None
+            rows = self._conn.execute(
+                "SELECT canonical_path, lang_code, lang_class, lang_codes, verified_at "
+                "FROM audio_lang_verifications WHERE canonical_path LIKE ? ESCAPE '\\'",
+                (_like_prefix(series),),
+            ).fetchall()
+        rows = [r for r in rows if r[0] != new_path and episode_key(r[0]) == key]
+        if not rows:
+            return None
+        try:
+            series_fs = canonical_to_fs(series)
+            new_fs = canonical_to_fs(new_path)
+        except PathOutsideRootError:
+            return None
+        # No separate "is the share mounted" check: an unmounted share makes
+        # every old file look gone, but then the walk below cannot find
+        # `new_path` either, so the uniqueness rule refuses.
+        orphans = []
+        for r in rows:
+            try:
+                if canonical_to_fs(r[0]).exists():
+                    continue
+            except PathOutsideRootError:
+                continue
+            orphans.append(r)
+        if not orphans:
+            return None
+        if _videos is not None and series in _videos:
+            videos = _videos[series]
+        else:
+            videos = _index_videos(series_fs)
+            if _videos is not None:
+                _videos[series] = videos
+        same_episode = videos.get(key, [])
+        if len(same_episode) != 1 or Path(same_episode[0]) != new_fs:
+            return None
+        languages = {(normalize_lang(r[1]) or r[1], r[2] or "single", r[3] or "") for r in orphans}
+        if len(languages) != 1:
+            return None
+        return max(orphans, key=lambda r: r[4] or 0.0)[0]
+
+    def carry_over(self, new_path: str, *, _videos: dict | None = None) -> AudioLangVerification | None:
+        """#563: move the verdict orphaned by a file replacement onto `new_path`
+        (see `find_carry_over`) and return it, or None. The moved verdict keeps
+        its source, confidence and date, and records `carried_from` and
+        `carried_at` in its evidence so the UI can say where it came from."""
+        old = self.find_carry_over(new_path, _videos=_videos)
+        if old is None:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT evidence FROM audio_lang_verifications WHERE canonical_path = ?", (old,)
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                evidence = json.loads(row[0]) if row[0] else {}
+            except (ValueError, TypeError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {"previous_evidence": evidence}
+            evidence["carried_from"] = old
+            evidence["carried_at"] = time.time()
+            cur = self._conn.execute(
+                "UPDATE audio_lang_verifications SET canonical_path = ?, evidence = ? "
+                "WHERE canonical_path = ? AND NOT EXISTS "
+                "(SELECT 1 FROM audio_lang_verifications WHERE canonical_path = ?)",
+                (new_path, json.dumps(evidence), old, new_path),
+            )
+            if cur.rowcount != 1:
+                return None
+        logging.getLogger(__name__).info(
+            "audio-lang verdict carried over (#563): %s -> %s", scrub(old), scrub(new_path)
+        )
+        return self._get_exact(new_path)
+
+    def sweep_carry_overs(self) -> list[tuple[str, str]]:
+        """Move every verdict whose file was replaced by a single successor.
+        Returns (old, new) pairs. Stats each verdict path once and walks each
+        affected show once; safe to repeat (a moved verdict is no longer an
+        orphan)."""
+        from .paths import PathOutsideRootError, canonical_to_fs
+
+        with self._lock:
+            paths = [r[0] for r in self._conn.execute("SELECT canonical_path FROM audio_lang_verifications")]
+        videos: dict = {}
+        successors: set[str] = set()
+        for old in paths:
+            key = episode_key(old)
+            series = series_folder(old)
+            if key is None or series is None:
+                continue
+            try:
+                if canonical_to_fs(old).exists():
+                    continue
+                series_fs = canonical_to_fs(series)
+            except PathOutsideRootError:
+                continue
+            if series not in videos:  # an unreadable show folder walks to nothing
+                videos[series] = _index_videos(series_fs)
+            same = videos[series].get(key, [])
+            if len(same) == 1:
+                rel = os.path.relpath(same[0], series_fs).replace(os.sep, "/")
+                successors.add(f"{series}/{rel}")
+        moved: list[tuple[str, str]] = []
+        for new in sorted(successors):
+            carried = self.carry_over(new, _videos=videos)
+            if carried is not None:
+                moved.append((carried.evidence["carried_from"], new))
+        return moved
+
+    def get_carried_lookup(self) -> dict[str, str]:
+        """{canonical_path: carried_from} for every verdict moved by #563."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, evidence FROM audio_lang_verifications WHERE evidence LIKE '%carried_from%'"
+            ).fetchall()
+        out: dict[str, str] = {}
+        for path, raw in rows:
+            try:
+                ev = json.loads(raw) if raw else None
+            except (ValueError, TypeError):
+                continue
+            if isinstance(ev, dict) and isinstance(ev.get("carried_from"), str):
+                out[path] = ev["carried_from"]
         return out
 
     # ─── #226: series-level intent ──────────────────────────────────
@@ -527,7 +750,8 @@ def resolve_audio_language_override(
 
     if store is None:
         return None
-    verification = store.get(canonical)
+    # #563: follow a verdict across a Sonarr/Radarr file replacement.
+    verification = store.get(canonical, follow_replaced=True)
     if verification is None:
         return None
 
