@@ -48,7 +48,8 @@ _LANG_SUFFIX_RE = re.compile(
 )
 
 
-VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".ts", ".wmv"}
+# #560: the app-wide list, not a local copy (this one had `.wmv`, paths.py did not).
+from .paths import VIDEO_EXTS  # noqa: E402
 
 
 @dataclass

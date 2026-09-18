@@ -27,6 +27,7 @@ from typing import Any, NamedTuple
 from .config import settings
 from .paths import (
     UNSUPPORTED_EXTS,
+    VIDEO_EXTS,
     canonical_to_fs,
     library_for_canonical,
     library_label,
@@ -1534,12 +1535,24 @@ def _disqualify_unsupported(items: list[CoverageItem]) -> None:
     forever, since the probe walker skips non-video extensions) instead of
     presenting it as actionable. Folders / unresolved files are a SEPARATE
     resolution gap and intentionally untouched. Already-verified rows are left
-    alone. Mutates in place."""
+    alone. Mutates in place.
+
+    #560: a resolved episode/movie FILE whose format is on neither list (not a
+    video subarr can probe, not a known disc image) is also unsupported. It was
+    left 'unprobed', and eager-probe never picks such a file, so it sat in
+    Analyzing forever. Only `file_canonical_path` is judged this way: an
+    unresolved row's `canonical_path` is a folder, and a folder like `Mr. Robot`
+    has a "suffix" too."""
     for it in items:
         if it.verification_state == "verified":
             continue
         cand = it.file_canonical_path or it.canonical_path or ""
         if cand and Path(cand).suffix.lower() in UNSUPPORTED_EXTS:
+            it.verification_state = "unsupported"
+            continue
+        resolved = it.file_canonical_path or ""
+        suffix = Path(resolved).suffix.lower() if resolved else ""
+        if suffix and suffix not in VIDEO_EXTS:
             it.verification_state = "unsupported"
 
 

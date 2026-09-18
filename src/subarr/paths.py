@@ -17,7 +17,14 @@ from .libraries import Library
 log = logging.getLogger(__name__)
 
 
-VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts"}
+# Video containers subarr probes and sends to subgen. The one list for the whole
+# app (#560): every entry must also be in subgen's VIDEO_EXTENSIONS, or subarr
+# would schedule files subgen refuses. `.wmv`, `.mpg` and `.mpeg` were missing
+# until 2.7.11, so those files sat in Coverage's Analyzing bucket forever.
+VIDEO_EXTS = {
+    ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts",
+    ".wmv", ".asf", ".mpg", ".mpeg", ".m2ts", ".flv", ".f4v", ".ogv", ".3gp", ".divx",
+}  # fmt: skip
 
 # Disc-image / archive containers we can't per-episode probe or transcribe.
 # A multi-episode .iso resolves (via Sonarr's episodeFile) to ONE disc path
