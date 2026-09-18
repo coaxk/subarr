@@ -13,7 +13,7 @@ permissions:
 jobs:
   # Tag pushes block on tests + drift check first. Main-branch pushes also
   # block — every image we publish to GHCR ran the test suite on the same
-  # commit. Cheap insurance against a typo shipping to :latest.
+  # commit. Cheap insurance against a typo shipping to :main or a release tag.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -63,15 +63,26 @@ jobs:
 
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        # :latest is the newest RELEASE, and only a release tag moves it.
+        # Main pushes publish :main and :sha-<short> only. Before 2026-09-18
+        # both the main push and the tag push of a release set :latest (the
+        # raw rule below on main, metadata-action's default latest=auto on the
+        # semver tag), so whichever build finished last owned it: v2.7.10's
+        # tag build won, v2.7.11's main build won and :latest carried the
+        # label version=main. flavor latest=false switches the implicit rule
+        # off so the one explicit rule is the only owner. Prerelease tags
+        # (v1.0.0-rc.1) never move :latest.
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
 
       # Expire the Dockerfile's apt layer daily, so a published image never
       # ships packages Debian has already patched just because the GHA layer
