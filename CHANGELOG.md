@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Changed
+- **`:latest` is now always the newest release.** It used to move on every push to `main` as well as on each release, so an install on `:latest` (the README's default) could pick up changes before they were released, and after a release `:latest` could be either of two builds depending on which finished last. Now only a release tag moves `:latest`. Unreleased builds are published as `:main` for anyone who wants to preview them. Pinned version tags and `:stable` are unchanged.
+
 ## [2.7.11] - 2026-09-18
 
 **Rows stuck in "Analyzing" clear, and your audio-language verdicts survive Sonarr replacing a file.**

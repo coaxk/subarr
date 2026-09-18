@@ -8,15 +8,19 @@ The image at `ghcr.io/coaxk/subarr` carries multiple tags by design:
 
 | Tag      | Who it's for                                    | Update cadence    |
 |----------|-------------------------------------------------|-------------------|
-| `:latest`| Curious users / preview folks                   | Every main push   |
+| `:main`  | Curious users / preview folks                   | Every main push   |
+| `:latest`| Newest release (the README's default install)   | Every release tag |
 | `:1`     | Auto-track major version                        | Every tag         |
 | `:1.1`   | Auto-track minor version (recommended for most) | Every minor tag   |
 | `:1.1.0` | Pinned exact version                            | Never re-points   |
 | `:stable`| Released, soak-tested, public-trust             | Every promotion   |
 
 Production deployments should follow `:1.1` (minor floats) or `:stable`
-(announced releases only). `:latest` follows main and ships with
-in-flight work — no guarantees.
+(announced releases only). `:main` follows main and ships with in-flight
+work — no guarantees. `:latest` moves only when a release tag is pushed
+(never on a prerelease such as `v1.0.0-rc.1`), so it is always byte-for-byte
+the newest `:X.Y.Z`. Until 2026-09-18 both the main push and the tag push of
+a release wrote `:latest`, and whichever build finished last won.
 
 ## How a release ships
 
@@ -24,7 +28,7 @@ in-flight work — no guarantees.
               ┌─────────────────┐
    tag v1.2.0 │  release.yml    │
    pushed  →  │  builds + tests │ → ghcr.io/coaxk/subarr:1.2.0
-              │  + GHCR publish │   + :1.2 + :1 + :latest (when on main)
+              │  + GHCR publish │   + :1.2 + :1 + :latest
               └────────┬────────┘
                        │
                        ↓
@@ -126,23 +130,17 @@ If a real regression surfaces, **do not promote**:
 
 ### 3. Promote
 
-After 7 clean days, retag the image to `:stable`:
+After 7 clean days, retag the image to `:stable` with the workflow:
 
 ```bash
-docker pull ghcr.io/coaxk/subarr:1.2.0
-docker tag  ghcr.io/coaxk/subarr:1.2.0 ghcr.io/coaxk/subarr:stable
-docker push ghcr.io/coaxk/subarr:stable
+gh workflow run promote-stable.yml -R coaxk/subarr --ref main -f version=1.2.0
 ```
 
-Or (preferred, no local pull):
-
-```bash
-gh api -X POST /user/packages/container/subarr/versions/<id>/tags \
-  --field tags='["stable"]'
-```
-
-(The version `id` for `:1.2.0` is visible at
-`https://github.com/coaxk/subarr/pkgs/container/subarr`).
+It uses `docker buildx imagetools create`, which copies the whole multi-arch
+index. Do NOT `docker pull` + `docker tag` + `docker push`: that pushes only
+the puller's architecture, so `:stable` silently loses arm64 (see the header of
+`promote-stable.yml`). Afterwards, check the artefact rather than the run:
+`:stable` and `:1.2.0` must have the same digest on GHCR.
 
 Then:
 
