@@ -42,9 +42,16 @@ def test_extension_match_is_case_insensitive():
 
 def test_sidecar_scanner_uses_the_shared_list():
     """One list, not two copies that drift apart."""
+    import inspect
+
     from subarr import paths, sidecar_scanner
 
-    assert sidecar_scanner.VIDEO_EXTS is paths.VIDEO_EXTS
+    # Contents, not identity: other suites reload `subarr.paths`, which gives it
+    # a new set object while sidecar_scanner keeps the one it imported.
+    assert sidecar_scanner.VIDEO_EXTS == paths.VIDEO_EXTS
+    src = inspect.getsource(sidecar_scanner)
+    assert "from .paths import VIDEO_EXTS" in src
+    assert "VIDEO_EXTS = {" not in src
 
 
 def test_every_listed_format_is_one_subgen_accepts():

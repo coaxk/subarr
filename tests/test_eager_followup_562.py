@@ -41,13 +41,13 @@ def _make_file(canonical: str):
     return p
 
 
-def _stub_probe(monkeypatch, fail=False):
+def _stub_probe(monkeypatch, fail=None):
     from subarr import probe_walker as pw
     from subarr.media_probe import ProbeResult
 
     async def fake_probe(path, timeout_s=30.0):
-        if fail:
-            raise RuntimeError("ffprobe could not read it")
+        if fail is not None:
+            raise fail
         return ProbeResult(canonical_path="")
 
     monkeypatch.setattr(pw, "probe", fake_probe)
@@ -76,10 +76,17 @@ def test_on_done_fires_once_with_the_finished_state(walker, monkeypatch):
     assert state.status == "done" and state.probed == 1
 
 
-def test_recorded_failures_are_counted_separately_from_stat_errors(walker, monkeypatch):
+@pytest.mark.parametrize("kind", ["probe_error", "unexpected"])
+def test_recorded_failures_are_counted_separately_from_stat_errors(walker, monkeypatch, kind):
+    from subarr.media_probe import ProbeError
+
     wk, _ = walker
     _make_file("TV/A/bad.mkv")
-    _stub_probe(monkeypatch, fail=True)
+    # ProbeError is ffprobe's own failure; anything else takes the second branch.
+    _stub_probe(
+        monkeypatch,
+        fail=ProbeError("ffprobe could not read it") if kind == "probe_error" else RuntimeError("boom"),
+    )
     state, _ = _run_walk(wk, ["TV/A/bad.mkv", "TV/Ghost/missing.mkv"])
     assert state.failures_recorded == 1  # ffprobe failure, written to the store
     assert len(state.errors) == 2  # plus the missing file, which is not
