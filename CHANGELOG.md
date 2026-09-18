@@ -14,6 +14,8 @@ breaking config changes.
 
 Reported by @ryanfaricy, with diagnoses precise enough to fix straight from.
 
+- **Your audio-language verdicts follow an episode when Sonarr replaces the file (#563).** A verdict was stored against one exact file, so when Sonarr upgraded an episode or swapped an `.mp4` for an `.mkv`, the new file had none. subarr then sent no language to subgen, and a file tagged with the wrong language was skipped again although you had already said what it was. A verdict now moves to the new file when the old one is gone and exactly one file for the same episode (by `S01E03`) remains in the show, including after a season folder rename. Anything ambiguous moves nothing. This happens when the episode is queued, and in a sweep before Coverage builds (at most every 30 minutes). The row then says the language was carried over from the previous file, so a wrong one is easy to spot and correct. The manual orphan cleanup also carries these verdicts over instead of deleting them.
+
 ## [2.7.10] - 2026-09-17
 
 **Files you retry leave Queue Issues once the retry is on its way.**
