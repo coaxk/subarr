@@ -16,7 +16,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from .media_probe import ProbeError, probe
 from .paths import VIDEO_EXTS, PathOutsideRootError, canonical_to_fs, fs_to_canonical
@@ -88,6 +88,9 @@ class WalkState:
         self.processed = 0
         self.cached_hits = 0
         self.probed = 0
+        # #562: probe failures written to the store. `errors` also holds stat and
+        # path errors, which are not recorded and would recur on every pass.
+        self.failures_recorded = 0
         self.errors: list[dict] = []
         self.started_at = time.time()
         self.finished_at: float | None = None
@@ -262,9 +265,11 @@ class ProbeWalker:
         except ProbeError as e:
             state.errors.append({"path": canonical, "error": str(e)})
             self._store.record_failure(canonical, str(e))
+            state.failures_recorded += 1
         except Exception as e:
             state.errors.append({"path": canonical, "error": repr(e)})
             self._store.record_failure(canonical, repr(e))
+            state.failures_recorded += 1
         finally:
             state.processed += 1
 
@@ -277,7 +282,12 @@ class ProbeWalker:
     # ------------------------------------------------------------------
     _EAGER_LABEL = "__eager__"
 
-    async def probe_paths(self, canonical_paths: list[str], force: bool = False) -> WalkState:
+    async def probe_paths(
+        self,
+        canonical_paths: list[str],
+        force: bool = False,
+        on_done: Callable[[WalkState], None] | None = None,
+    ) -> WalkState:
         """Probe a specific set of canonical paths. Skips files already
         cached (mtime/size match) and records failures.
 
@@ -296,7 +306,11 @@ class ProbeWalker:
         Deduped: if an
         eager walk is already running, the existing WalkState is returned
         instead of starting a parallel one (so back-to-back coverage
-        refreshes don't stack identical probe passes)."""
+        refreshes don't stack identical probe passes).
+
+        #562: `on_done(state)` is called once when this walk ends, whatever the
+        outcome. A caller that joins an already-running walk is not called: the
+        caller that started it is, and gets the same state."""
         for existing in self._walks.values():
             if existing.root == self._EAGER_LABEL and existing.status == "running":
                 log.info(
@@ -319,13 +333,19 @@ class ProbeWalker:
         state = WalkState(walk_id, self._EAGER_LABEL)
         self._walks[walk_id] = state
         task = asyncio.create_task(
-            self._run_targeted(state, paths, force=force), name=f"probe-eager-{walk_id}"
+            self._run_targeted(state, paths, force=force, on_done=on_done), name=f"probe-eager-{walk_id}"
         )
         self._tasks[walk_id] = task
         task.add_done_callback(lambda t, wid=walk_id: self._tasks.pop(wid, None))
         return state
 
-    async def _run_targeted(self, state: WalkState, canonical_paths: list[str], force: bool = False) -> None:
+    async def _run_targeted(
+        self,
+        state: WalkState,
+        canonical_paths: list[str],
+        force: bool = False,
+        on_done: Callable[[WalkState], None] | None = None,
+    ) -> None:
         try:
             state.total_files = len(canonical_paths)
             log.info("eager probe %s: %d wanted files", state.id, state.total_files)
@@ -376,6 +396,12 @@ class ProbeWalker:
             state.status = "error"
             state.errors.append({"error": repr(e)})
             state.finished_at = time.time()
+        finally:
+            if on_done is not None:
+                try:
+                    on_done(state)
+                except Exception as e:  # noqa: BLE001 - a caller's hook must not break the walker
+                    log.warning("eager probe %s on_done failed: %s", state.id, e)
 
 
 # #546: one definition of whether a probe root resolves, shared by the schedule
