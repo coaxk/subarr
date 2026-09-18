@@ -7,6 +7,13 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **WMV, MPG and other common formats are analyzed (#560).** Coverage only probed seven video formats, so readable `.wmv`, `.mpg` and `.mpeg` episodes (among others subgen transcribes) sat in "Analyzing" forever. subarr now probes the common formats subgen accepts, and a file in a format it cannot handle moves to "Couldn't analyze" instead of waiting indefinitely.
+- **Date-named episodes leave "Analyzing" (#561).** Episodes named by air date (`Show - 2026-09-08.mkv`) were matched to their analysis by an `S01E03`-style token they never contain, so a finished analysis was never used. Episodes are now matched by the exact file Sonarr reports. This also stops an older release still in the cache from being mistaken for the current file.
+- **Coverage updates as soon as analysis finishes (#562).** Rows kept showing "Analyzing" for up to a couple of minutes after their analysis had finished, until the next unrelated rebuild. Coverage now refreshes itself once a batch of analysis writes new results, within seconds when that batch cleared the backlog.
+
+Reported by @ryanfaricy, with diagnoses precise enough to fix straight from.
+
 ## [2.7.10] - 2026-09-17
 
 **Files you retry leave Queue Issues once the retry is on its way.**

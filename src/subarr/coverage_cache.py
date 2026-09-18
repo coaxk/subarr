@@ -50,6 +50,12 @@ log = logging.getLogger(__name__)
 # 5-min refresh cadence.
 _EAGER_PROBE_CAP = 400
 
+# #562: how long a follow-up build may wait after an eager batch that covered
+# the whole backlog wrote new results. Short, so rows leave Analyzing as soon as
+# their probe lands, instead of after the min-interval spacing (120 s default)
+# or the next 5-min tick. A batch that hit the cap keeps the normal spacing.
+EAGER_FOLLOWUP_MAX_WAIT_S = 5.0
+
 # #167: publish gate. A build whose CRITICAL source failed (configured but
 # errored) while the cached snapshot had it healthy is a degraded build —
 # build_coverage degrades integration failures to empty data (best-effort by
@@ -191,7 +197,14 @@ class CoverageCache:
         return self._pending_again or self._debounce_handle is not None
 
     def request_refresh(
-        self, bundle, probe_store, audio_lang_store, *, use_tautulli: bool = True, probe_walker=None
+        self,
+        bundle,
+        probe_store,
+        audio_lang_store,
+        *,
+        use_tautulli: bool = True,
+        probe_walker=None,
+        max_wait_s: float | None = None,
     ) -> None:
         """Single coalescing entry point for event-driven refresh kicks.
 
@@ -206,7 +219,11 @@ class CoverageCache:
 
         Non-blocking / fire-and-forget. The expensive build always runs
         under `refresh()`'s asyncio.Lock, so even racing callers can't
-        double-build."""
+        double-build.
+
+        #562: `max_wait_s` caps the debounce wait for this request, and pulls
+        an already-armed timer forward if it would fire later. It never starts
+        a second build alongside one in flight."""
         args = (bundle, probe_store, audio_lang_store, use_tautulli, probe_walker)
         self._pending_args = args
 
@@ -215,17 +232,22 @@ class CoverageCache:
             self._pending_again = True
             return
 
-        if self._debounce_handle is not None:
-            # A debounce timer is already armed; latest args win (set
-            # above), nothing else to do.
-            return
-
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # no loop (shouldn't happen in app context)
 
+        if self._debounce_handle is not None:
+            # A debounce timer is already armed; latest args win (set
+            # above). Only a shorter max_wait_s changes when it fires.
+            if max_wait_s is not None and self._debounce_handle.when() - loop.time() > max_wait_s:
+                self._debounce_handle.cancel()
+                self._debounce_handle = loop.call_later(max(0.0, max_wait_s), self._fire_debounced)
+            return
+
         wait = self._time_until_allowed(loop)
+        if max_wait_s is not None:
+            wait = min(wait, max(0.0, max_wait_s))
         if wait <= 0:
             self._start_refresh_task(args)
         else:
@@ -431,7 +453,11 @@ class CoverageCache:
                 )
                 log.info("coverage cache refreshed in %.1fs (%d items)", duration, snap.item_count)
                 if probe_walker is not None:
-                    await self._kick_eager_probe(probe_walker, body["items"])
+                    await self._kick_eager_probe(
+                        probe_walker,
+                        body["items"],
+                        refresh_args=(bundle, probe_store, audio_lang_store, use_tautulli),
+                    )
                 return snap
             finally:
                 self._refreshing = False
@@ -441,15 +467,44 @@ class CoverageCache:
                 except RuntimeError:  # pragma: no cover
                     pass
 
-    async def _kick_eager_probe(self, probe_walker, items: list[dict[str, Any]]) -> None:
+    async def _kick_eager_probe(
+        self, probe_walker, items: list[dict[str, Any]], refresh_args: tuple | None = None
+    ) -> None:
         """Queue a targeted probe of the build's unprobed rows. Never lets a
-        probe-walker hiccup break the refresh — eager-probe is best-effort."""
+        probe-walker hiccup break the refresh — eager-probe is best-effort.
+
+        #562: the snapshot was published before these probes ran, so when the
+        batch finishes having written new results (probes or recorded
+        failures), request one coalesced follow-up build to show them. A batch
+        that learned nothing new (all cached, or only unrecordable stat errors)
+        requests nothing, which is also what ends the chain: the follow-up
+        build's own batch finds those files cached."""
         try:
             targets = eager_probe_targets(items)
             if not targets:
                 return
             log.info("eager-probe: queueing %d unprobed wanted files", len(targets))
-            await probe_walker.probe_paths(targets)
+            capped = len(targets) >= _EAGER_PROBE_CAP
+
+            def _on_done(state) -> None:
+                if refresh_args is None or getattr(state, "status", None) != "done":
+                    return
+                written = (getattr(state, "probed", 0) or 0) + (getattr(state, "failures_recorded", 0) or 0)
+                if written <= 0:
+                    return
+                bundle, probe_store, audio_lang_store, use_tautulli = refresh_args
+                log.info("eager-probe: %d new result(s); requesting a coverage refresh", written)
+                self.request_refresh(
+                    bundle,
+                    probe_store,
+                    audio_lang_store,
+                    use_tautulli=use_tautulli,
+                    probe_walker=probe_walker,
+                    # A capped batch means more backlog: keep the normal spacing.
+                    max_wait_s=None if capped else EAGER_FOLLOWUP_MAX_WAIT_S,
+                )
+
+            await probe_walker.probe_paths(targets, on_done=_on_done)
         except Exception as e:
             log.warning("eager-probe kick failed (non-fatal): %s", e)
 

@@ -27,6 +27,7 @@ from typing import Any, NamedTuple
 from .config import settings
 from .paths import (
     UNSUPPORTED_EXTS,
+    VIDEO_EXTS,
     canonical_to_fs,
     library_for_canonical,
     library_label,
@@ -912,12 +913,38 @@ def _attach_probe_episode(
     plex_hints: dict[str, str] | None = None,
     whisper_verifications: dict[str, str] | None = None,
 ) -> None:
-    """Look up a probed file under the series prefix whose basename
-    contains S01E03 (or equivalent). On match, copy embedded_en +
-    audio_langs + file_canonical_path onto the item and mark it verified.
-    On no probe match, mark probe_failed if a probe failure matches the
-    same episode, else leave it unprobed (the probe-gate then buckets it)."""
-    from .media_probe import audio_lang_summary_with_titles, english_track_summary
+    """Attach this episode's probe and mark it verified; on no probe, mark
+    probe_failed if the probe was recorded as failing, else leave it unprobed
+    (the probe-gate then buckets it).
+
+    #561: when Sonarr has resolved the episode's file (`file_canonical_path`),
+    only a probe of THAT exact path counts. Before, the match searched basenames
+    for an SxxExx token, which date-named files (`Show - 2026-09-08.mkv`) never
+    contain, so their valid cached probe was never attached and the row sat in
+    Analyzing forever; and an old release still in the cache, carrying the same
+    token, could verify the row with the wrong file's audio. The token search
+    remains only for rows with no resolved file. Same rule as the movie side
+    (#497)."""
+    if item.file_canonical_path:
+        exact = item.file_canonical_path
+        # The index lists each probe under every ancestor folder, so the file's
+        # own folder finds it whatever the row's series prefix is.
+        folder = exact.rsplit("/", 1)[0]
+        for file_canonical, probe in idx.get(folder) or []:
+            if file_canonical == exact:
+                _apply_episode_probe(
+                    item,
+                    file_canonical,
+                    probe,
+                    tautulli_hints=tautulli_hints,
+                    user_verifications=user_verifications,
+                    plex_hints=plex_hints,
+                    whisper_verifications=whisper_verifications,
+                )
+                return
+        if exact in ((failed_idx or {}).get(folder) or []):
+            item.verification_state = "probe_failed"
+        return
 
     if not item.canonical_path:
         return
@@ -927,21 +954,15 @@ def _attach_probe_episode(
     for file_canonical, probe in idx.get(item.canonical_path) or []:
         basename = file_canonical.rsplit("/", 1)[-1].lower()
         if pattern in basename:
-            item.file_canonical_path = file_canonical
-            item.embedded_en = english_track_summary(probe)
-            langs, notes = audio_lang_summary_with_titles(probe)
-            item.audio_langs = langs
-            if notes:
-                item.audio_label_notes.extend(notes)
-            _classify_audio_label(
+            _apply_episode_probe(
                 item,
+                file_canonical,
+                probe,
                 tautulli_hints=tautulli_hints,
                 user_verifications=user_verifications,
                 plex_hints=plex_hints,
                 whisper_verifications=whisper_verifications,
             )
-            _apply_track_mismatch(item, probe)
-            item.verification_state = "verified"
             return
     # No successful probe matched — was this episode a probe FAILURE?
     for failed_canonical in (failed_idx or {}).get(item.canonical_path) or []:
@@ -949,6 +970,36 @@ def _attach_probe_episode(
             item.verification_state = "probe_failed"
             return
     # else: leave default "unprobed"
+
+
+def _apply_episode_probe(
+    item: CoverageItem,
+    file_canonical: str,
+    probe: Any,
+    *,
+    tautulli_hints: dict[str, str] | None,
+    user_verifications: dict[str, str] | None,
+    plex_hints: dict[str, str] | None,
+    whisper_verifications: dict[str, str] | None,
+) -> None:
+    """Copy a matched probe's facts onto the row and mark it verified."""
+    from .media_probe import audio_lang_summary_with_titles, english_track_summary
+
+    item.file_canonical_path = file_canonical
+    item.embedded_en = english_track_summary(probe)
+    langs, notes = audio_lang_summary_with_titles(probe)
+    item.audio_langs = langs
+    if notes:
+        item.audio_label_notes.extend(notes)
+    _classify_audio_label(
+        item,
+        tautulli_hints=tautulli_hints,
+        user_verifications=user_verifications,
+        plex_hints=plex_hints,
+        whisper_verifications=whisper_verifications,
+    )
+    _apply_track_mismatch(item, probe)
+    item.verification_state = "verified"
 
 
 def _attach_probe_movie(
@@ -1534,12 +1585,24 @@ def _disqualify_unsupported(items: list[CoverageItem]) -> None:
     forever, since the probe walker skips non-video extensions) instead of
     presenting it as actionable. Folders / unresolved files are a SEPARATE
     resolution gap and intentionally untouched. Already-verified rows are left
-    alone. Mutates in place."""
+    alone. Mutates in place.
+
+    #560: a resolved episode/movie FILE whose format is on neither list (not a
+    video subarr can probe, not a known disc image) is also unsupported. It was
+    left 'unprobed', and eager-probe never picks such a file, so it sat in
+    Analyzing forever. Only `file_canonical_path` is judged this way: an
+    unresolved row's `canonical_path` is a folder, and a folder like `Mr. Robot`
+    has a "suffix" too."""
     for it in items:
         if it.verification_state == "verified":
             continue
         cand = it.file_canonical_path or it.canonical_path or ""
         if cand and Path(cand).suffix.lower() in UNSUPPORTED_EXTS:
+            it.verification_state = "unsupported"
+            continue
+        resolved = it.file_canonical_path or ""
+        suffix = Path(resolved).suffix.lower() if resolved else ""
+        if suffix and suffix not in VIDEO_EXTS:
             it.verification_state = "unsupported"
 
 
