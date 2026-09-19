@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 import time
+from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -157,6 +158,7 @@ def _path_outcome_chip(
     canonical_path: str | None = None,
     completed_paths: set[str] | None = None,
     no_output_paths: set[str] | None = None,
+    explain_skip: Callable[[str], dict | None] | None = None,
 ) -> dict:
     """Derive a single 'outcome' shape per scan path for the UI:
     {category, label, detail, skip_reason?}.
@@ -200,6 +202,17 @@ def _path_outcome_chip(
         }
     if status == PATH_STATUS_SKIPPED:
         skip_reason = _infer_skip_reason(canonical_path) if canonical_path else "unknown"
+        explained = None
+        if skip_reason != "sub_exists" and explain_skip is not None and canonical_path:
+            # #569: name an audio-language skip from the file's tag, subgen's
+            # skip list and the user's verdict, instead of "reason not in
+            # /batch response". Best-effort: any failure keeps the old text.
+            try:
+                explained = explain_skip(canonical_path)
+            except Exception:  # noqa: BLE001 - never break the Queue page
+                explained = None
+        if explained:
+            return {"category": "skipped", **explained}
         if skip_reason == "sub_exists":
             label = "sub already exists"
             detail = "matching .srt already on disk — subgen had nothing to do. Not an issue."
@@ -279,6 +292,7 @@ def _build_history_view(
     completed_paths: set | None = None,
     no_output_paths: set | None = None,
     active_paths: dict[str, float] | None = None,
+    explain_skip: Callable[[str], dict | None] | None = None,
 ) -> tuple[list[dict], dict]:
     """Flatten scans → per-path outcome rows + category counts. Pure (no app
     state) so it can run in a worker thread and be cached. The expensive bit is
@@ -330,6 +344,7 @@ def _build_history_view(
                 canonical_path=r.path,
                 completed_paths=completed_paths,
                 no_output_paths=no_output_paths,
+                explain_skip=explain_skip,
             )
             cat = outcome["category"]
             if cat in counts:
@@ -350,6 +365,20 @@ def _build_history_view(
             history.append(row)
             newest.setdefault(r.path, row)
     return history, counts
+
+
+def _skip_explainer(request: Request) -> Callable[[str], dict | None]:
+    """#569: bind the audio-language skip explainer to this app's verdicts,
+    probe cache and connected subgen's capabilities."""
+    from ..submission_language import explain_audio_language_skip
+
+    state = request.app.state
+    store = getattr(state, "audio_lang", None)
+    caps = getattr(state, "subgen_caps", None)
+    probe_store = getattr(state, "probe_store", None)
+    return lambda canonical: explain_audio_language_skip(
+        canonical, store=store, caps=caps, probe_store=probe_store
+    )
 
 
 def _pending_active_paths(request: Request) -> dict[str, float]:
@@ -396,7 +425,13 @@ async def _refresh_history_cache(request: Request, history_window_s: int, cache_
         no_output_paths = await asyncio.to_thread(request.app.state.provenance.no_output_paths_since, since)
         active_paths = await asyncio.to_thread(_pending_active_paths, request)
         history, counts = await asyncio.to_thread(
-            _build_history_view, scans, live_paths, completed_paths, no_output_paths, active_paths
+            _build_history_view,
+            scans,
+            live_paths,
+            completed_paths,
+            no_output_paths,
+            active_paths,
+            _skip_explainer(request),
         )
         c.update(key=cache_key, built_at=time.time(), history=history, counts=counts)
     except Exception as e:
@@ -497,7 +532,13 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
         no_output_paths = await asyncio.to_thread(request.app.state.provenance.no_output_paths_since, since)
         active_paths = await asyncio.to_thread(_pending_active_paths, request)
         history, counts = await asyncio.to_thread(
-            _build_history_view, scans, live_paths, completed_paths, no_output_paths, active_paths
+            _build_history_view,
+            scans,
+            live_paths,
+            completed_paths,
+            no_output_paths,
+            active_paths,
+            _skip_explainer(request),
         )
         c.update(key=cache_key, built_at=now, history=history, counts=counts)
 

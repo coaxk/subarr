@@ -246,6 +246,15 @@ function QCheck({ checked, onChange, indeterminate }) {
   );
 }
 
+// Skips that are a correct outcome, not a problem: they get the neutral chip
+// and go to Recently done instead of Issues. One list for both uses (#569).
+//   sub_exists          a matching subtitle is already on disk
+//   file_removed        the file was gone before subgen ran
+//   interrupted         the scan was cut off by a subarr restart
+//   audio_lang_expected the user verified a language this subgen skips (#569)
+export const BENIGN_SKIP_REASONS = new Set(['sub_exists', 'file_removed', 'interrupted', 'audio_lang_expected']);
+export const isBenignSkip = (outcome) => BENIGN_SKIP_REASONS.has((outcome || {}).skip_reason);
+
 function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) {
   const path = entry.path;
   const out = entry.outcome || {};
@@ -256,8 +265,7 @@ function HistoryRow({ entry, onRequeue, onRemove, busy, checked, onToggleSel }) 
   const rawCategory = out.category || 'pending';
   // Benign skips (matching .srt on disk, or the file was removed) get the
   // neutral 'sub_exists' chip style rather than the warn-amber 'skipped' one.
-  const benignSkip = out.skip_reason === 'sub_exists' || out.skip_reason === 'file_removed'
-                  || out.skip_reason === 'interrupted';
+  const benignSkip = isBenignSkip(out);
   const category = (rawCategory === 'skipped' && benignSkip)
     ? 'sub_exists'
     : rawCategory;
@@ -799,8 +807,6 @@ export function QueuePage() {
   // before subgen ran) are NOT issues — route them into Recently done.
   // Everything else skipped (unknown reason, likely audio_lang) stays in
   // Issues so the user notices and can verify their skip-language list.
-  const isBenignSkip = (o) => o.skip_reason === 'sub_exists' || o.skip_reason === 'file_removed'
-                          || o.skip_reason === 'interrupted';
   const issues = history.filter(h => {
     const o = h.outcome || {};
     if (o.category === 'error') return true;
