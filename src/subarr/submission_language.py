@@ -170,4 +170,74 @@ def resolve_for_job(job: Any, *, store: Any, caps: Any, probe_store: Any) -> Sub
         return SubmissionLanguage(None, False, "lookup failed")
 
 
-__all__ = ["SubmissionLanguage", "resolve_for_job", "resolve_submission"]
+_LANGUAGE_NAMES = {
+    "en": "English", "fr": "French", "de": "German", "it": "Italian", "es": "Spanish", "pt": "Portuguese",
+    "nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "pl": "Polish",
+    "ru": "Russian", "sr": "Serbian", "hr": "Croatian", "bg": "Bulgarian", "cs": "Czech", "el": "Greek",
+    "he": "Hebrew", "tr": "Turkish", "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "hi": "Hindi",
+    "ar": "Arabic", "is": "Icelandic", "hu": "Hungarian", "ro": "Romanian", "uk": "Ukrainian",
+}  # fmt: skip
+
+
+def _lang_name(code: str) -> str:
+    return _LANGUAGE_NAMES.get(code, code)
+
+
+def explain_audio_language_skip(canonical: str, *, store: Any, caps: Any, probe_store: Any) -> dict | None:
+    """#569: say why subgen skipped a file for its audio language, when subarr
+    can tell, and what to do about it.
+
+    subgen's /batch reply only counts skips, so a skipped row read "reason not
+    in /batch response". subarr knows the file's TAGGED audio language (the
+    probe), the connected subgen's skip list, and the user's verdict, which is
+    enough to name the audio-language skip and the fix. Returns None when the
+    tag does not explain the skip (the caller keeps its generic text).
+
+    `skip_reason` is `audio_lang_expected` when the skip is correct (the user
+    verified a language this subgen is set to skip, so there is nothing to do;
+    the Queue page files it under Recently done), else `audio_lang`.
+    """
+    skip = {_norm(c) for c in (getattr(caps, "skip_audio_languages", None) or ()) if c}
+    if not skip:
+        return None
+    tagged = _tagged_audio_languages(probe_store, canonical)
+    if not tagged:
+        return None
+    hit = sorted(tagged & skip)
+    if not hit:
+        return None
+    tag = ", ".join(_lang_name(c) for c in hit)
+    lead = f"skipped: the audio is tagged {tag}, and this subgen skips {tag} audio."
+    try:
+        verdict = store.get(canonical) if store is not None else None
+    except Exception:  # noqa: BLE001 - explaining must never break the Queue page
+        verdict = None
+    if verdict is None:
+        return {
+            "skip_reason": "audio_lang",
+            "label": "skipped: audio language",
+            "detail": f"{lead} If the audio is really another language, verify it in Review "
+            "(or set a series language rule) and requeue.",
+        }
+    if getattr(verdict, "lang_class", "single") == "multi":
+        if getattr(caps, "bypass_skip", False):
+            nxt = "Requeue it: subarr asks subgen to bypass this skip for multilingual files."
+        else:
+            nxt = "This subgen cannot bypass the skip; a subarr-subgen with patch v4.23 or later can transcribe it."
+        return {"skip_reason": "audio_lang", "label": "skipped: audio language", "detail": f"{lead} {nxt}"}
+    lang = _norm(getattr(verdict, "lang_code", None))
+    if lang in skip:
+        return {
+            "skip_reason": "audio_lang_expected",
+            "label": f"skipped: {_lang_name(lang)} audio",
+            "detail": f"{lead} You verified the audio as {_lang_name(lang)}, so this skip is expected.",
+        }
+    return {
+        "skip_reason": "audio_lang",
+        "label": "skipped: audio language",
+        "detail": f"{lead} You verified it as {_lang_name(lang)}; requeue it and subarr sends that "
+        "language, so subgen transcribes instead of skipping.",
+    }
+
+
+__all__ = ["SubmissionLanguage", "explain_audio_language_skip", "resolve_for_job", "resolve_submission"]

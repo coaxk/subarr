@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Queue Issues says why subgen skipped a file for its audio language (#569).** A skipped file showed "reason not in /batch response", because subgen only reports how many files it skipped. subarr now works it out from what it already knows: the file's tagged audio language, the languages your subgen is set to skip, and any language you verified or series rule you set. The entry names the reason and the next step: requeue a file you verified as another language, or verify the language in Review. A file you verified in a language your subgen is set to skip is a correct skip, so it moves out of Issues into Recently done.
+
 ## [2.7.12] - 2026-09-19
 
 **Automatically queued files now use the audio language you verified, and `:latest` always means the newest release.**
