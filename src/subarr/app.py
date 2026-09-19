@@ -558,12 +558,25 @@ async def lifespan(app_: FastAPI):
     app_.state.pending_queue = PendingQueueStore(settings.db_path)
 
     async def _feeder_submit(job) -> None:
+        # #573/#570: decide the language here, at submit, for every producer.
+        # The scheduler, backfill and folder scans enqueue without one, so their
+        # jobs used to reach subgen with no override at all. A job that already
+        # carries a decision keeps it. Off the loop: it may stat the share.
+        from .submission_language import resolve_for_job
+
+        decision = await asyncio.to_thread(
+            resolve_for_job,
+            job,
+            store=getattr(app_.state, "audio_lang", None),
+            caps=getattr(app_.state, "subgen_caps", None),
+            probe_store=getattr(app_.state, "probe_store", None),
+        )
         scan = app_.state.scans.create([job.canonical_path], reverse=False)
         app_.state.runner.start(
             scan,
-            audio_language_override=job.audio_language_override,
+            audio_language_override=decision.override,
             ignore_forced=job.ignore_forced,
-            bypass_skip=job.bypass_skip,
+            bypass_skip=decision.bypass_skip,
         )
         # Full provenance (series_id carried on the job) so completion_watcher
         # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).
