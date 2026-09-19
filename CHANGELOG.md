@@ -7,6 +7,10 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Automatically queued files now use the audio language you verified (#573).** Only jobs queued by hand (Queue requeue, queueing from Gaps, an Aftercare re-run) ever passed your verified language to subgen. The overnight auto-queue, backfill and folder scans sent none, so a file you had marked as French whose track is tagged English was skipped by `SKIP_IF_AUDIO_LANGUAGES=eng` every time it was queued automatically, and worked only when requeued by hand. The language is now decided when each job is submitted, for every way a job can be queued, and a verdict you set after a file was queued still applies. On one real library this covers 357 of 427 verified files.
+- **Multilingual files tagged with a skipped language are transcribed (#570).** A multilingual verdict tells subgen to detect the language itself, so subarr sent no language, and a bilingual file whose track is tagged English was skipped although you had said what it is. subarr now asks subgen to bypass its skip for that file, but only when subgen supports it, when the file's tagged language is what subgen would skip it for, and when no subtitle in the language subgen would write already exists.
+
 ### Changed
 - **`:latest` is now always the newest release.** It used to move on every push to `main` as well as on each release, so an install on `:latest` (the README's default) could pick up changes before they were released, and after a release `:latest` could be either of two builds depending on which finished last. Now only a release tag moves `:latest`. Unreleased builds are published as `:main` for anyone who wants to preview them. Pinned version tags and `:stable` are unchanged.
 
