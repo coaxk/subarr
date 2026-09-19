@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -18,6 +20,16 @@ os.environ.setdefault("SUBARR_AUTH_DISABLED", "1")
 # default is the real prod URL and the pinger POSTs on its first tick, so every
 # TestClient boot was pinging telemetry.subarr.com. Empty = "don't transmit".
 os.environ.setdefault("SUBARR_TELEMETRY_ENDPOINT", "")
+# #545 follow-up: never let a test write into a REAL media library. The product
+# default is /media/library, which on Windows is C:\media\library, and any test
+# that planted files through settings.media_root without the subarr_env fixture
+# wrote there. Point it at a per-session sandbox instead. Deliberately an
+# OVERRIDE, not setdefault: a developer shell with SUBARR_MEDIA_ROOT aimed at a
+# real library must not make the suite write into it. Tests that need their own
+# layout still use subarr_env / monkeypatch.setenv, which win for that test.
+_TEST_MEDIA_ROOT = Path(tempfile.gettempdir()) / f"subarr-test-media-{os.getpid()}"
+_TEST_MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+os.environ["SUBARR_MEDIA_ROOT"] = str(_TEST_MEDIA_ROOT)
 
 
 def _make_compose(p: Path) -> None:
@@ -698,6 +710,11 @@ def _make_docker_stub(
             return progress_map or {}
 
     return _StubDocker
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """#545: remove this session's sandbox media root (see the top of the file)."""
+    shutil.rmtree(_TEST_MEDIA_ROOT, ignore_errors=True)
 
 
 def pytest_configure(config):
