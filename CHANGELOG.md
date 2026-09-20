@@ -7,6 +7,8 @@ breaking config changes.
 
 ## [Unreleased]
 
+**`:stable` moved to 2.7.12 on 2026-09-20** (it had been on 2.5.1 since July). Promoted ahead of the usual 7-day soak deliberately: 2.7.12 fixes #573, where automatically queued files ignored the audio language you had verified, which is exactly what an install tracking `:stable` relies on.
+
 ### Fixed
 - **Queue Issues says why subgen skipped a file for its audio language (#569).** A skipped file showed "reason not in /batch response", because subgen only reports how many files it skipped. subarr now works it out from what it already knows: the file's tagged audio language, the languages your subgen is set to skip, and any language you verified or series rule you set. The entry names the reason and the next step: requeue a file you verified as another language, or verify the language in Review. A file you verified in a language your subgen is set to skip is a correct skip, so it moves out of Issues into Recently done.
 
