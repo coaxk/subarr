@@ -127,6 +127,22 @@ async def _reprobe_then_refresh(request: Request, canonical: str) -> None:
         log.warning("auto-reprobe after verification failed for %s: %s", scrub(canonical), e)
 
 
+def _arr_ids_for(request: Request, canonical_path: str) -> tuple[int | None, int | None]:
+    """#571: (sonarr_episode_id, radarr_movie_id) for a path, from the cached
+    coverage snapshot. (None, None) when there is no snapshot yet or the path is
+    not in it — a verdict with no id simply falls back to #563's token match,
+    and the back-fill picks it up on a later sweep."""
+    from ..coverage_cache import snapshot_path_ids
+
+    try:
+        cov = getattr(request.app.state, "coverage_cache", None)
+        snap = cov.get_cached() if cov is not None else None
+        return snapshot_path_ids(snap).get(canonical_path, (None, None))
+    except Exception:  # noqa: BLE001 - never block a verification on this
+        log.warning("could not resolve arr ids for %s", scrub(canonical_path), exc_info=True)
+        return (None, None)
+
+
 @router.post("/verifications")
 async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str, Any]:
     from ..langs import normalize_lang
@@ -135,6 +151,12 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
     # #358: 3-letter picker codes ('glg') → 2-letter canonical, used for the
     # store, the Sonarr propagation, and the response so all three agree.
     lang = normalize_lang(req.lang_code) or req.lang_code
+    # #571: record the arr id this verdict is about, so it can be carried onto a
+    # replacement whose name has no SxxExx token (a date-named episode, #561) or
+    # none at all (a movie). Resolved HERE from the snapshot subarr already
+    # holds, rather than accepted from the client: the server owns which id a
+    # path belongs to, and an older UI that sends nothing still gets it.
+    sonarr_episode_id, radarr_movie_id = _arr_ids_for(request, req.canonical_path)
     store.upsert(
         canonical_path=req.canonical_path,
         lang_code=lang,
@@ -143,6 +165,8 @@ async def upsert_verification(req: VerifyRequest, request: Request) -> dict[str,
         evidence=req.evidence,
         lang_class=req.lang_class,  # #357
         lang_codes=req.lang_codes,  # #357
+        sonarr_episode_id=sonarr_episode_id,  # #571
+        radarr_movie_id=radarr_movie_id,  # #571
     )
 
     # v1.1.1 #219 closer: propagate the user's audio-language verification

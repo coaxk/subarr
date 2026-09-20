@@ -84,6 +84,32 @@ def degraded_sources(new_sources: dict | None, cached_sources: dict | None) -> l
     return out
 
 
+def snapshot_path_ids(snapshot: Any) -> dict[str, tuple[int | None, int | None]]:
+    """#571: {file path: (sonarr_episode_id, radarr_movie_id)} from a coverage
+    snapshot, for the verdict back-fill and the id-based carry-over.
+
+    Only rows that name a real file on disk (`file_canonical_path`) are usable:
+    a row for a wanted-but-absent episode has nothing to key a verdict to. An
+    episode is identified by its EPISODE id, never the series id — a series id
+    would make every episode of a show look like the same thing.
+    """
+    out: dict[str, tuple[int | None, int | None]] = {}
+    for row in getattr(snapshot, "items", None) or []:
+        path = row.get("file_canonical_path")
+        if not path:
+            continue
+        bazarr = row.get("bazarr") or {}
+        if row.get("media_type") == "movie":
+            ident = bazarr.get("radarr_id")
+            pair = (None, int(ident)) if ident is not None else None
+        else:
+            ident = bazarr.get("episode_id")
+            pair = (int(ident), None) if ident is not None else None
+        if pair is not None:
+            out[path] = pair
+    return out
+
+
 def eager_probe_targets(items: list[dict[str, Any]], cap: int = _EAGER_PROBE_CAP) -> list[str]:
     """Canonical paths of rows the probe-gate is hiding because they're
     unprobed — i.e. the 'Analyzing' bucket. These are exactly the files we
@@ -483,8 +509,23 @@ class CoverageCache:
         if sweep is None or time.time() - self._last_carry_sweep < CARRY_SWEEP_INTERVAL_S:
             return
         self._last_carry_sweep = time.time()
+        # #571: the ids come from the snapshot we already hold, so neither the
+        # back-fill nor the id match costs a Sonarr/Radarr call.
+        path_ids = snapshot_path_ids(self._cached)
         try:
-            moved = await asyncio.to_thread(sweep)
+            if path_ids:
+                backfill = getattr(audio_lang_store, "backfill_ids", None)
+                if backfill is not None:
+                    report = await asyncio.to_thread(backfill, path_ids)
+                    if report["updated"] or report["skipped_file_missing"]:
+                        log.info(
+                            "#571 verdict id back-fill: %d of %d verdict(s) given an arr id, "
+                            "%d skipped (file no longer on disk)",
+                            report["updated"],
+                            report["considered"],
+                            report["skipped_file_missing"],
+                        )
+            moved = await asyncio.to_thread(sweep, path_ids)
             if moved:
                 log.info("carried %d audio-language verdict(s) over to replaced files (#563)", len(moved))
         except Exception as e:  # noqa: BLE001 - the sweep is an improvement, never a gate

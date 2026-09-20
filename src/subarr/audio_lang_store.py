@@ -62,6 +62,10 @@ class AudioLangVerification:
     evidence: dict | None
     lang_class: str = "single"  # #357: 'single' | 'multi'
     lang_codes: list[str] | None = None  # #357: ordered set, only when multi
+    # #571: the arr id this verdict was recorded against, so carry-over can
+    # match on identity rather than on an SxxExx token the name may not carry.
+    sonarr_episode_id: int | None = None
+    radarr_movie_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,7 +78,33 @@ class AudioLangVerification:
             "evidence": self.evidence,
             "lang_class": self.lang_class,
             "lang_codes": self.lang_codes,
+            "sonarr_episode_id": self.sonarr_episode_id,
+            "radarr_movie_id": self.radarr_movie_id,
         }
+
+
+# Every full read of the table goes through these two, so a new column can
+# never be added to one read site and forgotten in the other.
+_VERDICT_COLUMNS = (
+    "canonical_path, lang_code, source, confidence, verified_at, verified_by, "
+    "evidence, lang_class, lang_codes, sonarr_episode_id, radarr_movie_id"
+)
+
+
+def _row_to_verification(row: tuple) -> AudioLangVerification:
+    return AudioLangVerification(
+        canonical_path=row[0],
+        lang_code=normalize_lang(row[1]) or row[1],  # #358
+        source=row[2],
+        confidence=row[3],
+        verified_at=row[4],
+        verified_by=row[5],
+        evidence=json.loads(row[6]) if row[6] else None,
+        lang_class=row[7] or "single",  # #357
+        lang_codes=_decode_lang_codes(row[8]),  # #357
+        sonarr_episode_id=row[9],  # #571
+        radarr_movie_id=row[10],  # #571
+    )
 
 
 def _decode_lang_codes(raw: str | None) -> list[str] | None:
@@ -160,18 +190,24 @@ class AudioLangStore:
         evidence: dict | None = None,
         lang_class: str = "single",  # #357
         lang_codes: list[str] | None = None,  # #357
+        sonarr_episode_id: int | None = None,  # #571
+        radarr_movie_id: int | None = None,  # #571
     ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audio_lang_verifications "
                 "(canonical_path, lang_code, source, confidence, verified_at, verified_by, evidence, "
-                " lang_class, lang_codes) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " lang_class, lang_codes, sonarr_episode_id, radarr_movie_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(canonical_path) DO UPDATE SET "
                 "  lang_code=excluded.lang_code, source=excluded.source, "
                 "  confidence=excluded.confidence, verified_at=excluded.verified_at, "
                 "  verified_by=excluded.verified_by, evidence=excluded.evidence, "
-                "  lang_class=excluded.lang_class, lang_codes=excluded.lang_codes",
+                "  lang_class=excluded.lang_class, lang_codes=excluded.lang_codes, "
+                # #571: a re-verify that carries no id must not erase the one
+                # already recorded — COALESCE keeps it.
+                "  sonarr_episode_id=COALESCE(excluded.sonarr_episode_id, sonarr_episode_id), "
+                "  radarr_movie_id=COALESCE(excluded.radarr_movie_id, radarr_movie_id)",
                 (
                     canonical_path,
                     # #358: canonical 2-letter ISO-639-1 (was raw .lower()).
@@ -186,6 +222,8 @@ class AudioLangStore:
                     # lang_code (2-letter canonical), so the set can never drift
                     # into a different format than lang_code regardless of caller.
                     json.dumps([normalize_lang(c) or c.lower() for c in lang_codes]) if lang_codes else None,
+                    sonarr_episode_id,  # #571
+                    radarr_movie_id,  # #571
                 ),
             )
 
@@ -215,24 +253,10 @@ class AudioLangStore:
     def _get_exact(self, canonical_path: str) -> AudioLangVerification | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT canonical_path, lang_code, source, confidence, "
-                "       verified_at, verified_by, evidence, lang_class, lang_codes "
-                "FROM audio_lang_verifications WHERE canonical_path = ?",
+                f"SELECT {_VERDICT_COLUMNS} FROM audio_lang_verifications WHERE canonical_path = ?",
                 (canonical_path,),
             ).fetchone()
-        if row:
-            return AudioLangVerification(
-                canonical_path=row[0],
-                lang_code=normalize_lang(row[1]) or row[1],  # #358
-                source=row[2],
-                confidence=row[3],
-                verified_at=row[4],
-                verified_by=row[5],
-                evidence=json.loads(row[6]) if row[6] else None,
-                lang_class=row[7] or "single",  # #357
-                lang_codes=_decode_lang_codes(row[8]),  # #357
-            )
-        return None
+        return _row_to_verification(row) if row else None
 
     def _get_intent(self, canonical_path: str) -> AudioLangVerification | None:
         # #226: fall through to series intent — every episode of a
@@ -313,27 +337,9 @@ class AudioLangStore:
     def list_all(self) -> list[AudioLangVerification]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT canonical_path, lang_code, source, confidence, "
-                "       verified_at, verified_by, evidence, lang_class, lang_codes "
-                "FROM audio_lang_verifications "
-                "ORDER BY verified_at DESC"
+                f"SELECT {_VERDICT_COLUMNS} FROM audio_lang_verifications ORDER BY verified_at DESC"
             ).fetchall()
-        out = []
-        for r in rows:
-            out.append(
-                AudioLangVerification(
-                    canonical_path=r[0],
-                    lang_code=normalize_lang(r[1]) or r[1],  # #358
-                    source=r[2],
-                    confidence=r[3],
-                    verified_at=r[4],
-                    verified_by=r[5],
-                    evidence=json.loads(r[6]) if r[6] else None,
-                    lang_class=r[7] or "single",  # #357
-                    lang_codes=_decode_lang_codes(r[8]),  # #357
-                )
-            )
-        return out
+        return [_row_to_verification(r) for r in rows]
 
     # ─── #563: carry a verdict across a file replacement ─────────────
 
@@ -410,6 +416,12 @@ class AudioLangStore:
         old = self.find_carry_over(new_path, _videos=_videos)
         if old is None:
             return None
+        return self._move_verdict(old, new_path)
+
+    def _move_verdict(self, old: str, new_path: str) -> AudioLangVerification | None:
+        """Re-key one verdict onto `new_path`, recording where it came from.
+        The row is UPDATEd rather than re-inserted, so the language, source,
+        confidence, date and (#571) the arr id all travel with it."""
         with self._lock:
             row = self._conn.execute(
                 "SELECT evidence FROM audio_lang_verifications WHERE canonical_path = ?", (old,)
@@ -437,11 +449,20 @@ class AudioLangStore:
         )
         return self._get_exact(new_path)
 
-    def sweep_carry_overs(self) -> list[tuple[str, str]]:
+    def sweep_carry_overs(
+        self, path_ids: dict[str, tuple[int | None, int | None]] | None = None
+    ) -> list[tuple[str, str]]:
         """Move every verdict whose file was replaced by a single successor.
         Returns (old, new) pairs. Stats each verdict path once and walks each
         affected show once; safe to repeat (a moved verdict is no longer an
-        orphan)."""
+        orphan).
+
+        #571: `path_ids` maps a file that EXISTS to the (sonarr_episode_id,
+        radarr_movie_id) the coverage snapshot holds for it. Given it, a verdict
+        carrying the same id is carried onto that file even when the name has no
+        SxxExx token to match — which is the only route for a date-named episode
+        (#561) or a movie. The mapping is passed in rather than fetched, so the
+        sweep makes no API call and stays runnable on a timer."""
         from .paths import PathOutsideRootError, canonical_to_fs
 
         with self._lock:
@@ -470,7 +491,111 @@ class AudioLangStore:
             carried = self.carry_over(new, _videos=videos)
             if carried is not None:
                 moved.append((carried.evidence["carried_from"], new))
+        moved.extend(self._carry_by_id(path_ids or {}))
         return moved
+
+    def _carry_by_id(self, path_ids: dict[str, tuple[int | None, int | None]]) -> list[tuple[str, str]]:
+        """#571: carry each orphaned verdict onto the file its arr id now names.
+
+        Refuses unless the successor is unambiguous, on the same terms the token
+        match uses: the old file is really gone, exactly ONE existing file
+        carries that id, it has no verdict of its own, and it is in the SAME
+        LIBRARY — the same Sonarr id in another instance is a different file
+        (#161)."""
+        from .paths import PathOutsideRootError, _split_canonical, canonical_to_fs
+
+        if not path_ids:
+            return []
+        # (kind, id, library slug) -> the existing files that claim it
+        claims: dict[tuple[str, int, str], list[str]] = {}
+        for path, (sonarr_id, radarr_id) in path_ids.items():
+            try:
+                slug, _rel = _split_canonical(path)
+            except PathOutsideRootError:
+                continue
+            for kind, ident in (("sonarr", sonarr_id), ("radarr", radarr_id)):
+                if ident is not None:
+                    claims.setdefault((kind, int(ident), slug), []).append(path)
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, sonarr_episode_id, radarr_movie_id "
+                "FROM audio_lang_verifications "
+                "WHERE sonarr_episode_id IS NOT NULL OR radarr_movie_id IS NOT NULL"
+            ).fetchall()
+
+        moved: list[tuple[str, str]] = []
+        for old, sonarr_id, radarr_id in rows:
+            try:
+                if canonical_to_fs(old).exists():
+                    continue  # two live files never share one verdict
+                slug, _rel = _split_canonical(old)
+            except PathOutsideRootError:
+                continue
+            kind, ident = ("sonarr", sonarr_id) if sonarr_id is not None else ("radarr", radarr_id)
+            candidates = claims.get((kind, int(ident), slug), [])
+            if len(candidates) != 1:
+                continue  # none, or ambiguous
+            new = candidates[0]
+            # A verdict already on `new` is refused by _move_verdict's own
+            # NOT EXISTS clause, which is the authoritative guard; checking it
+            # here as well only duplicated it.
+            if new == old:
+                continue
+            try:
+                if not canonical_to_fs(new).exists():
+                    continue  # the snapshot is stale; the file is not there now
+            except PathOutsideRootError:
+                continue
+            if self._move_verdict(old, new) is not None:
+                moved.append((old, new))
+        return moved
+
+    def backfill_ids(self, path_ids: dict[str, tuple[int | None, int | None]]) -> dict[str, int]:
+        """#571: give verdicts recorded before this existed the arr id of the
+        file they name, so a future replacement can carry them.
+
+        Only for a verdict whose file is STILL ON DISK: without the file there is
+        nothing to confirm the mapping is about this verdict rather than about
+        whatever now occupies the path. An id already recorded is never
+        overwritten. Idempotent, and returns counts so the caller can report
+        what it did."""
+        from .paths import PathOutsideRootError, canonical_to_fs
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path FROM audio_lang_verifications "
+                "WHERE sonarr_episode_id IS NULL AND radarr_movie_id IS NULL"
+            ).fetchall()
+        considered = updated = skipped_file_missing = 0
+        for (path,) in rows:
+            ids = path_ids.get(path)
+            if ids is None:
+                continue
+            considered += 1
+            sonarr_id, radarr_id = ids
+            if sonarr_id is None and radarr_id is None:
+                continue
+            try:
+                if not canonical_to_fs(path).exists():
+                    skipped_file_missing += 1
+                    continue
+            except PathOutsideRootError:
+                continue
+            with self._lock:
+                cur = self._conn.execute(
+                    "UPDATE audio_lang_verifications "
+                    "SET sonarr_episode_id = ?, radarr_movie_id = ? "
+                    "WHERE canonical_path = ? "
+                    "  AND sonarr_episode_id IS NULL AND radarr_movie_id IS NULL",
+                    (sonarr_id, radarr_id, path),
+                )
+            updated += cur.rowcount
+        return {
+            "considered": considered,
+            "updated": updated,
+            "skipped_file_missing": skipped_file_missing,
+        }
 
     def get_carried_lookup(self) -> dict[str, str]:
         """{canonical_path: carried_from} for every verdict moved by #563."""
