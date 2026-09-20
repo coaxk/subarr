@@ -113,6 +113,12 @@ def series_folder(canonical_path: str) -> str | None:
     return "/".join(parts) if len(parts) >= 2 else None
 
 
+def _with_slash(prefix: str) -> str:
+    """A series prefix in its canonical form. The trailing slash is what keeps
+    'TV/Alert/' from matching 'TV/Alerts/', so every comparison uses it."""
+    return prefix if prefix.endswith("/") else prefix + "/"
+
+
 def _like_prefix(prefix: str) -> str:
     """A LIKE pattern for everything under `prefix/`, escaping with a backslash."""
     return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
@@ -571,6 +577,85 @@ class AudioLangStore:
             }
             for r in rows
         ]
+
+    # ── #568: suggest a series rule from agreeing episode verdicts ──────
+
+    def dismiss_series_suggestion(self, series_prefix: str, note: str | None = None) -> None:
+        """Never offer a series rule for this show again."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO series_rule_suggestion_dismissed "
+                "(series_prefix, dismissed_at, note) VALUES (?, ?, ?) "
+                "ON CONFLICT(series_prefix) DO UPDATE SET "
+                "  dismissed_at=excluded.dismissed_at, note=excluded.note",
+                (_with_slash(series_prefix), time.time(), note),
+            )
+
+    def undismiss_series_suggestion(self, series_prefix: str) -> bool:
+        """Offer this show again. True if a dismissal existed."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM series_rule_suggestion_dismissed WHERE series_prefix = ?",
+                (_with_slash(series_prefix),),
+            )
+            return cur.rowcount > 0
+
+    def get_suggestion_dismissed_set(self) -> set[str]:
+        with self._lock:
+            rows = self._conn.execute("SELECT series_prefix FROM series_rule_suggestion_dismissed").fetchall()
+        return {r[0] for r in rows}
+
+    def suggest_series_rules(self, min_agreeing: int = 3) -> list[dict[str, Any]]:
+        """Shows whose per-episode verdicts all agree and that have no rule yet.
+
+        A show is offered only when EVERY verdict under it names the same single
+        language: a show whose verdicts disagree is a genuinely multilingual one
+        (#140) where the per-episode verdicts are the right answer, and one
+        dissenting verdict is enough to silence the show. Ordered by how many
+        verdicts the rule would cover, because that is how much per-file work it
+        saves.
+        """
+        by_show: dict[str, list[AudioLangVerification]] = {}
+        for v in self.list_all():
+            folder = series_folder(v.canonical_path)
+            if folder is None:
+                continue  # a movie, or a file sitting at a library root
+            by_show.setdefault(folder, []).append(v)
+
+        intents = [i["series_prefix"] for i in self.list_series_intents()]
+        dismissed = self.get_suggestion_dismissed_set()
+        mixed = self.get_mixed_dismissed_set()
+
+        out: list[dict[str, Any]] = []
+        for folder, verdicts in by_show.items():
+            prefix = _with_slash(folder)
+            if len(verdicts) < min_agreeing:
+                continue
+            # Compare prefix-to-prefix: both carry the trailing slash, so
+            # 'TV/Alert/' can never swallow 'TV/Alerts/'.
+            if any(prefix.startswith(i) for i in intents):
+                continue
+            if prefix in dismissed:
+                continue
+            if folder in mixed or prefix in mixed:
+                continue
+            if any(v.lang_class == "multi" for v in verdicts):
+                continue
+            langs = {v.lang_code for v in verdicts}
+            if len(langs) != 1:
+                continue
+            newest = sorted(verdicts, key=lambda v: v.verified_at, reverse=True)
+            out.append(
+                {
+                    "series_prefix": prefix,
+                    "title": folder.split("/")[-1],
+                    "lang_code": langs.pop(),
+                    "agreeing": len(verdicts),
+                    "sample_paths": [v.canonical_path for v in newest[:3]],
+                }
+            )
+        out.sort(key=lambda s: (-s["agreeing"], s["series_prefix"]))
+        return out
 
     # ── #140: mis-grouped-series dismiss ────────────────────────────────
 

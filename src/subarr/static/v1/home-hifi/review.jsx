@@ -875,6 +875,92 @@ function OrphanBanner() {
   );
 }
 
+// #568: when several of a show's episode verdicts agree and it has no rule
+// yet, offer one. A rule (#226) covers new and replaced files with no per-file
+// work — and unlike #563's carry-over it needs no SxxExx match. Applying keeps
+// the episode verdicts: they still win over the rule, so a correction on one
+// odd episode survives.
+export function SeriesSuggestionCard() {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState(null);   // the prefix currently being acted on
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/audio-lang/series-suggestions', { credentials: 'same-origin' });
+      if (!r.ok) return;              // silent: a nicety, not core UI (mirrors OrphanBanner)
+      const body = await r.json();
+      setItems(Array.isArray(body.items) ? body.items : []);
+    } catch { /* offline or blocked: stay silent rather than alarm */ }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (s, path, body) => {
+    setBusy(s.series_prefix);
+    setError(null);
+    try {
+      const r = await fetch(`/api/audio-lang/series-suggestions/${path}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const detail = await r.json().catch(() => ({}));
+        setError(detail.detail || `Could not apply the rule for ${s.title}.`);
+        return;
+      }
+      // Re-read the list: it is what proves the rule landed. Trusting the
+      // POST's own echo would be believing the thing under test.
+      await load();
+    } catch (e) {
+      setError(`Could not reach subarr: ${e.message || e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!items.length && !error) return null;
+
+  return (
+    <div style={{
+      border: '1px solid var(--border, #333)', borderRadius: 8, padding: '10px 12px',
+      fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ color: 'var(--fg-2)' }}>
+        {items.length === 1
+          ? 'One show has agreeing episode verdicts and no series rule.'
+          : `${items.length} shows have agreeing episode verdicts and no series rule.`}
+        {' '}A rule also covers future episodes and replaced files.
+      </div>
+      {error && <div style={{ color: 'var(--warn, #d98324)' }}>{error}</div>}
+      {items.map((s) => (
+        <div key={s.series_prefix} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <strong>{s.title}</strong>{' — you verified '}
+            {s.language_name || s.lang_code}{' on '}{s.agreeing}{' episodes.'}
+          </div>
+          <button
+            type="button"
+            disabled={busy === s.series_prefix}
+            onClick={() => act(s, 'apply', { series_prefix: s.series_prefix, lang_code: s.lang_code })}
+          >
+            {busy === s.series_prefix ? 'Applying...' : `Apply ${s.language_name || s.lang_code} to the series`}
+          </button>
+          <button
+            type="button"
+            disabled={busy === s.series_prefix}
+            onClick={() => act(s, 'dismiss', { series_prefix: s.series_prefix })}
+          >
+            Not this show
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ReviewPage() {
   const langPicks = useLanguagePicks();  // #358: full Whisper set, 2-letter
   const [data, setData] = useState(null);
@@ -1607,6 +1693,7 @@ export function ReviewPage() {
       display: 'flex', flexDirection: 'column',
     }}>
       <OrphanBanner />
+      <SeriesSuggestionCard />
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 'var(--text-h1)', fontWeight: 600 }}>Review</h1>
