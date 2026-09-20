@@ -9,6 +9,9 @@ breaking config changes.
 
 **`:stable` moved to 2.7.12 on 2026-09-20** (it had been on 2.5.1 since July). Promoted ahead of the usual 7-day soak deliberately: 2.7.12 fixes #573, where automatically queued files ignored the audio language you had verified, which is exactly what an install tracking `:stable` relies on.
 
+### Added
+- **Review offers a series rule when a show's episode verdicts agree (#568).** Verifying a show's audio language episode by episode leaves a verdict per file: it does nothing for the next episode, and nothing for a file Sonarr replaces. When three or more episodes of one show agree and the show has no series rule, Review now offers one, naming the show, the language and how many episodes agree. Accepting it writes the rule and changes nothing else: your per-episode verdicts stay and still take precedence, so a correction on one odd episode survives. A show whose verdicts disagree is never offered one, because that is a genuinely multilingual show where the per-episode verdicts are the right answer, and "Not this show" silences a show for good. On one real library this offered 29 rules covering 292 of 427 verdicts.
+
 ### Fixed
 - **Queue Issues says why subgen skipped a file for its audio language (#569).** A skipped file showed "reason not in /batch response", because subgen only reports how many files it skipped. subarr now works it out from what it already knows: the file's tagged audio language, the languages your subgen is set to skip, and any language you verified or series rule you set. The entry names the reason and the next step: requeue a file you verified as another language, or verify the language in Review. A file you verified in a language your subgen is set to skip is a correct skip, so it moves out of Issues into Recently done.
 

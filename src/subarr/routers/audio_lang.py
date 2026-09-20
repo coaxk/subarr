@@ -565,6 +565,86 @@ async def delete_series_intent(series_prefix: str, request: Request) -> dict[str
     return {"deleted": True, "series_prefix": series_prefix}
 
 
+# ─── #568: series-rule suggestions ──────────────────────────────────
+
+
+class SeriesSuggestionRequest(BaseModel):
+    series_prefix: str  # as the card carries it, e.g. "TV/Alerts/"
+    note: str | None = None
+
+
+class SeriesSuggestionApplyRequest(BaseModel):
+    series_prefix: str
+    lang_code: str  # must be the language the card offered
+
+
+def _suggestion_for(store: Any, series_prefix: str) -> dict[str, Any] | None:
+    from ..audio_lang_store import _with_slash
+
+    prefix = _with_slash(series_prefix)
+    return next((s for s in store.suggest_series_rules() if s["series_prefix"] == prefix), None)
+
+
+@router.get("/series-suggestions")
+async def list_series_suggestions(request: Request) -> dict[str, Any]:
+    """Shows whose per-episode verdicts all agree and that have no rule yet.
+    Review renders these as 'apply to the whole series?' cards.
+
+    The display name is resolved here, from #569's map, so the card can render
+    'French' without a second round trip for the language list.
+    """
+    from ..submission_language import _lang_name
+
+    store = request.app.state.audio_lang
+    return {
+        "items": [{**s, "language_name": _lang_name(s["lang_code"])} for s in store.suggest_series_rules()]
+    }
+
+
+@router.post("/series-suggestions/dismiss")
+async def dismiss_series_suggestion(req: SeriesSuggestionRequest, request: Request) -> dict[str, Any]:
+    store = request.app.state.audio_lang
+    store.dismiss_series_suggestion(req.series_prefix, note=req.note)
+    return {"dismissed": True, "series_prefix": req.series_prefix}
+
+
+@router.post("/series-suggestions/apply")
+async def apply_series_suggestion(req: SeriesSuggestionApplyRequest, request: Request) -> dict[str, Any]:
+    """Accept a suggested rule. Writes the #226 rule and NOTHING else: the
+    show's per-episode verdicts stay and keep overriding it, so a correction on
+    one odd episode survives accepting a rule for the show.
+
+    Refused unless the show is currently offered with that exact language — the
+    evidence is re-read here rather than trusted from the client, so a stale
+    card cannot write a rule the verdicts never supported.
+    """
+    store = request.app.state.audio_lang
+    from ..langs import normalize_lang
+
+    lang = normalize_lang(req.lang_code) or req.lang_code
+    offered = _suggestion_for(store, req.series_prefix)
+    if offered is None or offered["lang_code"] != lang:
+        raise HTTPException(
+            409,
+            detail=(
+                f"{req.series_prefix} is not currently suggested as {lang} — "
+                "its verdicts may have changed, or a rule already covers it"
+            ),
+        )
+    store.set_series_intent(
+        series_prefix=req.series_prefix,
+        lang_code=lang,
+        source="suggestion",
+        note=f"#568: {offered['agreeing']} agreeing episode verdicts",
+    )
+    # Mirror the series-intent route: episodes under the prefix flip green
+    # within seconds instead of at the next full walk. Best-effort.
+    cov_cache = getattr(request.app.state, "coverage_cache", None)
+    if cov_cache is not None:
+        cov_cache.request_refresh(request.app.state.integrations, request.app.state.probe_store, store)
+    return {"applied": True, "series_prefix": req.series_prefix, "lang_code": lang}
+
+
 # ─── #140: mis-grouped-series dismiss ───────────────────────────────
 
 
