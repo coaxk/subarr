@@ -357,6 +357,10 @@ class SubgenClient:
     def __init__(self, base_url: str | None = None, timeout: httpx.Timeout | None = None):
         self._base_url = (base_url or settings.subgen_url).rstrip("/")
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout or _DEFAULT_TIMEOUT)
+        # #577: the last capabilities reported by THIS client, so an unchanged
+        # re-probe can drop to DEBUG. Per client, so a second subgen (the
+        # onboarding test client) still reports its own first probe.
+        self._last_caps_fingerprint: tuple | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -464,11 +468,16 @@ class SubgenClient:
         except httpx.HTTPError as e:
             reason = classify_probe_failure(e)
             log.warning("subgen capability probe: /status unreachable (%s): %s", reason, e)
+            # #577: remember that we were down, so the probe that finds subgen
+            # BACK reports at INFO instead of matching the last good
+            # fingerprint and being suppressed as "unchanged".
+            self._last_caps_fingerprint = ("unreachable", reason)
             return SubgenCapabilities.unreachable(reason)
         if r.status_code != 200:
             # Something IS listening and answered. A completely different
             # diagnosis from "nothing is there", and previously indistinguishable.
             log.warning("subgen capability probe: /status returned %d", r.status_code)
+            self._last_caps_fingerprint = ("unreachable", r.status_code)  # #577, as above
             return SubgenCapabilities.unreachable(classify_probe_failure(status=r.status_code))
 
         # Extract version from the body. Patched + vanilla both use the
@@ -601,7 +610,26 @@ class SubgenClient:
             subarr_subgen_patch_rev=patch_rev,
             release_tag=release_tag,
         )
-        log.info(
+        # #577: this is a state report, not an event. The watchdog re-probes
+        # every 30 s, so logging it at INFO every time wrote the same line about
+        # 2,880 times a day and buried everything that did happen. INFO on the
+        # first probe and on any change (including a return from unreachable,
+        # which is an event even when the values match); DEBUG otherwise, so an
+        # unchanged probe is still traceable rather than silent.
+        fingerprint = (
+            caps.version,
+            caps.subarr_subgen_patch_rev,
+            caps.has_queue,
+            caps.has_batch,
+            caps.is_subarr_subgen,
+            caps.audio_language_override,
+            # No `reachable` here: every unreachable path returns earlier, with
+            # its own sentinel fingerprint, so it could only ever read True.
+        )
+        changed = fingerprint != self._last_caps_fingerprint
+        self._last_caps_fingerprint = fingerprint
+        log.log(
+            logging.INFO if changed else logging.DEBUG,
             "subgen capabilities: version=%s patch_rev=%s has_queue=%s has_batch=%s "
             "is_subarr_subgen=%s audio_lang_override=%s (compat_mode=%s)",
             caps.version,
