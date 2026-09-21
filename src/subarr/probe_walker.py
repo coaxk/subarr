@@ -407,6 +407,48 @@ class ProbeWalker:
 # #546: one definition of whether a probe root resolves, shared by the schedule
 # API, the wizard and (by the same reason text) the walker itself. A root that
 # does not resolve used to fail every scheduled walk with nothing on screen.
+def suggest_probe_roots_by_library() -> list[dict[str, Any]]:
+    """#549: every probe root the user could pick, per configured library.
+
+    Each entry carries the library's own root (`""` for the default library,
+    `@slug` otherwise — probing a whole library is a legitimate choice) and the
+    folders directly under it, already written in the canonical form the field
+    accepts: a bare name for the default library, `@slug/name` for any other.
+    That is the point of the picker: the `@slug/` form is exactly what nobody
+    can be expected to know (#524).
+
+    A library that cannot be read is still listed, with nothing to pick, so an
+    unmounted share shows up as itself rather than vanishing from the list.
+    """
+    from .config import settings
+
+    out: list[dict[str, Any]] = []
+    for lib in settings.libraries:
+        slug = lib.slug or ""
+        library_root = f"@{slug}" if slug else ""
+        roots: list[str] = []
+        try:
+            entries = sorted(canonical_to_fs(library_root).iterdir(), key=lambda p: p.name.lower())
+        except (OSError, PathOutsideRootError):
+            entries = []
+        for p in entries:
+            try:
+                if not p.is_dir() or p.name.startswith("."):
+                    continue
+            except OSError:
+                continue
+            roots.append(f"@{slug}/{p.name}" if slug else p.name)
+        out.append(
+            {
+                "slug": slug,
+                "name": lib.name or ("default" if not slug else slug),
+                "library_root": library_root,
+                "roots": roots,
+            }
+        )
+    return out
+
+
 def check_probe_root(root: str) -> dict:
     """{root, ok, reason}. `root` is a canonical: relative to the default library
     root, or `@slug/...` for another library. Never raises."""

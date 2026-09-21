@@ -13,7 +13,7 @@ from dataclasses import fields as _dc_fields
 
 from ..auto_queue import evaluate
 from ..coverage_engine import CoverageItem, build_coverage
-from ..probe_walker import check_probe_root
+from ..probe_walker import check_probe_root, suggest_probe_roots_by_library
 from ..schedule_store import AutoQueueRules
 
 # Constructor fields of CoverageItem — used to rebuild items from the
@@ -69,6 +69,15 @@ async def get_schedule(request: Request) -> dict[str, Any]:
         "schedules": schedules,
         "rules": store.get_rules().to_dict(),
     }
+
+
+@router.get("/probe-roots/suggestions")
+async def probe_root_suggestions() -> dict:
+    """#549: the probe roots that actually exist, per library, for the picker
+    next to the free-text field. Returns the canonical strings the field already
+    accepts, so nothing downstream changes. Off the loop: it reads directories,
+    which on a network share is not free."""
+    return {"libraries": await asyncio.to_thread(suggest_probe_roots_by_library)}
 
 
 @router.patch("/schedule/{name}")

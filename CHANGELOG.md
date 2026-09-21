@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Added
+- **Pick probe roots from your libraries instead of typing them (#549).** The probe roots field is free text, so a folder name had to be typed from memory — and if it was wrong, every scheduled walk failed. A Pick button now lists each configured library and the folders that actually exist under it, and writes the exact form the field expects, including the `@library/folder` form for a second library that nobody could be expected to know. Typing still works for anything the list cannot see.
+
 ### Changed
 - **subarr no longer repeats the same subgen capabilities line every 30 seconds (#577).** It checks subgen every 30 seconds and logged the full result each time, so a healthy install wrote that one line about 2,900 times a day and buried everything that actually happened. It is now logged when subarr first sees subgen, whenever anything about it changes, and when subgen comes back after being unreachable; an unchanged check is logged at debug level, so nothing is lost if you go looking.
 
