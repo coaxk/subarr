@@ -368,7 +368,10 @@ def test_coverage_refresh_sweeps_at_most_every_interval(subarr_env, tmp_path, mo
     calls = []
 
     class _Store:
-        def sweep_carry_overs(self):
+        # #571 added the path_ids argument; a double that does not accept it
+        # raises TypeError, which the caller swallows as non-fatal — carry-over
+        # would then stop silently, which is what this test's call count catches.
+        def sweep_carry_overs(self, path_ids=None):
             calls.append(1)
             return [("a", "b")]
 
@@ -409,7 +412,7 @@ def test_a_failing_sweep_does_not_block_the_build(subarr_env, tmp_path, monkeypa
     cache = cc.CoverageCache(db)
 
     class _Store:
-        def sweep_carry_overs(self):
+        def sweep_carry_overs(self, path_ids=None):
             raise OSError("share went away")
 
     asyncio.run(cache.refresh(bundle=None, probe_store=None, audio_lang_store=_Store()))
