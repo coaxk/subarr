@@ -245,6 +245,33 @@ export function ProbeRootsEditor({ value, onChange, check }) {
     if (next.join(',') !== value.join(',')) onChange(next);
   };
 
+  // #549: offer the roots that exist instead of asking for them from memory.
+  // The server returns the canonical strings this field already accepts — a
+  // bare folder for the default library, `@slug/folder` for any other — so
+  // picking one is exactly equivalent to typing it correctly, and typing stays
+  // available for anything the list cannot know about.
+  const [libraries, setLibraries] = useState([]);
+  const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/probe-roots/suggestions', { credentials: 'same-origin' });
+        if (!r.ok) return;            // silent: the field still works by hand
+        const body = await r.json();
+        if (alive) setLibraries(Array.isArray(body.libraries) ? body.libraries : []);
+      } catch { /* offline: leave the picker out rather than alarm */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const add = (root) => {
+    // Adding, never replacing: the field usually already holds something.
+    if (value.includes(root)) return;
+    onChange([...value, root]);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -267,6 +294,49 @@ export function ProbeRootsEditor({ value, onChange, check }) {
           fontSize: 'var(--text-md)', color: 'var(--fg-0)',
           fontFamily: 'var(--font-mono)',
         }} />
+      {libraries.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setPicking((v) => !v)}
+            style={{ alignSelf: 'flex-start', fontSize: 'var(--text-xs)' }}
+          >
+            {picking ? 'Hide' : 'Pick'}
+          </button>
+          {picking && (
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: 8,
+              border: '1px solid var(--bg-4)', borderRadius: 'var(--radius-md)', padding: 8,
+            }}>
+              {libraries.map((lib) => (
+                <div key={lib.slug || 'default'} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--fg-3)' }}>
+                    {lib.name}
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {lib.roots.length === 0 && (
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
+                        nothing readable under this library right now
+                      </span>
+                    )}
+                    {lib.roots.map((root) => (
+                      <button
+                        key={root}
+                        type="button"
+                        onClick={() => add(root)}
+                        disabled={value.includes(root)}
+                        style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }}
+                      >
+                        {root}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {missing && (
         <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--error-500, #ef4444)', lineHeight: 1.5 }}>
           {missing}
