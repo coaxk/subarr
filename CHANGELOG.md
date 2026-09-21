@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Changed
+- **subarr no longer repeats the same subgen capabilities line every 30 seconds (#577).** It checks subgen every 30 seconds and logged the full result each time, so a healthy install wrote that one line about 2,900 times a day and buried everything that actually happened. It is now logged when subarr first sees subgen, whenever anything about it changes, and when subgen comes back after being unreachable; an unchanged check is logged at debug level, so nothing is lost if you go looking.
+
 ### Fixed
 - **Audio-language verdicts now follow date-named episodes and movies when the file is replaced (#571).** A verdict followed a replaced file only when the name carried an `SxxExx` token, so a daily show (`Daily Show - 2026-09-08.mkv`) or a film lost its verdict on every upgrade, and subarr went back to trusting the file's own tag. Each verdict now remembers the Sonarr episode or Radarr movie id it was made against, and follows that id instead — including when the folder was renamed. Existing verdicts are given their id automatically, for files still on disk, and the log reports how many. A verdict still never moves onto a file that already has one, onto an id that now names several files, or into another library.
 
