@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.14] - 2026-09-22
+
+**Audio-language verdicts now follow daily episodes and movies when a file is replaced, and probe roots can be picked instead of typed.**
+
+One automatic database migration (`034`), applied on first start. No config changes. On first run after the upgrade, subarr gives your existing verdicts their Sonarr or Radarr id wherever the file is still on disk, and logs how many it did.
+
 ### Added
 - **Pick probe roots from your libraries instead of typing them (#549).** The probe roots field is free text, so a folder name had to be typed from memory — and if it was wrong, every scheduled walk failed. A Pick button now lists each configured library and the folders that actually exist under it, and writes the exact form the field expects, including the `@library/folder` form for a second library that nobody could be expected to know. Typing still works for anything the list cannot see.
 
