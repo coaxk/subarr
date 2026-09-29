@@ -1,7 +1,14 @@
-# Lint + test + workflow-security gate.
-#   - lint:    ruff check + ruff format --check + README freshness on every push + PR
+# Lint + test + extras + workflow-security gate.
+#   - lint:    ruff check + ruff format --check + README freshness + the extras
+#              audit (stdlib only, no installs) on every push + PR
 #   - test:    full pytest suite on PRs (pushes to main run it in release.yml
 #              before publish, so we don't double-run the suite there)
+#   - extras:  each optional runtime extra is installed and its OWN availability
+#              probe must report True. Added 2026-09-30: CI installed .[dev] and
+#              nothing else, so vad/qe/qe-onnx/lid were never resolved here and
+#              huggingface_hub was never imported in CI at all. #586 widened its
+#              ceiling past a published major and passed 15 checks that could not
+#              see the change.
 #   - zizmor:  GitHub Actions security audit (pinned actions, least-privilege
 #              permissions, cache-poisoning, unpinned images) — blocking, so the
 #              workflows can't silently regress into the hardening we just did.
@@ -33,6 +40,10 @@ jobs:
       # The README sat at 2.5 through 2.7.2 because nothing checked it. Fails
       # when its version markers lag pyproject.toml (major.minor).
       - run: python scripts/check_readme_freshness.py
+      # Fails if pyproject declares a runtime extra with no probe in
+      # scripts/check_extra.py, so the next optional feature cannot arrive
+      # untested the way these four did.
+      - run: python scripts/check_extra.py --audit
 
   test:
     # PRs only — pushes to main run pytest in release.yml before publish.
@@ -48,6 +59,42 @@ jobs:
           cache: pip
       - run: pip install -e .[dev]
       - run: PYTHONPATH=src pytest -q --tb=line
+
+  extras:
+    # Optional runtime features. Each extra is installed ON ITS OWN -- not all
+    # together -- because the bug this catches is a dependency set that fails to
+    # resolve in isolation, and installing everything at once would paper over it.
+    #
+    # The assertion is the project's own availability probe returning True, not
+    # "the module imported". Those probes return False rather than raising, by
+    # design, so the feature degrades quietly at runtime -- which means a broken
+    # dependency would otherwise leave the import succeeding and the feature
+    # silently switched off, with CI green.
+    name: extras (${{ matrix.extra }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken extra must not hide the state of the other three.
+      fail-fast: false
+      matrix:
+        extra: [vad, lid, qe-onnx, qe]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      # Matrix values reach the shell through env, never interpolated into the
+      # script body -- that is the template-injection shape zizmor blocks.
+      - name: install the extra
+        env:
+          EXTRA: ${{ matrix.extra }}
+        run: pip install -e ".[$EXTRA]"
+      - name: the feature must report itself AVAILABLE
+        env:
+          EXTRA: ${{ matrix.extra }}
+        run: PYTHONPATH=src python scripts/check_extra.py "$EXTRA"
 
   zizmor:
     # Blocking workflow-security audit — a non-functional gate is worse than
