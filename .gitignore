@@ -36,6 +36,14 @@ node_modules/
 # Caliber local state (tool-managed, never source-controlled)
 .caliber/
 
+# Claude Code local state (tool-managed). Currently just tdd-guard's
+# scratch JSON. NOTE this ignores the whole directory, so if project-level
+# Claude config is ever meant to be SHARED (.claude/settings.json, agents,
+# skills, hooks), it needs an explicit negation here or it will be dropped
+# silently -- the same way this repo family has lost requirements.txt,
+# *.sh, *.psm1 and *.vbs to ignore rules before.
+.claude/
+
 # Local scratch: aftercare/regroup tuning baselines (#168 comparison snapshots)
 .aftercare-baseline-*.json
 
