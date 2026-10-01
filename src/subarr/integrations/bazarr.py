@@ -189,29 +189,79 @@ class BazarrClient(IntegrationClient):
             return d.get("data", []) or []
         return d or []
 
+    async def episode_series_id(self, episode_id: int) -> int | None:
+        """#591: resolve an episode id to its Sonarr series id, which Bazarr's
+        download endpoint requires but the coverage row does not carry.
+
+        Deliberately asked of the SAME Bazarr instance the download will be
+        POSTed to, rather than of Sonarr. On a multi-instance install that
+        makes the answer correct by construction - the instance that owns the
+        episode is the instance that will fetch the subtitle - so no
+        canonical-path hint is needed to scope it, and we add no new
+        dependency to a path that otherwise needs only Bazarr.
+
+        The `[]` in `episodeid[]` is part of the parameter NAME, not an array
+        convention: `api/episodes/episodes.py` declares
+        `add_argument('episodeid[]', type=int, action='append', ...)` verbatim,
+        so a bare `episodeid` is not a parameter at all and the endpoint
+        answers 404 'Series or Episode ID not provided'. Read from the source
+        and confirmed live against v1.6.2 on 2026-10-01; re-check when bumping
+        .github/bazarr-verified-version.
+        """
+        d = await self._get("/api/episodes", params={"episodeid[]": episode_id})
+        rows = d.get("data", []) if isinstance(d, dict) else d
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = row.get("sonarrSeriesId")
+            if sid is None:
+                continue
+            try:
+                return int(sid)
+            except (TypeError, ValueError):
+                return None
+        return None
+
     async def download_episode_candidate(
         self,
         *,
         episode_id: int,
-        language: str,
+        series_id: int,
         provider: str,
         subtitles_id: str,
-        score: int,
         forced: bool = False,
         hi: bool = False,
+        original_format: bool = False,
     ) -> dict[str, Any] | None:
         """v1.1-F: POST /api/providers/episodes — tells Bazarr to fetch
         a specific candidate from the candidate list above. Closes the
         arbiter loop: user picks a human sub instead of Whisper, Bazarr
-        downloads + writes to disk + indexes."""
+        downloads + writes to disk + indexes.
+
+        #591: this payload was wrong from the start and could never succeed.
+        Bazarr's post_request_parser declares seriesid, episodeid, hi, forced,
+        original_format, provider and subtitle ALL required=True, and the
+        handler calls parse_args() - so the old payload, which omitted
+        `seriesid` and `original_format` and sent the id as `subtitles_id`,
+        was a 400 every time. `language` and `score` are not parameters on
+        this endpoint at all (the language is implied by the subtitle id), and
+        Bazarr ignores unknown arguments silently, which is why nothing ever
+        complained. Contract read from a live v1.6.2 container 2026-10-01;
+        re-check it when bumping .github/bazarr-verified-version.
+
+        The booleans go as "true"/"false" deliberately: Bazarr calls
+        args.get('hi').capitalize(), and "true".capitalize() is "True" - so
+        lowercase is correct here and "TRUE" would not be."""
         data = {
+            "seriesid": str(series_id),
             "episodeid": str(episode_id),
-            "language": language,
             "provider": provider,
-            "subtitles_id": subtitles_id,
-            "score": str(score),
+            "subtitle": subtitles_id,
             "forced": "true" if forced else "false",
             "hi": "true" if hi else "false",
+            "original_format": "true" if original_format else "false",
         }
         try:
             r = await self._client.post("/api/providers/episodes", data=data)
@@ -228,25 +278,27 @@ class BazarrClient(IntegrationClient):
         self,
         *,
         movie_id: int,
-        language: str,
         provider: str,
         subtitles_id: str,
-        score: int,
         forced: bool = False,
         hi: bool = False,
+        original_format: bool = False,
     ) -> dict[str, Any] | None:
         """Movie mirror of download_episode_candidate: POST
         /api/providers/movies (form field `radarrid`, matching
         candidate_movie_subtitles + upload_movie_subtitle) so the arbiter
-        accept loop works for movies too."""
+        accept loop works for movies too.
+
+        #591: same fix as the episode twin. The movies parser wants radarrid,
+        hi, forced, original_format, provider and subtitle - and notably NO
+        seriesid, which is the one asymmetry between the two endpoints."""
         data = {
             "radarrid": str(movie_id),
-            "language": language,
             "provider": provider,
-            "subtitles_id": subtitles_id,
-            "score": str(score),
+            "subtitle": subtitles_id,
             "forced": "true" if forced else "false",
             "hi": "true" if hi else "false",
+            "original_format": "true" if original_format else "false",
         }
         try:
             r = await self._client.post("/api/providers/movies", data=data)

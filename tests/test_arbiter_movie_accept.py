@@ -28,21 +28,27 @@ def test_download_movie_candidate_posts_radarrid():
     c._client = httpx.AsyncClient(base_url="http://bazarr:6767", transport=httpx.MockTransport(handler))
     c._configured = True
 
+    # #591: `language` and `score` are gone from the signature - Bazarr's
+    # providers/movies parser does not declare them, so they were only ever
+    # silently ignored. `original_format` is required and now sent.
     res = asyncio.run(
         c.download_movie_candidate(
             movie_id=42,
-            language="en",
             provider="opensubtitles",
             subtitles_id="abc123",
-            score=91,
             forced=False,
             hi=False,
+            original_format=False,
         )
     )
     assert captured["path"] == "/api/providers/movies"
     assert "radarrid=42" in captured["body"]
     assert "episodeid" not in captured["body"]
     assert res == {"downloaded": True}
+    # ⚠️ This handler returns 200 for ANY payload, so it cannot catch a
+    # contract mismatch - which is exactly how #591 survived. The stub that
+    # enforces Bazarr's required arguments lives in
+    # tests/test_arbiter_download_payload.py; keep the real contract there.
 
 
 def test_accept_movie_routes_to_bazarr(app_with_stub):
