@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.15] - 2026-10-02
+
+**Accepting a subtitle that Bazarr found now actually downloads it.**
+
+No database migration and no config changes. This release is also the first checked against Bazarr 1.6.2.
+
+### Fixed
+- **Accepting a candidate in the arbiter could never download it (#591).** When subarr shows you the subtitles Bazarr's providers have found for a file and you pick one, it asks Bazarr to fetch that subtitle. The request left out two values Bazarr requires and sent the subtitle's id under a name Bazarr does not read, so Bazarr refused it before doing anything at all — every accept failed, and Whisper was left as the only way that file would ever get a subtitle. This had been broken since the feature was added, and the failure was silent from the outside. The request now carries exactly what Bazarr asks for, and the series id Bazarr needs is resolved by asking the same Bazarr the download is being sent to, so it stays right if you run more than one. Verified end to end against Bazarr 1.6.2 with a real subtitle: one scoring 86.67% — below the score Bazarr needs before it will take a subtitle on its own, which is precisely the case this feature exists for — downloaded, synced and landed on disk.
+
 ## [2.7.14] - 2026-09-22
 
 **Audio-language verdicts now follow daily episodes and movies when a file is replaced, and probe roots can be picked instead of typed.**

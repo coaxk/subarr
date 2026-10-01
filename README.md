@@ -5,7 +5,7 @@ The coordination layer for the *arr subtitle stack. Stands beside Bazarr.
 Subarr decides what subtitles are actually missing across your library, which providers are worth your time, and when it is worth running Whisper. Bazarr finds and downloads. Subgen transcribes. Subarr coordinates.
 
 [![status](https://img.shields.io/badge/status-v2.7-violet)](https://github.com/coaxk/subarr)
-[![tests](https://img.shields.io/badge/tests-2413_python_%2B_297_frontend-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-2422_python_%2B_297_frontend-22d3ee)](https://github.com/coaxk/subarr/actions/workflows/ci.yml)
 [![security](https://img.shields.io/badge/Bandit_%2B_Semgrep_%2B_Trivy_%2B_pip--audit-22c55e)](#security)
 [![license](https://img.shields.io/badge/license-MIT-c8c8cc)](LICENSE)
 
@@ -551,9 +551,9 @@ cd subarr
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[dev]
 PYTHONPATH=src uvicorn subarr.app:app --reload --port 9922
-PYTHONPATH=src pytest -q                    # 2095 passing (about 20 min locally, 4 in CI)
+pytest -q                                   # 2422 passing (about 22 min locally, 4 in CI)
 npm install && npm run build:frontend       # SPA bundles
-npm run test:frontend                       # 235 passing, including component tests against the vendored React
+npm run test:frontend                       # 297 passing, including component tests against the vendored React
 python scripts/check_readme_freshness.py    # CI fails if this README's version markers lag pyproject
 ```
 
