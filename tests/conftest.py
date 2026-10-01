@@ -819,6 +819,23 @@ def writeback_stack(subarr_env, monkeypatch, tmp_path: Path):
                 return httpx.Response(200, json=[{"id": 1, "name": "English"}])
             if p == "/api/badges":
                 return httpx.Response(200, json={"episodes": 0, "movies": 0, "providers": 1})
+            if p == "/api/episodes":
+                # #591: Bazarr resolves episode -> series id here, and the
+                # download endpoint requires it. The value is DISTINCT per
+                # instance on purpose, so a routing test can prove the
+                # resolution asked the owning instance rather than instance 0.
+                epid = req.url.params.get("episodeid[]")
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "sonarrEpisodeId": int(epid) if epid else None,
+                                "sonarrSeriesId": 9100 if key[1] == "anime" else 9000,
+                            }
+                        ]
+                    },
+                )
             return httpx.Response(200, json={"data": []})
 
         return _h

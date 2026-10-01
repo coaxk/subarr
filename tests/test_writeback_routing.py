@@ -199,7 +199,13 @@ def test_arbiter_accept_routes_to_owning_bazarr(writeback_stack):
     def dl(key):
         return [c for c in ws.calls.get(key, []) if c["path"] == "/api/providers/episodes"]
 
-    assert dl(("bazarr", "anime")) and not dl(("bazarr", ""))
+    posts = dl(("bazarr", "anime"))
+    assert posts and not dl(("bazarr", ""))
+    # #591: the download needs a `seriesid`, which is resolved by asking Bazarr.
+    # The stub answers 9100 on the anime instance and 9000 on instance 0, so
+    # this also proves the RESOLUTION was routed to the owning instance - had it
+    # gone to instance 0 (or to instance-0 Sonarr) the payload would say 9000.
+    assert "seriesid=9100" in posts[0]["body"]
 
 
 def test_bazarr_sync_disk_routes_to_owning_instance(writeback_stack):

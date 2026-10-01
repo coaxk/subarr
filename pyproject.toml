@@ -97,6 +97,13 @@ subarr = ["static/**/*", "migrations/*.sql", "migrations/*.md", "data/*.json"]
 # keeps `pytest` running just the Python unit tests.
 testpaths = ["tests"]
 norecursedirs = ["tests/e2e"]
+# Test the source of THIS checkout, not whichever one the editable install
+# points at. `pip install -e .` drops a .pth naming an absolute src path
+# (C:\Projects\subarr\src here), so a git worktree ran its own tests against
+# the MAIN checkout's source - a fix under test could read green while the code
+# exercised was someone else's. Found 2026-10-01 during #591. This ini key
+# prepends the checkout-relative src, so every tree tests itself.
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 110
