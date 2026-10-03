@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.16] - 2026-10-03
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.15 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed (#593).** The image published for 2.7.15 shipped `libpng16-16t64 1.6.48-1+deb13u5`, and Debian published `deb13u6` for it a few hours after that build completed - one package, from a security pocket. This release rebuilds against current packages. Measured against the published artifact rather than the build that produced it: `apt-get -s upgrade` run inside the 2.7.15 image reported exactly that one package pending, which is the check a green build cannot answer.
+
 ## [2.7.15] - 2026-10-02
 
 **Accepting a subtitle that Bazarr found now actually downloads it.**
