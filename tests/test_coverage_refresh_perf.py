@@ -110,9 +110,16 @@ def test_min_interval_default_from_config(monkeypatch, tmp_path):
 # ─── Parallel rglob ─────────────────────────────────────────────────
 
 
-def test_srt_index_scan_runs_concurrently(monkeypatch):
-    """_build_srt_index_parallel must run scans with >1 in flight at once
-    (parallel) but never exceed the concurrency cap."""
+def test_sidecar_index_scan_runs_concurrently(monkeypatch):
+    """_build_sidecar_index_parallel must run scans with >1 in flight at once
+    (parallel) but never exceed the concurrency cap.
+
+    [#594] Renamed with the builder: it now carries BOTH sidecar kinds from a
+    single walk per series, so the scan it fans out is
+    `_scan_sidecars_recursive` and each value is `(srt_paths, image_paths)`.
+    The properties under test are unchanged — concurrency and the cap are what
+    keep ~668 series from being walked one at a time.
+    """
     import subarr.coverage_engine as ce
 
     in_flight = 0
@@ -124,31 +131,34 @@ def test_srt_index_scan_runs_concurrently(monkeypatch):
         max_in_flight = max(max_in_flight, in_flight)
         time.sleep(0.05)
         in_flight -= 1
-        return [f"{canonical}/sub.srt"]
+        return [f"{canonical}/sub.srt"], [f"{canonical}/sub.idx"]
 
-    monkeypatch.setattr(ce, "_scan_for_srt_recursive", _slow_scan)
+    monkeypatch.setattr(ce, "_scan_sidecars_recursive", _slow_scan)
 
     dirs = [f"series{i}" for i in range(12)]
     cap = 4
-    result = asyncio.run(ce._build_srt_index_parallel(dirs, cap=cap))
+    result = asyncio.run(ce._build_sidecar_index_parallel(dirs, cap=cap))
 
     assert max_in_flight > 1, "scans must run concurrently, not serially"
     assert max_in_flight <= cap, f"concurrency must be capped at {cap}, saw {max_in_flight}"
     assert set(result.keys()) == set(dirs)
-    assert result["series0"] == ["series0/sub.srt"]
+    # Both halves must survive the fan-out — the image half is the whole point
+    # of folding the two walks into one.
+    assert result["series0"] == (["series0/sub.srt"], ["series0/sub.idx"])
 
 
-def test_srt_index_handles_empty_and_dedupes(monkeypatch):
+def test_sidecar_index_handles_empty_and_dedupes(monkeypatch):
     import subarr.coverage_engine as ce
 
     seen: list = []
 
     def _scan(canonical: str):
         seen.append(canonical)
-        return []
+        return [], []
 
-    monkeypatch.setattr(ce, "_scan_for_srt_recursive", _scan)
-    # Duplicate + empty dirs must be deduped and skipped.
-    result = asyncio.run(ce._build_srt_index_parallel(["a", "a", "", "b"], cap=4))
+    monkeypatch.setattr(ce, "_scan_sidecars_recursive", _scan)
+    # Duplicate + empty dirs must be deduped and skipped. A series walked twice
+    # is the cost this dedupe exists to avoid, and it now saves TWO scans.
+    result = asyncio.run(ce._build_sidecar_index_parallel(["a", "a", "", "b"], cap=4))
     assert set(result.keys()) == {"a", "b"}
     assert sorted(seen) == ["a", "b"]

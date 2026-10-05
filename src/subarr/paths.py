@@ -306,6 +306,32 @@ def strip_arr_prefix(arr_path: str | None, prefix: str | None = None) -> str | N
     return rel
 
 
+def image_sidecar_names(parent: Path, stem: str) -> list[str]:
+    """#594: names of COMPLETE external image-subtitle pairs for `<stem>`.
+
+    A VobSub sidecar is two files: a `.idx` index and the `.sub` bitmap blob it
+    indexes into. Only the `.idx` name is returned, and only when its `.sub`
+    partner is present — a lone `.idx` indexes nothing, and a lone `.sub` is
+    not evidence of VobSub at all, because `.sub` is also MicroDVD's TEXT
+    extension. Requiring the pair is what keeps a half-copied rip from
+    suppressing a real subtitle gap.
+
+    Extensions are matched case-insensitively: DVD rippers emit `.IDX`/`.SUB`,
+    and a case-sensitive check would lose whole libraries.
+
+    Compared LITERALLY, never as a glob, for the reason in `srt_sidecar_names`:
+    `[...]` is a character class in a glob and release names are full of
+    brackets. Sorted, so the caller never depends on directory order.
+    """
+    try:
+        with os.scandir(parent) as entries:
+            names = [e.name for e in entries if e.name.startswith(stem) and e.is_file()]
+    except OSError:
+        return []
+    have = {n.lower() for n in names}
+    return sorted(n for n in names if n.lower().endswith(".idx") and (n[:-4] + ".sub").lower() in have)
+
+
 def srt_sidecar_names(parent: Path, stem: str) -> list[str]:
     """#558: names of the `<stem>*.srt` files in `parent`, compared LITERALLY.
 
