@@ -7,6 +7,17 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.17] - 2026-10-06
+
+**External VobSub subtitles beside your videos are no longer invisible, and the offer to transcribe image-based subs actually appears.**
+
+No database migration and no config changes.
+
+### Fixed
+- **External VobSub `.idx`/`.sub` sidecars were not detected as coverage (#594).** A complete pair sitting beside a video was invisible to a Coverage walk: the row came back with no subtitles on disk and no embedded English track, indistinguishable from a file that genuinely has none. Disk discovery only ever looked for `.srt`. The reporter audited his library and found 102 complete pairs, 101 of them containing English — so subarr would have queued Whisper for a hundred films that already had usable subtitles. Coverage now reports them in a new `image_subs_on_disk` field, for movies, episodes and the Bazarr-blind rows alike. A pair must be complete to count: a lone `.idx` indexes nothing, and a bare `.sub` is not evidence of VobSub at all, since that is also MicroDVD's text extension. Your existing files are never touched.
+- **The offer to transcribe image-based subtitles could never appear.** The banner added in #458 — the one that bulk-queues files whose only English subtitles are pictures — has been unreachable since it shipped in August. It selected rows by a field the row builder never produced, so it always found nothing and never rendered. Its test passed throughout because the test built rows by hand in a shape the app does not produce. The banner now works, and covers external `.idx`/`.sub` pairs as well as embedded PGS/VobSub tracks, so a library like the one in #594 can be queued in one action. Whether subgen will transcribe a given file depends on its filename: subgen treats `Movie.en.idx` as existing English coverage and skips it, while an untagged `Movie.idx` is transcribed. subarr now mirrors that rule exactly rather than assuming, so a row is only marked unfillable when subgen would really skip it.
+- **The frontend bundle-drift check never ran on Windows.** It quoted its file patterns in a way `cmd.exe` passes through literally, so the check matched no files and passed unconditionally; on Linux CI it worked, which is why nobody noticed. It now also covers source maps, which is where the drift it was missing actually showed up. Contributor-facing only — no effect on a running install.
+
 ## [2.7.16] - 2026-10-03
 
 **A rebuild that picks up a Debian security update. No code change.**
