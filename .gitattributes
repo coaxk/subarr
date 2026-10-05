@@ -13,6 +13,14 @@
 # not see it because that gate diffs *.bundle.js and *.html only.
 *.jsx text eol=lf
 *.mjs text eol=lf
+
+# ...and the plain .js that get BUNDLED. `session-guard.js` is imported by
+# every entry, so it lands in `sourcesContent` of every map; it was CRLF on
+# Windows and LF on a Linux runner, which made the maps differ and failed the
+# (now working) drift gate on the v2.7.17 tag. Scoped to home-hifi/ on purpose:
+# __tests__/*.js are never bundled, and v1/vendor/react*.min.js is a vendored
+# artefact better left byte-for-byte as shipped.
+src/subarr/static/v1/home-hifi/*.js text eol=lf
 src/subarr/static/v1/**/*.html text eol=lf
 
 # Every shell script here is executed on Linux: docker-entrypoint.sh is COPYd
