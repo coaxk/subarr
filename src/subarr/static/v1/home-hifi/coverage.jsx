@@ -152,7 +152,10 @@ function langCodeFromName(name) {
   return known[String(name).toLowerCase()] || String(name).slice(0, 3).toLowerCase();
 }
 
-function normalizeRow(item, idx, settleMinutes = 0) {
+// [#594] Exported so a test can exercise the REAL pipeline. The #458 image
+// banner was dead for ~2 months because its only test built row objects by
+// hand, in a shape normalizeRow never produces.
+export function normalizeRow(item, idx, settleMinutes = 0) {
   const ep = item.media_type === 'episode' ? formatEpisode(item.episode_number) : '';
   // Score: backend uses 0–1000ish; map to /100 for display (cap 9.9).
   const score = Math.min(9.9, (item.score || 0) / 100);
@@ -177,6 +180,19 @@ function normalizeRow(item, idx, settleMinutes = 0) {
     mon: !!item.monitored,
     disk: !!item.has_sub_on_disk,
     emb: !!(item.embedded_en && item.embedded_en !== 'NONE'),
+    // [#458 regression / #594] The LABEL, not just the boolean. imageOnlyRows
+    // keys on this exact value, and because it was never emitted here the
+    // image-only banner could never render -- its own test built rows by hand
+    // in a shape this function does not produce.
+    embedded_en: item.embedded_en || null,
+    // [#594] Complete external .idx/.sub pairs beside the video. Image-only
+    // English coverage just like an embedded bitmap track, so it feeds the
+    // same banner and the same bypass-skip offer.
+    image_subs: item.image_subs_on_disk || [],
+    // [#458] subgen will skip this file, so the gap is real but unfillable
+    // until IGNORE_IMAGE_SUBTITLES is on. Unmapped until now, so nothing
+    // downstream could distinguish it.
+    image_skip: !!item.image_only_subgen_will_skip,
     audio,
     reason: deriveReason(item),
     orig_lang: origLang,                  // ISO 639-1, e.g. 'es', 'fr'
@@ -2272,7 +2288,13 @@ function SelectionBar({ n, reasonFilter, onClear, onQueue, queueState }) {
 // vs bypass_skip). Exported for unit test.
 export function imageOnlyRows(rows) {
   if (!Array.isArray(rows)) return [];
-  return rows.filter(r => r && r.embedded_en === 'EN(image)');
+  // [#594] Two ways to be image-only: a bitmap track INSIDE the container, or
+  // a complete external .idx/.sub pair beside it. Both are pictures rather
+  // than text, both want the same bypass-skip offer, so both belong here.
+  return rows.filter(r => r && (
+    r.embedded_en === 'EN(image)'
+    || (Array.isArray(r.image_subs) && r.image_subs.length > 0)
+  ));
 }
 
 export function coverageQueueBody(row, { ignoreForced = false, bypassSkip = false } = {}) {
@@ -2695,6 +2717,10 @@ function ImageOnlyBanner({ rows, canBypass, onQueued }) {
   const [dismissed, setDismissed] = useState(false);
 
   const targets = useMemo(() => imageOnlyRows(rows), [rows]);
+  const externalCount = useMemo(
+    () => targets.filter(r => (r.image_subs || []).length > 0).length,
+    [targets],
+  );
   if (dismissed || !targets.length) return null;
 
   const run = async () => {
@@ -2736,6 +2762,15 @@ function ImageOnlyBanner({ rows, canBypass, onQueued }) {
               <strong>{targets.length} shown row{targets.length === 1 ? '' : 's'} have
               only image-based English subtitles</strong> (PGS/VobSub). Those are pictures,
               not text, so they cannot be searched, restyled or retimed.
+              {/* [#594] Name the external case explicitly. Being told about an
+                  "embedded track" when the subtitles are a .idx/.sub pair beside
+                  the file sends you looking inside the container for nothing. */}
+              {externalCount > 0 && (
+                <> {externalCount === targets.length
+                  ? (externalCount === 1 ? 'It is' : 'They are')
+                  : `${externalCount} of them are`} an external .idx/.sub pair beside
+                  the video; transcribing adds a text .srt and leaves the pair untouched.</>
+              )}
               {canBypass ? '' : ' Connected subgen is too old to transcribe them (needs v4.23+).'}
             </span>
           )}
@@ -3033,13 +3068,18 @@ export function CoveragePage() {
 
   const handleExportCsv = useCallback(() => {
     if (!rows.length) return;
-    const headers = ['score', 'type', 'title', 'episode', 'reason', 'monitored', 'has_sub_on_disk', 'embedded', 'audio', 'canonical_path'];
+    // [#594] image_subs_on_disk sits beside has_sub_on_disk because the two
+    // answer different questions: one is text next to the video, the other a
+    // bitmap pair. An audit of a VobSub library needs the second.
+    const headers = ['score', 'type', 'title', 'episode', 'reason', 'monitored', 'has_sub_on_disk',
+      'image_subs_on_disk', 'embedded', 'audio', 'canonical_path'];
     const csv = [headers.join(',')];
     for (const r of rows) {
       csv.push([
         r.score.toFixed(2), r.type,
         JSON.stringify(r.title), JSON.stringify(r.ep),
-        r.reason, r.mon ? 1 : 0, r.disk ? 1 : 0, r.emb ? 1 : 0,
+        r.reason, r.mon ? 1 : 0, r.disk ? 1 : 0,
+        JSON.stringify((r.image_subs || []).join('; ')), r.emb ? 1 : 0,
         JSON.stringify(r.audio), JSON.stringify(r._canonical_path || ''),
       ].join(','));
     }
