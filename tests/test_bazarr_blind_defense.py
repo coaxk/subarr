@@ -183,7 +183,8 @@ async def test_bazarr_blind_synthetic_row_reaches_score_without_nameerror(monkey
     async def _no_index(dirs):
         return {}
 
-    monkeypatch.setattr(ce, "_build_srt_index_parallel", _no_index)
+    # [#594] renamed: one walk now yields (srt_paths, image_idx_paths) per series
+    monkeypatch.setattr(ce, "_build_sidecar_index_parallel", _no_index)
     monkeypatch.setattr(ce, "_scan_for_srt_recursive", lambda c: [])
 
     def _fake_attach(item, *a, **k):
@@ -226,6 +227,7 @@ async def test_bazarr_blind_synthetic_row_reaches_score_without_nameerror(monkey
         sonarr_eps_by_id=eps_by_id,
         ep_file_paths={101: "/data/Media/TV/Flics/Season 1/Flics.S01E01.mkv"},
         series_srt_index={},
+        series_image_index={},
         sonarr_tags={},
         sonarr_missing_ids=set(),
         sonarr_recent_ids=set(),

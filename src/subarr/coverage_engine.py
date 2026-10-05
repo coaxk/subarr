@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ from .paths import (
     UNSUPPORTED_EXTS,
     VIDEO_EXTS,
     canonical_to_fs,
+    image_sidecar_names,
     library_for_canonical,
     library_label,
     strip_arr_prefix,
@@ -55,6 +57,14 @@ class CoverageItem:
     canonical_path: str | None = None  # relative to media_root, parent dir of the video
     has_sub_on_disk: bool = False  # any *.srt next to the video
     sub_files_seen: list[str] = field(default_factory=list)
+    # [#594] COMPLETE external image-subtitle pairs (.idx + .sub) beside the
+    # video, by .idx filename. Deliberately NOT folded into has_sub_on_disk:
+    # that means a TEXT sub and drives both "stale: disk already has .srt" and
+    # a Bazarr rescan suggestion, neither of which is true of a bitmap pair.
+    # Also not folded into embedded_en, which describes tracks INSIDE the
+    # container -- rendering an external file as "embedded" sends the reader
+    # hunting for a track that is not there.
+    image_subs_on_disk: list[str] = field(default_factory=list)
     # Bazarr cross-reference
     bazarr_sonarr_id: int | None = None
     bazarr_radarr_id: int | None = None
@@ -225,6 +235,7 @@ class CoverageItem:
             "verification_state": self.verification_state,
             "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
             "image_only_subgen_will_skip": self.image_only_subgen_will_skip,
+            "image_subs_on_disk": self.image_subs_on_disk,
             "wanted_lang_subgen_cannot_produce": self.wanted_lang_subgen_cannot_produce,
             "default_track_mismatch": self.default_track_mismatch,
             "mismatch_default_track_lang": self.mismatch_default_track_lang,
@@ -405,24 +416,73 @@ def _scan_for_srt(canonical_dir: str) -> tuple[bool, list[str]]:
         return False, []
 
 
-def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
-    """Walk every .srt under <media_root>/<canonical_dir> and return
-    relative paths. Cached per series during one coverage build via the
-    caller — series with 200 episodes only rglob once.
+def _scan_for_image_pairs(canonical_dir: str) -> list[str]:
+    """[#594] COMPLETE external image-subtitle pairs directly under
+    <media_root>/<canonical_dir>, by .idx filename. Movie-path counterpart of
+    `_scan_for_srt` (Radarr's path IS the movie folder).
 
-    Returns relative paths so the caller can match per-episode by looking
-    for an S01E03-style substring in the path.
+    Delegates to `image_sidecar_names` with an empty stem, which matches every
+    entry, so pair-completeness and case-insensitive extensions are decided in
+    exactly one place rather than reimplemented per call site.
     """
     if not canonical_dir:
         return []
     try:
-        # #134: library-aware resolve — see _scan_for_srt.
         full = canonical_to_fs(canonical_dir)
         if not full.is_dir():
             return []
-        return sorted(str(p.relative_to(full)) for p in full.rglob("*.srt") if p.is_file())
+        return image_sidecar_names(full, "")
     except (OSError, ValueError):
         return []
+
+
+def _scan_sidecars_recursive(canonical_dir: str) -> tuple[list[str], list[str]]:
+    """[#594] ONE walk, both sidecar kinds: `(srt_paths, image_idx_paths)`.
+
+    Deliberately a single traversal. #104 established that the per-series
+    recursive walk is the DOMINANT cost of a coverage build — ~668 series
+    walked serially blocked it for minutes — so adding a second walk for
+    `.idx` would have doubled the thing that was already the bottleneck.
+
+    `os.walk` rather than `rglob` + `is_file()`: os.walk already separates
+    files from directories, so it needs no per-entry stat. Here `/mnt/c` is 9p
+    and the library is CIFS, where the stat IS the expensive operation, so this
+    is cheaper than the single-extension rglob it replaces rather than merely
+    equal. Relative paths are built as strings, so they match the old
+    `relative_to` output exactly and the per-episode matchers are unaffected.
+
+    An image pair is returned only when its `.sub` partner is in the SAME
+    directory, decided from that directory's own listing.
+    """
+    if not canonical_dir:
+        return [], []
+    try:
+        # #134: library-aware resolve — see _scan_for_srt.
+        full = canonical_to_fs(canonical_dir)
+        if not full.is_dir():
+            return [], []
+        srts: list[str] = []
+        images: list[str] = []
+        for dirpath, _dirnames, filenames in os.walk(full):
+            lows = {f.lower() for f in filenames}
+            for f in filenames:
+                low = f.lower()
+                if low.endswith(".srt"):
+                    srts.append(str(Path(dirpath, f).relative_to(full)))
+                elif low.endswith(".idx") and (low[:-4] + ".sub") in lows:
+                    images.append(str(Path(dirpath, f).relative_to(full)))
+        return sorted(srts), sorted(images)
+    except (OSError, ValueError):
+        return [], []
+
+
+def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
+    """Every .srt under <media_root>/<canonical_dir>, as relative paths.
+
+    Contract unchanged; now a view over `_scan_sidecars_recursive` so the walk
+    happens once per series no matter how many sidecar kinds we care about.
+    """
+    return _scan_sidecars_recursive(canonical_dir)[0]
 
 
 # #104: the per-series rglob is the dominant cost of a coverage build —
@@ -435,7 +495,7 @@ def _scan_for_srt_recursive(canonical_dir: str) -> list[str]:
 _SRT_SCAN_CONCURRENCY = 8
 
 
-async def _build_srt_index_parallel(
+async def _build_sidecar_index_parallel(
     canonical_dirs,
     cap: int = _SRT_SCAN_CONCURRENCY,
 ) -> dict[str, list[str]]:
@@ -454,9 +514,9 @@ async def _build_srt_index_parallel(
         return {}
     sem = asyncio.Semaphore(max(1, cap))
 
-    async def _one(d: str) -> tuple[str, list[str]]:
+    async def _one(d: str) -> tuple[str, tuple[list[str], list[str]]]:
         async with sem:
-            paths = await asyncio.to_thread(_scan_for_srt_recursive, d)
+            paths = await asyncio.to_thread(_scan_sidecars_recursive, d)
         return d, paths
 
     pairs = await asyncio.gather(*[_one(d) for d in unique])
@@ -598,6 +658,34 @@ def _episode_file_canonical(
     if not abs_path:
         return None
     return strip_arr_prefix(abs_path) or abs_path
+
+
+def _episode_image_pairs(
+    *,
+    sonarr_episode_id: int | None,
+    ep_file_paths: dict[int, str],
+    sonarr_eps_by_id: dict[int, dict],
+    series_image_paths: list[str],
+    episode_number: str | None,
+) -> list[str]:
+    """[#594] The complete .idx/.sub pairs belonging to ONE episode.
+
+    Same two-tier resolution as `_stale_for_episode`: prefer Sonarr's
+    authoritative episodeFile.path, which catches Part.N / Episode_NN /
+    arbitrary release naming, and fall back to the S<NN>E<NN> substring only
+    when no file path is known.
+
+    Unlike the .srt case there is NO wanted-language gate. An image pair never
+    satisfies a wanted language — it is context explaining why a row that looks
+    empty is not, so it is reported whatever languages are wanted.
+    """
+    if not series_image_paths:
+        return []
+    if sonarr_episode_id is not None:
+        file_canonical = _episode_file_canonical(sonarr_episode_id, ep_file_paths, sonarr_eps_by_id)
+        if file_canonical:
+            return _sidecars_for_file(series_image_paths, file_canonical)
+    return _match_episode_srt_pattern(series_image_paths, episode_number)[1]
 
 
 def _stale_for_episode(
@@ -1564,6 +1652,26 @@ def _score(
                 "subgen will skip this (English subs are image-based, PGS/VobSub)"
                 " — enable IGNORE_IMAGE_SUBTITLES on subgen to transcribe it"
             )
+    # [#594] A complete external .idx/.sub pair is partial coverage for the
+    # same reason an embedded bitmap track is: a picture is not text. Scored
+    # like the embedded case so the same real situation is not ranked two ways.
+    if item.image_subs_on_disk and item.embedded_en != "EN(image)":
+        s -= 500
+        reasons.append(f"disk: external image subs ({item.image_subs_on_disk[0]}) — partial coverage")
+        # Whether the gap is FILLABLE turns on the filename, not the codec.
+        # subgen's has_external_subtitle_in_language() does list .idx/.sub, but
+        # only counts one as coverage when a language token is parseable from
+        # the name -- so a multilingual `Movie.idx` gets transcribed while
+        # `Movie.en.idx` is skipped. Flagging every pair unfillable would be
+        # wrong for the common case and would strand a real, fillable gap.
+        _stem = (item.file_canonical_path or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if _stem and not ignore_image_subtitles:
+            if any(_is_en_sidecar_for(n, _stem, (".idx",)) for n in item.image_subs_on_disk):
+                item.image_only_subgen_will_skip = True
+                reasons.append(
+                    "subgen will skip this (external English image subs, PGS/VobSub)"
+                    " — enable IGNORE_IMAGE_SUBTITLES on subgen to transcribe it"
+                )
     # [#505] Can this subgen produce ANY language this row is waiting for?
     # Only gates when the answer is knowable: an instance that does not
     # advertise its mode, or a file whose audio language is untagged in
@@ -1902,6 +2010,8 @@ async def build_coverage(
     # Per-series srt index cache (path-keyed) shared across instances so a dir
     # is only walked once.
     series_srt_index: dict[str, list[str]] = {}
+    # [#594] filled from the SAME walk as series_srt_index — never a second rglob.
+    series_image_index: dict[str, list[str]] = {}
 
     # ───────────── Episodes: one assembly per Sonarr instance ─────────────
     for _sonarr_inst in sonarr_ids:
@@ -1921,7 +2031,9 @@ async def build_coverage(
         _ep_canonical_dirs = [
             strip_arr_prefix(sonarr_by_id.get(w.get("sonarrSeriesId"), {}).get("path")) for w in bz_eps_i
         ]
-        series_srt_index.update(await _build_srt_index_parallel(_ep_canonical_dirs))
+        _combined = await _build_sidecar_index_parallel(_ep_canonical_dirs)
+        series_srt_index.update({d: v[0] for d, v in _combined.items()})
+        series_image_index.update({d: v[1] for d, v in _combined.items()})
 
         # Authoritative file-path resolution via THIS Sonarr (episode +
         # episodefile per series with wanted eps). Replaces fragile S<NN>E<NN>
@@ -1940,8 +2052,19 @@ async def build_coverage(
             if canonical and canonical not in series_srt_index:
                 # #104: defensive inline fallback (pre-scan above normally
                 # covers this); offloaded so it never blocks the loop (#228).
-                series_srt_index[canonical] = await asyncio.to_thread(_scan_for_srt_recursive, canonical)
+                _s, _i = await asyncio.to_thread(_scan_sidecars_recursive, canonical)
+                series_srt_index[canonical] = _s
+                series_image_index[canonical] = _i
             srt_paths = series_srt_index.get(canonical or "", [])
+            image_paths = series_image_index.get(canonical or "", [])
+            # [#594] narrow the series-wide pairs to THIS episode's file
+            ep_image_pairs = _episode_image_pairs(
+                sonarr_episode_id=w.get("sonarrEpisodeId"),
+                ep_file_paths=ep_file_paths,
+                sonarr_eps_by_id=sonarr_eps_by_id,
+                series_image_paths=image_paths,
+                episode_number=w.get("episode_number"),
+            )
             missing_codes = [
                 ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
             ]
@@ -1964,6 +2087,7 @@ async def build_coverage(
                 canonical_path=canonical,
                 has_sub_on_disk=has_srt,
                 sub_files_seen=srts,
+                image_subs_on_disk=ep_image_pairs,
                 bazarr_sonarr_id=sonarr_id,
                 bazarr_episode_id=w.get("sonarrEpisodeId"),
                 missing_subtitles=[
@@ -2019,6 +2143,7 @@ async def build_coverage(
                     sonarr_eps_by_id=sonarr_eps_by_id,
                     ep_file_paths=ep_file_paths,
                     series_srt_index=series_srt_index,
+                    series_image_index=series_image_index,
                     sonarr_tags=sonarr_tags,
                     sonarr_missing_ids=sonarr_missing_ids,
                     sonarr_recent_ids=sonarr_recent_ids,
@@ -2062,8 +2187,11 @@ async def build_coverage(
             # scan (one level deep), threaded so the cumulative cost stays off-loop.
             if canonical:
                 has_srt, srts = await asyncio.to_thread(_scan_for_srt, canonical)
+                # [#594] Same folder, same thread hop: complete .idx/.sub pairs.
+                image_pairs = await asyncio.to_thread(_scan_for_image_pairs, canonical)
             else:
                 has_srt, srts = False, []
+                image_pairs = []
             item = CoverageItem(
                 media_type="movie",
                 title=title,
@@ -2074,6 +2202,7 @@ async def build_coverage(
                 file_canonical_path=_movie_file_canonical,
                 has_sub_on_disk=has_srt,
                 sub_files_seen=srts,
+                image_subs_on_disk=image_pairs,
                 bazarr_radarr_id=m.get("id"),
                 missing_subtitles=[
                     ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
@@ -2201,6 +2330,7 @@ async def _add_bazarr_blind_synthetic_rows(
     sonarr_eps_by_id: dict[int, dict],
     ep_file_paths: dict[int, str],
     series_srt_index: dict[str, list[str]],
+    series_image_index: dict[str, list[str]],  # [#594] same walk, image pairs
     sonarr_tags: dict[int, str],
     sonarr_missing_ids: set[int],
     sonarr_recent_ids: dict[int, float],  # id→import_ts (#117)
@@ -2293,7 +2423,9 @@ async def _add_bazarr_blind_synthetic_rows(
         for c in (strip_arr_prefix(s.get("path")) for s in foreign_series)
         if c and c not in series_srt_index
     ]
-    series_srt_index.update(await _build_srt_index_parallel(_foreign_dirs))
+    _foreign_combined = await _build_sidecar_index_parallel(_foreign_dirs)
+    series_srt_index.update({d: v[0] for d, v in _foreign_combined.items()})
+    series_image_index.update({d: v[1] for d, v in _foreign_combined.items()})
 
     synthetic_added = 0
     for s in foreign_series:
@@ -2359,6 +2491,11 @@ async def _add_bazarr_blind_synthetic_rows(
                 file_canonical_path=file_canonical,
                 has_sub_on_disk=False,  # we just confirmed no EN sidecar
                 sub_files_seen=[],
+                # [#594] ...but an image pair may still be sitting there, and it
+                # is exactly what explains a row that otherwise looks empty.
+                image_subs_on_disk=_sidecars_for_file(
+                    series_image_index.get(series_canonical or "", []), file_canonical
+                ),
                 bazarr_sonarr_id=sid,
                 bazarr_episode_id=ep_id,
                 missing_subtitles=["en"],  # treat as needing English
@@ -2564,15 +2701,23 @@ def _audio_metadata_looks_mislabeled(audio_langs: list[str] | None) -> bool:
     return all(l == "en" for l in non_und)  # norm is ISO-639-1
 
 
-def _is_en_sidecar_for(srt_path: str, file_stem: str) -> bool:
+def _is_en_sidecar_for(srt_path: str, file_stem: str, suffixes: tuple[str, ...] = (".srt",)) -> bool:
     """True if `srt_path` looks like an English sidecar for the video whose
     stem (filename minus extension) is `file_stem`. Tolerates Plex-style
     naming (<stem>.en.srt, <stem>.eng.srt) plus engine-suffix variants
-    (<stem>.en.alass.srt, etc) since subsyncarr produces multiples."""
+    (<stem>.en.alass.srt, etc) since subsyncarr produces multiples.
+
+    [#594] `suffixes` exists so the same token rule decides English-ness for
+    image pairs (`.idx`) too. One rule, one place: subgen parses the language
+    from the FILENAME, so subarr must agree with it or they disagree about
+    whether a gap is fillable.
+    """
     name = srt_path.rsplit("/", 1)[-1]
-    if not name.endswith(".srt"):
+    low = name.lower()
+    ext = next((sfx for sfx in suffixes if low.endswith(sfx)), None)
+    if ext is None:
         return False
-    base = name[:-4]
+    base = name[: -len(ext)]
     if not base.startswith(file_stem):
         return False
     tail = base[len(file_stem) :]
