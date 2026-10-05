@@ -2,6 +2,17 @@
 # frontend bundle-drift CI gate is deterministic across Windows/Linux.
 *.bundle.js text eol=lf
 *.bundle.js.map text eol=lf
+
+# Source that FEEDS those bundles must be pinned too, or the output is not
+# actually deterministic. esbuild embeds the raw source text — line endings and
+# all — in each map's `sourcesContent`, so a map built from a CRLF checkout
+# differs byte-for-byte from one built from an LF checkout even when the
+# emitted .bundle.js is identical. With core.autocrlf=true these are stored LF
+# and checked out CRLF, while `health.entry.jsx` had somehow stayed LF on disk
+# — so a rebuild churned its map on every frontend PR, and the drift gate could
+# not see it because that gate diffs *.bundle.js and *.html only.
+*.jsx text eol=lf
+*.mjs text eol=lf
 src/subarr/static/v1/**/*.html text eol=lf
 
 # Every shell script here is executed on Linux: docker-entrypoint.sh is COPYd

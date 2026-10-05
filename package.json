@@ -12,7 +12,7 @@
     "prepare": "node scripts/setup-hooks.mjs",
     "build:frontend": "node scripts/build-frontend.mjs",
     "dev:frontend": "node scripts/build-frontend.mjs --watch",
-    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- 'src/subarr/static/v1/home-hifi/*.bundle.js' 'src/subarr/static/v1/home-hifi/*.html'",
+    "check:frontend": "node scripts/build-frontend.mjs && git diff --exit-code -- \"src/subarr/static/v1/home-hifi/*.bundle.js\" \"src/subarr/static/v1/home-hifi/*.bundle.js.map\" \"src/subarr/static/v1/home-hifi/*.html\"",
     "test:frontend": "vitest run"
   },
   "devDependencies": {
