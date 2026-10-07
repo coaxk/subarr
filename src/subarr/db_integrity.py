@@ -27,11 +27,10 @@ log = logging.getLogger(__name__)
 
 TASK_NAME = "db-integrity"
 
-# Re-checked at most daily by the caller's discretion; the boot check is the
-# one that matters (covers unclean shutdowns, the main corruption window).
-# #291: daily, not weekly — an always-on container's pill shouldn't read
-# "stale" for a week between boots.
-EXPECTED_INTERVAL_S = 1 * 86400.0
+# One-shot: runs once at boot (covers unclean shutdowns, the main corruption
+# window) and nothing re-runs it, so it records no cadence. #600: it used to
+# record 24h, which read "stale" (3x, ~72h) on any always-on container and
+# raised the red integrity callout over a healthy database.
 
 
 class DatabaseCorruptionError(Exception):
@@ -45,7 +44,7 @@ def check_db_integrity(db_path: Path, health) -> bool:
     Health page carries the bad news.
     """
     try:
-        health.register(TASK_NAME, expected_interval_s=EXPECTED_INTERVAL_S)
+        health.register(TASK_NAME, one_shot=True)
     except Exception:
         pass
     try:
@@ -56,13 +55,13 @@ def check_db_integrity(db_path: Path, health) -> bool:
             conn.close()
         findings = [r[0] for r in rows]
         if findings == ["ok"]:
-            health.record_success(TASK_NAME, expected_interval_s=EXPECTED_INTERVAL_S)
+            health.record_success(TASK_NAME)
             log.info("db integrity: quick_check ok (%s)", db_path)
             return True
         err = DatabaseCorruptionError(
             f"quick_check reported {len(findings)} finding(s): " + "; ".join(findings[:10])
         )
-        health.record_failure(TASK_NAME, err, expected_interval_s=EXPECTED_INTERVAL_S)
+        health.record_failure(TASK_NAME, err)
         log.error(
             "db integrity: CORRUPTION detected in %s — back up /data and see the Health page. Findings: %s",
             db_path,
@@ -73,7 +72,7 @@ def check_db_integrity(db_path: Path, health) -> bool:
         # Unopenable/unreadable counts as a failure too (e.g. "file is not a
         # database"), recorded the same way.
         try:
-            health.record_failure(TASK_NAME, e, expected_interval_s=EXPECTED_INTERVAL_S)
+            health.record_failure(TASK_NAME, e)
         except Exception:
             pass
         log.error("db integrity: check failed for %s: %s", db_path, e)

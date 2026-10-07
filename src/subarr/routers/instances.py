@@ -268,7 +268,12 @@ async def _plex_section_for(request: Request, lib) -> dict:
     plex = getattr(request.app.state.integrations, "plex", None)
     try:
         if plex is not None and plex.is_configured():
-            section = await plex._section_for_path(str(lib.fs_root))
+            # #598: match on the path PLEX sees, as partial_scan does. fs_root
+            # is subarr's view, which differs whenever PLEX_PATH_PREFIX does.
+            path = str(lib.fs_root)
+            section = await plex._section_for_path(
+                plex.translate_path(path, await plex._effective_prefix(path))
+            )
             return {"name": section, "matched": bool(section)}
     except Exception:  # noqa: BLE001 - topology must render even if Plex errs
         log.debug("plex section match failed for %s", lib.slug, exc_info=True)

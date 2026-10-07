@@ -137,6 +137,17 @@ class PlexClient:
             return self._path_prefix
         if self._auto_prefix is not None:
             return self._auto_prefix
+        # #598: a sample with nothing beneath media_root (the default library's
+        # own root) cannot reveal a prefix. Answer identity for it WITHOUT
+        # caching, or that miss pins identity for every later caller,
+        # partial_scan included.
+        root = self._media_root
+        if (
+            not root
+            or not sample_subarr_path.startswith(root + "/")
+            or not sample_subarr_path[len(root) :].strip("/")
+        ):
+            return ""
         from .media_server import derive_path_prefix
 
         derived = None

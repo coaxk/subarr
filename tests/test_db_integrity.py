@@ -59,3 +59,68 @@ def test_check_never_raises(subarr_env, tmp_path):
     health = TaskHealthStore(health_db)
     # Nonexistent path: must return False, not raise (boot must continue).
     assert check_db_integrity(tmp_path / "missing" / "no.db", health) is False
+
+
+# --- #600: a one-shot boot check must never go "stale" ---------------------
+#
+# check_db_integrity runs ONCE, at boot. It used to record a 24h
+# expected_interval_s, so an always-on container read unhealthy (3x the
+# interval, ~72h) with zero failures and raised the red "Database integrity
+# issue detected" callout over a healthy database.
+
+_FOUR_DAYS = 4 * 86400.0
+
+
+def test_boot_check_records_no_cadence(subarr_env, tmp_path):
+    from subarr.db_integrity import check_db_integrity
+
+    db, health = _stores(tmp_path)
+    assert check_db_integrity(db, health) is True
+    state = {s.task_name: s for s in health.states()}["db-integrity"]
+    assert state.expected_interval_s is None
+    assert state.next_run_at is None
+
+
+def test_boot_check_not_unhealthy_after_long_uptime(subarr_env, tmp_path):
+    import sqlite3
+
+    from subarr.db_integrity import check_db_integrity
+
+    db, health = _stores(tmp_path)
+    assert check_db_integrity(db, health) is True
+    # Age the one success by four days, past the old 72h stale threshold.
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE task_health SET last_success_at = last_success_at - ? WHERE task_name='db-integrity'",
+        (_FOUR_DAYS,),
+    )
+    conn.commit()
+    conn.close()
+    state = {s.task_name: s for s in health.states()}["db-integrity"]
+    assert state.is_unhealthy is False
+
+
+def test_boot_check_clears_interval_persisted_by_older_release(subarr_env, tmp_path):
+    """An install that ran <= 2.7.17 already has 86400 stored in its row. The
+    upserts COALESCE the interval, so passing None alone would leave it in
+    place and the false alarm would survive the upgrade."""
+    import sqlite3
+    import time
+
+    from subarr.db_integrity import check_db_integrity
+
+    db, health = _stores(tmp_path)
+    health.register("db-integrity", expected_interval_s=86400.0)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE task_health SET last_success_at = ? WHERE task_name='db-integrity'",
+        (time.time() - _FOUR_DAYS,),
+    )
+    conn.commit()
+    conn.close()
+    assert {s.task_name: s for s in health.states()}["db-integrity"].is_unhealthy is True
+
+    assert check_db_integrity(db, health) is True
+    state = {s.task_name: s for s in health.states()}["db-integrity"]
+    assert state.expected_interval_s is None
+    assert state.is_unhealthy is False
