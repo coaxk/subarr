@@ -8,7 +8,12 @@ breaking config changes.
 ## [Unreleased]
 
 ### Fixed
+- **Thinking models such as gemma4 returned empty answers.** gemma4 (and qwen3) reason before answering by default, and those reasoning tokens count against the reply limit, so language detection, Arena explanations and the vision pre-filter came back blank with Ollama reporting it had hit the length cap. subarr now asks Ollama to skip thinking on every call. Models that do not think, such as qwen2.5, ignore the setting, so existing installs behave exactly as before.
+- **A language-detection reply with trailing junk was misread as the language "iso".** If the model appended text after its JSON answer (gemma4 has been seen adding `</th>`), the whole reply was rejected as JSON and the fallback took the first word of `{"iso_code": ...` as the language code. The JSON answer is now read even with trailing text, and stray markup around the code itself is stripped.
 - **`OLLAMA_VISION_MODEL` set in your compose file could be silently overridden by a value saved in `subarr-overrides.json`.** Every other setting that can be saved follows the rule that your environment variable wins over a saved value, and `OLLAMA_MODEL` already did. The vision model was missing from that list, so a saved value took priority over your environment. It now follows the same rule. A new test fails if any setting that can be saved is not covered by the rule.
+
+### Added
+- **gemma4 is recognised as a vision model.** With `OLLAMA_VISION_MODEL=auto`, or when the configured vision model is not installed, subarr now picks gemma4 if it is the vision model you have. qwen2.5vl stays first in line, so an install that has both keeps using it.
 
 ## [2.7.18] - 2026-10-07
 
