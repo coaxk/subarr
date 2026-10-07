@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.18] - 2026-10-07
+
+**Two false warnings removed: a database-integrity alarm on long-running installs, and "no Plex section" when Plex sees your media under a different path.**
+
+No database migration and no config changes.
+
 ### Fixed
 - **The Health page raised a false "Database integrity issue detected" warning after about three days of uptime (#600).** The integrity check runs once, when subarr starts, but it was recorded as if it ran daily. Once three days passed with no new run, the check read as overdue and turned red over a healthy database, with zero failures. It is now recorded as a startup-only check and can no longer go stale. Installs that already ran an earlier version had the daily schedule saved, so subarr clears it on the next start rather than only stopping new ones. Your database was never affected, and the full integrity check was always the accurate answer.
 - **Settings > Libraries showed a false "no Plex section" warning when Plex sees your media under a different path (#598).** The check compared subarr's own path (for example `/media/library/movies`) with Plex's (`/data/movies`) without translating between them. Partial scans already translated correctly, so this was a display problem only. It now uses the same translation, from `PLEX_PATH_PREFIX` or auto-detected from Plex's own library folders. The warning on the parent media root is kept when Plex has no section there, because that one is accurate. While fixing it we found that the fix as first written would have broken auto-detected prefixes for partial scans as well, since the parent root is checked first and an inconclusive result was being remembered for the rest of the session. That case is now covered by a test.
