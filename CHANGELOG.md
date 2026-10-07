@@ -7,6 +7,12 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.19] - 2026-10-08
+
+**Thinking models such as gemma4 now work for language detection, Arena explanations and the vision pre-filter.**
+
+No database migration and no config changes.
+
 ### Fixed
 - **Thinking models such as gemma4 returned empty answers.** gemma4 (and qwen3) reason before answering by default, and those reasoning tokens count against the reply limit, so language detection, Arena explanations and the vision pre-filter came back blank with Ollama reporting it had hit the length cap. subarr now asks Ollama to skip thinking on every call. Models that do not think, such as qwen2.5, ignore the setting, so existing installs behave exactly as before.
 - **A language-detection reply with trailing junk was misread as the language "iso".** If the model appended text after its JSON answer (gemma4 has been seen adding `</th>`), the whole reply was rejected as JSON and the fallback took the first word of `{"iso_code": ...` as the language code. The JSON answer is now read even with trailing text, and stray markup around the code itself is stripped.
