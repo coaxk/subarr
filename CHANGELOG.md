@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **`OLLAMA_VISION_MODEL` set in your compose file could be silently overridden by a value saved in `subarr-overrides.json`.** Every other setting that can be saved follows the rule that your environment variable wins over a saved value, and `OLLAMA_MODEL` already did. The vision model was missing from that list, so a saved value took priority over your environment. It now follows the same rule. A new test fails if any setting that can be saved is not covered by the rule.
+
 ## [2.7.18] - 2026-10-07
 
 **Two false warnings removed: a database-integrity alarm on long-running installs, and "no Plex section" when Plex sees your media under a different path.**

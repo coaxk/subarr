@@ -231,3 +231,36 @@ def test_wizard_persist_failure_does_not_undo_live_apply(subarr_env, monkeypatch
     assert config.settings.sonarr_url == "http://s:8989"  # live apply survived
     inst0 = next(i for i in config.settings.instances if i.service == "sonarr" and i.id == "")
     assert inst0.url == "http://s:8989"  # rebuild ran despite the persist failure
+
+
+def test_env_beats_file_override_for_ollama_vision_model(tmp_path, monkeypatch):
+    """OLLAMA_VISION_MODEL set in compose must beat a persisted override,
+    exactly like OLLAMA_MODEL does (env > file > default)."""
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.setenv("OLLAMA_VISION_MODEL", "env-vision:7b")
+    from subarr import config, config_store as cs
+
+    cs.save_override("ollama_vision_model", "file-vision:7b")
+    s = config.load()
+    assert s.ollama_vision_model == "env-vision:7b"
+    assert config.env_is_set("ollama_vision_model") is True
+
+
+def test_file_override_applies_to_ollama_vision_model_when_env_unset(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBARR_CONFIG_STORE", str(tmp_path / "ov.json"))
+    monkeypatch.delenv("OLLAMA_VISION_MODEL", raising=False)
+    from subarr import config, config_store as cs
+
+    cs.save_override("ollama_vision_model", "file-vision:7b")
+    s = config.load()
+    assert s.ollama_vision_model == "file-vision:7b"
+
+
+def test_every_persistable_field_is_env_guardable():
+    """Drift check: a field the override file can set (_FIELD_COERCE) must
+    map to its env var in FIELD_ENV_VARS, or env_is_set() returns False and
+    the persisted value silently beats the operator's env."""
+    from subarr import config
+
+    missing = sorted(set(config._FIELD_COERCE) - set(config.FIELD_ENV_VARS))
+    assert missing == []
