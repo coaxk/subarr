@@ -569,6 +569,9 @@ FIELD_ENV_VARS: dict[str, str] = {
     "subgen_url": "SUBGEN_URL",
     "ollama_url": "OLLAMA_URL",
     "ollama_model": "OLLAMA_MODEL",
+    # Persistable via _FIELD_COERCE, so it must be guardable here too or a
+    # saved override silently beats OLLAMA_VISION_MODEL from compose.
+    "ollama_vision_model": "OLLAMA_VISION_MODEL",
     # #75: Plex creds become UI-editable. PLEX_URL has a built-in default
     # (via _env_or) but env_is_set() checks the raw env var presence, so an
     # operator who pinned PLEX_URL keeps authority; a default-only install
