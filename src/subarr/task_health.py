@@ -128,9 +128,18 @@ class TaskHealthStore:
         # single choke point for the sanitized fleet crash aggregates.
         self._crash_recorder = crash_recorder
 
-    def register(self, task_name: str, *, expected_interval_s: float | None = None) -> None:
+    def register(
+        self, task_name: str, *, expected_interval_s: float | None = None, one_shot: bool = False
+    ) -> None:
         """Seed a row so a task appears (as 'never run yet') before its first
-        cycle, and record its cadence for the staleness check. Best-effort."""
+        cycle, and record its cadence for the staleness check. Best-effort.
+
+        The upserts COALESCE the cadence, so a None never overwrites a stored
+        one. one_shot=True is the explicit way to clear it: for checks that run
+        once (at boot) and so can never be "stale" (#600)."""
+        interval_sql = (
+            "NULL" if one_shot else "COALESCE(excluded.expected_interval_s, task_health.expected_interval_s)"
+        )
         try:
             with self._lock:
                 self._conn.execute(
@@ -138,8 +147,8 @@ class TaskHealthStore:
                     "total_failures, expected_interval_s, updated_at) "
                     "VALUES (?, 0, 0, 0, ?, ?) "
                     "ON CONFLICT(task_name) DO UPDATE SET "
-                    "  expected_interval_s=COALESCE(excluded.expected_interval_s, task_health.expected_interval_s)",
-                    (task_name, expected_interval_s, time.time()),
+                    f"  expected_interval_s={interval_sql}",
+                    (task_name, None if one_shot else expected_interval_s, time.time()),
                 )
         except Exception as e:
             log.debug("task_health register(%s) failed: %s", task_name, e)

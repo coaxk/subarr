@@ -139,3 +139,28 @@ def test_record_is_best_effort_never_raises(store):
     # never crash the loop it monitors.
     store.record_success("x")
     store.record_failure("x", ValueError("y"))
+
+
+# --- #600: register(one_shot=True) is the only way to CLEAR a cadence -------
+
+
+def _interval(store, name):
+    return {s.task_name: s for s in store.states()}[name].expected_interval_s
+
+
+def test_register_none_keeps_existing_interval(store):
+    """Loops seed with their cadence and must not lose it on a None register."""
+    store.register("loop", expected_interval_s=30)
+    store.register("loop")
+    assert _interval(store, "loop") == 30
+
+
+def test_register_one_shot_clears_existing_interval(store):
+    store.register("boot-check", expected_interval_s=86400.0)
+    store.register("boot-check", one_shot=True)
+    assert _interval(store, "boot-check") is None
+
+
+def test_register_one_shot_on_fresh_row(store):
+    store.register("boot-check", one_shot=True)
+    assert _interval(store, "boot-check") is None
