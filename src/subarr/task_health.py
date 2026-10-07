@@ -137,9 +137,6 @@ class TaskHealthStore:
         The upserts COALESCE the cadence, so a None never overwrites a stored
         one. one_shot=True is the explicit way to clear it: for checks that run
         once (at boot) and so can never be "stale" (#600)."""
-        interval_sql = (
-            "NULL" if one_shot else "COALESCE(excluded.expected_interval_s, task_health.expected_interval_s)"
-        )
         try:
             with self._lock:
                 self._conn.execute(
@@ -147,8 +144,9 @@ class TaskHealthStore:
                     "total_failures, expected_interval_s, updated_at) "
                     "VALUES (?, 0, 0, 0, ?, ?) "
                     "ON CONFLICT(task_name) DO UPDATE SET "
-                    f"  expected_interval_s={interval_sql}",
-                    (task_name, None if one_shot else expected_interval_s, time.time()),
+                    "  expected_interval_s=CASE WHEN ? THEN NULL "
+                    "    ELSE COALESCE(excluded.expected_interval_s, task_health.expected_interval_s) END",
+                    (task_name, None if one_shot else expected_interval_s, time.time(), int(one_shot)),
                 )
         except Exception as e:
             log.debug("task_health register(%s) failed: %s", task_name, e)
