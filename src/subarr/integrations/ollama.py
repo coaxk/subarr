@@ -29,6 +29,11 @@ class OllamaError(RuntimeError):
 # Ollama can take a while on first model load. Generous read timeout.
 _OLLAMA_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=3.0)
 
+# _THINK_NOTE: thinking models (gemma4, qwen3) reason by default and those
+# tokens count against num_predict, so a capped reply comes back EMPTY with
+# done_reason "length". Every /api/generate body sends "think": False;
+# non-thinking models (qwen2.5) ignore it.
+
 
 # #232: Known vision-capable Ollama model families. Used to detect
 # whether the user has ANY vision model installed when they have not
@@ -37,8 +42,11 @@ _OLLAMA_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=3.0)
 # variants (qwen2.5vl:7b-q4, llava:13b-v1.6, etc.) — anything starting
 # with one of these is a fair candidate. Order = preference: qwen2.5vl
 # is current best-in-class for our specific job (thumb classification).
+# gemma4 ranks second: every gemma4 variant is text + vision, so a
+# gemma4-only install resolves, but a user with both keeps qwen2.5vl.
 _VISION_FAMILIES = (
     "qwen2.5vl",  # current default + recommended
+    "gemma4",  # text + vision; thinks by default, see _THINK_NOTE
     "qwen2-vl",  # predecessor, still common
     "llama3.2-vision",
     "llava",
@@ -166,6 +174,7 @@ class OllamaClient:
             "model": self._model,
             "prompt": prompt,
             "stream": False,
+            "think": False,  # see _THINK_NOTE
             "options": {"temperature": temperature, "num_predict": num_predict},
         }
         if system:
@@ -333,6 +342,7 @@ class OllamaClient:
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,
+            "think": False,  # see _THINK_NOTE
             "options": {"temperature": 0.1, "num_predict": num_predict},
         }
         try:

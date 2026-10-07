@@ -191,16 +191,19 @@ def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
     malformed (e.g. transient backend hiccup), falling back to the v1.1
     free-text iso parser so legacy prompts/models still work.
     """
+    text = (raw or "").strip()
     try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+        # raw_decode, not loads: gemma4 has been seen appending junk such as
+        # "</th>" after otherwise valid output, and loads() rejecting the whole
+        # string sent valid JSON to the free-text parser, which took the first
+        # word of '{"iso_code"...' ("iso") as the language.
+        obj, _ = json.JSONDecoder().raw_decode(text[text.find("{") :]) if "{" in text else (None, 0)
+    except json.JSONDecodeError:
+        obj = None
+    if not isinstance(obj, dict):
         # Fallback: maybe the model returned bare ISO text (vanilla mode).
-        return parse_iso(raw or ""), None, None
-    iso = (obj.get("iso_code") or "").strip().lower()
-    if iso == "und" or not _ISO_RE.match(iso):
-        iso_norm: str | None = None
-    else:
-        iso_norm = iso
+        return parse_iso(text), None, None
+    iso_norm = parse_iso(str(obj.get("iso_code") or ""))
     conf = obj.get("confidence")
     try:
         conf_norm = float(conf) if conf is not None else None
