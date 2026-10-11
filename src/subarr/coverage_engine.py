@@ -562,13 +562,105 @@ def _sidecars_for_file(srt_paths: list[str], file_canonical: str) -> list[str]:
     ]
 
 
+# Release-team and tool tokens that look like 2-3 char alpha but are not
+# language codes. Heuristic list — extend as we hit new ones.
+_KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
+_KNOWN_NON_LANG = {
+    "web",
+    "hdtv",
+    "dvd",
+    "uhd",
+    "hdr",
+    "sdr",
+    "ddp",
+    "aac",
+    "dts",
+    "ac3",
+    "flac",
+    "x264",
+    "x265",
+    "ind",
+    "rep",
+    "tla",
+    "ntb",
+    "syn",
+}
+# Plex / Bazarr caption markers that follow a language code
+# (`Movie.en.sdh.srt`, `Movie.es.cc.srt`). Not language codes.
+_CAPTION_SUFFIXES = {"sdh", "cc"}
+_SIDECAR_SKIP_TOKENS = _KNOWN_TOOLS | _KNOWN_NON_LANG | _CAPTION_SUFFIXES
+
+
+def _is_known_language_token(tok: str) -> bool:
+    """True when `tok` is a real language code, not just 2-3 letters."""
+    from .langs import WHISPER_LANGUAGES, _ISO3_TO_ISO1, _NAME_TO_ISO
+
+    return tok in WHISPER_LANGUAGES or tok in _ISO3_TO_ISO1 or tok in _NAME_TO_ISO
+
+
+def _sidecar_lang_token(tokens: list[str]) -> str | None:
+    """Language token in a sidecar stem.
+
+    Only the trailing suffix cluster is considered: tool names, release tags,
+    caption markers, and language-shaped tokens at the end of the name. A
+    title token in front of that cluster is left alone, so `Mr. Title.hi.srt`
+    stays Hindi (`hi`) even though `mr` is also the Marathi code.
+
+    `sdh` and `cc` are always caption markers. `hi` is ISO 639-1 Hindi and
+    also the hearing-impaired marker (`Movie.en.hi.srt`, `Movie.es.hi.srt`).
+    It is a marker only when another real language code shares that trailing
+    cluster. `Movie.hi.srt` stays Hindi.
+    """
+
+    def _shaped(tok: str) -> bool:
+        return 2 <= len(tok) <= 3 and tok.isalpha()
+
+    cluster: list[str] = []
+    for tok in reversed(tokens):
+        if tok in _SIDECAR_SKIP_TOKENS or tok == "hi" or _shaped(tok):
+            cluster.append(tok)
+            continue
+        break
+
+    for i, tok in enumerate(cluster):
+        if tok in _SIDECAR_SKIP_TOKENS or not _shaped(tok):
+            continue
+        if tok == "hi":
+            preceded = any(
+                _shaped(left)
+                and left not in _SIDECAR_SKIP_TOKENS
+                and left != "hi"
+                and _is_known_language_token(left)
+                for left in cluster[i + 1 :]
+            )
+            if preceded:
+                continue
+        return tok
+    return None
+
+
+def _lang_token_from_srt_name(name: str) -> str:
+    """Language token for one sidecar filename, or 'und'.
+
+    Does not apply the forced-sidecar exclusion. Callers that decide coverage
+    (`_langs_in_sidecars`) drop `<stem>.<lang>.forced.srt` before this.
+    """
+    import re
+
+    lower = name.rsplit("/", 1)[-1].lower()
+    if lower.endswith(".srt"):
+        lower = lower[:-4]
+    return _sidecar_lang_token(re.split(r"[.\-]", lower)) or "und"
+
+
 def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     """Parse 2-letter language codes from sidecar filenames.
 
     Convention: '<basename>.<lang>.srt' (e.g. '...WEBTUBE.en.srt' → 'en').
     Plain '<basename>.srt' → 'und' (undefined; could be anything).
-    Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') are still
-    parsed correctly because we grab the lang slot, not the last token."""
+    Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') and caption
+    suffixes ('....en.sdh.srt', '....es.hi.srt', '....en.cc.srt') resolve to
+    the language, not the trailing marker."""
     import re
 
     # [2026-05-30] Split on BOTH dots AND hyphens. Release teams pack
@@ -577,29 +669,6 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     # in v1.0 missed those because it saw the whole "x264-iND-en" as
     # one token (not alpha → skipped, fell through to "und"). Original
     # subarr handled both separators.
-    KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
-    # Also skip release-team tokens that look like 2-3 char alpha but
-    # AREN'T language codes. Heuristic list — extend as we hit new ones.
-    KNOWN_NON_LANG = {
-        "web",
-        "hdtv",
-        "dvd",
-        "uhd",
-        "hdr",
-        "sdr",
-        "ddp",
-        "aac",
-        "dts",
-        "ac3",
-        "flac",
-        "x264",
-        "x265",
-        "ind",
-        "rep",
-        "tla",
-        "ntb",
-        "syn",
-    }
 
     # [#485] A FORCED sidecar is not full coverage. subarr already treats
     # embedded forced tracks this way (has_usable_embedded_english excludes
@@ -629,14 +698,7 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
         # silently stop counting its subtitles.
         if _FORCED_TOKEN in tokens:
             continue
-        found_lang = None
-        for tok in reversed(tokens):
-            if 2 <= len(tok) <= 3 and tok.isalpha():
-                if tok in KNOWN_TOOLS or tok in KNOWN_NON_LANG:
-                    continue
-                found_lang = tok
-                break
-        langs.add(found_lang or "und")
+        langs.add(_sidecar_lang_token(tokens) or "und")
     return langs
 
 
