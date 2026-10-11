@@ -58,11 +58,36 @@ def _shape_history_row(r: dict[str, Any], media_type: str) -> dict[str, Any]:
     return out
 
 
+def _arr_id(value: object) -> int | None:
+    """A positive arr id from a snapshot field. ``0`` and blanks are absent."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value or None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed or None
+    return None
+
+
 def _ref_from_item(it: dict[str, Any]) -> tuple[str, int] | None:
+    """Map a coverage snapshot row to ``(media_type, arr id)``.
+
+    ``CoverageItem.to_dict()`` nests the ids under ``bazarr``
+    (``episode_id`` / ``radarr_id``). That is the shape stored in the coverage
+    snapshot. Older fixtures still put ``bazarr_episode_id`` /
+    ``bazarr_radarr_id`` on the row itself, so both shapes resolve.
+    """
+    nested = it.get("bazarr")
+    nested = nested if isinstance(nested, dict) else {}
     if it.get("media_type") == "movie":
-        rid = it.get("bazarr_radarr_id")
+        rid = _arr_id(it.get("bazarr_radarr_id"))
+        if rid is None:
+            rid = _arr_id(nested.get("radarr_id"))
         return ("movie", rid) if rid else None
-    eid = it.get("bazarr_episode_id")
+    eid = _arr_id(it.get("bazarr_episode_id"))
+    if eid is None:
+        eid = _arr_id(nested.get("episode_id"))
     return ("episode", eid) if eid else None
 
 
