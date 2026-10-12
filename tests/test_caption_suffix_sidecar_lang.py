@@ -74,3 +74,27 @@ class TestCaptionSuffixIsNotTheLanguage:
     def test_a_caption_marker_with_no_language_is_undefined(self, name):
         assert _langs_in_sidecars([name]) == {"und"}
         assert _lang_from_srt_name(name) == "und"
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("Movie.en.default.srt", "en"),
+            ("Movie.zh-Hans.srt", "zh"),
+            ("Movie.zh-hant.srt", "zh"),
+            ("Movie.sr-Latn.srt", "sr"),
+            ("Show.S01E01.en.WEBRip.srt", "en"),
+            ("Movie.en.1080p.srt", "en"),
+            ("Movie.en.synced.srt", "en"),
+            ("Movie.en.v2.srt", "en"),
+        ],
+    )
+    def test_a_token_after_the_language_does_not_hide_it(self, name, expected):
+        assert _lang_token_from_srt_name(name) == expected
+        assert _lang_from_srt_name(name) == expected
+        assert _langs_in_sidecars([name]) == {expected}
+
+    def test_library_still_reads_the_language_on_a_forced_sidecar(self):
+        # Coverage ignores a forced sidecar. Library still reports its language.
+        assert _langs_in_sidecars(["Movie.en.forced.srt"]) == set()
+        assert _lang_from_srt_name("Movie.en.forced.srt") == "en"
+        assert _lang_token_from_srt_name("Movie.en.forced.srt") == "en"

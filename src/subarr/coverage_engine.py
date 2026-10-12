@@ -593,41 +593,39 @@ _SIDECAR_SKIP_TOKENS = _KNOWN_TOOLS | _KNOWN_NON_LANG | _CAPTION_SUFFIXES
 
 def _is_known_language_token(tok: str) -> bool:
     """True when `tok` is a real language code, not just 2-3 letters."""
-    from .langs import WHISPER_LANGUAGES, _ISO3_TO_ISO1, _NAME_TO_ISO
+    from .langs import is_language_code
 
-    return tok in WHISPER_LANGUAGES or tok in _ISO3_TO_ISO1 or tok in _NAME_TO_ISO
+    return is_language_code(tok)
 
 
-def _sidecar_lang_token(tokens: list[str]) -> str | None:
-    """Language token in a sidecar stem.
+def _shaped_lang_token(tok: str) -> bool:
+    return 2 <= len(tok) <= 3 and tok.isalpha()
 
-    Only the trailing suffix cluster is considered: tool names, release tags,
-    caption markers, and language-shaped tokens at the end of the name. A
-    title token in front of that cluster is left alone, so `Mr. Title.hi.srt`
-    stays Hindi (`hi`) even though `mr` is also the Marathi code.
 
-    `sdh` and `cc` are always caption markers. `hi` is ISO 639-1 Hindi and
-    also the hearing-impaired marker (`Movie.en.hi.srt`, `Movie.es.hi.srt`).
-    It is a marker only when another real language code shares that trailing
-    cluster. `Movie.hi.srt` stays Hindi.
+def _trailing_suffix_cluster(tokens: list[str]) -> list[str]:
+    """Suffix tokens at the end of a sidecar stem, nearest last.
+
+    Stops at the first token that is not a tool, release tag, caption marker,
+    or language-shaped token. `default` in `Movie.en.default.srt` ends the
+    cluster before `en`.
     """
-
-    def _shaped(tok: str) -> bool:
-        return 2 <= len(tok) <= 3 and tok.isalpha()
-
     cluster: list[str] = []
     for tok in reversed(tokens):
-        if tok in _SIDECAR_SKIP_TOKENS or tok == "hi" or _shaped(tok):
+        if tok in _SIDECAR_SKIP_TOKENS or tok == "hi" or _shaped_lang_token(tok):
             cluster.append(tok)
             continue
         break
+    return cluster
 
+
+def _lang_in_cluster(cluster: list[str]) -> str | None:
+    """Language in a trailing cluster, treating `hi` as a marker only there."""
     for i, tok in enumerate(cluster):
-        if tok in _SIDECAR_SKIP_TOKENS or not _shaped(tok):
+        if tok in _SIDECAR_SKIP_TOKENS or not _shaped_lang_token(tok):
             continue
         if tok == "hi":
             preceded = any(
-                _shaped(left)
+                _shaped_lang_token(left)
                 and left not in _SIDECAR_SKIP_TOKENS
                 and left != "hi"
                 and _is_known_language_token(left)
@@ -637,6 +635,37 @@ def _sidecar_lang_token(tokens: list[str]) -> str | None:
                 continue
         return tok
     return None
+
+
+def _lang_scanning_past_unknown(tokens: list[str]) -> str | None:
+    """First language-shaped token from the end, walking past longer tokens.
+
+    This is the pre-cluster scan. `sdh` and `cc` stay markers, so a name that
+    is only a caption suffix is still undefined.
+    """
+    for tok in reversed(tokens):
+        if not _shaped_lang_token(tok):
+            continue
+        if tok in _SIDECAR_SKIP_TOKENS:
+            continue
+        return tok
+    return None
+
+
+def _sidecar_lang_token(tokens: list[str]) -> str | None:
+    """Language token in a sidecar stem.
+
+    The trailing suffix cluster decides whether `hi` is a hearing-impaired
+    marker or Hindi. `Mr. Title.hi.srt` stays Hindi (`hi`) even though `mr`
+    is also the Marathi code, because `Title` is outside that cluster.
+
+    A longer token after the language (`Movie.en.default.srt`,
+    `Movie.zh-Hans.srt`, `Movie.en.WEBRip.srt`) is not part of the cluster.
+    When the cluster has no language, fall back to scanning every token so
+    that language is still found. `sdh` and `cc` are always caption markers.
+    """
+    cluster = _trailing_suffix_cluster(tokens)
+    return _lang_in_cluster(cluster) or _lang_scanning_past_unknown(tokens)
 
 
 def _lang_token_from_srt_name(name: str) -> str:
