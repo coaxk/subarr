@@ -381,6 +381,41 @@ def _skip_explainer(request: Request) -> Callable[[str], dict | None]:
     )
 
 
+def _subgen_library_prefixes() -> tuple[str, ...]:
+    """Subgen path prefixes for every configured library, each ending in ``/``.
+
+    The default ``SUBGEN_MEDIA_PREFIX`` is library 0. Extra libraries carry
+    their own ``subgen_prefix`` (for example ``/tv`` beside ``/movies``). A
+    trailing slash keeps ``/media`` from also matching ``/media2``.
+    """
+    raws = [lib.subgen_prefix for lib in settings.libraries] or [settings.subgen_media_prefix]
+    prefixes: list[str] = []
+    seen: set[str] = set()
+    for raw in raws:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        prefix = "/" if text == "/" else text.rstrip("/") + "/"
+        if prefix not in seen:
+            seen.add(prefix)
+            prefixes.append(prefix)
+    return tuple(prefixes)
+
+
+def _is_library_job(task: object, prefixes: tuple[str, ...]) -> bool:
+    """True for a Subgen job whose path sits under a configured library.
+
+    Tuning Lab sweeps upload audio to a temp path outside every library
+    prefix, so they stay off the main queue.
+    """
+    if not isinstance(task, dict):
+        return False
+    path = task.get("path")
+    if not isinstance(path, str):
+        return False
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
 def _pending_active_paths(request: Request) -> dict[str, float]:
     """#564: canonical path -> when its waiting or submitted job was queued.
     Best-effort: a missing or failing queue just means nothing is superseded."""
@@ -477,18 +512,16 @@ async def get_queue(request: Request, history_window_s: int = _DEFAULT_HISTORY_W
 
     # Tuning-lab arena sweeps run through subgen via /asr UPLOAD mode, so they
     # surface in subgen's /queue with a subgen-side temp upload path (not a
-    # `<subgen_media_prefix>/…` library path). They belong to the Tuning Lab,
-    # not the main queue — without this filter the sidebar counted a sweep
-    # ("1 running") that the queue page never rendered (it keys off library
-    # paths), so the count and the list disagreed. Drop non-library jobs from
-    # BOTH the lists and the counts so they stay in sync.
-    _media_prefix = settings.subgen_media_prefix.rstrip("/") + "/"
-
-    def _is_library_job(t: object) -> bool:
-        return isinstance(t, dict) and isinstance(t.get("path"), str) and t["path"].startswith(_media_prefix)
-
-    live["processing"] = [t for t in (live.get("processing") or []) if _is_library_job(t)]
-    live["queued"] = [t for t in (live.get("queued") or []) if _is_library_job(t)]
+    # library path). They belong to the Tuning Lab, not the main queue —
+    # without this filter the sidebar counted a sweep ("1 running") that the
+    # queue page never rendered, so the count and the list disagreed. Match
+    # every configured library prefix, not only the default one: a second
+    # library at /tv is a real job even when SUBGEN_MEDIA_PREFIX is /movies.
+    # Drop non-library jobs from BOTH the lists and the counts so they stay
+    # in sync.
+    prefixes = _subgen_library_prefixes()
+    live["processing"] = [t for t in (live.get("processing") or []) if _is_library_job(t, prefixes)]
+    live["queued"] = [t for t in (live.get("queued") or []) if _is_library_job(t, prefixes)]
     live["processing_count"] = len(live["processing"])
     live["queued_count"] = len(live["queued"])
 

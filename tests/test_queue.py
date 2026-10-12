@@ -114,6 +114,59 @@ def _arena_mixed_handler(req: httpx.Request) -> httpx.Response:
     return httpx.Response(404)
 
 
+def _two_library_handler(req: httpx.Request) -> httpx.Response:
+    # Default library prefix is /media. The extra library is /tv. A sibling
+    # prefix (/media2) and a Tuning Lab upload must not count as library jobs.
+    if req.url.path == "/queue":
+        return httpx.Response(
+            200,
+            json={
+                "queued": [
+                    {"path": "/tv/Show/S01E01.mkv", "type": "transcribe"},
+                    {"path": "/media2/Nope.mkv", "type": "transcribe"},
+                ],
+                "processing": [
+                    {"path": "/media/Movies/Film.mkv", "type": "transcribe"},
+                    {"path": "/tmp/subgen-upload-abc123.wav", "type": "transcribe"},
+                ],
+                "queued_count": 2,
+                "processing_count": 2,
+                "idle": False,
+                "version": "2026.05.3",
+            },
+        )
+    return httpx.Response(404)
+
+
+@pytest.mark.subgen(handler=_two_library_handler)
+def test_queue_keeps_jobs_under_every_library_prefix(app_with_stub):
+    from subarr.libraries import Library
+    from subarr.routers import queue as queue_mod
+
+    default = queue_mod.settings.libraries[0]
+    tv = Library(
+        slug="tv",
+        name="TV",
+        fs_root=default.fs_root,
+        subgen_prefix="/tv",
+        arr_prefix="/tv/",
+    )
+    # Settings is frozen; the queue reads this same object, so swap the
+    # library tuple in place and put the original back before the next test.
+    original = queue_mod.settings.libraries
+    object.__setattr__(queue_mod.settings, "libraries", (default, tv))
+    try:
+        body = app_with_stub.get("/api/queue").json()
+    finally:
+        object.__setattr__(queue_mod.settings, "libraries", original)
+    processing = [t["path"] for t in body["processing"]]
+    queued = [t["path"] for t in body["queued"]]
+    assert processing == ["/media/Movies/Film.mkv"]
+    assert queued == ["/tv/Show/S01E01.mkv"]
+    assert body["processing_count"] == len(processing)
+    assert body["queued_count"] == len(queued)
+
+
 @pytest.mark.subgen(handler=_arena_mixed_handler)
 def test_queue_excludes_arena_asr_upload_jobs(app_with_stub):
     body = app_with_stub.get("/api/queue").json()
