@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.20] - 2026-10-12
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.19 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed (#606).** The images published for 2.7.18 and 2.7.19 ship `liblzma5 5.8.1-1+deb13u1`, and Debian has since published `deb13u2` in its security pocket (DSA-6549-1). This release rebuilds against current packages. Measured against the published artifacts rather than a fresh build: `apt-get -s upgrade` run inside both images reported exactly that one security-pocket package pending.
+
 ## [2.7.19] - 2026-10-08
 
 **Thinking models such as gemma4 now work for language detection, Arena explanations and the vision pre-filter.**
