@@ -119,6 +119,30 @@ def test_resolve_media_ref():
     assert _resolve_media_ref("TV/Other/x.mkv", _COV_ITEMS) is None
 
 
+# CoverageItem.to_dict() nests the ids. The snapshot in the database is this
+# shape; the flat bazarr_* keys above are only the older fixture form.
+_NESTED_COV_ITEMS = [
+    {
+        "file_canonical_path": "TV/Show/Season 1/Show.S01E01.mkv",
+        "media_type": "episode",
+        "bazarr": {"sonarr_id": 7, "radarr_id": None, "episode_id": 42},
+    },
+    {
+        "file_canonical_path": "Movies/Film (2020)/Film.mkv",
+        "media_type": "movie",
+        "bazarr": {"sonarr_id": None, "radarr_id": 9, "episode_id": None},
+    },
+]
+
+
+def test_resolve_media_ref_reads_nested_bazarr_ids():
+    from subarr.routers.blacklist import _resolve_media_ref
+
+    assert _resolve_media_ref("TV/Show/Season 1/Show.S01E01.mkv", _NESTED_COV_ITEMS) == ("episode", 42)
+    assert _resolve_media_ref("TV/Show/Season 1/Show.S01E01.en.srt", _NESTED_COV_ITEMS) == ("episode", 42)
+    assert _resolve_media_ref("Movies/Film (2020)/Film.mkv", _NESTED_COV_ITEMS) == ("movie", 9)
+
+
 class _SnapCache:
     def __init__(self, items):
         self._snap = type("S", (), {"items": items})()
@@ -135,6 +159,15 @@ def test_history_endpoint_resolves_by_path(app_with_stub):
     app_with_stub.app.state.coverage_cache = _SnapCache(_COV_ITEMS)
     r = app_with_stub.get("/api/blacklist/history?path=TV/Show/Season 1/Show.S01E01.en.srt")
     assert r.status_code == 200
+    assert sum(1 for s in r.json()["subtitles"] if s["blacklistable"]) == 1
+
+
+@pytest.mark.integrations_stub(bazarr_handler=_bazarr_history_stub)
+def test_history_endpoint_resolves_nested_snapshot_ids(app_with_stub):
+    app_with_stub.app.state.coverage_cache = _SnapCache(_NESTED_COV_ITEMS)
+    r = app_with_stub.get("/api/blacklist/history?path=TV/Show/Season 1/Show.S01E01.en.srt")
+    assert r.status_code == 200
+    assert r.json()["id"] == 42
     assert sum(1 for s in r.json()["subtitles"] if s["blacklistable"]) == 1
 
 
