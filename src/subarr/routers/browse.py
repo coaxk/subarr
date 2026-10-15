@@ -82,45 +82,13 @@ def clear_cache_for_prefix(prefix: str | None = None) -> int:
         return len(victims)
 
 
-# Heuristic non-language tokens we should NOT mistake for ISO codes when
-# parsing srt filenames. Matches coverage_engine._langs_in_sidecars.
-_KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
-_KNOWN_NON_LANG = {
-    "web",
-    "hdtv",
-    "dvd",
-    "uhd",
-    "hdr",
-    "sdr",
-    "ddp",
-    "aac",
-    "dts",
-    "ac3",
-    "flac",
-    "x264",
-    "x265",
-    "ind",
-    "rep",
-    "tla",
-    "ntb",
-    "syn",
-}
-
-
 def _lang_from_srt_name(name: str) -> str:
     """Parse 2-3 char language code from a sidecar .srt filename. Returns
-    'und' when no recognisable token. Mirrors coverage_engine logic so
+    'und' when no recognisable token. Delegates to coverage_engine so
     Library + Coverage agree on what each .srt looks like."""
-    lower = name.lower()
-    if lower.endswith(".srt"):
-        lower = lower[:-4]
-    tokens = re.split(r"[.\-]", lower)
-    for tok in reversed(tokens):
-        if 2 <= len(tok) <= 3 and tok.isalpha():
-            if tok in _KNOWN_TOOLS or tok in _KNOWN_NON_LANG:
-                continue
-            return tok
-    return "und"
+    from ..coverage_engine import _lang_token_from_srt_name
+
+    return _lang_token_from_srt_name(name)
 
 
 # Languages that count as "English coverage" for the status indicator.
