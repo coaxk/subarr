@@ -40,7 +40,7 @@ def test_flag_off_leaves_sidecar_untouched(tmp_path, monkeypatch):
     srt.write_text(_HOT, encoding="utf-8")
     _enable(False)
     w = _watcher()
-    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p: str(srt))
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
     w._run_retime(_Entry())
     assert srt.read_text(encoding="utf-8") == _HOT  # byte-for-byte unchanged
 
@@ -52,7 +52,7 @@ def test_flag_on_retimes_hot_sidecar(tmp_path, monkeypatch):
     srt.write_text(_HOT, encoding="utf-8")
     _enable(True)
     w = _watcher()
-    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p: str(srt))
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
     before = analyze_srt(_HOT)
     w._run_retime(_Entry())
     after = analyze_srt(srt.read_text(encoding="utf-8"))
@@ -67,7 +67,7 @@ def test_flag_on_comfortable_sidecar_not_rewritten(tmp_path, monkeypatch):
     srt.write_text(_CALM, encoding="utf-8")
     _enable(True)
     w = _watcher()
-    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p: str(srt))
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
     mtime_before = srt.stat().st_mtime_ns
     w._run_retime(_Entry())
     assert srt.stat().st_mtime_ns == mtime_before  # write-only-if-changed → no touch
@@ -76,7 +76,7 @@ def test_flag_on_comfortable_sidecar_not_rewritten(tmp_path, monkeypatch):
 def test_no_sidecar_is_noop(monkeypatch):
     _enable(True)
     w = _watcher()
-    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p: None)
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: None)
     w._run_retime(_Entry())  # must not raise
 
 
@@ -85,7 +85,7 @@ def test_retime_failure_never_raises(tmp_path, monkeypatch):
     srt.write_text(_HOT, encoding="utf-8")
     _enable(True)
     w = _watcher()
-    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p: str(srt))
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
     monkeypatch.setattr(
         "subarr.completion_watcher.retime_srt",
         lambda t: (_ for _ in ()).throw(ValueError("boom")),

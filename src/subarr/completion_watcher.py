@@ -46,6 +46,22 @@ log = logging.getLogger(__name__)
 # written and subgen accepting /batch, the path is in neither queue; judging it
 # then would hold back a file that is about to transcribe normally.
 NO_OUTPUT_MIN_AGE_S = 120
+# #613: tolerance when comparing a sidecar's mtime with a job's queued_at. The
+# file's mtime comes from the share's clock, queued_at from subarr's.
+SIDECAR_MTIME_SLACK_S = 300
+
+
+def _fresh_names(parent: Path, names: list[str], since: float) -> set[str]:
+    """The sidecars in `names` modified at or after `since` (less the slack)."""
+    cutoff = float(since) - SIDECAR_MTIME_SLACK_S
+    fresh: set[str] = set()
+    for n in names:
+        try:
+            if (parent / n).stat().st_mtime >= cutoff:
+                fresh.add(n)
+        except OSError:
+            continue
+    return fresh
 
 
 def _upload_language(srt_name: str, video_stem: str) -> str:
@@ -77,7 +93,7 @@ def _upload_language(srt_name: str, video_stem: str) -> str:
     return langs[-1]
 
 
-def choose_srt_sidecar(stem: str, names: list[str]) -> str | None:
+def choose_srt_sidecar(stem: str, names: list[str], fresh: set[str] | None = None) -> str | None:
     """Pick which sibling .srt is the one subgen just wrote, from `names`.
 
     [#499] This used to be "prefer <stem>.en.srt, else the first glob hit".
@@ -102,11 +118,21 @@ def choose_srt_sidecar(stem: str, names: list[str]) -> str | None:
 
     Ties break on the sorted name so the answer never depends on the order the
     filesystem happened to return.
+
+    [#613] `fresh` names the siblings written since the job was queued. When
+    any exist, only they are ranked: subgen's output is always written after
+    the job is queued, so an older sidecar (an English subtitle Bazarr had
+    already downloaded, beside a Norwegian job) can never displace it. With no
+    fresh sibling, or no `fresh` given, every sibling is ranked as before.
     """
     prefix = f"{stem}."
     siblings = [n for n in names if n.startswith(prefix) and n.lower().endswith(".srt")]
     if not siblings:
         return None
+    if fresh:
+        recent = [n for n in siblings if n in fresh]
+        if recent:
+            siblings = recent
 
     exact = f"{stem}.en.srt"
     if exact in siblings:
@@ -328,7 +354,7 @@ class CompletionWatcher:
         except AttributeError:
             return  # older provenance store
         for entry in rows:
-            if not self._find_srt_sidecar(entry.canonical_path):
+            if not self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None)):
                 continue
             self._provenance.set_outcome(entry.id, OUTCOME_WRITTEN)
             log.warning(
@@ -409,7 +435,7 @@ class CompletionWatcher:
                 return None
         except (OSError, PathOutsideRootError):
             return None
-        if self._find_srt_sidecar(entry.canonical_path):
+        if self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None)):
             return OUTCOME_WRITTEN
         if time.time() - float(entry.queued_at) < NO_OUTPUT_MIN_AGE_S:
             return "wait"
@@ -537,7 +563,7 @@ class CompletionWatcher:
         bz = self._bazarr_for(entry.canonical_path)
         if not bz.is_configured():
             return False
-        srt_path = self._find_srt_sidecar(entry.canonical_path)
+        srt_path = self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None))
         if srt_path is None:
             log.debug("upload: no .srt sidecar found for %s", entry.canonical_path)
             return False
@@ -619,7 +645,7 @@ class CompletionWatcher:
         if not getattr(self, "_aftercare", None):
             return
         try:
-            srt_path = self._find_srt_sidecar(entry.canonical_path)
+            srt_path = self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None))
             if not srt_path:
                 return
             text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
@@ -648,7 +674,7 @@ class CompletionWatcher:
         if not _settings.retime_enabled:
             return
         try:
-            srt_path = self._find_srt_sidecar(entry.canonical_path)
+            srt_path = self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None))
             if not srt_path:
                 return
             text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
@@ -689,9 +715,13 @@ class CompletionWatcher:
         except Exception as e:  # noqa: BLE001 - at-import scan must never break completion
             log.warning("forced-segment at-import scan failed for %s: %s", canonical_path, e)
 
-    def _find_srt_sidecar(self, video_canonical: str) -> str | None:
+    def _find_srt_sidecar(self, video_canonical: str, since: float | None = None) -> str | None:
         """Locate the .srt subgen wrote next to the video. See
-        choose_srt_sidecar() for the ranking and why it is not just a glob."""
+        choose_srt_sidecar() for the ranking and why it is not just a glob.
+
+        `since` is the job's queued_at (#613): siblings modified at or after it,
+        less SIDECAR_MTIME_SLACK_S for clock skew between subarr and the share,
+        are treated as this job's output."""
         try:
             # #134: library-aware resolve (@slug/ heads).
             full = canonical_to_fs(video_canonical)
@@ -704,7 +734,8 @@ class CompletionWatcher:
         # #558: literal names, never a glob -- `[...]` in a release name is a
         # character class to glob and hid the subtitle of 17% of one library.
         names = srt_sidecar_names(parent, stem)
-        chosen = choose_srt_sidecar(stem, names)
+        fresh = _fresh_names(parent, names, since) if since is not None else None
+        chosen = choose_srt_sidecar(stem, names, fresh=fresh)
         return str(parent / chosen) if chosen else None
 
     async def _trigger_bazarr_scan(self, ledger_id: int, series_id: int, canonical_path: str) -> None:

@@ -99,3 +99,63 @@ def test_a_title_word_is_never_sent_as_the_language(writeback_stack):
 
     assert asyncio.run(_watcher(writeback_stack.bundle)._try_upload_to_bazarr(entry)) is True
     assert _sent_languages(writeback_stack.calls, "/api/episodes/subtitles") == ["en"]
+
+
+# --- #613 part 2: WHICH sidecar is subgen's output ---------------------------
+#
+# The picker ranked an exact `<stem>.en.srt` first. For a non-English job next
+# to an English subtitle Bazarr had already downloaded, that old English file
+# was re-timed in place, graded and uploaded, and subgen's Norwegian output was
+# never used. Subgen writes its output AFTER the job is queued, so a sidecar
+# modified since `queued_at` is preferred over one that predates the job.
+
+
+def _choose(names, fresh=None):
+    from subarr.completion_watcher import choose_srt_sidecar
+
+    return choose_srt_sidecar("Ep", names, fresh=fresh)
+
+
+def test_a_fresh_sidecar_beats_an_older_exact_en_srt():
+    assert _choose(["Ep.en.srt", "Ep.nor.srt"], fresh={"Ep.nor.srt"}) == "Ep.nor.srt"
+
+
+def test_ranking_still_applies_among_fresh_sidecars():
+    names = ["Ep.en.srt", "Ep.nor.srt", "Ep.forced.srt"]
+    assert _choose(names, fresh={"Ep.en.srt", "Ep.nor.srt", "Ep.forced.srt"}) == "Ep.en.srt"
+
+
+def test_no_fresh_sidecar_falls_back_to_the_existing_ranking():
+    assert _choose(["Ep.en.srt", "Ep.nor.srt"], fresh=set()) == "Ep.en.srt"
+    assert _choose(["Ep.en.srt", "Ep.nor.srt"]) == "Ep.en.srt"
+
+
+def _age(canonical: str, suffix: str, seconds_ago: float) -> None:
+    import os
+    import time
+
+    from subarr.paths import canonical_to_fs
+
+    video = Path(canonical_to_fs(canonical))
+    p = video.parent / f"{video.stem}{suffix}"
+    t = time.time() - seconds_ago
+    os.utime(p, (t, t))
+
+
+def test_the_upload_takes_subgens_new_output_over_an_older_english_sidecar(writeback_stack):
+    import time
+
+    _seed(EPISODE, ".en.srt")  # Bazarr's English download, from last week
+    _age(EPISODE, ".en.srt", 7 * 86400)
+    _seed(EPISODE, ".nor.srt")  # subgen's output for this job, just written
+    entry = SimpleNamespace(
+        id=5, canonical_path=EPISODE, sonarr_episode_id=2201, series_id=22, queued_at=time.time() - 3600
+    )
+
+    assert asyncio.run(_watcher(writeback_stack.bundle)._try_upload_to_bazarr(entry)) is True
+    assert _sent_languages(writeback_stack.calls, "/api/episodes/subtitles") == ["no"]
+    bodies = [
+        c["body"] for c in writeback_stack.calls[("bazarr", "")] if c["path"] == "/api/episodes/subtitles"
+    ]
+    assert 'ShowTV.S01E01.nor.srt"' in bodies[0]  # the multipart filename
+    assert 'ShowTV.S01E01.en.srt"' not in bodies[0]
