@@ -674,8 +674,17 @@ class CompletionWatcher:
         if not _settings.retime_enabled:
             return
         try:
-            srt_path = self._find_srt_sidecar(entry.canonical_path, getattr(entry, "queued_at", None))
+            queued_at = getattr(entry, "queued_at", None)
+            srt_path = self._find_srt_sidecar(entry.canonical_path, queued_at)
             if not srt_path:
+                return
+            # #613: the picker falls back to an older sidecar when subgen wrote
+            # nothing, and re-timing would rewrite a file subgen never produced.
+            if (
+                queued_at is not None
+                and Path(srt_path).stat().st_mtime < float(queued_at) - SIDECAR_MTIME_SLACK_S
+            ):
+                log.info("not re-timing %s: its subtitle predates the job", entry.canonical_path)
                 return
             text = Path(srt_path).read_text(encoding="utf-8", errors="replace")
             new_text = retime_srt(text)
