@@ -117,3 +117,64 @@ async def test_complete_entry_retimes_before_aftercare_and_upload(monkeypatch):
     # re-time must run before aftercare reads the sidecar and before the upload.
     assert calls.index("retime") < calls.index("aftercare")
     assert calls.index("retime") < calls.index("upload")
+
+
+# #613 follow-up: never re-time a subtitle that predates the job. When subgen
+# writes nothing, the sidecar picker falls back to whatever is beside the video
+# (an English subtitle Bazarr downloaded last week, say), and re-timing would
+# rewrite a file subgen never produced. Completion still records the job by
+# existence alone (#545), so this guard is limited to the in-place rewrite.
+
+
+class _QueuedEntry(_Entry):
+    def __init__(self, queued_at):
+        self.queued_at = queued_at
+
+
+def _age(path, seconds):
+    import os
+    import time
+
+    t = time.time() - seconds
+    os.utime(path, (t, t))
+
+
+def test_a_sidecar_older_than_the_job_is_not_retimed(tmp_path, monkeypatch):
+    import time
+
+    srt = tmp_path / "S01E01.en.srt"
+    srt.write_text(_HOT, encoding="utf-8")
+    _age(srt, 7 * 86400)
+    _enable(True)
+    w = _watcher()
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
+    w._run_retime(_QueuedEntry(queued_at=time.time() - 3600))
+    assert srt.read_text(encoding="utf-8") == _HOT
+
+
+def test_a_sidecar_written_since_the_job_is_retimed(tmp_path, monkeypatch):
+    import time
+
+    srt = tmp_path / "S01E01.en.srt"
+    srt.write_text(_HOT, encoding="utf-8")
+    _enable(True)
+    w = _watcher()
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
+    w._run_retime(_QueuedEntry(queued_at=time.time() - 3600))
+    assert srt.read_text(encoding="utf-8") != _HOT
+
+
+def test_within_the_clock_skew_slack_still_retimes(tmp_path, monkeypatch):
+    # The share's clock may run behind subarr's; a file a minute "older" than
+    # the job is still this job's output.
+    import time
+
+    srt = tmp_path / "S01E01.en.srt"
+    srt.write_text(_HOT, encoding="utf-8")
+    now = time.time()
+    _age(srt, 60)
+    _enable(True)
+    w = _watcher()
+    monkeypatch.setattr(w, "_find_srt_sidecar", lambda p, since=None: str(srt))
+    w._run_retime(_QueuedEntry(queued_at=now))
+    assert srt.read_text(encoding="utf-8") != _HOT
