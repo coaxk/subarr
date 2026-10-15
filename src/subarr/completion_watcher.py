@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .aftercare import evaluate_subtitle
 from .integrations import IntegrationError
@@ -46,6 +46,35 @@ log = logging.getLogger(__name__)
 # written and subgen accepting /batch, the path is in neither queue; judging it
 # then would hold back a file that is about to transcribe normally.
 NO_OUTPUT_MIN_AGE_S = 120
+
+
+def _upload_language(srt_name: str, video_stem: str) -> str:
+    """ISO-639-1 language to label a direct Bazarr upload with (#613).
+
+    Read from the name of the file being uploaded, because that name is what
+    subgen wrote: `<stem>.nor.srt` is Norwegian whatever the job was expected
+    to produce. This used to be a hardcoded "en", so every transcription that
+    was not English reached Bazarr labelled English.
+
+    Only the part AFTER the video's own stem is read, and only a code Whisper
+    can produce counts, so a title word (`Doctor.Who.srt`) is never sent as a
+    language. `hi` is a hearing-impaired marker when a language precedes it
+    (`.en.hi.srt`) and Hindi otherwise. A name with no language in it keeps
+    "en", subgen's default output language and what every earlier release sent.
+    """
+    from .langs import WHISPER_LANGUAGES, normalize_lang
+
+    name = srt_name.replace("\\", "/").rsplit("/", 1)[-1]
+    tail = name[len(video_stem) :] if name.startswith(video_stem) else name
+    if tail.lower().endswith(".srt"):
+        tail = tail[:-4]
+    codes = [normalize_lang(t) for t in tail.split(".") if t]
+    langs = [c for c in codes if c in WHISPER_LANGUAGES]
+    if not langs:
+        return "en"
+    if langs[-1] == "hi" and len(langs) > 1:
+        return langs[-2]
+    return langs[-1]
 
 
 def choose_srt_sidecar(stem: str, names: list[str]) -> str | None:
@@ -512,16 +541,22 @@ class CompletionWatcher:
         if srt_path is None:
             log.debug("upload: no .srt sidecar found for %s", entry.canonical_path)
             return False
+        language = _upload_language(srt_path, PurePosixPath(entry.canonical_path).stem)
         try:
             if entry.sonarr_episode_id and entry.series_id:
                 await bz.upload_episode_subtitle(
                     series_id=entry.series_id,
                     episode_id=entry.sonarr_episode_id,
-                    language="en",
+                    language=language,
                     file_path=srt_path,
                 )
                 self._provenance.mark_bazarr_triggered(entry.id)
-                log.info("bazarr upload OK for episode %d (ledger #%d)", entry.sonarr_episode_id, entry.id)
+                log.info(
+                    "bazarr upload OK for episode %d as %s (ledger #%d)",
+                    entry.sonarr_episode_id,
+                    language,
+                    entry.id,
+                )
                 return True
             # #368: movie path — same direct upload, keyed by radarr_movie_id
             # (now carried on the job → provenance). Routes to the owning Bazarr
@@ -529,11 +564,16 @@ class CompletionWatcher:
             if entry.radarr_movie_id:
                 await bz.upload_movie_subtitle(
                     radarr_id=entry.radarr_movie_id,
-                    language="en",
+                    language=language,
                     file_path=srt_path,
                 )
                 self._provenance.mark_bazarr_triggered(entry.id)
-                log.info("bazarr upload OK for movie %d (ledger #%d)", entry.radarr_movie_id, entry.id)
+                log.info(
+                    "bazarr upload OK for movie %d as %s (ledger #%d)",
+                    entry.radarr_movie_id,
+                    language,
+                    entry.id,
+                )
                 return True
             return False
         except IntegrationError as e:
