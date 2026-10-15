@@ -7,6 +7,15 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.21] - 2026-10-15
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.20 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed.** The 2.7.20 image ships `librsvg2-2 2.60.0+dfsg-1`, and Debian has since published `2.60.0+dfsg-1+deb13u1` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: the promote-to-stable gate ran `apt list --upgradable` inside `ghcr.io/coaxk/subarr:2.7.20` and found exactly that one security-pocket package pending.
+
 ## [2.7.20] - 2026-10-12
 
 **A rebuild that picks up a Debian security update. No code change.**
