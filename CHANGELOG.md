@@ -7,6 +7,20 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.22] - 2026-10-18
+
+**Non-English transcriptions now reach Bazarr under the right language, and subtitle files named with caption markers count as coverage again.**
+
+### Fixed
+- **A subtitle subgen wrote in another language was uploaded to Bazarr labelled English (#613).** The direct upload always sent `en`, so a Norwegian transcription saved as `<video>.nor.srt` appeared in Bazarr as an English subtitle. The language is now read from the file subgen wrote, after the video's own name, so a word in the title is never mistaken for a language. `.en.hi.srt` is English with a hearing-impaired marker, and a file with no language in its name still goes up as English, as before.
+- **subarr could pick an older subtitle beside the video as the job's output and re-time it (#613).** When subgen wrote nothing, the file chosen as "the output" could be one that was already there, such as an English subtitle Bazarr had downloaded, and the re-timing step then rewrote it in place. subarr now prefers a subtitle written since the job was queued, and never re-times one that predates the job (with five minutes of allowance for clock differences between your server and NAS).
+- **Caption markers in a subtitle's file name were read as its language (#607).** `Movie.en.sdh.srt`, `Movie.en.cc.srt` and `Movie.es.hi.srt` were treated as subtitles in a language called `sdh`, `cc` or Hindi, so coverage did not count them and queued transcriptions subgen then rejected. They now count as English and Spanish. A tag after the language (`Movie.en.default.srt`, `Movie.zh-Hans.srt`, `Movie.en.WEBRip.srt`) no longer hides it either. Thanks to @patrickthescriptwhisperer for the fix.
+- **The Queue page hid Subgen jobs from libraries other than the default (#609).** A job was kept only when its path matched the default library's path prefix, so with TV at `/tv` and movies at `/movies`, TV jobs disappeared from the page. Jobs from every configured library are shown now, and a prefix no longer matches a longer folder name (`/media` does not match `/media2`).
+- **Download history did not load for a file in Library and Aftercare (#611).** Looking up blacklist history by path did not read the Bazarr ids where subarr stores them, so the history for that episode or movie stayed empty. It now finds them.
+
+### Security
+- **OS packages refreshed (#620).** The 2.7.21 image ships `libexpat1 2.8.3-1~deb13u1` and `libjxl0.11 0.11.2-0.1~deb13u2`, and Debian has since published fixes in its security pocket. This release rebuilds against current packages. Measured against the published `ghcr.io/coaxk/subarr:2.7.21` with `apt list --upgradable`: exactly those two security-pocket packages were pending.
+
 ## [2.7.21] - 2026-10-15
 
 **A rebuild that picks up a Debian security update. No code change.**
