@@ -562,13 +562,134 @@ def _sidecars_for_file(srt_paths: list[str], file_canonical: str) -> list[str]:
     ]
 
 
+# Release-team and tool tokens that look like 2-3 char alpha but are not
+# language codes. Heuristic list — extend as we hit new ones.
+_KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
+_KNOWN_NON_LANG = {
+    "web",
+    "hdtv",
+    "dvd",
+    "uhd",
+    "hdr",
+    "sdr",
+    "ddp",
+    "aac",
+    "dts",
+    "ac3",
+    "flac",
+    "x264",
+    "x265",
+    "ind",
+    "rep",
+    "tla",
+    "ntb",
+    "syn",
+}
+# Plex / Bazarr caption markers that follow a language code
+# (`Movie.en.sdh.srt`, `Movie.es.cc.srt`). Not language codes.
+_CAPTION_SUFFIXES = {"sdh", "cc"}
+_SIDECAR_SKIP_TOKENS = _KNOWN_TOOLS | _KNOWN_NON_LANG | _CAPTION_SUFFIXES
+
+
+def _is_known_language_token(tok: str) -> bool:
+    """True when `tok` is a real language code, not just 2-3 letters."""
+    from .langs import is_language_code
+
+    return is_language_code(tok)
+
+
+def _shaped_lang_token(tok: str) -> bool:
+    return 2 <= len(tok) <= 3 and tok.isalpha()
+
+
+def _trailing_suffix_cluster(tokens: list[str]) -> list[str]:
+    """Suffix tokens at the end of a sidecar stem, nearest last.
+
+    Stops at the first token that is not a tool, release tag, caption marker,
+    or language-shaped token. `default` in `Movie.en.default.srt` ends the
+    cluster before `en`.
+    """
+    cluster: list[str] = []
+    for tok in reversed(tokens):
+        if tok in _SIDECAR_SKIP_TOKENS or tok == "hi" or _shaped_lang_token(tok):
+            cluster.append(tok)
+            continue
+        break
+    return cluster
+
+
+def _lang_in_cluster(cluster: list[str]) -> str | None:
+    """Language in a trailing cluster, treating `hi` as a marker only there."""
+    for i, tok in enumerate(cluster):
+        if tok in _SIDECAR_SKIP_TOKENS or not _shaped_lang_token(tok):
+            continue
+        if tok == "hi":
+            preceded = any(
+                _shaped_lang_token(left)
+                and left not in _SIDECAR_SKIP_TOKENS
+                and left != "hi"
+                and _is_known_language_token(left)
+                for left in cluster[i + 1 :]
+            )
+            if preceded:
+                continue
+        return tok
+    return None
+
+
+def _lang_scanning_past_unknown(tokens: list[str]) -> str | None:
+    """First language-shaped token from the end, walking past longer tokens.
+
+    This is the pre-cluster scan. `sdh` and `cc` stay markers, so a name that
+    is only a caption suffix is still undefined.
+    """
+    for tok in reversed(tokens):
+        if not _shaped_lang_token(tok):
+            continue
+        if tok in _SIDECAR_SKIP_TOKENS:
+            continue
+        return tok
+    return None
+
+
+def _sidecar_lang_token(tokens: list[str]) -> str | None:
+    """Language token in a sidecar stem.
+
+    The trailing suffix cluster decides whether `hi` is a hearing-impaired
+    marker or Hindi. `Mr. Title.hi.srt` stays Hindi (`hi`) even though `mr`
+    is also the Marathi code, because `Title` is outside that cluster.
+
+    A longer token after the language (`Movie.en.default.srt`,
+    `Movie.zh-Hans.srt`, `Movie.en.WEBRip.srt`) is not part of the cluster.
+    When the cluster has no language, fall back to scanning every token so
+    that language is still found. `sdh` and `cc` are always caption markers.
+    """
+    cluster = _trailing_suffix_cluster(tokens)
+    return _lang_in_cluster(cluster) or _lang_scanning_past_unknown(tokens)
+
+
+def _lang_token_from_srt_name(name: str) -> str:
+    """Language token for one sidecar filename, or 'und'.
+
+    Does not apply the forced-sidecar exclusion. Callers that decide coverage
+    (`_langs_in_sidecars`) drop `<stem>.<lang>.forced.srt` before this.
+    """
+    import re
+
+    lower = name.rsplit("/", 1)[-1].lower()
+    if lower.endswith(".srt"):
+        lower = lower[:-4]
+    return _sidecar_lang_token(re.split(r"[.\-]", lower)) or "und"
+
+
 def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     """Parse 2-letter language codes from sidecar filenames.
 
     Convention: '<basename>.<lang>.srt' (e.g. '...WEBTUBE.en.srt' → 'en').
     Plain '<basename>.srt' → 'und' (undefined; could be anything).
-    Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') are still
-    parsed correctly because we grab the lang slot, not the last token."""
+    Tool-suffix forms ('....en.alass.srt', '....en.ffsubsync.srt') and caption
+    suffixes ('....en.sdh.srt', '....es.hi.srt', '....en.cc.srt') resolve to
+    the language, not the trailing marker."""
     import re
 
     # [2026-05-30] Split on BOTH dots AND hyphens. Release teams pack
@@ -577,29 +698,6 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
     # in v1.0 missed those because it saw the whole "x264-iND-en" as
     # one token (not alpha → skipped, fell through to "und"). Original
     # subarr handled both separators.
-    KNOWN_TOOLS = {"alass", "autosubsync", "ffsubsync", "subsync"}
-    # Also skip release-team tokens that look like 2-3 char alpha but
-    # AREN'T language codes. Heuristic list — extend as we hit new ones.
-    KNOWN_NON_LANG = {
-        "web",
-        "hdtv",
-        "dvd",
-        "uhd",
-        "hdr",
-        "sdr",
-        "ddp",
-        "aac",
-        "dts",
-        "ac3",
-        "flac",
-        "x264",
-        "x265",
-        "ind",
-        "rep",
-        "tla",
-        "ntb",
-        "syn",
-    }
 
     # [#485] A FORCED sidecar is not full coverage. subarr already treats
     # embedded forced tracks this way (has_usable_embedded_english excludes
@@ -629,14 +727,7 @@ def _langs_in_sidecars(sidecars: list[str]) -> set[str]:
         # silently stop counting its subtitles.
         if _FORCED_TOKEN in tokens:
             continue
-        found_lang = None
-        for tok in reversed(tokens):
-            if 2 <= len(tok) <= 3 and tok.isalpha():
-                if tok in KNOWN_TOOLS or tok in KNOWN_NON_LANG:
-                    continue
-                found_lang = tok
-                break
-        langs.add(found_lang or "und")
+        langs.add(_sidecar_lang_token(tokens) or "und")
     return langs
 
 

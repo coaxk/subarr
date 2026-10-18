@@ -232,6 +232,17 @@ WHISPER_LANGUAGES: dict[str, str] = {
 }
 
 
+def is_language_code(token: str) -> bool:
+    """True when `token` is an ISO 639-1 or ISO 639-2 code this module maps.
+
+    Sidecar tokens are 2-3 letters. `_NAME_TO_ISO` holds full English names
+    (`english`, `japanese`), so it cannot match one of those tokens and is
+    not consulted here.
+    """
+    tok = token.strip().lower()
+    return tok in WHISPER_LANGUAGES or tok in _ISO3_TO_ISO1
+
+
 def display_name(code: str | None) -> str:
     """English display name from WHISPER_LANGUAGES; falls back to the code."""
     if not code:
