@@ -31,6 +31,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from .aftercare import evaluate_subtitle
+from .arr_id_lookup import ArrIdResolver
 from .integrations import IntegrationError
 from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical, srt_sidecar_names
 from .integrations.bazarr import BazarrClient
@@ -220,6 +221,8 @@ class CompletionWatcher:
         # #216: canonical_path -> media duration_s (or None), resolved from
         # the ffprobe cache. Enables aftercare's sync-overrun signal.
         self._duration_lookup = duration_lookup or (lambda canonical: None)
+        # #629: ids for a job queued without them, resolved from the arrs.
+        self._arr_ids = ArrIdResolver()
 
     @property
     def _subgen(self):
@@ -551,6 +554,32 @@ class CompletionWatcher:
                 log.warning("bazarr scan-disk retry failed on %s: %s", key, e)
                 continue
 
+    async def _fill_missing_arr_ids(self, entry) -> None:
+        """#629: a job queued by hand can reach completion without Sonarr/Radarr
+        ids (the enqueue-time snapshot only knows still-wanted files). Ask the
+        arrs that own the row's library, set the ids on the entry for this
+        write-back, and persist them so the scan-disk retry pass can use them."""
+        if entry.series_id is not None or entry.sonarr_episode_id or entry.radarr_movie_id:
+            return
+        if self._bundle_provider is None:
+            return
+        bundle = self._bundle_provider()
+        lib = library_for_canonical(entry.canonical_path)
+        ids = await self._arr_ids.resolve(
+            entry.canonical_path,
+            bundle.client_for("sonarr", lib.sonarr_id),
+            bundle.client_for("radarr", lib.radarr_id),
+        )
+        if not ids:
+            return
+        for k, v in ids.items():
+            setattr(entry, k, v)
+        try:
+            self._provenance.set_arr_ids(entry.id, **ids)
+        except Exception as e:  # noqa: BLE001 - the write-back below still uses the ids
+            log.warning("could not persist resolved arr ids for ledger #%d: %s", entry.id, e)
+        log.info("arr ids resolved for %s: %s (ledger #%d)", entry.canonical_path, ids, entry.id)
+
     async def _try_upload_to_bazarr(self, entry) -> bool:
         """v1.1-G: Multipart-upload the freshly-Whispered .srt directly
         to Bazarr. Returns True on success (skip scan-disk), False on any
@@ -567,6 +596,7 @@ class CompletionWatcher:
         if srt_path is None:
             log.debug("upload: no .srt sidecar found for %s", entry.canonical_path)
             return False
+        await self._fill_missing_arr_ids(entry)
         language = _upload_language(srt_path, PurePosixPath(entry.canonical_path).stem)
         try:
             if entry.sonarr_episode_id and entry.series_id:
@@ -605,7 +635,7 @@ class CompletionWatcher:
             # (it needs series_id), so Bazarr hears nothing about this subtitle.
             if entry.series_id is None:
                 log.info(
-                    "bazarr not notified for %s: the job carried no Sonarr/Radarr ids (ledger #%d)",
+                    "bazarr not notified for %s: no Sonarr/Radarr ids on the job and none found in the arrs (ledger #%d)",
                     entry.canonical_path,
                     entry.id,
                 )
