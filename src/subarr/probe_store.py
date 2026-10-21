@@ -172,6 +172,19 @@ class ProbeStore:
             rows = self._conn.execute("SELECT canonical_path FROM media_probe").fetchall()
         return [r[0] for r in rows]
 
+    def discovered_summary(self) -> tuple[int, tuple[str, int, float | None] | None]:
+        """[#621] Row count plus the newest probe's (canonical_path, size,
+        duration_s), for the Dashboard's "discovered" tile. Answered in SQL:
+        hydrating every row via all_entries() held the GIL for seconds on a
+        40k-row table. Ties on probed_at go to the lowest canonical_path."""
+        with self._lock:
+            count = self._conn.execute("SELECT COUNT(*) FROM media_probe").fetchone()[0]
+            newest = self._conn.execute(
+                "SELECT canonical_path, size, duration_s FROM media_probe "
+                "ORDER BY probed_at DESC, canonical_path ASC LIMIT 1"
+            ).fetchone()
+        return count, (tuple(newest) if newest else None)
+
     def all_entries(self) -> list[ProbeResult]:
         """Return every cached probe as a hydrated ProbeResult. Used by
         the Library Probe tab to render the full cache."""

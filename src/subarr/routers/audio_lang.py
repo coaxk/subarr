@@ -1032,18 +1032,26 @@ async def pending_review(
     elif limit is None:
         limit = _FILE_PAGE_DEFAULT
     audio_lang_store = request.app.state.audio_lang
-    verifications = audio_lang_store.get_all_as_lookup()
-    # #406: key the multilingual lane on the STORE source (not the snapshot's
-    # display audio_source, which reads 'multilingual' for BOTH auto and
-    # user-confirmed rows). Auto rows are surfaced for review; user rows are
-    # settled and excluded.
-    sources = audio_lang_store.get_all_sources_as_lookup()
-    multi_map = audio_lang_store.get_all_multi_as_lookup()
-    # #170: apply the track-mismatch dismiss at READ time too. build_coverage
-    # bakes it out only when it regenerates the snapshot; this endpoint reads the
-    # cached snapshot, so without this a dismissed row reappears until the next
-    # full walk. Mirrors how `verifications` is already applied live below.
-    tm_dismissed = audio_lang_store.get_track_mismatch_dismissed_set()
+
+    def _store_reads():
+        # #621: sync SQLite reads, so run them off the event loop.
+        return (
+            audio_lang_store.get_all_as_lookup(),
+            # #406: key the multilingual lane on the STORE source (not the
+            # snapshot's display audio_source, which reads 'multilingual' for
+            # BOTH auto and user-confirmed rows). Auto rows are surfaced for
+            # review; user rows are settled and excluded.
+            audio_lang_store.get_all_sources_as_lookup(),
+            audio_lang_store.get_all_multi_as_lookup(),
+            # #170: apply the track-mismatch dismiss at READ time too.
+            # build_coverage bakes it out only when it regenerates the snapshot;
+            # this endpoint reads the cached snapshot, so without this a
+            # dismissed row reappears until the next full walk. Mirrors how
+            # `verifications` is already applied live below.
+            audio_lang_store.get_track_mismatch_dismissed_set(),
+        )
+
+    verifications, sources, multi_map, tm_dismissed = await asyncio.to_thread(_store_reads)
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     items_source: list[dict[str, Any]] = []
     if cov_cache is not None:
