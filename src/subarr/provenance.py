@@ -167,6 +167,26 @@ class ProvenanceStore:
                 (ts, outcome, ledger_id),
             )
 
+    def set_arr_ids(
+        self,
+        ledger_id: int,
+        *,
+        series_id: int | None = None,
+        sonarr_episode_id: int | None = None,
+        radarr_movie_id: int | None = None,
+    ) -> None:
+        """#629: record ids resolved after the fact. Fills only columns that are
+        still NULL, so ids the job was queued with always win."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE subs_generated SET "
+                "series_id = COALESCE(series_id, ?), "
+                "sonarr_episode_id = COALESCE(sonarr_episode_id, ?), "
+                "radarr_movie_id = COALESCE(radarr_movie_id, ?) "
+                "WHERE id = ?",
+                (series_id, sonarr_episode_id, radarr_movie_id, ledger_id),
+            )
+
     def mark_bazarr_triggered(self, ledger_id: int, when: float | None = None) -> None:
         ts = when if when is not None else time.time()
         with self._lock:
