@@ -62,13 +62,17 @@ def test_summary_counts_and_returns_newest_row_with_its_size(tmp_path):
     assert newest == ("Movies/B/b.mkv", 5_000_000_000, 5400.0)
 
 
-def test_summary_tie_on_probed_at_is_deterministic(tmp_path):
-    # The old max() over a canonical_path-ordered list kept the FIRST of a tie.
-    s = _store(tmp_path)
-    _put(s, "b.mkv", size=2, probed_at=50.0)
-    _put(s, "a.mkv", size=1, probed_at=50.0)
+def test_summary_newest_row_is_an_index_lookup_not_a_scan(tmp_path):
+    # The newest-row query runs under ProbeStore._lock, which the probe walker's
+    # upserts also take, so it must not scan and sort the whole table.
+    from subarr.probe_store import _NEWEST_PROBE_SQL
 
-    assert s.discovered_summary()[1][0] == "a.mkv"
+    s = _store(tmp_path)
+    with s._lock:
+        plan = " | ".join(r[-1] for r in s._conn.execute("EXPLAIN QUERY PLAN " + _NEWEST_PROBE_SQL))
+
+    assert "idx_media_probe_probed_at" in plan, plan
+    assert "TEMP B-TREE" not in plan, plan
 
 
 def test_summary_does_not_hydrate_rows(tmp_path, monkeypatch):

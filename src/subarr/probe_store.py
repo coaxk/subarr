@@ -30,6 +30,12 @@ from .media_probe import AudioStream, ProbeResult, SubtitleStream
 # ffprobe rows from Sonarr/Radarr pre-computed mediaInfo ('arr_mediainfo').
 
 
+# [#621] An index lookup on idx_media_probe_probed_at (migration 035), not a
+# scan and sort: it runs under the store lock that every probe upsert takes.
+# probed_at is a time.time() float, so ties need no tie-break.
+_NEWEST_PROBE_SQL = "SELECT canonical_path, size, duration_s FROM media_probe ORDER BY probed_at DESC LIMIT 1"
+
+
 class ProbeStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,13 +182,10 @@ class ProbeStore:
         """[#621] Row count plus the newest probe's (canonical_path, size,
         duration_s), for the Dashboard's "discovered" tile. Answered in SQL:
         hydrating every row via all_entries() held the GIL for seconds on a
-        40k-row table. Ties on probed_at go to the lowest canonical_path."""
+        40k-row table."""
         with self._lock:
             count = self._conn.execute("SELECT COUNT(*) FROM media_probe").fetchone()[0]
-            newest = self._conn.execute(
-                "SELECT canonical_path, size, duration_s FROM media_probe "
-                "ORDER BY probed_at DESC, canonical_path ASC LIMIT 1"
-            ).fetchone()
+            newest = self._conn.execute(_NEWEST_PROBE_SQL).fetchone()
         return count, (tuple(newest) if newest else None)
 
     def all_entries(self) -> list[ProbeResult]:

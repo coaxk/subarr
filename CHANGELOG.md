@@ -8,7 +8,7 @@ breaking config changes.
 ## [Unreleased]
 
 ### Fixed
-- **The Dashboard stalled the whole app on large libraries (#621).** To show one count and the most recently probed file, the "discovered" tile loaded every row of the probe cache into memory on each 30-second refresh. At about 40,000 files that took over a second of Python work, and everything else waiting on subarr at that moment hitched with it, which showed up as a stream of `loop_lag` warnings. The tile now asks the database for just those two things: about 30 ms on a 40,000-row table, measured, against 750-1,200 ms before. The tile's size, which had always read as 0, now shows the file's real size. The Review page's verification lookups also moved off the request loop. Thanks to @caracturus for the report and the stack traces that pinned it down.
+- **The Dashboard stalled the whole app on large libraries (#621).** To show one count and the most recently probed file, the "discovered" tile loaded every row of the probe cache into memory on each 30-second refresh. At about 40,000 files that took over a second of Python work, and everything else waiting on subarr at that moment hitched with it, which showed up as a stream of `loop_lag` warnings. The tile now asks the database for just those two things: about 1 ms on a 40,000-row table, measured, against 750-1,200 ms before, using a new database index (applied automatically on upgrade). The tile's size, which had always read as 0, now shows the file's real size. The Review page's verification lookups also moved off the request loop. Thanks to @caracturus for the report and the stack traces that pinned it down.
 
 ## [2.7.22] - 2026-10-18
 
