@@ -477,7 +477,10 @@ class CoverageCache:
                     return cached
                 self._consecutive_holds = 0
 
-                snap = self.store(
+                # [#627] a ~1 MB JSON upsert: on the event loop it was the
+                # most frequent live loop_lag stall.
+                snap = await asyncio.to_thread(
+                    self.store,
                     items=body["items"],
                     totals=body["totals"],
                     sources=body["sources"],
