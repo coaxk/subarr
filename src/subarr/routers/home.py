@@ -147,19 +147,14 @@ async def _stages_block(state) -> list[dict[str, Any]]:
     try:
 
         def _discovered_sync() -> tuple[int, str, str]:
-            # probe_store.all_entries() loads the FULL probe table (4700+ rows,
-            # ~1.2s) — far too heavy to run on the event loop, where it froze
-            # every concurrent request during the 30s dashboard refresh. Keep
-            # the existing data shape but run it off the loop via to_thread.
-            entries = state.probe_store.all_entries()
-            if not entries:
+            # #621: a COUNT and one row, answered in SQL. Hydrating the whole
+            # table with all_entries() held the GIL for seconds on large
+            # libraries, which stalled the loop even from to_thread.
+            count, newest = state.probe_store.discovered_summary()
+            if newest is None:
                 return 0, "", ""
-            newest = max(entries, key=lambda e: getattr(e, "probed_at", 0) or 0)
-            return (
-                len(entries),
-                "/" + newest.canonical_path,
-                _format_size_meta(getattr(newest, "size", 0), getattr(newest, "duration_s", None)),
-            )
+            path, size, duration_s = newest
+            return count, "/" + path, _format_size_meta(size, duration_s)
 
         discovered_count, top, top_meta = await asyncio.to_thread(_discovered_sync)
     except Exception as e:
