@@ -10,6 +10,15 @@ breaking config changes.
 ### Fixed
 - **The Dashboard stalled the whole app on large libraries (#621).** To show one count and the most recently probed file, the "discovered" tile loaded every row of the probe cache into memory on each 30-second refresh. At about 40,000 files that took over a second of Python work, and everything else waiting on subarr at that moment hitched with it, which showed up as a stream of `loop_lag` warnings. The tile now asks the database for just those two things: about 1 ms on a 40,000-row table, measured, against 750-1,200 ms before, using a new database index (applied automatically on upgrade). The tile's size, which had always read as 0, now shows the file's real size. The Review page's verification lookups also moved off the request loop. Thanks to @caracturus for the report and the stack traces that pinned it down.
 
+## [2.7.23] - 2026-10-21
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.22 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed.** The 2.7.22 image ships `ca-certificates 20250419`, and Debian has since published `20250419+deb13u1` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: the promote-to-stable gate ran `apt list --upgradable` inside `ghcr.io/coaxk/subarr:2.7.22` and found exactly that one security-pocket package pending.
+
 ## [2.7.22] - 2026-10-18
 
 **Non-English transcriptions now reach Bazarr under the right language, and subtitle files named with caption markers count as coverage again.**
