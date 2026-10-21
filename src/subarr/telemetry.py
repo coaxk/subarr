@@ -329,7 +329,7 @@ class TelemetryCollector:
         configured. False with error set means the transmission attempt
         failed.
         """
-        state = self.state()
+        state = await asyncio.to_thread(self.state)
         if not state.opted_in:
             return False, None
         # #202: refresh subgen reachability right before snapshotting, so
@@ -340,12 +340,14 @@ class TelemetryCollector:
                 await self._subgen_caps_refresher()
             except Exception as e:  # noqa: BLE001 — never break a send on a refresh
                 log.debug("telemetry subgen refresh failed (best-effort): %s", e)
-        payload = self.build_payload()
+        # [#627] build_payload reads SQLite through the stats provider, and
+        # every _record_attempt is a SQLite write: all of it runs in a worker.
+        payload = await asyncio.to_thread(self.build_payload)
         payload_json = json.dumps(payload.to_dict(), separators=(",", ":"))
 
         # Always record what we WOULD send, even if no endpoint —
         # the Settings preview wants something to display.
-        self._record_attempt(payload_json, error=None, transmit=False)
+        await asyncio.to_thread(self._record_attempt, payload_json, error=None, transmit=False)
 
         if not self._endpoint:
             return False, None
@@ -361,13 +363,13 @@ class TelemetryCollector:
             )
             if r.status_code >= 400:
                 err = f"HTTP {r.status_code}"
-                self._record_attempt(payload_json, error=err, transmit=True)
+                await asyncio.to_thread(self._record_attempt, payload_json, error=err, transmit=True)
                 return False, err
-            self._record_attempt(payload_json, error=None, transmit=True)
+            await asyncio.to_thread(self._record_attempt, payload_json, error=None, transmit=True)
             return True, None
         except httpx.HTTPError as e:
             err = f"{type(e).__name__}: {e}"
-            self._record_attempt(payload_json, error=err, transmit=True)
+            await asyncio.to_thread(self._record_attempt, payload_json, error=err, transmit=True)
             return False, err
 
     # ─── Internal ───────────────────────────────────────────────────
@@ -526,7 +528,7 @@ def make_default_stats_provider(app_state) -> Any:
         # Library size bucket — pulled from probe_store row count as a
         # rough proxy. Won't fingerprint anyone since we bucket coarsely.
         try:
-            probe_size = len(app_state.probe_store.all_paths())
+            probe_size = app_state.probe_store.count()
         except Exception:
             probe_size = 0
         if probe_size < 100:

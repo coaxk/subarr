@@ -178,6 +178,11 @@ class ProbeStore:
             rows = self._conn.execute("SELECT canonical_path FROM media_probe").fetchall()
         return [r[0] for r in rows]
 
+    def count(self) -> int:
+        """[#627] Row count without materialising every path."""
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM media_probe").fetchone()[0]
+
     def discovered_summary(self) -> tuple[int, tuple[str, int, float | None] | None]:
         """[#621] Row count plus the newest probe's (canonical_path, size,
         duration_s), for the Dashboard's "discovered" tile. Answered in SQL:

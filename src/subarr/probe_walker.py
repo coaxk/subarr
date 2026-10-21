@@ -209,16 +209,24 @@ class ProbeWalker:
 
             sem = asyncio.Semaphore(WALK_CONCURRENCY)
 
+            # [#627] stat (a network share), canonicalise (resolve() hits the
+            # share too) and the cache read are all blocking, and on a large
+            # walk they stalled the event loop. One worker call per file.
+            def _lookup(p: Path):
+                try:
+                    st = p.stat()
+                except OSError as e:
+                    return e, None, None
+                canonical = fs_to_canonical(p)
+                return st, canonical, self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
+
             async def _one(p: Path):
                 async with sem:
-                    try:
-                        st = p.stat()
-                    except OSError as e:
-                        state.errors.append({"path": str(p), "error": f"stat: {e}"})
+                    st, canonical, cached = await asyncio.to_thread(_lookup, p)
+                    if isinstance(st, OSError):
+                        state.errors.append({"path": str(p), "error": f"stat: {st}"})
                         state.processed += 1
                         return
-                    canonical = fs_to_canonical(p)
-                    cached = self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
                     if cached is not None:
                         state.cached_hits += 1
                         state.processed += 1
@@ -255,7 +263,9 @@ class ProbeWalker:
         try:
             result = await probe(p)
             result.canonical_path = canonical
-            self._store.upsert(
+            # [#627] store writes run in a worker, never on the event loop.
+            await asyncio.to_thread(
+                self._store.upsert,
                 canonical_path=canonical,
                 mtime=st.st_mtime,
                 size=st.st_size,
@@ -264,11 +274,11 @@ class ProbeWalker:
             state.probed += 1
         except ProbeError as e:
             state.errors.append({"path": canonical, "error": str(e)})
-            self._store.record_failure(canonical, str(e))
+            await asyncio.to_thread(self._store.record_failure, canonical, str(e))
             state.failures_recorded += 1
         except Exception as e:
             state.errors.append({"path": canonical, "error": repr(e)})
-            self._store.record_failure(canonical, repr(e))
+            await asyncio.to_thread(self._store.record_failure, canonical, repr(e))
             state.failures_recorded += 1
         finally:
             state.processed += 1
@@ -351,28 +361,34 @@ class ProbeWalker:
             log.info("eager probe %s: %d wanted files", state.id, state.total_files)
             sem = asyncio.Semaphore(WALK_CONCURRENCY)
 
+            # [#627] resolve, stat and the cache read in one worker call; see
+            # the root walk's _lookup.
+            def _lookup(canonical: str):
+                try:
+                    p = canonical_to_fs(canonical)
+                except PathOutsideRootError:
+                    return None, "outside media root", None
+                try:
+                    st = p.stat()
+                except OSError as e:
+                    return None, f"stat: {e}", None
+                # [#506] force skips the cache read entirely, so a tag-only
+                # edit that left mtime and size untouched is still re-probed.
+                cached = None if force else self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
+                return (p, st), None, cached
+
             async def _one(canonical: str):
                 async with sem:
-                    try:
-                        p = canonical_to_fs(canonical)
-                    except PathOutsideRootError:
-                        state.errors.append({"path": canonical, "error": "outside media root"})
+                    found, error, cached = await asyncio.to_thread(_lookup, canonical)
+                    if error is not None:
+                        state.errors.append({"path": canonical, "error": error})
                         state.processed += 1
                         return
-                    try:
-                        st = p.stat()
-                    except OSError as e:
-                        state.errors.append({"path": canonical, "error": f"stat: {e}"})
+                    p, st = found
+                    if cached is not None:  # always None under force
+                        state.cached_hits += 1
                         state.processed += 1
                         return
-                    # [#506] force skips the cache read entirely, so a tag-only
-                    # edit that left mtime and size untouched is still re-probed.
-                    if not force:
-                        cached = self._store.get(canonical, mtime=st.st_mtime, size=st.st_size)
-                        if cached is not None:
-                            state.cached_hits += 1
-                            state.processed += 1
-                            return
                     await self._probe_and_record(state, canonical, p, st)
 
             await asyncio.gather(*(_one(c) for c in canonical_paths))
