@@ -601,6 +601,14 @@ class CompletionWatcher:
                     entry.id,
                 )
                 return True
+            # #629: say so. With no ids the scan-disk fallback is skipped too
+            # (it needs series_id), so Bazarr hears nothing about this subtitle.
+            if entry.series_id is None:
+                log.info(
+                    "bazarr not notified for %s: the job carried no Sonarr/Radarr ids (ledger #%d)",
+                    entry.canonical_path,
+                    entry.id,
+                )
             return False
         except IntegrationError as e:
             log.warning("bazarr upload failed (%s); falling back to scan-disk", e)

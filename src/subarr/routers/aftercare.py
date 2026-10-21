@@ -175,7 +175,12 @@ async def regenerate(result_id: int, request: Request) -> dict[str, Any]:
             getattr(request.app.state, "subgen_caps", None), "skip_audio_languages", None
         ),
     )
+    # #629: carry the Sonarr/Radarr ids like the scheduler does, or completion
+    # cannot tell Bazarr about the regenerated subtitle.
+    from ..coverage_cache import enqueue_ids_for
+
+    ids = enqueue_ids_for(request.app.state, [canonical]).get(canonical, {})
     pending = request.app.state.pending_queue
-    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override)
+    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override, **ids)
     request.app.state.queue_feeder.kick()
     return {"job": job.id, "path": canonical, "status": "pending"}

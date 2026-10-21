@@ -69,11 +69,15 @@ async def create_scan(req: ScanRequest, request: Request) -> dict:
     # throttled, reorderable) as everything else instead of stampeding subgen.
     # Manual is the top priority bucket → the feeder feeds it first; kick() wakes
     # the feeder now instead of waiting out its interval. The feeder owns
-    # scan-row creation + provenance at submit time (series_id stays unknown for
-    # Scan-tab picks — power-user surgery, not the Bazarr-aware path). enqueue()
-    # dedups against anything already pending/in-flight for the same path.
+    # scan-row creation + provenance at submit time. #629: a picked FILE that the
+    # coverage snapshot knows carries its Sonarr/Radarr ids, so completion can
+    # tell Bazarr; a directory or an unknown file goes out without them.
+    # enqueue() dedups against anything already pending/in-flight for the same path.
+    from ..coverage_cache import enqueue_ids_for
+
+    ids = enqueue_ids_for(request.app.state, cleaned)
     pending = request.app.state.pending_queue
-    jobs = [pending.enqueue(p, source="manual") for p in cleaned]
+    jobs = [pending.enqueue(p, source="manual", **ids.get(p, {})) for p in cleaned]
     request.app.state.queue_feeder.kick()
     return {
         "enqueued": [j.canonical_path for j in jobs],

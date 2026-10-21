@@ -110,6 +110,50 @@ def snapshot_path_ids(snapshot: Any) -> dict[str, tuple[int | None, int | None]]
     return out
 
 
+def snapshot_enqueue_ids(snapshot: Any) -> dict[str, dict[str, int]]:
+    """#629: {file path: enqueue id kwargs} from a coverage snapshot, so a
+    manual enqueue (requeue, regenerate, Scan-tab submit) carries the same
+    Sonarr/Radarr ids the scheduler's paths do. Without them completion can
+    neither upload the .srt to Bazarr nor fire its scan-disk fallback.
+
+    An episode needs its SERIES id too (Bazarr's upload and scan are keyed by
+    both), unlike #571's verdict key, which is the episode id alone. Rows with
+    no file on disk or no id are left out, so the caller enqueues as before.
+    """
+    out: dict[str, dict[str, int]] = {}
+    for row in getattr(snapshot, "items", None) or []:
+        path = row.get("file_canonical_path")
+        if not path:
+            continue
+        bazarr = row.get("bazarr") or {}
+        ids: dict[str, int] = {}
+        if row.get("media_type") == "movie":
+            if bazarr.get("radarr_id") is not None:
+                ids["radarr_movie_id"] = int(bazarr["radarr_id"])
+        else:
+            if bazarr.get("sonarr_id") is not None:
+                ids["series_id"] = int(bazarr["sonarr_id"])
+            if bazarr.get("episode_id") is not None:
+                ids["sonarr_episode_id"] = int(bazarr["episode_id"])
+        if ids:
+            out[path] = ids
+    return out
+
+
+def enqueue_ids_for(app_state: Any, paths: list[str]) -> dict[str, dict[str, int]]:
+    """#629: enqueue id kwargs for `paths` from the app's cached coverage
+    snapshot. Empty when there is no snapshot yet or the lookup fails: a manual
+    enqueue must never be refused over this, it just goes out without ids."""
+    try:
+        cov = getattr(app_state, "coverage_cache", None)
+        snap = cov.get_cached() if cov is not None else None
+        ids = snapshot_enqueue_ids(snap)
+    except Exception:  # noqa: BLE001 - never block a manual enqueue on this
+        log.warning("could not resolve arr ids for a manual enqueue", exc_info=True)
+        return {}
+    return {p: ids[p] for p in paths if p in ids}
+
+
 def eager_probe_targets(items: list[dict[str, Any]], cap: int = _EAGER_PROBE_CAP) -> list[str]:
     """Canonical paths of rows the probe-gate is hiding because they're
     unprobed — i.e. the 'Analyzing' bucket. These are exactly the files we
