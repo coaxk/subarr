@@ -763,8 +763,13 @@ async def requeue(req: RequeueRequest, request: Request) -> dict:
     # the #229 audio_language_override on the row; the feeder applies it at
     # submit time and records provenance. Manual priority + kick() = near-
     # immediate. enqueue dedups if the path is already pending/in-flight.
+    # #629: carry the Sonarr/Radarr ids like the scheduler does, or completion
+    # cannot tell Bazarr about the new subtitle.
+    from ..coverage_cache import enqueue_ids_for
+
+    ids = enqueue_ids_for(request.app.state, [canonical]).get(canonical, {})
     pending = request.app.state.pending_queue
-    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override)
+    job = pending.enqueue(canonical, source="manual", audio_language_override=audio_language_override, **ids)
     request.app.state.queue_feeder.kick()
     _invalidate_history_cache(request.app.state)
     return {"job": job.id, "path": canonical, "status": "pending"}
