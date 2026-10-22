@@ -7,6 +7,10 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.24] - 2026-10-22
+
+**Bazarr now hears about subtitles from Requeue, Regenerate and Scan, and large libraries no longer stall the app.**
+
 ### Fixed
 - **The Dashboard stalled the whole app on large libraries (#621).** To show one count and the most recently probed file, the "discovered" tile loaded every row of the probe cache into memory on each 30-second refresh. At about 40,000 files that took over a second of Python work, and everything else waiting on subarr at that moment hitched with it, which showed up as a stream of `loop_lag` warnings. The tile now asks the database for just those two things: about 1 ms on a 40,000-row table, measured, against 750-1,200 ms before, using a new database index (applied automatically on upgrade). The tile's size, which had always read as 0, now shows the file's real size. The Review page's verification lookups also moved off the request loop. Thanks to @caracturus for the report and the stack traces that pinned it down.
 - **Short app-wide pauses while the library was being scanned (#627).** A week of `loop_lag` warnings on a 6,600-file install traced 28 of 34 stalls to database and file-system work done on the thread that answers every request: saving the coverage snapshot after each refresh, checking each file while probing new media, and counting probed files for telemetry. That work now runs in the background, so the UI and API stay responsive while it happens. Nothing to configure.
