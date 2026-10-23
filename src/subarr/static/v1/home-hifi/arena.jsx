@@ -11,7 +11,7 @@
 // the app — this is the marquee feature, not a bolt-on.
 
 import { SectionCard, StatusDot, Glyph, ICONS, LangTag } from './atoms.jsx';
-import { fetchBrowse } from './library.jsx';  // #145: reuse Library's cached, rollup-skipping browse
+import { fetchBrowse, libraryPickerOptions, rootPathForLibrary } from './library.jsx';  // #145: reuse Library's cached, rollup-skipping browse
 import { AudioReviewModal } from './coverage.jsx';  // reuse the audio player + lang picker for "set language"
 
 const { useState, useEffect, useRef, useCallback } = React;
@@ -192,11 +192,52 @@ function ProgressSegments({ done, total, running }) {
 // ── file picker modal ────────────────────────────────────────────────────────
 const VIDEO_RE = /\.(mkv|mp4|avi|m4v|mov|webm|ts)$/i;
 
-function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = false, bulkProgress = null }) {
-  const [path, setPath] = useState('');
+// A canonical is either library-0 (`TV/Show/ep.mkv`) or `@slug/TV/Show/ep.mkv`.
+// The sweep API already resolves the `@slug` head; the picker has to produce it.
+export function canonicalLibrarySlug(path) {
+  const s = String(path || '').replace(/^\/+/, '');
+  if (!s.startsWith('@')) return '';
+  const head = s.slice(1).split('/')[0];
+  return head || '';
+}
+
+export function libraryRelativePath(path) {
+  const s = String(path || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!s.startsWith('@')) return s;
+  const slash = s.indexOf('/');
+  return slash < 0 ? '' : s.slice(slash + 1);
+}
+
+// '' for the default library root, `@slug/` for another library's root, and
+// `@slug/rest` (no trailing slash) once the user has drilled in.
+export function browsePathFor(slug, relative) {
+  const rel = String(relative || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  const root = rootPathForLibrary(slug).replace(/\/$/, '');
+  if (!rel) return root ? `${root}/` : '';
+  return root ? `${root}/${rel}` : rel;
+}
+
+export function pickerStartPath(mediaPath) {
+  return browsePathFor(canonicalLibrarySlug(mediaPath), '');
+}
+
+export function pickerBrowseTarget(path) {
+  const slug = canonicalLibrarySlug(path);
+  const relative = libraryRelativePath(path);
+  return {
+    slug,
+    relative,
+    atRoot: relative === '',
+    browsePath: browsePathFor(slug, relative),
+  };
+}
+
+export function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = false, bulkProgress = null, initialPath = '' }) {
+  const [path, setPath] = useState(() => pickerStartPath(initialPath));
   const [entries, setEntries] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [libraries, setLibraries] = useState(null);
   // #141: multi-select — checkboxes accumulate across folders so you can
   // assemble a bulk batch from several shows, then queue a sweep for each.
   const [picked, setPicked] = useState(() => new Set());
@@ -206,16 +247,30 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = 
 
   useEffect(() => {
     let alive = true;
+    fetch('/api/settings/libraries', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d) setLibraries(d.libraries || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
     setLoading(true); setErr(null);
-    // #145: Library's cached browse — skips the 10s+ recursive rollup at
-    // root and serves revisited folders instantly from browseCache.
-    fetchBrowse(path)
+    // #145: Library's cached browse — skips the 10s+ recursive rollup at a
+    // library root (the default '' OR a non-default `@slug/`) and serves
+    // revisited folders instantly from browseCache.
+    const target = pickerBrowseTarget(path);
+    fetchBrowse(target.browsePath, { isRoot: target.atRoot })
       .then((d) => { if (alive) setEntries(d.entries || []); })
       .catch((e) => { if (alive) setErr(String(e)); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [path]);
 
-  const parts = path ? path.split('/') : [];
+  const target = pickerBrowseTarget(path);
+  const pickerOpts = libraryPickerOptions(libraries);
+  const libLabel = (pickerOpts && pickerOpts.find((o) => o.slug === target.slug)?.name) || 'library';
+  const parts = target.relative ? target.relative.split('/') : [];
   const dirs = (entries || []).filter((e) => e.is_dir);
   const files = (entries || []).filter((e) => !e.is_dir && VIDEO_RE.test(e.name));
 
@@ -239,16 +294,35 @@ function FilePicker({ onPick, onPickMany, onClose, bulkReady = true, bulkBusy = 
   return (
     <div style={modalBackdrop} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
           <strong style={{ fontSize: 'var(--text-lg)' }}>Pick a media file</strong>
-          <button onClick={onClose} style={iconBtnStyle}><Glyph char={ICONS.close || '×'} size={14} /></button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {pickerOpts && (
+              <select
+                aria-label="Library"
+                value={target.slug}
+                onChange={(e) => setPath(rootPathForLibrary(e.target.value))}
+                title="Browse a different library's tree"
+                style={{
+                  height: 30, padding: '0 10px', background: 'var(--bg-2)',
+                  border: 'var(--border)', borderRadius: 'var(--radius-md)',
+                  color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
+                }}
+              >
+                {pickerOpts.map((o) => (
+                  <option key={o.slug || '(default)'} value={o.slug}>{o.name}</option>
+                ))}
+              </select>
+            )}
+            <button onClick={onClose} style={iconBtnStyle}><Glyph char={ICONS.close || '×'} size={14} /></button>
+          </span>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, fontSize: 'var(--text-sm)', marginBottom: 10 }}>
-          <button onClick={() => setPath('')} style={crumbStyle}>library</button>
+          <button onClick={() => setPath(rootPathForLibrary(target.slug))} style={crumbStyle}>{libLabel}</button>
           {parts.map((p, i) => (
             <span key={i} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
               <span style={{ color: 'var(--fg-3)' }}>/</span>
-              <button onClick={() => setPath(parts.slice(0, i + 1).join('/'))} style={crumbStyle}>{p}</button>
+              <button onClick={() => setPath(browsePathFor(target.slug, parts.slice(0, i + 1).join('/')))} style={crumbStyle}>{p}</button>
             </span>
           ))}
         </div>
@@ -486,7 +560,7 @@ function SweepForm({ onRun, disabled, gate, activeCount = 0 }) {
 
   return (
     <SectionCard label="Configure sweep">
-      {picking && <FilePicker onClose={() => { if (!submitting) setPicking(false); }} onPick={(p) => { setMediaPath(p); setPicking(false); }} onPickMany={submitMany} bulkReady={recipesReady} bulkBusy={submitting} bulkProgress={bulkProgress} />}
+      {picking && <FilePicker initialPath={mediaPath} onClose={() => { if (!submitting) setPicking(false); }} onPick={(p) => { setMediaPath(p); setPicking(false); }} onPickMany={submitMany} bulkReady={recipesReady} bulkBusy={submitting} bulkProgress={bulkProgress} />}
 
       {/* media file */}
       <div style={fieldStyle}>
