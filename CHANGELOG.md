@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Tuning Lab's "Pick a media file" dialog only listed the default library (#635).** With more than one library configured, Browse… on a sweep always opened the default library's tree, and the root breadcrumb always returned there. The dialog now offers the same library switcher as Library → Browse, and a chosen file keeps the `@library/...` path the sweep already accepts. A single-library install looks the same as before.
+
 ## [2.7.24] - 2026-10-22
 
 **Bazarr now hears about subtitles from Requeue, Regenerate and Scan, and large libraries no longer stall the app.**
