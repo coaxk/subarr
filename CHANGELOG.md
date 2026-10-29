@@ -10,6 +10,15 @@ breaking config changes.
 ### Fixed
 - **Tuning Lab's "Pick a media file" dialog only listed the default library (#635).** With more than one library configured, Browse… on a sweep always opened the default library's tree, and the root breadcrumb always returned there. The dialog now offers the same library switcher as Library → Browse, and a chosen file keeps the `@library/...` path the sweep already accepts. A single-library install looks the same as before.
 
+## [2.7.25] - 2026-10-29
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.24 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed.** The 2.7.24 image ships `libbrotli1 1.1.0-2+b7`, and Debian has since published `1.1.0-2+deb13u1` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: the promote-to-stable gate ran `apt list --upgradable` inside `ghcr.io/coaxk/subarr:2.7.24` and found exactly that one security-pocket package pending.
+
 ## [2.7.24] - 2026-10-22
 
 **Bazarr now hears about subtitles from Requeue, Regenerate and Scan, and large libraries no longer stall the app.**
