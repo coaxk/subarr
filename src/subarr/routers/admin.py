@@ -312,6 +312,167 @@ async def db_orphans_prune(request: Request) -> dict:
     return await asyncio.to_thread(_sweep, request, dry_run=False)
 
 
+# [#638] Longest pairs list the dry run sends per section; the rest is counted.
+RELINK_PAIRS_CAP = 500
+
+
+class RelinkBody(BaseModel):
+    old_head: str
+    new_head: str
+
+
+def _relink_analysis(request: Request):
+    """[#638] (rules, stale_count, inventory). Reads only; run in a thread.
+
+    Stale = known paths (both stores) that `_path_exists` says are gone. A rule
+    needs RULE_MIN_VERIFIED stale verdicts, so below that no rule is possible
+    and the library walk is skipped: an install with a deleted file or two
+    never pays for a walk on every Review page load. The returned inventory is
+    None when the walk was skipped, so the caller can say so."""
+    from .. import relink
+
+    stores = _orphan_stores(request)
+    als = stores.get("audio_lang")
+    ps = stores.get("probe")
+    verified = set(als.all_paths()) if als is not None else set()
+    probed = set(ps.all_paths()) if ps is not None else set()
+    stale = sorted(p for p in (verified | probed) if not _path_exists(p))
+    if sum(1 for p in stale if p in verified) < relink.RULE_MIN_VERIFIED:
+        return [], len(stale), None
+    old_sizes = ps.sizes_for(stale) if ps is not None else {}
+    inv = relink.get_inventory()
+    rules = relink.build_rules(
+        stale,
+        old_sizes=old_sizes,
+        verified=verified,
+        probed=probed,
+        inventory=inv.files,
+        failed_slugs=set(inv.failed_slugs),
+    )
+    return rules, len(stale), inv
+
+
+def _pair_json(p) -> dict:
+    return {"old": p.old, "new": p.new, "how": p.how}
+
+
+def _rule_json(rule) -> dict:
+    cap = RELINK_PAIRS_CAP
+    included = rule.included
+    return {
+        "old_head": rule.old_head,
+        "new_head": rule.new_head,
+        "verified": rule.verified,
+        "by_size": len(rule.by_size),
+        "path_only": len(rule.path_only),
+        "path_only_withheld": rule.path_only_withheld,
+        "mismatches": rule.mismatches,
+        "collisions": rule.collisions,
+        "sample": [_pair_json(p) for p in included[:5]],
+        "pairs_by_size": [_pair_json(p) for p in rule.by_size[:cap]],
+        "pairs_path_only": [_pair_json(p) for p in rule.path_only[:cap]],
+        "truncated": max(0, len(rule.by_size) - cap) + max(0, len(rule.path_only) - cap),
+    }
+
+
+def _relink_dry_run(request: Request) -> dict:
+    rules, stale, inv = _relink_analysis(request)
+    return {
+        "rules": [_rule_json(r) for r in rules],
+        "stale": stale,
+        "inventory": {
+            "walked": inv is not None,
+            "files": len(inv.files) if inv is not None else 0,
+            "unreadable_libraries": sorted(inv.failed_slugs) if inv is not None else [],
+            "walk_s": round(inv.walk_s, 3) if inv is not None else 0.0,
+        },
+    }
+
+
+def _relink_apply(request: Request, old_head: str, new_head: str) -> dict:
+    from .. import relink
+    from ..log_safe import scrub
+    from ..paths import canonical_to_fs
+
+    rules, _stale, _inv = _relink_analysis(request)
+    rule = next((r for r in rules if r.old_head == old_head and r.new_head == new_head), None)
+    if rule is None:
+        return {
+            "applied": False,
+            "reason": "this rewrite is no longer offered (already applied, or the files changed)",
+            "relinked": 0,
+            "skipped_collision": 0,
+            "failed": 0,
+        }
+    stores = _orphan_stores(request)
+    als = stores.get("audio_lang")
+    ps = stores.get("probe")
+    pairs = rule.included
+    old_sizes = ps.sizes_for([p.old for p in pairs]) if ps is not None else {}
+    verified = set(als.all_paths()) if als is not None else set()
+    relinked = skipped = failed = 0
+    for pair in pairs:
+        # 1. The target must still be the file we matched.
+        try:
+            fs = canonical_to_fs(pair.new)
+            ok = fs.is_file()
+            if ok and pair.how == "size":
+                ok = fs.stat().st_size == old_sizes.get(pair.old)
+        except Exception:  # noqa: BLE001 - an unreadable target is a failed pair, not a crash
+            ok = False
+        if not ok:
+            failed += 1
+            continue
+        try:
+            if pair.old in verified:
+                # 2. A verdict appearing at the new path since the analysis wins,
+                # and then the probe row stays put too so the pair stays whole.
+                if als.relink(pair.old, pair.new) is None:
+                    skipped += 1
+                    continue
+                if ps is not None:
+                    ps.move(pair.old, pair.new)
+                relinked += 1
+            elif ps is not None and ps.move(pair.old, pair.new):
+                # 3. Probe-only row.
+                relinked += 1
+            else:
+                skipped += 1
+        except Exception as e:  # noqa: BLE001 - one bad row must not abort the rest
+            log.warning("relink of %s failed: %s", scrub(pair.old), scrub(str(e)))
+            failed += 1
+    relink.invalidate_inventory()
+    log.info(
+        "relink rule %s -> %s applied (#638): relinked=%d skipped_collision=%d failed=%d",
+        scrub(old_head),
+        scrub(new_head),
+        relinked,
+        skipped,
+        failed,
+    )
+    return {
+        "applied": True,
+        "reason": "ok",
+        "relinked": relinked,
+        "skipped_collision": skipped,
+        "failed": failed,
+    }
+
+
+@router.get("/admin/db/orphans/relink")
+async def db_orphans_relink(request: Request) -> dict:
+    """[#638] DRY RUN: path-rewrite rules that would move stale rows onto the
+    same files at their new paths. Writes nothing."""
+    return await asyncio.to_thread(_relink_dry_run, request)
+
+
+@router.post("/admin/db/orphans/relink")
+async def db_orphans_relink_apply(body: RelinkBody, request: Request) -> dict:
+    """[#638] APPLY one rule. The server recomputes the matches, so the client
+    names only the rewrite and never supplies a list of pairs."""
+    return await asyncio.to_thread(_relink_apply, request, body.old_head, body.new_head)
+
+
 def _list_siblings(canonical_path: str) -> list[str]:
     """Filenames sitting next to a canonical path, or [] if we cannot look.
 

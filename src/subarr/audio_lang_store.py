@@ -34,7 +34,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .data_persistence import apply_journal_mode
 from .langs import normalize_lang
@@ -421,10 +421,20 @@ class AudioLangStore:
             return None
         return self._move_verdict(old, new_path)
 
-    def _move_verdict(self, old: str, new_path: str) -> AudioLangVerification | None:
+    def relink(self, old: str, new_path: str) -> AudioLangVerification | None:
+        """#638: move the verdict at `old` onto `new_path` (the same file at a
+        new path). Records `relinked_from` / `relinked_at`; refuses, returning
+        None, when `new_path` already holds a verdict (the existing one wins)."""
+        return self._move_verdict(old, new_path, kind="relinked")
+
+    def _move_verdict(
+        self, old: str, new_path: str, *, kind: Literal["carried", "relinked"] = "carried"
+    ) -> AudioLangVerification | None:
         """Re-key one verdict onto `new_path`, recording where it came from.
         The row is UPDATEd rather than re-inserted, so the language, source,
-        confidence, date and (#571) the arr id all travel with it."""
+        confidence, date and (#571) the arr id all travel with it. `kind`
+        picks the provenance key: #563 carry-over writes `carried_from`, a
+        #638 relink writes `relinked_from`."""
         with self._lock:
             row = self._conn.execute(
                 "SELECT evidence FROM audio_lang_verifications WHERE canonical_path = ?", (old,)
@@ -437,8 +447,8 @@ class AudioLangStore:
                 evidence = {}
             if not isinstance(evidence, dict):
                 evidence = {"previous_evidence": evidence}
-            evidence["carried_from"] = old
-            evidence["carried_at"] = time.time()
+            evidence[f"{kind}_from"] = old
+            evidence[f"{kind}_at"] = time.time()
             cur = self._conn.execute(
                 "UPDATE audio_lang_verifications SET canonical_path = ?, evidence = ? "
                 "WHERE canonical_path = ? AND NOT EXISTS "
@@ -448,7 +458,10 @@ class AudioLangStore:
             if cur.rowcount != 1:
                 return None
         logging.getLogger(__name__).info(
-            "audio-lang verdict carried over (#563): %s -> %s", scrub(old), scrub(new_path)
+            "audio-lang verdict %s: %s -> %s",
+            "relinked (#638)" if kind == "relinked" else "carried over (#563)",
+            scrub(old),
+            scrub(new_path),
         )
         return self._get_exact(new_path)
 
