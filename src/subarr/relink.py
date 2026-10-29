@@ -11,10 +11,17 @@ and is the only part that touches the filesystem.
 
 from __future__ import annotations
 
+import logging
+import os
+import threading
+import time
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
+
+from .log_safe import scrub
 
 RULE_MIN_VERIFIED = 3
 MIN_TAIL = 3
@@ -175,3 +182,81 @@ def build_rules(
             out.append(rule)
     out.sort(key=lambda r: (-r.verified, r.old_head, r.new_head))
     return out
+
+
+# ─── Inventory of current files ─────────────────────────────────────
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Inventory:
+    files: dict[str, int]
+    failed_slugs: frozenset[str]
+    walk_s: float = 0.0
+
+
+def walk_inventory() -> Inventory:
+    """Walk every library root once and record canonical path -> size.
+
+    A library whose root is not a readable directory, or whose walk reports ANY
+    error part-way, is marked failed and contributes NO files: a partial
+    listing that looks complete would let a rule map rows onto the wrong file.
+    Cost: one directory listing per directory and one os.stat per video file.
+    """
+    from .config import settings
+    from .paths import VIDEO_EXTS, fs_to_canonical
+
+    started = time.monotonic()
+    files: dict[str, int] = {}
+    failed: set[str] = set()
+    for lib in settings.libraries:
+        root = lib.fs_root
+        if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+            failed.add(lib.slug)
+            continue
+        errors: list[OSError] = []
+        found: dict[str, int] = {}
+        for dirpath, _dirs, names in os.walk(root, onerror=errors.append):
+            for name in names:
+                p = os.path.join(dirpath, name)
+                if os.path.splitext(name)[1].lower() not in VIDEO_EXTS:
+                    continue
+                try:
+                    size = os.stat(p).st_size
+                    found[fs_to_canonical(Path(p))] = size
+                except (OSError, ValueError):
+                    continue
+        if errors:
+            failed.add(lib.slug)
+            _log.warning("relink inventory: library %r walk failed (%s)", lib.slug, scrub(str(errors[0])))
+            continue
+        files.update(found)
+    walk_s = time.monotonic() - started
+    _log.info("relink inventory: %d files, %d failed libraries, %.1fs", len(files), len(failed), walk_s)
+    return Inventory(files=files, failed_slugs=frozenset(failed), walk_s=walk_s)
+
+
+_cache_lock = threading.Lock()
+_cache: tuple[tuple, float, Inventory] | None = None
+
+
+def get_inventory(*, max_age_s: float = 300.0) -> Inventory:
+    """Cached walk. The lock is held ACROSS the walk so concurrent callers wait
+    for one walk instead of each starting their own."""
+    global _cache
+    from .config import settings
+
+    key = tuple((lib.slug, str(lib.fs_root)) for lib in settings.libraries)
+    with _cache_lock:
+        if _cache is not None and _cache[0] == key and time.monotonic() - _cache[1] < max_age_s:
+            return _cache[2]
+        inv = walk_inventory()
+        _cache = (key, time.monotonic(), inv)
+        return inv
+
+
+def invalidate_inventory() -> None:
+    global _cache
+    with _cache_lock:
+        _cache = None
