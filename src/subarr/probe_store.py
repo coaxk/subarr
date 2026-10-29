@@ -17,6 +17,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 from .data_persistence import apply_journal_mode
@@ -172,6 +173,42 @@ class ProbeStore:
         with self._lock:
             cur = self._conn.execute("DELETE FROM media_probe WHERE canonical_path = ?", (canonical_path,))
         return cur.rowcount > 0
+
+    def sizes_for(self, paths: Iterable[str]) -> dict[str, int | None]:
+        """[#638] Cached size per path, for the paths that HAVE a row (a value
+        of None is a row with no size). Chunked so the IN list stays under
+        SQLite's variable limit."""
+        wanted = list(dict.fromkeys(paths))
+        out: dict[str, int | None] = {}
+        for i in range(0, len(wanted), 500):
+            chunk = wanted[i : i + 500]
+            marks = ",".join("?" * len(chunk))
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT canonical_path, size FROM media_probe WHERE canonical_path IN ({marks})",  # nosec B608
+                    chunk,
+                ).fetchall()
+            out.update({r[0]: r[1] for r in rows})
+        return out
+
+    def move(self, old: str, new: str) -> bool:
+        """[#638] Re-key the probe row at `old` onto `new`, plus its
+        probe_failures row. Refuses (False) when `new` already has a row: the
+        existing one wins. Returns True iff the media_probe row moved."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE media_probe SET canonical_path = ? WHERE canonical_path = ? AND NOT EXISTS "
+                "(SELECT 1 FROM media_probe WHERE canonical_path = ?)",
+                (new, old, new),
+            )
+            moved = cur.rowcount == 1
+            if moved:
+                self._conn.execute(
+                    "UPDATE probe_failures SET canonical_path = ? WHERE canonical_path = ? AND NOT EXISTS "
+                    "(SELECT 1 FROM probe_failures WHERE canonical_path = ?)",
+                    (new, old, new),
+                )
+        return moved
 
     def all_paths(self) -> list[str]:
         with self._lock:
