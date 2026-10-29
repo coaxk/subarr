@@ -9,6 +9,16 @@ breaking config changes.
 
 ### Fixed
 - **The orphan cleanup refused forever after a mount or library move (#638).** If most of your saved paths pointed at a layout that no longer existed (the rows were recorded while a mount was misconfigured, say), the cleanup on the Review page saw "more than half the files are missing" and held back every time, and re-walking the library could never clear it. Those rows were not garbage: each audio-language verification is work you did by hand, and the files were usually still there under a new path. Review now looks for them. When a group of stale paths lines up with files that exist today under one consistent rewrite (for example `Old/Anime/...` is now `Anime/...`), it shows a card with the old and new path, how many files matched by path and size and how many by path only, and a sample you can expand to the full list. **Relink all** moves those verifications and probe rows onto the files at their new paths, keeping the language, source, confidence and date, and noting where each came from. A rule is offered only when at least three verified files agree. A file that already has a verification at its new path is left alone and that one wins. Rows whose old path had a recorded size are matched only when the size is identical, and a rule with any size mismatch does not move its unchecked rows. Nothing changes until you click, and the existing safety check is untouched: a dropped mount still matches nothing and still holds the cleanup back. Whatever cannot be found goes through the normal cleanup afterwards. Thanks to @ErroneousBosch for the report and for laying out exactly what their data looked like.
+- **Tuning Lab's "Pick a media file" dialog only listed the default library (#635).** With more than one library configured, Browse… on a sweep always opened the default library's tree, and the root breadcrumb always returned there. The dialog now offers the same library switcher as Library → Browse, and a chosen file keeps the `@library/...` path the sweep already accepts. A single-library install looks the same as before.
+
+## [2.7.25] - 2026-10-29
+
+**A rebuild that picks up a Debian security update. No code change.**
+
+Nothing in subarr itself changed between 2.7.24 and this release: same code, same database schema, same configuration. Only the operating-system packages inside the published image moved, so there is nothing to migrate and nothing to reconfigure.
+
+### Security
+- **OS packages refreshed.** The 2.7.24 image ships `libbrotli1 1.1.0-2+b7`, and Debian has since published `1.1.0-2+deb13u1` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: the promote-to-stable gate ran `apt list --upgradable` inside `ghcr.io/coaxk/subarr:2.7.24` and found exactly that one security-pocket package pending.
 
 ## [2.7.24] - 2026-10-22
 
