@@ -7,6 +7,9 @@ breaking config changes.
 
 ## [Unreleased]
 
+### Fixed
+- **The orphan cleanup refused forever after a mount or library move (#638).** If most of your saved paths pointed at a layout that no longer existed (the rows were recorded while a mount was misconfigured, say), the cleanup on the Review page saw "more than half the files are missing" and held back every time, and re-walking the library could never clear it. Those rows were not garbage: each audio-language verification is work you did by hand, and the files were usually still there under a new path. Review now looks for them. When a group of stale paths lines up with files that exist today under one consistent rewrite (for example `Old/Anime/...` is now `Anime/...`), it shows a card with the old and new path, how many files matched by path and size and how many by path only, and a sample you can expand to the full list. **Relink all** moves those verifications and probe rows onto the files at their new paths, keeping the language, source, confidence and date, and noting where each came from. A rule is offered only when at least three verified files agree. A file that already has a verification at its new path is left alone and that one wins. Rows whose old path had a recorded size are matched only when the size is identical, and a rule with any size mismatch does not move its unchecked rows. Nothing changes until you click, and the existing safety check is untouched: a dropped mount still matches nothing and still holds the cleanup back. Whatever cannot be found goes through the normal cleanup afterwards. Thanks to @ErroneousBosch for the report and for laying out exactly what their data looked like.
+
 ## [2.7.24] - 2026-10-22
 
 **Bazarr now hears about subtitles from Requeue, Regenerate and Scan, and large libraries no longer stall the app.**
