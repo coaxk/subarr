@@ -762,6 +762,70 @@ function BulkResultBanner({ result, onDismiss }) {
   );
 }
 
+// [#638] One card per path-rewrite rule. A rule is a layout change the server
+// found on its own (same files, new path); "Relink all" asks the server to move
+// every row it matched, and the server recomputes the matches rather than
+// trusting this list.
+function RelinkCard({ rule, busy, onApply, onSkip }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = (h) => h || '(library root)';
+  const sample = rule.sample || [];
+  const pairLine = (pr) => (
+    <div key={`${pr.old}→${pr.new}`}>
+      {pr.old} {'→'} {pr.new}{pr.how === 'path_only' ? ' (path only)' : ''}
+    </div>
+  );
+  const listStyle = {
+    maxHeight: 180, overflowY: 'auto', fontFamily: 'var(--mono, monospace)',
+    fontSize: 'var(--text-xs)', color: 'var(--fg-2)',
+    border: '1px solid var(--border, #333)', borderRadius: 6, padding: 8,
+  };
+  return (
+    <div style={{
+      border: '1px solid var(--border, #333)', borderRadius: 6, padding: '8px 10px',
+      display: 'flex', flexDirection: 'column', gap: 6,
+    }}>
+      <div>
+        <strong>{label(rule.old_head)} {'→'} {label(rule.new_head)}</strong>
+        <div>
+          {rule.by_size} matched by path + size, {rule.path_only} by path only
+          {rule.path_only_withheld > 0 && (
+            <span> ({rule.path_only_withheld} path-only rows held back: a size did not match)</span>
+          )}
+        </div>
+      </div>
+      <div style={{ ...listStyle, maxHeight: 'none', overflowY: 'visible' }}>
+        {sample.map(pairLine)}
+      </div>
+      {expanded && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div>Matched by path + size</div>
+          <div style={listStyle}>{(rule.pairs_by_size || []).map(pairLine)}</div>
+          {(rule.pairs_path_only || []).length > 0 && (
+            <>
+              <div>Matched by path only</div>
+              <div style={listStyle}>{rule.pairs_path_only.map(pairLine)}</div>
+            </>
+          )}
+          {rule.truncated > 0 && <div>and {rule.truncated} more</div>}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button type="button" onClick={onApply} disabled={busy}>
+          {busy ? 'Relinking...' : 'Relink all'}
+        </button>
+        <button type="button" onClick={onSkip}>Skip</button>
+        <button type="button" onClick={() => setExpanded(v => !v)}>
+          {expanded ? 'Hide' : 'Show all'}
+        </button>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+          Moves the saved verifications onto the same files at their new paths.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // [#453] Renamed or deleted files leave rows keyed on the OLD canonical path.
 // Nothing in the coverage path checks whether a file still exists, so re-walking
 // never clears them and users have resorted to hand-written SQL.
@@ -775,19 +839,43 @@ function OrphanBanner() {
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [done, setDone] = useState(null);
+  // [#638] relink cards. `rules` always comes from the server's GET; `skipped`
+  // is session-only; `relinkDone` is separate from the prune's `done`.
+  const [rules, setRules] = useState([]);
+  const [skipped, setSkipped] = useState(() => new Set());
+  const [relinkBusy, setRelinkBusy] = useState(null);
+  const [relinkDone, setRelinkDone] = useState(null);
+
+  const fetchOrphans = useCallback(async () => {
+    const r = await fetch('/api/admin/db/orphans', { credentials: 'same-origin' });
+    if (!r.ok) return null;              // silent: this is a nicety, not core UI
+    return r.json();
+  }, []);
+
+  // A relink fetch failure is silent and simply shows no cards.
+  const fetchRules = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/db/orphans/relink', { credentials: 'same-origin' });
+      if (!r.ok) return [];
+      const body = await r.json();
+      return Array.isArray(body.rules) ? body.rules : [];
+    } catch { return []; }
+  }, []);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/admin/db/orphans', { credentials: 'same-origin' });
-        if (!r.ok) return;                 // silent: this is a nicety, not core UI
-        const body = await r.json();
-        if (alive) setState(body);
+        const body = await fetchOrphans();
+        if (alive && body) setState(body);
       } catch { /* offline or blocked: stay silent rather than alarm */ }
     })();
+    (async () => {
+      const found = await fetchRules();
+      if (alive) setRules(found);
+    })();
     return () => { alive = false; };
-  }, []);
+  }, [fetchOrphans, fetchRules]);
 
   const apply = async () => {
     setBusy(true);
@@ -799,8 +887,8 @@ function OrphanBanner() {
       setDone(body);
       // Re-fetching the list is what proves the rows are gone; trusting the
       // POST's own echo would be believing the thing under test.
-      const again = await fetch('/api/admin/db/orphans', { credentials: 'same-origin' });
-      if (again.ok) setState(await again.json());
+      const again = await fetchOrphans();
+      if (again) setState(again);
     } catch (e) {
       setDone({ safe: false, reason: `Prune failed: ${e.message || e}` });
     } finally {
@@ -808,10 +896,35 @@ function OrphanBanner() {
     }
   };
 
+  const ruleKey = (rl) => `${rl.old_head}|${rl.new_head}`;
+
+  const applyRelink = async (rl) => {
+    setRelinkBusy(ruleKey(rl));
+    try {
+      const r = await fetch('/api/admin/db/orphans/relink', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_head: rl.old_head, new_head: rl.new_head }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setRelinkDone(await r.json());
+      // Both views come from the server again; the POST body only feeds the
+      // result line.
+      const [again, found] = await Promise.all([fetchOrphans().catch(() => null), fetchRules()]);
+      if (again) setState(again);
+      setRules(found);
+    } catch (e) {
+      setRelinkDone({ applied: false, reason: `Relink failed: ${e.message || e}` });
+    } finally {
+      setRelinkBusy(null);
+    }
+  };
+
   if (dismissed || !state) return null;
   const n = state.would_delete || 0;
   const blocked = n > 0 && state.safe === false;
-  if (n === 0 && !done) return null;
+  const visibleRules = rules.filter(rl => !skipped.has(ruleKey(rl)));
+  if (n === 0 && !done && !relinkDone && visibleRules.length === 0) return null;
 
   // A refusal is not an error. It means the storage looks unavailable, and the
   // honest thing is to explain that rather than offer a button that would
@@ -824,6 +937,25 @@ function OrphanBanner() {
       borderRadius: 8, padding: '10px 12px', fontSize: 'var(--text-sm)',
       display: 'flex', flexDirection: 'column', gap: 8,
     }}>
+      {visibleRules.map(rl => (
+        <RelinkCard
+          key={ruleKey(rl)} rule={rl} busy={relinkBusy === ruleKey(rl)}
+          onApply={() => applyRelink(rl)}
+          onSkip={() => setSkipped(prev => new Set(prev).add(ruleKey(rl)))} />
+      ))}
+      {relinkDone && (
+        <div role="status">
+          {relinkDone.applied === false
+            ? relinkDone.reason
+            : (
+              <span>
+                Relinked {relinkDone.relinked}
+                {relinkDone.skipped_collision > 0 && `, ${relinkDone.skipped_collision} skipped (already verified at the new path)`}
+                {relinkDone.failed > 0 && `, ${relinkDone.failed} failed`}.
+              </span>
+            )}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ color: tone }}>{blocked ? '⚠' : '●'}</span>
         <div style={{ flex: 1 }}>
@@ -835,14 +967,14 @@ function OrphanBanner() {
             </span>
           ) : blocked ? (
             <span><strong>{n} rows reference files that are missing, and cleanup is on hold.</strong> {state.reason}</span>
-          ) : (
+          ) : n > 0 ? (
             <span>
               <strong>{n} row{n === 1 ? '' : 's'} reference files that no longer exist.</strong>{' '}
               Usually renames. Cleaning them up clears stale entries from Review.
             </span>
-          )}
+          ) : null}
         </div>
-        {!done && !blocked && (
+        {!done && !blocked && n > 0 && (
           <button type="button" onClick={() => setOpen(v => !v)} style={{ whiteSpace: 'nowrap' }}>
             {open ? 'Hide' : 'Show these'}
           </button>
