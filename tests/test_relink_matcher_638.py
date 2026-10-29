@@ -216,15 +216,23 @@ def test_case_sensitive():
 
 
 def test_two_stale_paths_claiming_one_file_are_both_unmatched():
-    s1, s2 = "Old1/Show/S1/e.mkv", "Old2/Show/S1/e.mkv"
-    others = _files("Old", 3)
-    inv = {"New/Show/S1/e.mkv": 1}
-    inv.update({x: 1 for x in _remap(others, "Old/", "")})
-    stale = [s1, s2, *others]
+    # Each old layout forms its OWN offered rule (3 other matches apiece), so
+    # only the double-claim guard keeps the shared file out of both. Without
+    # it, both rules carry it, and the second click lands a skipped collision.
+    shared = "Show/S1/e.mkv"
+    inv = {"New/" + shared: 1}
+    stale = ["Old1/" + shared, "Old2/" + shared]
+    for i in range(3):
+        inv[f"New/A{i}/S1/a{i}.mkv"] = 1
+        inv[f"New/B{i}/S1/b{i}.mkv"] = 1
+        stale += [f"Old1/A{i}/S1/a{i}.mkv", f"Old2/B{i}/S1/b{i}.mkv"]
     rules = _build(stale, inv, old_sizes={s: 1 for s in stale})
+    assert sorted((r.old_head, r.new_head, r.verified) for r in rules) == [
+        ("Old1", "New", 3),
+        ("Old2", "New", 3),
+    ]
     included = [p.old for r in rules for p in r.included]
-    assert s1 not in included and s2 not in included
-    assert sorted(included) == sorted(others)
+    assert not [p for p in included if p.endswith(shared)]
 
 
 def test_failed_library_rows_never_match():

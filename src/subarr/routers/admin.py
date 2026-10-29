@@ -324,9 +324,11 @@ class RelinkBody(BaseModel):
 def _relink_analysis(request: Request):
     """[#638] (rules, stale_count, inventory). Reads only; run in a thread.
 
-    Stale = known paths (both stores) that `_path_exists` says are gone. With
-    nothing stale there is nothing to match, so the library walk is skipped
-    and a healthy install never pays for it."""
+    Stale = known paths (both stores) that `_path_exists` says are gone. A rule
+    needs RULE_MIN_VERIFIED stale verdicts, so below that no rule is possible
+    and the library walk is skipped: an install with a deleted file or two
+    never pays for a walk on every Review page load. The returned inventory is
+    None when the walk was skipped, so the caller can say so."""
     from .. import relink
 
     stores = _orphan_stores(request)
@@ -335,8 +337,8 @@ def _relink_analysis(request: Request):
     verified = set(als.all_paths()) if als is not None else set()
     probed = set(ps.all_paths()) if ps is not None else set()
     stale = sorted(p for p in (verified | probed) if not _path_exists(p))
-    if not stale:
-        return [], 0, relink.Inventory({}, frozenset())
+    if sum(1 for p in stale if p in verified) < relink.RULE_MIN_VERIFIED:
+        return [], len(stale), None
     old_sizes = ps.sizes_for(stale) if ps is not None else {}
     inv = relink.get_inventory()
     rules = relink.build_rules(
@@ -379,9 +381,10 @@ def _relink_dry_run(request: Request) -> dict:
         "rules": [_rule_json(r) for r in rules],
         "stale": stale,
         "inventory": {
-            "files": len(inv.files),
-            "unreadable_libraries": sorted(inv.failed_slugs),
-            "walk_s": round(inv.walk_s, 3),
+            "walked": inv is not None,
+            "files": len(inv.files) if inv is not None else 0,
+            "unreadable_libraries": sorted(inv.failed_slugs) if inv is not None else [],
+            "walk_s": round(inv.walk_s, 3) if inv is not None else 0.0,
         },
     }
 

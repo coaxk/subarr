@@ -207,6 +207,29 @@ def test_verdict_appearing_after_the_analysis_counts_as_skipped_collision(
     assert c.app.state.probe_store.sizes_for([olds[1]]) == {olds[1]: 6}
 
 
+def test_walk_skipped_below_threshold_and_reported(app_with_stub, media_root, monkeypatch):
+    """Fewer stale verdicts than a rule needs: no rule is possible, so the
+    Review page must not pay for a library walk. `walked` keeps a skipped walk
+    distinguishable from a real walk of empty libraries."""
+    from subarr import relink
+
+    c = app_with_stub
+    _scene(c, media_root, relink.RULE_MIN_VERIFIED - 1)
+    calls = []
+    real = relink.walk_inventory
+    monkeypatch.setattr(relink, "walk_inventory", lambda: calls.append(1) or real())
+    body = c.get(RELINK).json()
+    assert body["rules"] == []
+    assert body["stale"] == relink.RULE_MIN_VERIFIED - 1
+    assert body["inventory"]["walked"] is False
+    assert calls == []
+    relink.invalidate_inventory()
+    _scene(c, media_root, relink.RULE_MIN_VERIFIED, old="Old2/Anime")
+    body = c.get(RELINK).json()
+    assert body["inventory"]["walked"] is True
+    assert calls == [1]
+
+
 def test_mount_drop_offers_nothing_and_guard_refuses(app_with_stub, media_root, monkeypatch):
     from subarr import relink
 
