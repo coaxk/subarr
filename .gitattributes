@@ -36,3 +36,4 @@ src/subarr/static/v1/**/*.html text eol=lf
 # Git hooks are POSIX sh — pin to LF so a CRLF shebang (#!/bin/sh\r) can't
 # break execution on Linux/macOS (incl. CI clones).
 .githooks/* text eol=lf
+tests/fixtures/subgen_track_choice_cases.json text eol=lf
