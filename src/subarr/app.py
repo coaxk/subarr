@@ -88,6 +88,7 @@ from .routers import (
     vision as r_vision,
     enrichment as r_enrichment,
     forced_segment as r_forced_segment,
+    per_file_task as r_per_file_task,
     gpu,
     home as r_home,
     instances as r_instances,
@@ -1284,6 +1285,7 @@ def health() -> dict:
 @app.get("/api/health/tasks")
 def health_tasks() -> dict:
     """#157: per-loop background-task health. Powers the header pill (any
+app.include_router(r_per_file_task.router)
     unhealthy) + the Health page (per-task status, last error, traceback).
     #234: each task carries `can_run_now` so the page shows a Run-now button
     on the loops that support an on-demand trigger."""
