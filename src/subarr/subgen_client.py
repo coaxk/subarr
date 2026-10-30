@@ -103,6 +103,38 @@ def classify_probe_failure(exc: Exception | None = None, *, status: int | None =
     return "transport"
 
 
+def _parse_preferred_audio_languages(raw: Any) -> tuple[tuple[str | None, ...] | None, tuple[str, ...]]:
+    """[#633] (entries, unreadable) from capabilities.preferred_audio_languages.
+
+    Absent or not a list -> (None, ()), i.e. not advertised. A JSON null stays
+    None in place; duplicates and order are kept. A non-null entry that does not
+    map to a language is NOT turned into None (that would fake a fall-through
+    subgen never makes): it is returned in `unreadable` instead.
+    """
+    from .per_file_task import known_language
+
+    if not isinstance(raw, list):
+        return None, ()
+    entries: list[str | None] = []
+    unreadable: list[str] = []
+    for item in raw:
+        if item is None:
+            entries.append(None)
+            continue
+        code = known_language(item)
+        if code is None:
+            unreadable.append(str(item))
+            continue
+        entries.append(code)
+    return tuple(entries), tuple(unreadable)
+
+
+def _parse_force_detected(raw: Any) -> str | None:
+    from .per_file_task import known_language
+
+    return known_language(raw)
+
+
 def producible_subtitle_languages(mode: str | None, audio_langs: list[str] | None) -> set[str] | None:
     """[#505] Which subtitle languages a subgen instance can produce for ONE file.
 
@@ -125,7 +157,13 @@ def producible_subtitle_languages(mode: str | None, audio_langs: list[str] | Non
     production queue path (scan_runner) calls batch() with no task at all, so
     the global setting is what runs. Counting per_request_task here would let
     rows through that then fail in exactly the way this function exists to
-    prevent."""
+    prevent.
+
+    [#633] When the per-file task feature is active (see per_file_task.py:
+    active_config) the production path DOES send a task, chosen per file, and
+    the gate uses per_file_task.producible_for_task for those rows instead of
+    this function. This function is still the answer for every row that has no
+    per-file task, and for every install with the feature off."""
     from .langs import normalize_lang
 
     m = (mode or "").strip().lower()
@@ -206,6 +244,20 @@ class SubgenCapabilities:
     # file's own audio language. None means the instance did not advertise
     # it (older subgen), which must read as UNKNOWN and gate nothing.
     transcribe_or_translate: str | None = None
+    # [v4.38 / #633] subgen's PREFERRED_AUDIO_LANGUAGES in order, unfiltered,
+    # duplicates kept, each entry a normalized ISO 639-1 code. A JSON null
+    # (an entry subgen could not parse) stays None IN PLACE: subgen's own
+    # lookup falls through to the default track on it, which skips every later
+    # entry, so dropping it would predict a track subgen never reaches. None for
+    # the whole field means not advertised (older subgen).
+    preferred_audio_languages: tuple[str | None, ...] | None = None
+    # Non-null advertised entries subarr could not map to a language. Turning
+    # one into None would fake a fall-through, so they are reported instead and
+    # per_file_task.active_config goes inert.
+    preferred_audio_languages_unreadable: tuple[str, ...] = ()
+    # [v4.38 / #633] subgen's FORCE_DETECTED_LANGUAGE_TO, normalized. None when
+    # absent, null or unmappable.
+    force_detected_language_to: str | None = None
     # Renames the OUTPUT FILE without changing the language of its contents,
     # so it is NOT the producible language and must never be used as one.
     # Carried so a contradiction (translate mode writing a .es.srt) is
@@ -307,6 +359,9 @@ class SubgenCapabilities:
             "per_request_kwargs": self.per_request_kwargs,
             "per_request_task": self.per_request_task,
             "transcribe_or_translate": self.transcribe_or_translate,
+            "preferred_audio_languages": self.preferred_audio_languages,
+            "preferred_audio_languages_unreadable": self.preferred_audio_languages_unreadable,
+            "force_detected_language_to": self.force_detected_language_to,
             "subtitle_language_name": self.subtitle_language_name,
             "asr_arena": self.asr_arena,
             "asr_vanilla_base": self.asr_vanilla_base,
@@ -504,6 +559,9 @@ class SubgenClient:
         per_request_kwargs = False
         per_request_task = False
         transcribe_or_translate = None
+        preferred_audio_languages: tuple[str | None, ...] | None = None
+        preferred_audio_languages_unreadable: tuple[str, ...] = ()
+        force_detected_language_to: str | None = None
         subtitle_language_name = None
         asr_arena = False
         asr_vanilla_base = False
@@ -545,6 +603,13 @@ class SubgenClient:
                             per_request_task = bool(caps_block.get("per_request_task"))
                             _tot = caps_block.get("transcribe_or_translate")
                             transcribe_or_translate = str(_tot).strip().lower() if _tot else None
+                            (
+                                preferred_audio_languages,
+                                preferred_audio_languages_unreadable,
+                            ) = _parse_preferred_audio_languages(caps_block.get("preferred_audio_languages"))
+                            force_detected_language_to = _parse_force_detected(
+                                caps_block.get("force_detected_language_to")
+                            )
                             _sln = caps_block.get("subtitle_language_name")
                             subtitle_language_name = str(_sln).strip() if _sln else None
                             asr_arena = bool(caps_block.get("asr_arena"))
@@ -597,6 +662,9 @@ class SubgenClient:
             per_request_kwargs=per_request_kwargs,
             per_request_task=per_request_task,
             transcribe_or_translate=transcribe_or_translate,
+            preferred_audio_languages=preferred_audio_languages,
+            preferred_audio_languages_unreadable=preferred_audio_languages_unreadable,
+            force_detected_language_to=force_detected_language_to,
             subtitle_language_name=subtitle_language_name,
             asr_arena=asr_arena,
             asr_vanilla_base=asr_vanilla_base,

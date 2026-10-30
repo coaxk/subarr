@@ -155,6 +155,13 @@ class Settings:
     # English optimisation is byte-for-byte unchanged for everyone who does not
     # opt in. Set SUBARR_FORCED_SEGMENT_ENABLED=1 to enable.
     forced_segment_enabled: bool
+    # #633: choose transcribe vs translate per file. OFF by default; inert unless
+    # the connected subgen also advertises per_request_task and its preferred
+    # audio languages (per_file_task.active_config). The wanted list is the
+    # user's subtitle languages (ISO 639-1): audio in one of them is transcribed,
+    # any other audio is translated to English when English is wanted.
+    per_file_task_enabled: bool
+    per_file_task_wanted: list[str]
     # #157 gap-fill: verbose logging knob. When on, the root logger goes to
     # DEBUG and the httpx/httpcore request loggers are UN-pinned from WARNING so
     # request detail shows. Default off = today's INFO behaviour byte-for-byte.
@@ -345,6 +352,11 @@ def load() -> Settings:
         # #364: default OFF (opt-in GPU-spending pipeline).
         forced_segment_enabled=os.environ.get("SUBARR_FORCED_SEGMENT_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on"),
+        # #633: default off, empty list. UI-persistable, so env-guarded like the
+        # other persistable fields (env wins over the saved choice).
+        per_file_task_enabled=os.environ.get("SUBARR_PER_FILE_TASK_ENABLED", "0").strip().lower()
+        in ("1", "true", "yes", "on"),
+        per_file_task_wanted=_coerce_lang_list(os.environ.get("SUBARR_PER_FILE_TASK_WANTED", "")),
         # #157 gap-fill: SUBARR_DEBUG verbose knob. Off by default; the logging
         # setup (app.py) reads settings.debug to raise the root level to DEBUG.
         debug=os.environ.get("SUBARR_DEBUG", "0").strip().lower() in ("1", "true", "yes", "on"),
@@ -589,6 +601,8 @@ FIELD_ENV_VARS: dict[str, str] = {
     "sonarr_propagate_audio_lang": "SONARR_PROPAGATE_AUDIO_LANG",
     "retime_enabled": "SUBARR_RETIME_ENABLED",
     "forced_segment_enabled": "SUBARR_FORCED_SEGMENT_ENABLED",
+    "per_file_task_enabled": "SUBARR_PER_FILE_TASK_ENABLED",
+    "per_file_task_wanted": "SUBARR_PER_FILE_TASK_WANTED",
     "plex_partial_scan_enabled": "PLEX_PARTIAL_SCAN_ENABLED",
     "subgen_webhook_enabled": "SUBARR_SUBGEN_WEBHOOK_ENABLED",
 }
@@ -611,6 +625,22 @@ def _coerce_bool(v) -> bool:
     return str(v).strip().lower() not in ("0", "false", "no", "off", "")
 
 
+def _coerce_lang_list(v) -> list[str]:
+    """#633: a persisted language list. Accepts a list, or a string split on
+    commas and whitespace; normalized, deduplicated, order-preserving."""
+    import re
+
+    from .per_file_task import normalize_wanted
+
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [t for t in re.split(r"[,\s]+", v) if t]
+    if not isinstance(v, (list, tuple)):
+        return []
+    return normalize_wanted(v)
+
+
 # #112: per-field coercion for persisted overrides (JSON → typed). Only
 # fields listed here can be set from the UI persistence layer; everything
 # else in an override file is ignored (defensive — the file never widens the
@@ -622,6 +652,8 @@ _FIELD_COERCE = {
     "plex_partial_scan_enabled": _coerce_bool,
     "subgen_webhook_enabled": _coerce_bool,
     "forced_segment_enabled": _coerce_bool,
+    "per_file_task_enabled": _coerce_bool,
+    "per_file_task_wanted": _coerce_lang_list,
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
