@@ -142,7 +142,14 @@ def test_post_wrong_body_type_is_422(api):
 def test_route_is_registered_and_not_auth_bypassed(api):
     from subarr.auth import is_path_bypassed
 
-    assert PATH in {getattr(r, "path", None) for r in api.app.routes}
+    # Through a real request, not `app.routes`: FastAPI >= 0.16x lists an
+    # included router as one lazy `_IncludedRouter` entry with no `path`.
+    # JSON is required so the SPA catch-all (HTML 200) cannot pass this.
+    api.app.state.subgen_caps = _caps()
+    r = api.get(PATH)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert "enabled" in r.json()
     assert is_path_bypassed(PATH) is False
 
 
