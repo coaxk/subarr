@@ -1694,6 +1694,12 @@ export function PerFileTaskCard() {
   if (status?.error) return <SectionCard label="Transcribe or translate per file"><div style={muted}>Could not query: {status.error}</div></SectionCard>;
 
   const view = derivePerFileTaskView(status);
+  // Unavailable: an existing ON may still be switched OFF and saved (so a stale
+  // setting is never stuck), but nothing can be switched ON or edited.
+  const canSwitchOff = view.disabled && enabled;
+  const pendingSwitchOff = view.disabled && !enabled && view.enabled;
+  const toggleLocked = busy || (view.disabled && !canSwitchOff);
+  const saveLocked = busy || (view.disabled && !pendingSwitchOff);
   return (
     <SectionCard label="Transcribe or translate per file">
       <div style={{ ...muted, lineHeight: 1.5 }}>
@@ -1707,8 +1713,8 @@ export function PerFileTaskCard() {
         </div>
       )}
       <Row label="Translate audio that is not a wanted language into English"
-        control={<Toggle on={enabled} busy={view.disabled || busy} label="Translate audio that is not a wanted language into English"
-          onToggle={() => { if (!view.disabled) { setEnabled(!enabled); setSaved(false); } }} />} />
+        control={<Toggle on={enabled} busy={toggleLocked} label="Translate audio that is not a wanted language into English"
+          onToggle={() => { if (!toggleLocked) { setEnabled(!enabled); setSaved(false); } }} />} />
       <Row label="Wanted subtitle languages (e.g. en, es)"
         control={
           <input
@@ -1723,7 +1729,7 @@ export function PerFileTaskCard() {
               borderRadius: 'var(--radius-md)', color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
             }} />} />
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="btn sm violet" onClick={save} disabled={view.disabled || busy}>
+        <button className="btn sm violet" onClick={save} disabled={saveLocked}>
           {busy ? 'Saving…' : 'Save'}
         </button>
         {saved && <span style={muted}>Saved</span>}

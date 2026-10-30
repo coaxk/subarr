@@ -125,6 +125,29 @@ describe('PerFileTaskCard (#633)', () => {
     expect(c.querySelector('[role="note"]').textContent).toContain('update subarr-subgen to v4.38+');
   });
 
+  it('unavailable but saved ON: the user can switch it OFF and Save, but not edit or switch on', async () => {
+    getBody = { ...getBody, enabled: true, wanted: ['en'], available: false,
+      unavailable_reason: 'subgen does not accept a per-request task' };
+    const c = await render();
+    expect(toggle(c).disabled).toBe(false);
+    expect(field(c).disabled).toBe(true);
+    expect(saveBtn(c).disabled).toBe(true); // nothing to save yet
+    await click(toggle(c));
+    expect(toggle(c).getAttribute('aria-checked')).toBe('false');
+    expect(toggle(c).disabled).toBe(true); // an enable is not allowed while unavailable
+    expect(saveBtn(c).disabled).toBe(false);
+    await click(saveBtn(c));
+    const post = calls.find((x) => x.init && x.init.method === 'POST');
+    expect(JSON.parse(post.init.body)).toEqual({ enabled: false, wanted: ['en'] });
+  });
+
+  it('unavailable and saved OFF: nothing can be switched on or saved', async () => {
+    getBody = { ...getBody, enabled: false, available: false, unavailable_reason: 'x' };
+    const c = await render();
+    expect(toggle(c).disabled).toBe(true);
+    expect(saveBtn(c).disabled).toBe(true);
+  });
+
   it('save: POSTs the toggle and the field split on commas and whitespace', async () => {
     const c = await render();
     await click(toggle(c));
