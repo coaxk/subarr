@@ -29,13 +29,23 @@ Anything that cannot be established leaves the decision at "no override".
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .langs import normalize_lang
 from .log_safe import scrub
+from .per_file_task import active_config, choose_task, resolve_source_language
 
 log = logging.getLogger(__name__)
+
+# #633: a folder job is expanded into per-file tasks only up to this many video
+# files. Beyond it the folder is submitted as one path with no task (today's
+# behaviour), so a library-root job cannot make the feeder stat thousands of
+# files on a network share.
+PER_FILE_TASK_FOLDER_CAP = 500
 
 
 @dataclass(frozen=True)
@@ -170,6 +180,158 @@ def resolve_for_job(job: Any, *, store: Any, caps: Any, probe_store: Any) -> Sub
         return SubmissionLanguage(None, False, "lookup failed")
 
 
+def resolve_task_for_file(
+    canonical: str,
+    *,
+    override: str | None,
+    caps: Any,
+    probe_store: Any,
+    enabled: bool,
+    wanted: Iterable[Any],
+    quiet: bool = False,
+) -> str | None:
+    """[#633] The Whisper task to send for ONE file, or None for "send none".
+
+    Mirrors the gate in coverage_engine._score: same configuration
+    (`active_config`), same tracks (the probe's audio streams in order), and
+    `override` is the audio_language_override actually being sent, so gate and
+    dispatch cannot drift. A missing or unreadable probe gives None. Never
+    raises.
+    """
+    cfg = active_config(enabled, wanted, caps)
+    if cfg is None:
+        return None
+    try:
+        probe = probe_store.get(canonical) if probe_store is not None else None
+        tracks = [(a.language, bool(a.default)) for a in (getattr(probe, "audio", None) or [])]
+    except Exception:  # noqa: BLE001 - an unreadable probe means "cannot tell"
+        return None
+    if not tracks:
+        return None
+    forced = normalize_lang(override) if override else None
+    source = resolve_source_language(
+        tracks, forced=forced, force_detected=cfg.force_detected, preferred=cfg.preferred
+    )
+    task = choose_task(source, cfg.wanted)
+    reason = (
+        "no audio language could be determined"
+        if source is None
+        else f"audio {source}, wanted {sorted(cfg.wanted)}"
+    )
+    log.log(
+        logging.DEBUG if quiet else logging.INFO,
+        "per-file task for %s: source=%s task=%s (%s)",
+        scrub(canonical),
+        source,
+        task,
+        reason,
+    )
+    return task
+
+
+def _folder_video_files(directory: Path, cap: int) -> tuple[list[Path] | None, int]:
+    """(files, count) for the video files under `directory`, recursively and
+    sorted. files is None when there are more than `cap`; the walk stops as soon
+    as the cap is passed, so count is then cap + 1, not the true total."""
+    from .paths import VIDEO_EXTS
+
+    found: list[Path] = []
+    for root, _dirs, names in os.walk(directory):
+        for name in names:
+            if Path(name).suffix.lower() in VIDEO_EXTS:
+                found.append(Path(root) / name)
+                if len(found) > cap:
+                    return None, len(found)
+    return sorted(found), len(found)
+
+
+def plan_job_dispatch(
+    job: Any,
+    decision: SubmissionLanguage,
+    *,
+    caps: Any,
+    probe_store: Any,
+    enabled: bool,
+    wanted: Iterable[Any],
+) -> tuple[list[str], dict[str, str | None]]:
+    """[#633] The scan paths for one pending job and the task for each.
+
+    A job carrying its own `task` keeps it. Otherwise a FILE gets the task for
+    its own audio. A FOLDER (only when the feature is active) is expanded: if
+    every file wants the same task the folder goes as one path with that task;
+    if they differ the scan carries the file list, one /batch per file. A folder
+    with no video, or more than PER_FILE_TASK_FOLDER_CAP of them, goes as today
+    with no task. Never raises.
+    """
+    canonical = job.canonical_path
+    if getattr(job, "task", None):
+        return [canonical], {canonical: job.task}
+    wanted = list(wanted)
+    if active_config(enabled, wanted, caps) is None:
+        return [canonical], {canonical: None}
+
+    from .paths import PathOutsideRootError, canonical_to_fs, fs_to_canonical
+
+    try:
+        fs = canonical_to_fs(canonical)
+        is_dir = fs.is_dir()
+    except (PathOutsideRootError, OSError):
+        is_dir = False
+
+    def one(path: str, override: str | None, quiet: bool = False) -> str | None:
+        return resolve_task_for_file(
+            path,
+            override=override,
+            caps=caps,
+            probe_store=probe_store,
+            enabled=enabled,
+            wanted=wanted,
+            quiet=quiet,
+        )
+
+    if not is_dir:
+        return [canonical], {canonical: one(canonical, decision.override)}
+
+    try:
+        files, n_found = _folder_video_files(fs, PER_FILE_TASK_FOLDER_CAP)
+    except OSError as e:
+        log.warning("per-file task: cannot list %s: %s", scrub(canonical), e)
+        return [canonical], {canonical: None}
+    if files is None:
+        log.warning(
+            "per-file task: %s holds more than %d video files (%d counted before stopping); "
+            "submitting the folder with no task",
+            scrub(canonical),
+            PER_FILE_TASK_FOLDER_CAP,
+            n_found,
+        )
+        return [canonical], {canonical: None}
+    if not files:
+        return [canonical], {canonical: None}
+    try:
+        canon_files = [fs_to_canonical(f) for f in files]
+    except (PathOutsideRootError, ValueError):
+        return [canonical], {canonical: None}
+    # The runner sends the JOB's override (decision.override) on every /batch of a
+    # folder scan, so subgen forces that language for each file. Plan with the same
+    # value, or the task would be chosen for a different source language.
+    tasks = {c: one(c, decision.override, quiet=True) for c in canon_files}
+    distinct = set(tasks.values())
+    if len(distinct) == 1:
+        (only,) = distinct
+        log.info(
+            "per-file task: folder %s is uniform (%d files): task=%s", scrub(canonical), len(files), only
+        )
+        return [canonical], {canonical: only}
+    log.info(
+        "per-file task: folder %s is mixed (%d files): %s",
+        scrub(canonical),
+        len(files),
+        {t: sum(1 for v in tasks.values() if v == t) for t in sorted(distinct, key=str)},
+    )
+    return canon_files, tasks
+
+
 _LANGUAGE_NAMES = {
     "en": "English", "fr": "French", "de": "German", "it": "Italian", "es": "Spanish", "pt": "Portuguese",
     "nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "pl": "Polish",
@@ -240,4 +402,12 @@ def explain_audio_language_skip(canonical: str, *, store: Any, caps: Any, probe_
     }
 
 
-__all__ = ["SubmissionLanguage", "explain_audio_language_skip", "resolve_for_job", "resolve_submission"]
+__all__ = [
+    "PER_FILE_TASK_FOLDER_CAP",
+    "SubmissionLanguage",
+    "explain_audio_language_skip",
+    "plan_job_dispatch",
+    "resolve_for_job",
+    "resolve_submission",
+    "resolve_task_for_file",
+]

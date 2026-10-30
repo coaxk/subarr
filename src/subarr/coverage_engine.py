@@ -73,6 +73,11 @@ class CoverageItem:
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
     embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / 'EN(image)' / None
     audio_langs: list[str] = field(default_factory=list)
+    # [#633] The probe's raw audio tracks, (ffprobe language tag, default flag)
+    # in stream order. audio_langs is rewritten later by user/Plex/Whisper hints;
+    # this is what subgen itself will read, so the per-file task gate uses it.
+    # Internal: never serialized (to_dict builds its payload field by field).
+    audio_tracks: list[tuple[str | None, bool]] = field(default_factory=list)
     audio_lang_codes: list[str] | None = None  # #357: multilingual set (>=2 langs)
     suggest_bazarr_rescan: bool = False
     # Resolved file path (file-level, not series-dir; populated when
@@ -1168,6 +1173,7 @@ def _apply_episode_probe(
     item.embedded_en = english_track_summary(probe)
     langs, notes = audio_lang_summary_with_titles(probe)
     item.audio_langs = langs
+    item.audio_tracks = [(a.language, bool(a.default)) for a in probe.audio]
     if notes:
         item.audio_label_notes.extend(notes)
     _classify_audio_label(
@@ -1224,6 +1230,7 @@ def _attach_probe_movie(
     item.embedded_en = english_track_summary(probe)
     langs, notes = audio_lang_summary_with_titles(probe)
     item.audio_langs = langs
+    item.audio_tracks = [(a.language, bool(a.default)) for a in probe.audio]
     if notes:
         item.audio_label_notes.extend(notes)
     _classify_audio_label(
@@ -1636,6 +1643,45 @@ def _import_ts_of(recent: Any, key: int | None) -> float | None:
     return recent.get(key)
 
 
+_override_log = logging.getLogger(__name__ + ".per_file_override")
+# The resolver logs an INFO line per forwarded override. The feeder wants it; a
+# coverage build would emit it once per row, every refresh.
+_override_log.setLevel(logging.WARNING)
+
+
+def _per_file_forced_lookup(audio_lang_store: Any, subgen_caps: Any):
+    """[#633] canonical -> the audio_language_override the feeder would send.
+
+    The same resolver call the feeder makes (submission_language.resolve_submission),
+    with the same skip list, so gate and dispatch agree on the forced language.
+    """
+    from .audio_lang_store import resolve_audio_language_override
+
+    skip = getattr(subgen_caps, "skip_audio_languages", None)
+
+    def lookup(canonical: str) -> str | None:
+        if audio_lang_store is None:
+            return None
+        return resolve_audio_language_override(
+            audio_lang_store,
+            canonical,
+            caller="coverage",
+            log=_override_log,
+            skip_audio_languages=skip,
+        )
+
+    return lookup
+
+
+def _per_file_forced_map(audio_lang_store: Any, subgen_caps: Any, paths: Any):
+    """[#633] Resolve the feeder's override for every path ONCE and return a
+    dict-backed lookup, so `_score` (run per row on the event loop) never touches
+    the store. Run this in a worker thread: it is one SQLite read per path."""
+    live = _per_file_forced_lookup(audio_lang_store, subgen_caps)
+    resolved = {p: live(p) for p in paths}
+    return lambda canonical: resolved.get(canonical)
+
+
 def _score(
     item: CoverageItem,
     signals: dict[str, dict],
@@ -1650,6 +1696,11 @@ def _score(
     # [#505] subgen's global TRANSCRIBE_OR_TRANSLATE, as advertised by v4.29+.
     # None means not advertised, which must gate nothing.
     subgen_output_task: str | None = None,
+    # [#633] per-file transcribe/translate: the active configuration (or None,
+    # which leaves the gate exactly as it was) and a lookup of the verified-
+    # language override the feeder would send for a file.
+    per_file_task: Any = None,
+    per_file_forced: Any = None,
 ) -> None:
     s = 0
     reasons: list[str] = []
@@ -1772,6 +1823,29 @@ def _score(
     from .subgen_client import producible_subtitle_languages
 
     _producible = producible_subtitle_languages(subgen_output_task, item.audio_langs)
+    # [#633] With per-file tasks active, the task dispatch will send for THIS
+    # file decides what it can produce: {L} for transcribe, {en} for translate.
+    # W (the wanted languages) only picks the task. The intersection with the
+    # row's missing_subtitles below is unchanged.
+    if per_file_task is not None and item.audio_tracks:
+        from .langs import normalize_lang as _nl
+        from .per_file_task import choose_task, producible_for_task, resolve_source_language
+
+        _forced = (
+            per_file_forced(item.file_canonical_path)
+            if per_file_forced and item.file_canonical_path
+            else None
+        )
+        _source = resolve_source_language(
+            item.audio_tracks,
+            forced=_nl(_forced) if _forced else None,
+            force_detected=per_file_task.force_detected,
+            preferred=per_file_task.preferred,
+        )
+        _task = choose_task(_source, per_file_task.wanted)
+        if _task is not None:
+            _producible = producible_for_task(_task, _source)
+            reasons.append(f"per-file task: {_task} ({_source} audio)")
     if _producible is not None and item.missing_subtitles:
         from .langs import normalize_lang
 
@@ -1939,6 +2013,14 @@ async def build_coverage(
     # [#505] The instance's global TRANSCRIBE_OR_TRANSLATE, advertised from
     # v4.29. None on anything older, which reads as unknown and gates nothing.
     subgen_task = getattr(subgen_caps, "transcribe_or_translate", None)
+    # [#633] Per-file transcribe/translate. None unless the setting is on AND the
+    # connected subgen advertises what it needs; None leaves every gate as it was.
+    from .per_file_task import active_config as _active_per_file_config
+
+    per_file_cfg = _active_per_file_config(
+        settings.per_file_task_enabled, settings.per_file_task_wanted, subgen_caps
+    )
+    per_file_forced = None  # built below, off-loop, once the probe entries are read
 
     # ── Bazarr: fan out across ALL instances; each wanted item is tagged with
     #    its source instance id (_bazarr_instance) for routing (#161 Phase 2).
@@ -2039,6 +2121,15 @@ async def build_coverage(
         # blocked). all_entries() returns the identical hydrated ProbeResults in a
         # SINGLE query; run it (query + JSON hydration) off-loop in a worker.
         entries = await asyncio.to_thread(probe_store.all_entries)
+        if per_file_cfg is not None:
+            # Only files with audio tracks can reach the per-file gate (it needs
+            # CoverageItem.audio_tracks, which comes from these same entries).
+            per_file_forced = await asyncio.to_thread(
+                _per_file_forced_map,
+                audio_lang_store,
+                subgen_caps,
+                [e.canonical_path for e in entries if getattr(e, "audio", None)],
+            )
         for entry in entries:
             path = entry.canonical_path
             sources["probe_cache"]["entries"] += 1
@@ -2218,6 +2309,8 @@ async def build_coverage(
                 ignore_forced_subtitles=ignore_forced,
                 ignore_image_subtitles=ignore_image,
                 subgen_output_task=subgen_task,
+                per_file_task=per_file_cfg,
+                per_file_forced=per_file_forced,
             )
             inst_ep_rows.append(item)
 
@@ -2250,6 +2343,8 @@ async def build_coverage(
                     ignore_forced_subtitles=ignore_forced,
                     ignore_image_subtitles=ignore_image,
                     subgen_output_task=subgen_task,
+                    per_file_task=per_file_cfg,
+                    per_file_forced=per_file_forced,
                 )
             )
         ep_rows.extend(inst_ep_rows)
@@ -2319,6 +2414,8 @@ async def build_coverage(
                 ignore_forced_subtitles=ignore_forced,
                 ignore_image_subtitles=ignore_image,
                 subgen_output_task=subgen_task,
+                per_file_task=per_file_cfg,
+                per_file_forced=per_file_forced,
             )
             inst_movie_rows.append(item)
 
@@ -2346,6 +2443,8 @@ async def build_coverage(
                     ignore_forced_subtitles=ignore_forced,
                     ignore_image_subtitles=ignore_image,
                     subgen_output_task=subgen_task,
+                    per_file_task=per_file_cfg,
+                    per_file_forced=per_file_forced,
                 )
             )
         movie_rows.extend(inst_movie_rows)
@@ -2438,6 +2537,8 @@ async def _add_bazarr_blind_synthetic_rows(
     ignore_image_subtitles: bool = False,
     # [#505] forwarded to _score so synthetic rows are gated too.
     subgen_output_task: str | None = None,
+    per_file_task: Any = None,
+    per_file_forced: Any = None,
 ) -> list[CoverageItem]:
     """Build synthetic CoverageItem rows for episodes Bazarr can't see —
     foreign-language series where the file metadata lies and Bazarr's
@@ -2644,6 +2745,8 @@ async def _add_bazarr_blind_synthetic_rows(
                 ignore_forced_subtitles=ignore_forced_subtitles,
                 ignore_image_subtitles=ignore_image_subtitles,
                 subgen_output_task=subgen_output_task,
+                per_file_task=per_file_task,
+                per_file_forced=per_file_forced,
             )
             new_rows.append(item)
             seen_ep_ids.add(ep_id)
@@ -2682,6 +2785,8 @@ async def _add_radarr_blind_movie_rows(
     ignore_image_subtitles: bool,
     # [#505] forwarded to _score so blind movie rows are gated too.
     subgen_output_task: str | None = None,
+    per_file_task: Any = None,
+    per_file_forced: Any = None,
 ) -> list[CoverageItem]:
     """Surface Radarr movies missing English subtitle coverage.
 
@@ -2758,6 +2863,8 @@ async def _add_radarr_blind_movie_rows(
             ignore_forced_subtitles=ignore_forced_subtitles,
             ignore_image_subtitles=ignore_image_subtitles,
             subgen_output_task=subgen_output_task,
+            per_file_task=per_file_task,
+            per_file_forced=per_file_forced,
         )
         new_rows.append(item)
         seen_files.add(file_canonical)

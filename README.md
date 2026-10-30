@@ -346,6 +346,8 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `SUBARR_RETIME_ENABLED` | `1` | Auto re-timing of generated subs for readability. Opt out with `0`. |
 | `SUBARR_VAD_ENABLED` | `1` | silero VAD for speech-aware clip selection. |
 | `SUBARR_FORCED_SEGMENT_ENABLED` | `0` | Experimental forced-segment generation. Off by default. |
+| `SUBARR_PER_FILE_TASK_ENABLED` | `0` | Choose Whisper transcribe vs translate per file from its audio language (#633). Needs subgen v4.38+. When set, the env value stays in effect; a Settings change is saved but not applied. |
+| `SUBARR_PER_FILE_TASK_WANTED` | _(empty)_ | Wanted subtitle languages for the per-file task rule, comma or space separated (e.g. `en,fr`). When set, the env value stays in effect; a Settings change is saved but not applied. |
 | `SONARR_PROPAGATE_AUDIO_LANG` | `0` | Write verified audio language back to Sonarr. Opt-in. |
 | `SUBARR_SUBGEN_WEBHOOK_ENABLED` | `1` | Accept subgen completion webhooks. |
 | `SUBARR_MULTILANG_CHUNK_MIN_PROB` | `0.5` | Confidence threshold for multilingual audio detection. |
