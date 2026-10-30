@@ -269,3 +269,55 @@ def test_ttl_runs_from_the_walk_not_from_the_answer(app_with_stub, media_root, c
     c.get(RELINK)  # answer at t=1299 on the t=1000 inventory
     clock[0] = 1000 + relink.NO_RULES_TTL_S + 1
     assert c.get(RELINK).json()["inventory"]["cached"] is False
+
+
+def _analysis(**reasons):
+    from subarr import relink
+
+    return relink.Analysis(rules=[], reasons={**dict.fromkeys(relink.REASONS, 0), **reasons}, examples={})
+
+
+def test_remember_stores_the_breakdown_with_the_same_inventory(clock):
+    from subarr import relink
+
+    inv = relink.Inventory({"a/b.mkv": 1}, frozenset())
+    an = _analysis(no_candidate=4)
+    relink.remember_no_rules("fp", inv, an)
+    got_inv, got_an = relink.cached_no_rules_analysis("fp")
+    assert got_inv is inv and got_an is an
+    assert relink.cached_no_rules("fp") is inv  # the old accessor is unchanged
+    assert relink.cached_no_rules_analysis("other") is None
+
+
+def test_remember_without_a_breakdown_still_hits(clock):
+    from subarr import relink
+
+    inv = relink.Inventory({}, frozenset())
+    relink.remember_no_rules("fp", inv)
+    assert relink.cached_no_rules_analysis("fp") == (inv, None)
+
+
+def test_a_second_remember_replaces_inventory_and_breakdown_together(clock):
+    from subarr import relink
+
+    first, second = relink.Inventory({"a/b.mkv": 1}, frozenset()), relink.Inventory({}, frozenset())
+    relink.remember_no_rules("fp", first, _analysis(no_candidate=1))
+    relink.remember_no_rules("fp", second, _analysis(needs_size=2))
+    inv, an = relink.cached_no_rules_analysis("fp")
+    assert inv is second and an.reasons["needs_size"] == 2 and an.reasons["no_candidate"] == 0
+
+
+def test_breakdown_is_not_remembered_for_a_walk_with_failed_libraries(clock):
+    from subarr import relink
+
+    relink.remember_no_rules("fp", relink.Inventory({}, frozenset({"x"})), _analysis(no_candidate=1))
+    assert relink.cached_no_rules_analysis("fp") is None
+
+
+def test_breakdown_expires_with_the_ttl(clock):
+    from subarr import relink
+
+    inv = relink.Inventory({}, frozenset(), walked_at=clock[0])
+    relink.remember_no_rules("fp", inv, _analysis())
+    clock[0] += relink.NO_RULES_TTL_S + 1
+    assert relink.cached_no_rules_analysis("fp") is None

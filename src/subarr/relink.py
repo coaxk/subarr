@@ -25,7 +25,8 @@ from typing import Literal
 from .log_safe import scrub
 
 RULE_MIN_VERIFIED = 3
-MIN_TAIL = 3
+MIN_TAIL = 3  # the shortest shared tail that may match on path alone
+MIN_TAIL_SIZED = 2  # ...and when the recorded size equals the current file size
 
 
 def split_head(canonical: str) -> tuple[str, list[str]]:
@@ -81,13 +82,37 @@ def _shared_tail(a: list[str], b: list[str]) -> int:
     return n
 
 
-def _unique_best(cands: list[tuple[int, str]]) -> tuple[int, str] | None:
-    """Longest shared tail wins; a tie for the longest is None."""
+def _unique_best(cands: list[tuple]) -> tuple | None:
+    """Longest shared tail (first tuple element) wins; a tie for the longest is None."""
     if not cands:
         return None
-    top = max(n for n, _ in cands)
+    top = max(c[0] for c in cands)
     best = [c for c in cands if c[0] == top]
     return best[0] if len(best) == 1 else None
+
+
+# Every stale path is counted under exactly one of these, the first that applies.
+REASONS = (
+    "failed_library",
+    "too_short",
+    "no_candidate",
+    "needs_size",
+    "size_changed",
+    "ambiguous",
+    "contested",
+    "collision",
+    "path_only_withheld",
+    "below_threshold",
+    "offered",
+)
+EXAMPLES_PER_REASON = 3
+
+
+@dataclass
+class Analysis:
+    rules: list[Rule]
+    reasons: dict[str, int]  # every key in REASONS is always present
+    examples: dict[str, list[str]]  # up to 3 sorted stale paths per reason, non-zero reasons only
 
 
 def build_rules(
@@ -100,48 +125,96 @@ def build_rules(
     failed_slugs: set[str],
 ) -> list[Rule]:
     """Offered rules only, sorted by verified count (desc) then heads."""
+    return analyse(
+        stale,
+        old_sizes=old_sizes,
+        verified=verified,
+        probed=probed,
+        inventory=inventory,
+        failed_slugs=failed_slugs,
+    ).rules
+
+
+def analyse(
+    stale: Iterable[str],
+    *,
+    old_sizes: dict[str, int | None],
+    verified: set[str],
+    probed: set[str],
+    inventory: dict[str, int],
+    failed_slugs: set[str],
+) -> Analysis:
+    """Offered rules (sorted by verified count desc, then heads) plus the reason
+    each distinct stale path is, or is not, in one of them.
+
+    A tail of MIN_TAIL segments may match on path alone; a tail of only
+    MIN_TAIL_SIZED may match when the stale row's recorded size equals the
+    current file's. A different-size 2-segment file is not evidence of the same
+    file, so it never counts as a mismatch against a rule."""
     index: dict[tuple[str, ...], list[tuple[str, list[str]]]] = defaultdict(list)
     for c in inventory:
         if _slug_of(c) in failed_slugs:
             continue
         _prefix, segs = split_head(c)
-        if len(segs) >= MIN_TAIL:
-            index[tuple(segs[-MIN_TAIL:])].append((c, segs))
+        if len(segs) >= MIN_TAIL_SIZED:
+            index[tuple(segs[-MIN_TAIL_SIZED:])].append((c, segs))
 
+    reason_of: dict[str, str] = {}
     # stale path -> (new path, old_head, new_head, how)
     matches: dict[str, tuple[str, str, str, str]] = {}
     mismatches: dict[tuple[str, str], int] = defaultdict(int)
 
     for s in sorted(set(stale)):
         if _slug_of(s) in failed_slugs:
+            reason_of[s] = "failed_library"
             continue
         s_prefix, s_segs = split_head(s)
-        if len(s_segs) < MIN_TAIL:
+        if len(s_segs) < MIN_TAIL_SIZED:
+            reason_of[s] = "too_short"
             continue
-        cands = [(c, segs) for c, segs in index.get(tuple(s_segs[-MIN_TAIL:]), []) if c != s]
+        cands = [(c, segs) for c, segs in index.get(tuple(s_segs[-MIN_TAIL_SIZED:]), []) if c != s]
         if not cands:
+            reason_of[s] = "no_candidate"
             continue
-        ranked = [(_shared_tail(s_segs, segs), c, segs) for c, segs in cands]
         size = old_sizes.get(s)
-        how = "path_only"
-        pool = ranked
+        has_third = len(s_segs) >= MIN_TAIL
+        third = s_segs[-MIN_TAIL] if has_third else None
         if isinstance(size, int):
-            filtered = [r for r in ranked if inventory[r[1]] == size]
-            if filtered:
-                pool, how = filtered, "size"
-            else:
-                best = _unique_best([(n, c) for n, c, _ in ranked])
-                if best is not None:
-                    n, c = best
-                    segs = next(sg for cc, sg in cands if cc == c)
-                    key = (_join_head(s_prefix, s_segs[:-n]), _join_head(split_head(c)[0], segs[:-n]))
-                    mismatches[key] += 1
+            pool = [(_shared_tail(s_segs, segs), c, segs) for c, segs in cands if inventory[c] == size]
+            how = "size"
+            if not pool:
+                reason_of[s] = "size_changed"
+                # Only a tail of MIN_TAIL+ is evidence the wrong-size file is the same file.
+                if has_third:
+                    long = [
+                        (_shared_tail(s_segs, segs), c, segs)
+                        for c, segs in cands
+                        if len(segs) >= MIN_TAIL and segs[-MIN_TAIL] == third
+                    ]
+                    best = _unique_best(long)
+                    if best is not None:
+                        n, c, segs = best
+                        key = (_join_head(s_prefix, s_segs[:-n]), _join_head(split_head(c)[0], segs[:-n]))
+                        mismatches[key] += 1
                 continue
-        best = _unique_best([(n, c) for n, c, _ in pool])
+        else:
+            if not has_third:
+                reason_of[s] = "needs_size"
+                continue
+            pool = [
+                (_shared_tail(s_segs, segs), c, segs)
+                for c, segs in cands
+                if len(segs) >= MIN_TAIL and segs[-MIN_TAIL] == third
+            ]
+            how = "path_only"
+            if not pool:
+                reason_of[s] = "needs_size"
+                continue
+        best = _unique_best(pool)
         if best is None:
+            reason_of[s] = "ambiguous"
             continue
-        n, c = best
-        segs = next(sg for cc, sg in cands if cc == c)
+        n, c, segs = best
         matches[s] = (
             c,
             _join_head(s_prefix, s_segs[:-n]),
@@ -157,12 +230,14 @@ def build_rules(
     grouped: dict[tuple[str, str], Rule] = {}
     for s, (new, oh, nh, how) in matches.items():
         if claims[new] > 1:
+            reason_of[s] = "contested"
             continue
         key = (oh, nh)
         rule = grouped.setdefault(key, Rule(old_head=oh, new_head=nh))
         collided = (new in verified) if s in verified else (new in probed)
         if collided:
             rule.collisions += 1
+            reason_of[s] = "collision"
             continue
         pair = Pair(old=s, new=new, how=how)  # type: ignore[arg-type]
         if how == "size":
@@ -175,14 +250,26 @@ def build_rules(
         rule.mismatches = mismatches.get(key, 0)
         if rule.path_only and (not rule.by_size or rule.mismatches):
             rule.path_only_withheld = len(rule.path_only)
+            for p in rule.path_only:
+                reason_of[p.old] = "path_only_withheld"
             rule.path_only = []
         rule.by_size.sort(key=lambda p: p.old)
         rule.path_only.sort(key=lambda p: p.old)
         rule.verified = sum(1 for p in rule.included if p.old in verified)
-        if rule.verified >= RULE_MIN_VERIFIED:
+        is_offered = rule.verified >= RULE_MIN_VERIFIED
+        for p in rule.included:
+            reason_of[p.old] = "offered" if is_offered else "below_threshold"
+        if is_offered:
             out.append(rule)
     out.sort(key=lambda r: (-r.verified, r.old_head, r.new_head))
-    return out
+
+    reasons = dict.fromkeys(REASONS, 0)
+    by_reason: dict[str, list[str]] = defaultdict(list)
+    for path, reason in reason_of.items():
+        reasons[reason] += 1
+        by_reason[reason].append(path)
+    examples = {r: sorted(by_reason[r])[:EXAMPLES_PER_REASON] for r in REASONS if reasons[r]}
+    return Analysis(rules=out, reasons=reasons, examples=examples)
 
 
 # ─── Inventory of current files ─────────────────────────────────────
@@ -282,7 +369,7 @@ def get_inventory(*, max_age_s: float = 300.0) -> Inventory:
 NO_RULES_TTL_S = 6 * 3600.0
 
 _no_rules_lock = threading.Lock()
-_no_rules: tuple[tuple, str, float, Inventory] | None = None
+_no_rules: tuple[tuple, str, float, Inventory, Analysis | None] | None = None
 
 
 def analysis_fingerprint(
@@ -301,24 +388,39 @@ def analysis_fingerprint(
     return h.hexdigest()
 
 
-def cached_no_rules(fingerprint: str, *, max_age_s: float = NO_RULES_TTL_S) -> Inventory | None:
-    """The inventory of the walk that found no rules for these inputs, or None."""
+def _no_rules_hit(fingerprint: str, max_age_s: float):
     key = _library_key()
     with _no_rules_lock:
         hit = _no_rules
     if hit is None or hit[0] != key or hit[1] != fingerprint or _clock() - hit[2] >= max_age_s:
         return None
-    return hit[3]
+    return hit
 
 
-def remember_no_rules(fingerprint: str, inv: Inventory) -> None:
+def cached_no_rules(fingerprint: str, *, max_age_s: float = NO_RULES_TTL_S) -> Inventory | None:
+    """The inventory of the walk that found no rules for these inputs, or None."""
+    hit = _no_rules_hit(fingerprint, max_age_s)
+    return None if hit is None else hit[3]
+
+
+def cached_no_rules_analysis(
+    fingerprint: str, *, max_age_s: float = NO_RULES_TTL_S
+) -> tuple[Inventory, Analysis | None] | None:
+    """The inventory AND breakdown from one remembered entry, so the two can
+    never come from different remembers. The breakdown is None when the entry
+    was stored without one."""
+    hit = _no_rules_hit(fingerprint, max_age_s)
+    return None if hit is None else (hit[3], hit[4])
+
+
+def remember_no_rules(fingerprint: str, inv: Inventory, analysis: Analysis | None = None) -> None:
     """A walk with an unreadable library is never remembered: rows may map onto
     that library once it reads again, and that does not change the stale set."""
     global _no_rules
     if inv.failed_slugs:
         return
     with _no_rules_lock:
-        _no_rules = (_library_key(), fingerprint, inv.walked_at, inv)
+        _no_rules = (_library_key(), fingerprint, inv.walked_at, inv, analysis)
 
 
 def invalidate_inventory() -> None:
