@@ -1613,6 +1613,127 @@ function ForcedSegmentCard() {
 }
 
 
+// #633 per-file transcribe/translate. Pure render-decision helpers (unit-tested).
+// The field is free text: split on commas and whitespace, then POSTed.
+export function splitWantedLanguages(text) {
+  return String(text || '').split(/[\s,]+/).filter(Boolean);
+}
+
+export function derivePerFileTaskView(status) {
+  const s = status || {};
+  const available = !!s.available;
+  return {
+    enabled: !!s.enabled,
+    wantedText: Array.isArray(s.wanted) ? s.wanted.join(', ') : '',
+    available,
+    disabled: !available,
+    reason: available ? null : (s.unavailable_reason || 'not available on the connected subgen'),
+  };
+}
+
+// Shown on the subgen panel. GET /api/per-file-task/config says whether the
+// connected subgen can do it (a per-request task AND an advertised preferred
+// audio language list); the choice is persisted by POST and kept even while it
+// is unavailable.
+export function PerFileTaskCard() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [enabled, setEnabled] = useState(false);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [saved, setSaved] = useState(false);
+
+  const apply = (next) => {
+    const v = derivePerFileTaskView(next);
+    setStatus(next);
+    setEnabled(v.enabled);
+    setText(v.wantedText);
+  };
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/per-file-task/config', { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        if (alive) apply(body);
+      } catch (e) {
+        if (alive) setStatus({ error: e.message });
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const save = async () => {
+    setBusy(true); setError(null); setSaved(false);
+    try {
+      const r = await fetch('/api/per-file-task/config', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, wanted: splitWantedLanguages(text) }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const b = await r.json(); if (b && b.detail) detail = String(b.detail); } catch (e) { /* keep status text */ }
+        setError(detail);
+        return;
+      }
+      apply(await r.json());
+      setSaved(true);
+    } catch (e) {
+      setError(e.message);
+    } finally { setBusy(false); }
+  };
+
+  const muted = { fontSize: 'var(--text-sm)', color: 'var(--fg-2)' };
+  if (loading) return <SectionCard label="Transcribe or translate per file"><div style={muted}>Checking…</div></SectionCard>;
+  if (status?.error) return <SectionCard label="Transcribe or translate per file"><div style={muted}>Could not query: {status.error}</div></SectionCard>;
+
+  const view = derivePerFileTaskView(status);
+  return (
+    <SectionCard label="Transcribe or translate per file">
+      <div style={{ ...muted, lineHeight: 1.5 }}>
+        Transcribes files whose audio is a wanted language, translates the rest to English. Uses the same audio track subgen will pick.
+      </div>
+      {view.reason && (
+        <div role="note" style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.20)', borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-sm)', color: 'var(--fg-1)' }}>
+          {view.reason}
+        </div>
+      )}
+      <Row label="Translate audio that is not a wanted language into English"
+        control={<Toggle on={enabled} busy={view.disabled || busy} label="Translate audio that is not a wanted language into English"
+          onToggle={() => { if (!view.disabled) { setEnabled(!enabled); setSaved(false); } }} />} />
+      <Row label="Wanted subtitle languages (e.g. en, es)"
+        control={
+          <input
+            type="text"
+            aria-label="Wanted subtitle languages"
+            value={text}
+            disabled={view.disabled || busy}
+            onChange={(e) => { setText(e.target.value); setSaved(false); }}
+            placeholder="en, es"
+            style={{
+              width: 220, padding: '6px 10px', background: 'var(--bg-0)', border: 'var(--border)',
+              borderRadius: 'var(--radius-md)', color: 'var(--fg-0)', fontSize: 'var(--text-sm)',
+            }} />} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button className="btn sm violet" onClick={save} disabled={view.disabled || busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {saved && <span style={muted}>Saved</span>}
+        {error && <span role="alert" style={{ ...muted, color: 'var(--error-400, #f87171)' }}>{error}</span>}
+      </div>
+    </SectionCard>
+  );
+}
+
+
 function IntegrationPanel({ rail, refetchHealth }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -1728,6 +1849,9 @@ function IntegrationPanel({ rail, refetchHealth }) {
           <Row label="compat mode" value={i.compat_mode ? 'on' : 'off'} hint="when on, subarr serialises scans for vanilla subgens" />
         </SectionCard>
       )}
+
+      {/* #633 per-file transcribe/translate (subgen panel only) */}
+      {rail.id === 'subgen' && <PerFileTaskCard />}
 
       {/* #232 vision capability card — only on the Ollama panel.
           Shows whether the vision pre-filter is currently active,
