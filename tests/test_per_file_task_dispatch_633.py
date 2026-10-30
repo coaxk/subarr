@@ -786,3 +786,30 @@ async def test_build_coverage_never_touches_the_store_when_inactive(coverage_bun
             bundle, use_tautulli=False, probe_store=probes, audio_lang_store=store, subgen_caps=_caps()
         )
     assert store.threads == []
+
+
+# ---- end to end: the real build_coverage threads the forced map into _score ---
+
+
+@pytest.mark.asyncio
+async def test_build_coverage_row_uses_the_stored_verdict_as_source_language(coverage_bundle):
+    """An eng-tagged file with a stored ja verdict, W={en}: the row must be
+    judged as translate (ja audio). Fails if build_coverage stops handing the
+    forced-language lookup to _score (the file would be judged eng audio)."""
+    import test_coverage_characterization as cc
+    from subarr.coverage_engine import build_coverage
+
+    path = "Movies/Dune (2021)/Dune.2021.mkv"
+    store = _ThreadSpyStore({path: "ja"})
+    probes = _AllEntriesProbes([_probe([("eng", True)], path=path)])
+    bundle = coverage_bundle(sonarr_handler=cc._sonarr, bazarr_handler=cc._bazarr, radarr_handler=cc._radarr)
+    with _settings(True, ["en"]):
+        report = await build_coverage(
+            bundle, use_tautulli=False, probe_store=probes, audio_lang_store=store, subgen_caps=_caps()
+        )
+    rows = [r for r in report.to_dict()["items"] if r.get("file_canonical_path") == path]
+    assert rows, [r.get("file_canonical_path") for r in report.to_dict()["items"]]
+    reasons = rows[0]["score_reasons"]
+    assert "per-file task: translate (ja audio)" in reasons, reasons
+    assert not any("subgen cannot produce" in r for r in reasons), reasons
+    assert rows[0].get("wanted_lang_subgen_cannot_produce") in (False, None)
