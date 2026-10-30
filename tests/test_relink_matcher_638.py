@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from subarr.relink import MIN_TAIL, RULE_MIN_VERIFIED, Pair, Rule, build_rules, split_head
+from subarr.relink import MIN_TAIL, MIN_TAIL_SIZED, RULE_MIN_VERIFIED, Pair, Rule, build_rules, split_head
 
 
 def _files(prefix: str, n: int = 3, tag: str = "A") -> list[str]:
@@ -34,6 +34,7 @@ def _remap(paths, old, new):
 def test_constants():
     assert RULE_MIN_VERIFIED == 3
     assert MIN_TAIL == 3
+    assert MIN_TAIL_SIZED == 2
 
 
 def test_split_head():
@@ -196,16 +197,41 @@ def test_threshold_boundary():
     assert len(rules[0].included) == 4
 
 
-def test_short_paths_never_match():
-    stale = [f"Show{i}/e.mkv" for i in range(4)]
-    inv = {f"X/Show{i}/e.mkv": 1 for i in range(4)}
+def test_short_paths_follow_the_sized_contract():
+    """Was: 2 segments never match. Now: 2 match only on an equal size, 1 never."""
+    cases = [
+        ([f"Show{i}/e.mkv" for i in range(4)], {f"X/Show{i}/e.mkv": 1 for i in range(4)}, ("", "X")),
+        # The @slug head is never a tail segment: 2 segments after removing it.
+        (
+            [f"@disk2/Show{i}/e.mkv" for i in range(4)],
+            {f"Show{i}/e.mkv": 1 for i in range(4)},
+            ("@disk2", ""),
+        ),
+        (
+            [f"@disk2/Show{i}/e.mkv" for i in range(4)],
+            {f"X/Show{i}/e.mkv": 1 for i in range(4)},
+            ("@disk2", "X"),
+        ),
+    ]
+    for stale, inv, heads in cases:
+        # Unsized: never a match on path alone.
+        assert _build(stale, inv, old_sizes={}) == []
+        assert _build(stale, inv, old_sizes={s: None for s in stale}) == []
+        # Sized and equal: matches, by size.
+        rules = _build(stale, inv, old_sizes={s: 1 for s in stale})
+        assert [(r.old_head, r.new_head) for r in rules] == [heads]
+        assert len(rules[0].by_size) == 4 and rules[0].path_only == []
+        # Sized but different: no match.
+        assert _build(stale, inv, old_sizes={s: 2 for s in stale}) == []
+
+
+def test_one_segment_paths_never_match_even_sized():
+    stale = [f"e{i}.mkv" for i in range(4)]
+    inv = {f"X/e{i}.mkv": 1 for i in range(4)}
     assert _build(stale, inv, old_sizes={s: 1 for s in stale}) == []
-    # The @slug head is never a tail segment: 2 segments after removing it.
-    stale = [f"@disk2/Show{i}/e.mkv" for i in range(4)]
-    inv = {f"Show{i}/e.mkv": 1 for i in range(4)}
-    assert _build(stale, inv, old_sizes={s: 1 for s in stale}) == []
-    stale = [f"@disk2/Show{i}/e.mkv" for i in range(4)]
-    inv = {f"X/Show{i}/e.mkv": 1 for i in range(4)}
+    # A 1-segment inventory file (after its slug) is not indexed either.
+    stale = [f"X/e{i}.mkv" for i in range(4)]
+    inv = {f"@m/e{i}.mkv": 1 for i in range(4)}
     assert _build(stale, inv, old_sizes={s: 1 for s in stale}) == []
 
 
