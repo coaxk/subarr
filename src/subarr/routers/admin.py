@@ -321,14 +321,18 @@ class RelinkBody(BaseModel):
     new_head: str
 
 
-def _relink_analysis(request: Request):
-    """[#638] (rules, stale_count, inventory). Reads only; run in a thread.
+def _relink_analysis(request: Request, *, use_no_rules_cache: bool):
+    """[#638] (rules, stale_count, inventory, cached). Reads only; run in a thread.
 
     Stale = known paths (both stores) that `_path_exists` says are gone. A rule
     needs RULE_MIN_VERIFIED stale verdicts, so below that no rule is possible
     and the library walk is skipped: an install with a deleted file or two
     never pays for a walk on every Review page load. The returned inventory is
-    None when the walk was skipped, so the caller can say so."""
+    None when the walk was skipped, so the caller can say so.
+
+    [#641] Above that bar, a "no rules" answer for the same inputs is reused
+    (`cached` True, inventory = the walk that produced it). Apply passes
+    use_no_rules_cache=False so it never inherits the cache's one blind spot."""
     from .. import relink
 
     stores = _orphan_stores(request)
@@ -338,8 +342,13 @@ def _relink_analysis(request: Request):
     probed = set(ps.all_paths()) if ps is not None else set()
     stale = sorted(p for p in (verified | probed) if not _path_exists(p))
     if sum(1 for p in stale if p in verified) < relink.RULE_MIN_VERIFIED:
-        return [], len(stale), None
+        return [], len(stale), None, False
     old_sizes = ps.sizes_for(stale) if ps is not None else {}
+    fingerprint = relink.analysis_fingerprint(stale, verified=verified, probed=probed, old_sizes=old_sizes)
+    if use_no_rules_cache:
+        hit = relink.cached_no_rules(fingerprint)
+        if hit is not None:
+            return [], len(stale), hit, True
     inv = relink.get_inventory()
     rules = relink.build_rules(
         stale,
@@ -349,7 +358,9 @@ def _relink_analysis(request: Request):
         inventory=inv.files,
         failed_slugs=set(inv.failed_slugs),
     )
-    return rules, len(stale), inv
+    if not rules:
+        relink.remember_no_rules(fingerprint, inv)
+    return rules, len(stale), inv, False
 
 
 def _pair_json(p) -> dict:
@@ -376,12 +387,13 @@ def _rule_json(rule) -> dict:
 
 
 def _relink_dry_run(request: Request) -> dict:
-    rules, stale, inv = _relink_analysis(request)
+    rules, stale, inv, cached = _relink_analysis(request, use_no_rules_cache=True)
     return {
         "rules": [_rule_json(r) for r in rules],
         "stale": stale,
         "inventory": {
             "walked": inv is not None,
+            "cached": cached,
             "files": len(inv.files) if inv is not None else 0,
             "unreadable_libraries": sorted(inv.failed_slugs) if inv is not None else [],
             "walk_s": round(inv.walk_s, 3) if inv is not None else 0.0,
@@ -394,7 +406,7 @@ def _relink_apply(request: Request, old_head: str, new_head: str) -> dict:
     from ..log_safe import scrub
     from ..paths import canonical_to_fs
 
-    rules, _stale, _inv = _relink_analysis(request)
+    rules, _stale, _inv, _cached = _relink_analysis(request, use_no_rules_cache=False)
     rule = next((r for r in rules if r.old_head == old_head and r.new_head == new_head), None)
     if rule is None:
         return {

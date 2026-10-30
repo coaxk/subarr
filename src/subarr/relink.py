@@ -11,6 +11,7 @@ and is the only part that touches the filesystem.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -194,6 +195,7 @@ class Inventory:
     files: dict[str, int]
     failed_slugs: frozenset[str]
     walk_s: float = 0.0
+    walked_at: float = 0.0  # _clock() when the walk finished; the #641 TTL runs from here
 
 
 def walk_inventory() -> Inventory:
@@ -234,29 +236,94 @@ def walk_inventory() -> Inventory:
         files.update(found)
     walk_s = time.monotonic() - started
     _log.info("relink inventory: %d files, %d failed libraries, %.1fs", len(files), len(failed), walk_s)
-    return Inventory(files=files, failed_slugs=frozenset(failed), walk_s=walk_s)
+    return Inventory(files=files, failed_slugs=frozenset(failed), walk_s=walk_s, walked_at=_clock())
 
+
+_clock = time.monotonic
 
 _cache_lock = threading.Lock()
 _cache: tuple[tuple, float, Inventory] | None = None
+
+
+def _library_key() -> tuple:
+    from .config import settings
+
+    return tuple((lib.slug, str(lib.fs_root)) for lib in settings.libraries)
 
 
 def get_inventory(*, max_age_s: float = 300.0) -> Inventory:
     """Cached walk. The lock is held ACROSS the walk so concurrent callers wait
     for one walk instead of each starting their own."""
     global _cache
-    from .config import settings
-
-    key = tuple((lib.slug, str(lib.fs_root)) for lib in settings.libraries)
+    key = _library_key()
     with _cache_lock:
-        if _cache is not None and _cache[0] == key and time.monotonic() - _cache[1] < max_age_s:
+        if _cache is not None and _cache[0] == key and _clock() - _cache[1] < max_age_s:
             return _cache[2]
         inv = walk_inventory()
-        _cache = (key, time.monotonic(), inv)
+        _cache = (key, _clock(), inv)
         return inv
 
 
+# ─── #641: remembered "no rules" outcome ────────────────────────────
+#
+# Stale rows that are ordinary renames (an upgrade in place) never form a rule,
+# yet each one keeps the stale count above RULE_MIN_VERIFIED, so every Review
+# load walked the library (29.8 s for 5,956 files, 0 rules, on the
+# maintainer's install). A no-rules answer can only change when its inputs do:
+# the fingerprint covers the stale set and each stale path's old size, plus the
+# WHOLE verdict and probe sets (collisions read them at the new paths); the
+# library key covers the roots. The TTL, counted from the walk, bounds the one
+# input left: the inventory itself. Files appearing at a new path, or a
+# duplicate copy disappearing (which breaks a tie in `_unique_best`), can each
+# turn "no rules" into a rule with every key input unchanged. A head-exists
+# pre-filter was rejected: a library split moves `TV/Show/S1/e.mkv` to
+# `@anime/Show/S1/e.mkv` while `TV` still exists, which is exactly a relink.
+
+NO_RULES_TTL_S = 6 * 3600.0
+
+_no_rules_lock = threading.Lock()
+_no_rules: tuple[tuple, str, float, Inventory] | None = None
+
+
+def analysis_fingerprint(
+    stale: Iterable[str], *, verified: set[str], probed: set[str], old_sizes: dict[str, int | None]
+) -> str:
+    """Stable digest of every `build_rules` input except the inventory."""
+    h = hashlib.sha256()
+    for section in (
+        (f"{p}\x1f{old_sizes.get(p)}" for p in sorted(set(stale))),
+        sorted(verified),
+        sorted(probed),
+    ):
+        for item in section:
+            h.update(f"{item}\x1e".encode())
+        h.update(b"\x1d")
+    return h.hexdigest()
+
+
+def cached_no_rules(fingerprint: str, *, max_age_s: float = NO_RULES_TTL_S) -> Inventory | None:
+    """The inventory of the walk that found no rules for these inputs, or None."""
+    key = _library_key()
+    with _no_rules_lock:
+        hit = _no_rules
+    if hit is None or hit[0] != key or hit[1] != fingerprint or _clock() - hit[2] >= max_age_s:
+        return None
+    return hit[3]
+
+
+def remember_no_rules(fingerprint: str, inv: Inventory) -> None:
+    """A walk with an unreadable library is never remembered: rows may map onto
+    that library once it reads again, and that does not change the stale set."""
+    global _no_rules
+    if inv.failed_slugs:
+        return
+    with _no_rules_lock:
+        _no_rules = (_library_key(), fingerprint, inv.walked_at, inv)
+
+
 def invalidate_inventory() -> None:
-    global _cache
+    global _cache, _no_rules
     with _cache_lock:
         _cache = None
+    with _no_rules_lock:
+        _no_rules = None
