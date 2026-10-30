@@ -572,12 +572,28 @@ async def lifespan(app_: FastAPI):
             caps=getattr(app_.state, "subgen_caps", None),
             probe_store=getattr(app_.state, "probe_store", None),
         )
-        scan = app_.state.scans.create([job.canonical_path], reverse=False)
+        # #633: the Whisper task per file (a job's own `task` wins; a folder may
+        # expand to several paths). Off the loop: it stats files and reads the
+        # probe store. Inert, and byte-for-byte today's submit, unless the
+        # setting is on and the connected subgen advertises what it needs.
+        from .submission_language import plan_job_dispatch
+
+        paths, path_tasks = await asyncio.to_thread(
+            plan_job_dispatch,
+            job,
+            decision,
+            caps=getattr(app_.state, "subgen_caps", None),
+            probe_store=getattr(app_.state, "probe_store", None),
+            enabled=settings.per_file_task_enabled,
+            wanted=settings.per_file_task_wanted,
+        )
+        scan = app_.state.scans.create(paths, reverse=False)
         app_.state.runner.start(
             scan,
             audio_language_override=decision.override,
             ignore_forced=job.ignore_forced,
             bypass_skip=decision.bypass_skip,
+            path_tasks=path_tasks,
         )
         # Full provenance (series_id carried on the job) so completion_watcher
         # fires Bazarr's scan-disk task the moment subgen finishes (#66/#116 s6).
@@ -1269,6 +1285,7 @@ app.include_router(r_vad.router)
 app.include_router(r_arena.router)
 app.include_router(r_audio_audit.router)
 app.include_router(r_forced_segment.router)
+app.include_router(r_per_file_task.router)
 app.include_router(r_aftercare.router)
 app.include_router(r_subgen_setup.router)
 
@@ -1285,7 +1302,6 @@ def health() -> dict:
 @app.get("/api/health/tasks")
 def health_tasks() -> dict:
     """#157: per-loop background-task health. Powers the header pill (any
-app.include_router(r_per_file_task.router)
     unhealthy) + the Health page (per-task status, last error, traceback).
     #234: each task carries `can_run_now` so the page shows a Run-now button
     on the loops that support an on-demand trigger."""

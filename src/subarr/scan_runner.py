@@ -128,6 +128,10 @@ class ScanRunner:
         # /batch (transcribe a forced-only file anyway). In-memory, same lifetime
         # as _overrides — lost on restart, but so is the in-flight scan.
         self._ignore_forced: set[str] = set()
+        # #633: scan id -> canonical path -> Whisper task for that path. Not
+        # `_tasks`, which already holds the asyncio Tasks. In memory with the
+        # same lifetime as _overrides.
+        self._path_tasks: dict[str, dict[str, str | None]] = {}
         # [#458 follow-on] scans allowed to overrule subgen's skip heuristics
         # entirely -- the image-only-subtitle class, which SKIP_IF_AUDIO_LANGUAGES
         # otherwise refuses forever.
@@ -196,7 +200,10 @@ class ScanRunner:
         audio_language_override: str | None = None,
         ignore_forced: bool = False,
         bypass_skip: bool = False,
+        path_tasks: dict[str, str | None] | None = None,
     ) -> None:
+        if path_tasks:
+            self._path_tasks[scan.id] = dict(path_tasks)
         if audio_language_override:
             self._overrides[scan.id] = audio_language_override
         if ignore_forced:
@@ -209,6 +216,7 @@ class ScanRunner:
             lambda t, sid=scan.id: (
                 self._tasks.pop(sid, None),
                 self._overrides.pop(sid, None),
+                self._path_tasks.pop(sid, None),
                 self._ignore_forced.discard(sid),
                 self._bypass_skip.discard(sid),
             )
@@ -272,10 +280,15 @@ class ScanRunner:
             try:
                 directory = canonical_to_subgen_batch(path)
                 override = self._overrides.get(scan_id)
+                # #633: caps can refresh mid-scan, so the capability is read NOW.
+                task = self._path_tasks.get(scan_id, {}).get(path)
+                if task is not None and not getattr(self._caps_provider(), "per_request_task", False):
+                    task = None
                 status_code, body = await self._subgen.batch(
                     directory,
                     reverse=scan.reverse,
                     audio_language_override=override,
+                    task=task,
                     ignore_forced=scan_id in self._ignore_forced,
                     bypass_skip=scan_id in self._bypass_skip,
                 )
