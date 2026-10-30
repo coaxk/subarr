@@ -55,8 +55,11 @@ def test_two_tail_wrong_size_is_not_a_mismatch():
     inv = {f"S{i}/E/s{i}.mkv": 5 for i in range(4)}
     sizes = {s: 5 for s in stale[:3]}
     sizes[stale[3]] = None  # a path-only pair under the same rule
-    odd = "Old/Z/q.mkv"  # sized, only candidate is a 2-tail file of another size
-    inv["Q/Z/q.mkv"] = 6
+    # Sized, and its only candidate is a 2-tail file of another size whose
+    # heads are the rule's own ("Old", ""): if it counted as a mismatch it
+    # would land on this rule and withhold the path-only pair.
+    odd = "Old/Z/q.mkv"
+    inv["Z/q.mkv"] = 6
     sizes[odd] = 5
     rules = _build([*stale, odd], inv, old_sizes=sizes)
     assert len(rules) == 1
