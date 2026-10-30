@@ -1673,6 +1673,15 @@ def _per_file_forced_lookup(audio_lang_store: Any, subgen_caps: Any):
     return lookup
 
 
+def _per_file_forced_map(audio_lang_store: Any, subgen_caps: Any, paths: Any):
+    """[#633] Resolve the feeder's override for every path ONCE and return a
+    dict-backed lookup, so `_score` (run per row on the event loop) never touches
+    the store. Run this in a worker thread: it is one SQLite read per path."""
+    live = _per_file_forced_lookup(audio_lang_store, subgen_caps)
+    resolved = {p: live(p) for p in paths}
+    return lambda canonical: resolved.get(canonical)
+
+
 def _score(
     item: CoverageItem,
     signals: dict[str, dict],
@@ -2011,7 +2020,7 @@ async def build_coverage(
     per_file_cfg = _active_per_file_config(
         settings.per_file_task_enabled, settings.per_file_task_wanted, subgen_caps
     )
-    per_file_forced = _per_file_forced_lookup(audio_lang_store, subgen_caps) if per_file_cfg else None
+    per_file_forced = None  # built below, off-loop, once the probe entries are read
 
     # ── Bazarr: fan out across ALL instances; each wanted item is tagged with
     #    its source instance id (_bazarr_instance) for routing (#161 Phase 2).
@@ -2112,6 +2121,15 @@ async def build_coverage(
         # blocked). all_entries() returns the identical hydrated ProbeResults in a
         # SINGLE query; run it (query + JSON hydration) off-loop in a worker.
         entries = await asyncio.to_thread(probe_store.all_entries)
+        if per_file_cfg is not None:
+            # Only files with audio tracks can reach the per-file gate (it needs
+            # CoverageItem.audio_tracks, which comes from these same entries).
+            per_file_forced = await asyncio.to_thread(
+                _per_file_forced_map,
+                audio_lang_store,
+                subgen_caps,
+                [e.canonical_path for e in entries if getattr(e, "audio", None)],
+            )
         for entry in entries:
             path = entry.canonical_path
             sources["probe_cache"]["entries"] += 1

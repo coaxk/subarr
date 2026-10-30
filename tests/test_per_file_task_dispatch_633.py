@@ -702,3 +702,87 @@ def test_plan_without_an_override_still_splits_the_same_folder(client, media_roo
     with _settings(True, ["en"]):
         _submit(client, job)
     assert sorted(t for _, t in _wait_batches(_REC, 2)) == ["transcribe", "translate"]
+
+
+# ---- the gate's forced map is built once, off the event loop (review fix) -----
+
+
+class _ThreadSpyStore(_Store):
+    def __init__(self, mapping):
+        super().__init__(mapping)
+        self.threads = []
+
+    def get_all_as_lookup(self):
+        return {}
+
+    def get_all_sources_as_lookup(self):
+        return {}
+
+    def list_series_intents(self):
+        return []
+
+    def get_all_multi_as_lookup(self):
+        return {}
+
+    def get(self, canonical, follow_replaced=False):
+        import threading
+
+        self.threads.append(threading.get_ident())
+        return super().get(canonical, follow_replaced=follow_replaced)
+
+
+class _AllEntriesProbes:
+    def __init__(self, probes):
+        self.probes = probes
+
+    def all_entries(self):
+        return list(self.probes)
+
+    def failed_paths(self):
+        return []
+
+    def get(self, canonical, *a, **k):
+        return None
+
+
+def test_forced_map_is_precomputed_and_lookup_never_touches_the_store():
+    from subarr.coverage_engine import _per_file_forced_map
+
+    store = _ThreadSpyStore({"TV/S/a.mkv": "fr"})
+    lookup = _per_file_forced_map(store, _caps(), ["TV/S/a.mkv", "TV/S/b.mkv"])
+    seen = len(store.threads)
+    assert seen == 2
+    assert lookup("TV/S/a.mkv") == "fr" and lookup("TV/S/b.mkv") is None
+    assert lookup("TV/S/unknown.mkv") is None
+    assert len(store.threads) == seen, "lookup is dict-backed"
+
+
+@pytest.mark.asyncio
+async def test_build_coverage_resolves_forced_off_loop_when_active(coverage_bundle):
+    import threading
+
+    from subarr.coverage_engine import build_coverage
+
+    store = _ThreadSpyStore({"TV/S/a.mkv": "fr"})
+    probes = _AllEntriesProbes([_probe([("eng", True)], path="TV/S/a.mkv")])
+    bundle = coverage_bundle()
+    with _settings(True, ["en"]):
+        await build_coverage(
+            bundle, use_tautulli=False, probe_store=probes, audio_lang_store=store, subgen_caps=_caps()
+        )
+    assert store.threads, "active config: the map was built"
+    assert threading.get_ident() not in store.threads
+
+
+@pytest.mark.asyncio
+async def test_build_coverage_never_touches_the_store_when_inactive(coverage_bundle):
+    from subarr.coverage_engine import build_coverage
+
+    store = _ThreadSpyStore({"TV/S/a.mkv": "fr"})
+    probes = _AllEntriesProbes([_probe([("eng", True)], path="TV/S/a.mkv")])
+    bundle = coverage_bundle()
+    with _settings(False, ["en"]):
+        await build_coverage(
+            bundle, use_tautulli=False, probe_store=probes, audio_lang_store=store, subgen_caps=_caps()
+        )
+    assert store.threads == []
