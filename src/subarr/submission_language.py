@@ -312,9 +312,10 @@ def plan_job_dispatch(
         canon_files = [fs_to_canonical(f) for f in files]
     except (PathOutsideRootError, ValueError):
         return [canonical], {canonical: None}
-    # A folder submission sends no per-file override today, so `forced` must be
-    # None here to match what is actually sent.
-    tasks = {c: one(c, None, quiet=True) for c in canon_files}
+    # The runner sends the JOB's override (decision.override) on every /batch of a
+    # folder scan, so subgen forces that language for each file. Plan with the same
+    # value, or the task would be chosen for a different source language.
+    tasks = {c: one(c, decision.override, quiet=True) for c in canon_files}
     distinct = set(tasks.values())
     if len(distinct) == 1:
         (only,) = distinct

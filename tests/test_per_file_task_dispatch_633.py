@@ -660,3 +660,45 @@ def test_file_job_uses_the_override_being_sent(client, media_root):
     with _settings(True, ["en"]):
         _submit(client, job)
     assert [t for _, t in _wait_batches(_REC, 1)] == ["translate"]
+
+
+# ---- folders carry the job's override to EVERY path (review fix) --------------
+
+
+def test_folder_under_a_declared_series_intent_plans_what_the_file_job_plans(client, media_root):
+    """resolve_for_job on a FOLDER can return a series-intent override, and the
+    runner sends it on every /batch of the scan, so subgen forces that language
+    for each file. The plan must use the same forced language."""
+    st = _folder(client, media_root, {"a.mkv": [("eng", True)]})
+    st.audio_lang = _Store({"TV/Dir": "ja"})  # series declared ja; files tagged eng
+    job = _enqueue(st, "TV/Dir")
+    with _settings(True, ["en"]):
+        _submit(client, job)
+    folder_task = [t for _, t in _wait_batches(_REC, 1)]
+    assert folder_task == ["translate"], "forced ja, only en wanted"
+
+    _REC.batches.clear()
+    st.audio_lang = _Store({"TV/Dir/a.mkv": "ja"})
+    file_job = _enqueue(st, "TV/Dir/a.mkv")
+    with _settings(True, ["en"]):
+        _submit(client, file_job)
+    assert [t for _, t in _wait_batches(_REC, 1)] == folder_task
+
+
+def test_folder_job_carrying_a_stored_override_uses_it_for_every_file(client, media_root):
+    st = _folder(client, media_root, {"a.mkv": [("eng", True)], "b.mkv": [("jpn", True)]})
+    job = _enqueue(st, "TV/Dir", audio_language_override="ja")
+    with _settings(True, ["en"]):
+        _submit(client, job)
+    got = _wait_batches(_REC, 1)
+    assert len(got) == 1, "uniform once the override applies: both files translate"
+    assert got[0][1] == "translate"
+    assert got[0][0].rstrip("/").endswith("TV/Dir")
+
+
+def test_plan_without_an_override_still_splits_the_same_folder(client, media_root):
+    st = _folder(client, media_root, {"a.mkv": [("eng", True)], "b.mkv": [("jpn", True)]})
+    job = _enqueue(st, "TV/Dir")
+    with _settings(True, ["en"]):
+        _submit(client, job)
+    assert sorted(t for _, t in _wait_batches(_REC, 2)) == ["transcribe", "translate"]
