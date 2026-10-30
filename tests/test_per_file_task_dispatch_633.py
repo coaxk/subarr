@@ -176,12 +176,13 @@ def test_resolve_task_for_file_logs_one_info_line(caplog):
 def test_gate_and_dispatch_agree_on_the_task(case, wanted):
     from subarr.coverage_engine import CoverageItem, _score
     from subarr.per_file_task import active_config
+    from subarr.subgen_client import _parse_preferred_audio_languages
     from subarr.submission_language import resolve_task_for_file
 
     path = "TV/Show/ep.mkv"
     tracks = [(t, d) for t, d in case["tracks"]]
     caps = _caps(
-        preferred_audio_languages=tuple(_p1(p) for p in case["preferred"]),
+        preferred_audio_languages=_parse_preferred_audio_languages(case["preferred_advertised"])[0],
         force_detected_language_to=_p1(case["force_detected"]),
     )
     forced = case["forced"]

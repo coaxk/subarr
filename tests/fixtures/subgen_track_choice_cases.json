@@ -16,6 +16,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "en"
@@ -30,6 +33,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -46,6 +52,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "en"
@@ -60,6 +69,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -81,6 +93,10 @@
     "jpn",
     "eng"
    ],
+   "preferred_advertised": [
+    "ja",
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "ja"
@@ -101,6 +117,10 @@
     "eng",
     "jpn"
    ],
+   "preferred_advertised": [
+    "en",
+    "ja"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "en"
@@ -115,6 +135,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": "ja",
    "forced": null,
@@ -135,6 +158,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": "ja",
    "forced": "fr",
    "expected_source": "fr"
@@ -154,6 +180,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": null
@@ -168,6 +197,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -187,6 +219,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -212,6 +247,10 @@
     null,
     "eng"
    ],
+   "preferred_advertised": [
+    null,
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "ja"
@@ -231,6 +270,10 @@
    "preferred": [
     null,
     "eng"
+   ],
+   "preferred_advertised": [
+    null,
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -256,6 +299,10 @@
     null,
     "eng"
    ],
+   "preferred_advertised": [
+    null,
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "ja"
@@ -275,6 +322,9 @@
    "preferred": [
     "de"
    ],
+   "preferred_advertised": [
+    "de"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "de"
@@ -292,6 +342,9 @@
     ]
    ],
    "preferred": [
+    "de"
+   ],
+   "preferred_advertised": [
     "de"
    ],
    "force_detected": null,
@@ -314,6 +367,10 @@
     null,
     "eng"
    ],
+   "preferred_advertised": [
+    null,
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "en"
@@ -334,12 +391,16 @@
     "eng",
     "eng"
    ],
+   "preferred_advertised": [
+    "en",
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "en"
   },
   {
-   "name": "fre_and_fra_both_match_preferred_fr",
+   "name": "fre_tag_matches_preferred_fr",
    "tracks": [
     [
      "fre",
@@ -351,6 +412,31 @@
     ]
    ],
    "preferred": [
+    "fr"
+   ],
+   "preferred_advertised": [
+    "fr"
+   ],
+   "force_detected": null,
+   "forced": null,
+   "expected_source": "fr"
+  },
+  {
+   "name": "fra_tag_matches_preferred_fr",
+   "tracks": [
+    [
+     "fra",
+     false
+    ],
+    [
+     "jpn",
+     true
+    ]
+   ],
+   "preferred": [
+    "fr"
+   ],
+   "preferred_advertised": [
     "fr"
    ],
    "force_detected": null,
@@ -372,6 +458,9 @@
    "preferred": [
     "zh"
    ],
+   "preferred_advertised": [
+    "zh"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "zh"
@@ -386,6 +475,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -402,6 +494,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": null
@@ -411,6 +506,9 @@
    "tracks": [],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -429,6 +527,7 @@
     ]
    ],
    "preferred": [],
+   "preferred_advertised": [],
    "force_detected": null,
    "forced": null,
    "expected_source": "es"
@@ -447,6 +546,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -467,6 +569,9 @@
    "preferred": [
     "eng"
    ],
+   "preferred_advertised": [
+    "en"
+   ],
    "force_detected": "ko",
    "forced": null,
    "expected_source": "ko"
@@ -480,6 +585,7 @@
     ]
    ],
    "preferred": [],
+   "preferred_advertised": [],
    "force_detected": "ja",
    "forced": "fr",
    "expected_source": "fr"
@@ -498,6 +604,9 @@
    ],
    "preferred": [
     "eng"
+   ],
+   "preferred_advertised": [
+    "en"
    ],
    "force_detected": null,
    "forced": null,
@@ -519,9 +628,57 @@
     "spa",
     "eng"
    ],
+   "preferred_advertised": [
+    "es",
+    "en"
+   ],
    "force_detected": null,
    "forced": null,
    "expected_source": "es"
+  },
+  {
+   "name": "yue_track_matches_preferred_yue_three_letter_639_1",
+   "tracks": [
+    [
+     "jpn",
+     true
+    ],
+    [
+     "yue",
+     false
+    ]
+   ],
+   "preferred": [
+    "yue"
+   ],
+   "preferred_advertised": [
+    "yue"
+   ],
+   "force_detected": null,
+   "forced": null,
+   "expected_source": "yue"
+  },
+  {
+   "name": "haw_default_track_no_preferred_match_three_letter_639_1",
+   "tracks": [
+    [
+     "haw",
+     true
+    ],
+    [
+     "jpn",
+     false
+    ]
+   ],
+   "preferred": [
+    "eng"
+   ],
+   "preferred_advertised": [
+    "en"
+   ],
+   "force_detected": null,
+   "forced": null,
+   "expected_source": "haw"
   }
  ]
 }

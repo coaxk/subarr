@@ -19,7 +19,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "subgen_track_choice_cases.json"
 
 # Update BOTH repos together: subarr-subgen pins the same constant in
 # tests/smoke_track_choice.py. A change on one side only fails one suite loudly.
-FIXTURE_SHA256 = "fb9ac252754a8c744f23aa82ef9cb262590d806ffb9bb22485087184c797561e"
+FIXTURE_SHA256 = "e00b59d02962493ec0930c492e97a5838543f8454e9041ca79bd42f403de7b1d"
 
 CASES = json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
 
@@ -65,6 +65,22 @@ def test_track_language_is_case_sensitive_like_upstream():
     assert f("ENG") is None
 
 
+def test_three_letter_639_1_codes_yue_and_haw_are_readable_and_mapped():
+    from subarr.langs import normalize_lang
+    from subarr.per_file_task import known_language, subgen_track_language as f
+    from subarr.subgen_client import _parse_preferred_audio_languages
+
+    assert f("yue") == "yue" and f("haw") == "haw"
+    assert normalize_lang("yue") == "yue" and normalize_lang("haw") == "haw"
+    assert known_language("yue") == "yue" and known_language("haw") == "haw"
+    assert _parse_preferred_audio_languages(["yue", None, "haw"]) == (("yue", None, "haw"), ())
+
+
+def test_fixture_has_the_advertised_form_for_every_case():
+    assert len(CASES) == 32
+    assert all("preferred_advertised" in c for c in CASES)
+
+
 def test_iso_table_matches_upstream_shape():
     from subarr.langs import UPSTREAM_ISO639_2_TO_1
 
@@ -85,6 +101,17 @@ def _p1(p):
     return p if len(p) == 2 else subgen_track_language(p)
 
 
+def _advertised(case):
+    """subarr only ever sees what /queue emits (`preferred_advertised`), parsed by
+    the same code SubgenCapabilities uses. None of it may be unreadable."""
+    from subarr.subgen_client import _parse_preferred_audio_languages
+
+    entries, unreadable = _parse_preferred_audio_languages(case["preferred_advertised"])
+    assert unreadable == (), case["name"]
+    assert entries == tuple(case["preferred_advertised"])
+    return entries
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_resolve_source_language_matches_the_contract(case):
     from subarr.per_file_task import resolve_source_language
@@ -93,7 +120,7 @@ def test_resolve_source_language_matches_the_contract(case):
         [(t, d) for t, d in case["tracks"]],
         forced=case["forced"],
         force_detected=_p1(case["force_detected"]),
-        preferred=tuple(_p1(p) for p in case["preferred"]),
+        preferred=_advertised(case),
     )
     assert got == case["expected_source"]
 
