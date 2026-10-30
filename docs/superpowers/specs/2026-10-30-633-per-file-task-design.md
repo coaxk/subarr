@@ -71,7 +71,7 @@ Patch hygiene: generate it the way the existing patches are generated (`scripts/
 
 Add the following to `SubgenCapabilities`:
 - `preferred_audio_languages: tuple[str | None, ...] | None = None`. `None` means not advertised (older subgen). A JSON `null` entry becomes `None` **in place**; keep the position and keep duplicates. Each non-null entry is a 639-1 code subgen produced with `to_iso_639_1()`, parsed with `normalize_lang`. If any non-null entry cannot be mapped, do NOT turn it into `None`, because that would fake a fall-through. Instead set `preferred_audio_languages_unreadable: tuple[str, ...]` to those entries; `active_config` then returns `None`, and the API reports "subgen advertised a preferred audio language subarr cannot read: X".
-- `force_detected_language_to: str | None = None`, normalized. Absent, `null` or unmappable → `None`.
+- `force_detected_language_to: str | None = None`, normalized. Absent or `null` → `None`. A non-empty advertised value that cannot be mapped is NOT turned into `None` (that would fake a fall-through to the preferred list): set `force_detected_language_unreadable: str | None` to the raw value; `active_config` then returns `None` and the API reports "subgen advertised a forced detected language subarr cannot read: X".
 
 Parse both next to `transcribe_or_translate` (`subgen_client.py` ~545) and include them in the fingerprint/`to_dict` wherever the sibling fields appear.
 
@@ -112,7 +112,7 @@ class PerFileTaskConfig:
 
 def active_config(settings_enabled: bool, wanted: Iterable[str], caps) -> PerFileTaskConfig | None
 ```
-The function returns non-`None` only when all five of these hold: `settings_enabled`, `wanted` is non-empty after normalization, `caps.per_request_task` is true, `caps.preferred_audio_languages is not None`, and `caps.preferred_audio_languages_unreadable` is empty. In every other case it returns `None`, the feature is inert, and behaviour is byte-for-byte today's. There is **no** fallback to `eng` when the list is not advertised (issue comment 2026-10-29).
+The function returns non-`None` only when all six of these hold: `settings_enabled`, `wanted` is non-empty after normalization, `caps.per_request_task` is true, `caps.preferred_audio_languages is not None`, `caps.preferred_audio_languages_unreadable` is empty, and `caps.force_detected_language_unreadable` is falsy. In every other case it returns `None`, the feature is inert, and behaviour is byte-for-byte today's. There is **no** fallback to `eng` when the list is not advertised (issue comment 2026-10-29).
 
 ### B3. Setting and API
 
@@ -146,7 +146,7 @@ The function returns non-`None` only when all five of these hold: `settings_enab
 - **Folders** (`canonical_to_fs(job.canonical_path)` is a directory and `cfg` is active). Nothing is re-enqueued and the feeder loop is unchanged; one job stays one job:
   - List video files recursively (`os.walk`, `VIDEO_EXTS` only, sorted canonical paths). Zero files → submit the folder as today, with no task.
   - More than `PER_FILE_TASK_FOLDER_CAP = 500` files → submit the folder as today, with no task, and log WARNING with the count.
-  - Compute each file's task with `override=None`: a folder submission sends no per-file override today, so `forced` must be `None` to match what is sent. Document this in a comment.
+  - Compute each file's task with `override=decision.override`: the runner sends the JOB's override on every `/batch` of a folder scan, so subgen forces that language for each file, and `forced` must match what is sent. A folder under a declared series intent therefore plans the same task as the file job would.
   - If every file gets the same task (including all `None`), the paths are `[folder]` and `path_tasks = {folder: that task}`.
   - If the tasks differ, the paths are the file list and `path_tasks` maps each file to its task. The scan carries N paths, and the runner already loops `scan.paths` with one `/batch` per path. Before relying on that, check that `scans.create` accepts many paths and that the completion/provenance plumbing handles a multi-path scan whose provenance is the folder; `git grep -n "scans.create(" src` shows existing multi-path uses. If a multi-path scan does not complete correctly, STOP and report rather than redesigning.
 - The arena, forced-segment and other `asr` paths are untouched.
@@ -174,6 +174,7 @@ The function returns non-`None` only when all five of these hold: `settings_enab
 - `job.task` preset → sent as-is.
 - Caps lose `per_request_task` between start and batch → no task sent.
 - The forced override path: a verified-language file whose override differs from its tracks uses the override as `L` in both gate and dispatch.
+- Known, documented divergence (gate vs folder job): the gate predicts each file with the file's OWN override, while a file inside a FOLDER job gets the folder's override at dispatch. Folder jobs come only from manual Scan-tab submits, which the gate does not filter, so the divergence cannot affect auto-queued work.
 - Known, documented divergence (test pins the current behaviour): a job enqueued with a stored `audio_language_override` that differs from the store's current verdict. Dispatch uses the stored one ("decided when queued"), while the gate predicted from the store.
 
 `tests/test_per_file_task_api_633.py`: GET shape, the POST 400s, persistence on disk, and the auth requirement.
