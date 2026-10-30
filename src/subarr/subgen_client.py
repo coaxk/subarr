@@ -129,10 +129,18 @@ def _parse_preferred_audio_languages(raw: Any) -> tuple[tuple[str | None, ...] |
     return tuple(entries), tuple(unreadable)
 
 
-def _parse_force_detected(raw: Any) -> str | None:
+def _parse_force_detected(raw: Any) -> tuple[str | None, str | None]:
+    """(code, unreadable). Unset (absent, null, empty, NONE) is (None, None).
+    A non-empty value subarr cannot map is reported, never dropped: dropping it
+    would fake a fall-through to the preferred list that subgen does not make."""
     from .per_file_task import known_language
 
-    return known_language(raw)
+    if raw is None or str(raw).strip().lower() in ("", "none"):
+        return None, None
+    code = known_language(raw)
+    if code is None:
+        return None, str(raw)
+    return code, None
 
 
 def producible_subtitle_languages(mode: str | None, audio_langs: list[str] | None) -> set[str] | None:
@@ -258,6 +266,9 @@ class SubgenCapabilities:
     # [v4.38 / #633] subgen's FORCE_DETECTED_LANGUAGE_TO, normalized. None when
     # absent, null or unmappable.
     force_detected_language_to: str | None = None
+    # The raw advertised value when it is set but unmappable; per_file_task.active_config
+    # goes inert on it, for the same reason as the preferred list above.
+    force_detected_language_unreadable: str | None = None
     # Renames the OUTPUT FILE without changing the language of its contents,
     # so it is NOT the producible language and must never be used as one.
     # Carried so a contradiction (translate mode writing a .es.srt) is
@@ -362,6 +373,7 @@ class SubgenCapabilities:
             "preferred_audio_languages": self.preferred_audio_languages,
             "preferred_audio_languages_unreadable": self.preferred_audio_languages_unreadable,
             "force_detected_language_to": self.force_detected_language_to,
+            "force_detected_language_unreadable": self.force_detected_language_unreadable,
             "subtitle_language_name": self.subtitle_language_name,
             "asr_arena": self.asr_arena,
             "asr_vanilla_base": self.asr_vanilla_base,
@@ -562,6 +574,7 @@ class SubgenClient:
         preferred_audio_languages: tuple[str | None, ...] | None = None
         preferred_audio_languages_unreadable: tuple[str, ...] = ()
         force_detected_language_to: str | None = None
+        force_detected_language_unreadable: str | None = None
         subtitle_language_name = None
         asr_arena = False
         asr_vanilla_base = False
@@ -607,9 +620,10 @@ class SubgenClient:
                                 preferred_audio_languages,
                                 preferred_audio_languages_unreadable,
                             ) = _parse_preferred_audio_languages(caps_block.get("preferred_audio_languages"))
-                            force_detected_language_to = _parse_force_detected(
-                                caps_block.get("force_detected_language_to")
-                            )
+                            (
+                                force_detected_language_to,
+                                force_detected_language_unreadable,
+                            ) = _parse_force_detected(caps_block.get("force_detected_language_to"))
                             _sln = caps_block.get("subtitle_language_name")
                             subtitle_language_name = str(_sln).strip() if _sln else None
                             asr_arena = bool(caps_block.get("asr_arena"))
@@ -665,6 +679,7 @@ class SubgenClient:
             preferred_audio_languages=preferred_audio_languages,
             preferred_audio_languages_unreadable=preferred_audio_languages_unreadable,
             force_detected_language_to=force_detected_language_to,
+            force_detected_language_unreadable=force_detected_language_unreadable,
             subtitle_language_name=subtitle_language_name,
             asr_arena=asr_arena,
             asr_vanilla_base=asr_vanilla_base,

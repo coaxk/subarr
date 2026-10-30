@@ -195,6 +195,7 @@ def _caps(**kw):
         preferred_audio_languages=("en",),
         preferred_audio_languages_unreadable=(),
         force_detected_language_to=None,
+        force_detected_language_unreadable=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -216,6 +217,7 @@ def test_active_config_all_inputs_present():
         (True, ["en"], _caps(per_request_task=False)),
         (True, ["en"], _caps(preferred_audio_languages=None)),
         (True, ["en"], _caps(preferred_audio_languages_unreadable=("klingon",))),
+        (True, ["en"], _caps(force_detected_language_unreadable="klingon")),
         (True, ["en"], None),
     ],
 )
@@ -281,6 +283,22 @@ async def test_caps_absent_means_not_advertised():
     assert caps.preferred_audio_languages is None
     assert caps.force_detected_language_to is None
     assert caps.preferred_audio_languages_unreadable == ()
+
+
+@pytest.mark.asyncio
+async def test_caps_unreadable_force_detected_is_reported_not_dropped():
+    caps = await _probe({"preferred_audio_languages": ["en"], "force_detected_language_to": "klingon"})
+    assert caps.force_detected_language_to is None
+    assert caps.force_detected_language_unreadable == "klingon"
+    assert caps.to_dict()["force_detected_language_unreadable"] == "klingon"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [None, "", "NONE", "none"])
+async def test_caps_unset_force_detected_is_not_unreadable(raw):
+    caps = await _probe({"preferred_audio_languages": ["en"], "force_detected_language_to": raw})
+    assert caps.force_detected_language_to is None
+    assert caps.force_detected_language_unreadable is None
 
 
 @pytest.mark.asyncio

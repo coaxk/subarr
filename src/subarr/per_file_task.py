@@ -164,6 +164,8 @@ def active_config(
         return None
     if getattr(caps, "preferred_audio_languages_unreadable", ()):
         return None
+    if getattr(caps, "force_detected_language_unreadable", None):
+        return None
     return PerFileTaskConfig(
         wanted=frozenset(norm),
         preferred=tuple(preferred),

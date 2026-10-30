@@ -34,6 +34,9 @@ def _unavailable_reason(caps: Any) -> str | None:
     unreadable = getattr(caps, "preferred_audio_languages_unreadable", ())
     if unreadable:
         return "subgen advertised a preferred audio language subarr cannot read: " + ", ".join(unreadable)
+    fd_unreadable = getattr(caps, "force_detected_language_unreadable", None)
+    if fd_unreadable:
+        return f"subgen advertised a forced detected language subarr cannot read: {fd_unreadable}"
     return None
 
 

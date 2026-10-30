@@ -25,6 +25,7 @@ def _caps(**kw):
         per_request_task=True,
         preferred_audio_languages=(None, "en"),
         preferred_audio_languages_unreadable=(),
+        force_detected_language_unreadable=None,
         force_detected_language_to="ja",
     )
     base.update(kw)
@@ -70,6 +71,16 @@ def test_get_reports_unreadable_entry(api):
     assert body["available"] is False
     assert (
         "subgen advertised a preferred audio language subarr cannot read: klingon"
+        in body["unavailable_reason"]
+    )
+
+
+def test_get_reports_unreadable_force_detected(api):
+    api.app.state.subgen_caps = _caps(force_detected_language_unreadable="klingon")
+    body = api.get(PATH).json()
+    assert body["available"] is False
+    assert (
+        "subgen advertised a forced detected language subarr cannot read: klingon"
         in body["unavailable_reason"]
     )
 
