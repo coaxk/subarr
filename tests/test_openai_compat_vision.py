@@ -934,21 +934,22 @@ def _assert_no_secrets(messages: list[str]) -> None:
         assert "URLMARK" not in message
 
 
-# --- z2. chat errors on vision keep the text rules -----------------------
+# --- z2. a 401 on vision counts as a failure -----------------------------
 
 
 @pytest.mark.asyncio
-async def test_vision_401_records_success(now):
-    chat = _Route([_err(401)] + [_err(500)] * 5)
+async def test_vision_401_records_failure(now):
+    chat = _Route([_err(401)])
     breaker = _breaker(now)
     for _ in range(4):
         breaker.record_failure()
     c = _client(chat, breaker=breaker)
     with pytest.raises(LLMError, match="API key rejected"):
         await c.vision_describe(image_b64=_PNG_B64, prompt="p")
-    assert breaker.state == "closed"
-    breaker.record_failure()
-    assert breaker.state == "closed"
+    assert breaker.state == "open"
+    with pytest.raises(LLMCoolingDown):
+        await c.generate("p")
+    assert chat.calls == 1
 
 
 # --- aa. the text path is unchanged --------------------------------------

@@ -421,7 +421,8 @@ class OpenAICompatClient:
                     raise LLMError("llm /chat/completions: client closed mid-request (live rebuild)") from e
                 if r.status_code in (401, 403):
                     # Never include the body: a proxy may echo the key back.
-                    outcome = True
+                    # #616: a rejected key counts as a failure, so a revoked hosted key opens the breaker.
+                    outcome = False
                     raise LLMError("LLM API key rejected (check OPENAI_API_KEY)")
                 if r.status_code == 404:
                     outcome = True

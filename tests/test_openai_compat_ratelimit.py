@@ -330,8 +330,6 @@ async def test_waited_success_resets_failures(now, slept):
     "item",
     [
         pytest.param(lambda: _err(400), id="400"),
-        pytest.param(lambda: _err(401), id="401"),
-        pytest.param(lambda: _err(403), id="403"),
         pytest.param(lambda: _err(404), id="404"),
     ],
 )
@@ -352,8 +350,8 @@ async def test_client_errors_do_not_trip_breaker(item, now):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reachable",
-    [_err(401), _ok("")],
-    ids=["401", "empty-200"],
+    [_err(404), _ok("")],
+    ids=["404", "empty-200"],
 )
 async def test_reachable_reply_resets_failure_count(reachable, now):
     rec = _Recorder([_err(500)] * 4 + [reachable] + [_err(500)] * 4 + [_ok()])
@@ -369,6 +367,130 @@ async def test_reachable_reply_resets_failure_count(reachable, now):
             await c.generate("p")
     assert breaker.state == "closed"
     assert await c.generate("p") == "ja"
+
+
+# --- n2. a rejected key opens the breaker ---------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403], ids=["401", "403"])
+async def test_rejected_key_opens_breaker(status, now):
+    rec = _Recorder([_err(status) for _ in range(5)])
+    breaker = _breaker(now)
+    c = _client(rec, breaker=breaker)
+    for _ in range(5):
+        with pytest.raises(LLMError, match="API key rejected") as excinfo:
+            await c.generate("p")
+        assert not isinstance(excinfo.value, LLMCoolingDown)
+    with pytest.raises(LLMCoolingDown):
+        await c.generate("p")
+    assert rec.calls == 5
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_counts_with_server_errors(now):
+    rec = _Recorder([_err(500)] * 4 + [_err(401)])
+    breaker = _breaker(now)
+    c = _client(rec, breaker=breaker)
+    for _ in range(4):
+        with pytest.raises(LLMError):
+            await c.generate("p")
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.generate("p")
+    assert breaker.state == "open"
+    with pytest.raises(LLMCoolingDown):
+        await c.generate("p")
+    assert rec.calls == 5
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_is_not_reset_by_404(now):
+    rec = _Recorder([_err(500)] * 4 + [_err(404)] + [_err(401)] * 5)
+    breaker = _breaker(now)
+    c = _client(rec, breaker=breaker)
+    for _ in range(4):
+        with pytest.raises(LLMError):
+            await c.generate("p")
+    with pytest.raises(LLMError, match="model not found"):
+        await c.generate("p")
+    for _ in range(4):
+        with pytest.raises(LLMError, match="API key rejected"):
+            await c.generate("p")
+    assert breaker.state == "closed"
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.generate("p")
+    assert breaker.state == "open"
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_on_half_open_probe_reopens(now):
+    rec = _Recorder([_err(500)] * 5 + [_err(401)])
+    breaker = _breaker(now)
+    c = _client(rec, breaker=breaker)
+    for _ in range(5):
+        with pytest.raises(LLMError):
+            await c.generate("p")
+    assert breaker.state == "open"
+    now[0] = 60.0
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.generate("p")
+    with pytest.raises(LLMCoolingDown):
+        await c.generate("p")
+    assert rec.calls == 6
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_never_waits(now, slept):
+    rec = _Recorder([_err(401, retry_after="1")])
+    breaker = _breaker(now)
+    for _ in range(4):
+        breaker.record_failure()
+    c = _client(rec, breaker=breaker)
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.generate("p")
+    assert rec.calls == 1
+    assert slept == []
+    assert breaker.state == "open"
+
+
+@pytest.mark.asyncio
+async def test_models_rejected_key_stays_outside_breaker(now):
+    breaker = _breaker(now)
+    for _ in range(4):
+        breaker.record_failure()
+    c = OpenAICompatClient(base_url=_LOCAL, model=_MODEL, api_key="k", breaker=breaker)
+    c._client = httpx.AsyncClient(
+        base_url=c._base_url,
+        transport=httpx.MockTransport(lambda request: httpx.Response(401, text="no")),
+    )
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.models()
+    assert breaker.state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_message_is_fixed():
+    rec = _Recorder([_err(401, text=f"invalid key {_KEY}")])
+    c = _client(rec, api_key=_KEY)
+    with pytest.raises(LLMError) as excinfo:
+        await c.generate("p")
+    assert str(excinfo.value) == "LLM API key rejected (check OPENAI_API_KEY)"
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_after_retry_after_wait_counts_once(now, slept):
+    rec = _Recorder([_err(429, retry_after="1"), _err(401)])
+    breaker = _breaker(now)
+    for _ in range(3):
+        breaker.record_failure()
+    c = _client(rec, breaker=breaker)
+    with pytest.raises(LLMError, match="API key rejected"):
+        await c.generate("p")
+    assert rec.calls == 2
+    assert slept == [1.0]
+    assert breaker.state == "closed"
+    breaker.record_failure()
+    assert breaker.state == "open"
 
 
 # --- o. a negotiated success counts once ----------------------------------
