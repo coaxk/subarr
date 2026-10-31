@@ -347,7 +347,10 @@ def _library_key() -> tuple:
     return tuple((lib.slug, str(lib.fs_root)) for lib in settings.libraries)
 
 
-def get_inventory(*, max_age_s: float = 300.0) -> Inventory:
+INVENTORY_TTL_S = 300.0
+
+
+def get_inventory(*, max_age_s: float = INVENTORY_TTL_S) -> Inventory:
     """Cached walk. The lock is held ACROSS the walk so concurrent callers wait
     for one walk instead of each starting their own."""
     global _cache
@@ -404,6 +407,24 @@ def _no_rules_hit(fingerprint: str, max_age_s: float):
     if hit is None or hit[0] != key or hit[1] != fingerprint or _clock() - hit[2] >= max_age_s:
         return None
     return hit
+
+
+def peek_inventory() -> Inventory | None:
+    """The newest inventory already in memory for the current libraries, from the
+    walk cache or the remembered no-rules answer, each inside its own TTL. Never
+    walks. Its files existed at `walked_at`; a caller may use it only to call a
+    path present, never missing (a file added since is simply not listed)."""
+    key = _library_key()
+    now = _clock()
+    found: list[Inventory] = []
+    with _cache_lock:
+        if _cache is not None and _cache[0] == key and now - _cache[1] < INVENTORY_TTL_S:
+            found.append(_cache[2])
+    with _no_rules_lock:
+        hit = _no_rules
+    if hit is not None and hit[0] == key and now - hit[2] < NO_RULES_TTL_S:
+        found.append(hit[3])
+    return max(found, key=lambda inv: inv.walked_at, default=None)
 
 
 def cached_no_rules(fingerprint: str, *, max_age_s: float = NO_RULES_TTL_S) -> Inventory | None:

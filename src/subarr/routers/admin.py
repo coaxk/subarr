@@ -342,7 +342,14 @@ def _relink_analysis(request: Request, *, use_no_rules_cache: bool):
     ps = stores.get("probe")
     verified = set(als.all_paths()) if als is not None else set()
     probed = set(ps.all_paths()) if ps is not None else set()
-    stale = sorted(p for p in (verified | probed) if not _path_exists(p))
+    # A path an in-memory inventory lists is present without a stat (5.5 s of
+    # realpath + stat for 6,374 paths on CIFS); every other path is still
+    # checked, so the inventory can make a row look present but never missing.
+    # A file deleted since that walk reads present until it ages out, the blind
+    # spot #641 already accepts. Apply always checks every path.
+    inv_now = relink.peek_inventory() if use_no_rules_cache else None
+    listed = inv_now.files if inv_now is not None else {}
+    stale = sorted(p for p in (verified | probed) if p not in listed and not _path_exists(p))
     if sum(1 for p in stale if p in verified) < relink.RULE_MIN_VERIFIED:
         return [], len(stale), None, False, None
     old_sizes = ps.sizes_for(stale) if ps is not None else {}
