@@ -124,9 +124,9 @@
 - Consumes: `CircuitBreaker` (`src/subarr/circuit_breaker.py:33`, `allow()`, `record_success()`, `record_failure()`). Inject `clock` and a patchable `asyncio.sleep` so tests do not wait.
 - Produces: `LLMError` subclass `LLMCoolingDown(LLMError)` raised when the breaker is open; the message contains `"cooling down"`.
 
-- [ ] **Step 1: Write failing tests:** `test_429_retry_after_honoured` (`retry-after: 2`: one sleep of 2, then success), `test_429_retry_after_too_long` (`retry-after: 31`: raises, no sleep), `test_429_without_retry_after_raises`, `test_503_retry_after_honoured`, `test_breaker_opens_after_5_failures` (the 6th call raises `LLMCoolingDown` with no request sent), `test_breaker_recovers_after_cooldown` (advance the clock 60 s: a request is sent again), `test_400_and_401_do_not_trip_breaker` (client errors are not provider failures).
+- [ ] **Step 1: Write failing tests:** `test_429_retry_after_honoured` (`retry-after: 2`: one sleep of 2, then success), `test_429_retry_after_too_long` (`retry-after: 31`: raises, no sleep), `test_429_without_retry_after_raises`, `test_503_retry_after_honoured`, `test_breaker_opens_after_5_failures` (the 6th call raises `LLMCoolingDown` with no request sent), `test_breaker_recovers_after_cooldown` (advance the clock 60 s: a request is sent again), `test_client_errors_do_not_trip_breaker` (400 and 404: client errors are not provider failures). Decision 2026-11-01 (Judd, after the content-policy and region risk was raised): a 401 or 403 from `/chat/completions` counts as a breaker FAILURE, so a revoked hosted key opens the breaker instead of retrying forever; 400 and 404 stay success, and `models()` stays outside the breaker. Landed as a follow-up to Task 5 (`test_rejected_key_opens_breaker` and siblings).
 - [ ] **Step 2: Run** and expect FAIL.
-- [ ] **Step 3: Implement.** Count 429, 5xx and transport errors as failures. A reply that negotiation resolves counts as one success.
+- [ ] **Step 3: Implement.** Count 429, 5xx, transport errors and (since 2026-11-01) 401/403 as failures. A reply that negotiation resolves counts as one success.
 - [ ] **Step 4: Run** and expect PASS.
 - [ ] **Step 5: Commit** `feat(616): rate-limit handling and breaker for the LLM client`.
 
