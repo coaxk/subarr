@@ -113,6 +113,9 @@ class Analysis:
     rules: list[Rule]
     reasons: dict[str, int]  # every key in REASONS is always present
     examples: dict[str, list[str]]  # up to 3 sorted stale paths per reason, non-zero reasons only
+    # Every matched group that is NOT offered (below the verified bar, or left with
+    # no pairs by collisions / withheld path-only pairs), largest first, then heads.
+    unoffered: list[Rule] = field(default_factory=list)
 
 
 def build_rules(
@@ -246,6 +249,7 @@ def analyse(
             rule.path_only.append(pair)
 
     out: list[Rule] = []
+    unoffered: list[Rule] = []
     for key, rule in grouped.items():
         rule.mismatches = mismatches.get(key, 0)
         if rule.path_only and (not rule.by_size or rule.mismatches):
@@ -259,9 +263,9 @@ def analyse(
         is_offered = rule.verified >= RULE_MIN_VERIFIED
         for p in rule.included:
             reason_of[p.old] = "offered" if is_offered else "below_threshold"
-        if is_offered:
-            out.append(rule)
+        (out if is_offered else unoffered).append(rule)
     out.sort(key=lambda r: (-r.verified, r.old_head, r.new_head))
+    unoffered.sort(key=lambda r: (-group_rows(r), r.old_head, r.new_head))
 
     reasons = dict.fromkeys(REASONS, 0)
     by_reason: dict[str, list[str]] = defaultdict(list)
@@ -269,7 +273,12 @@ def analyse(
         reasons[reason] += 1
         by_reason[reason].append(path)
     examples = {r: sorted(by_reason[r])[:EXAMPLES_PER_REASON] for r in REASONS if reasons[r]}
-    return Analysis(rules=out, reasons=reasons, examples=examples)
+    return Analysis(rules=out, reasons=reasons, examples=examples, unoffered=unoffered)
+
+
+def group_rows(rule: Rule) -> int:
+    """Stale rows a group holds: its pairs plus the ones collisions and withholding took out."""
+    return len(rule.included) + rule.collisions + rule.path_only_withheld
 
 
 # ─── Inventory of current files ─────────────────────────────────────

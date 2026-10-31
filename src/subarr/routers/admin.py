@@ -314,6 +314,8 @@ async def db_orphans_prune(request: Request) -> dict:
 
 # [#638] Longest pairs list the dry run sends per section; the rest is counted.
 RELINK_PAIRS_CAP = 500
+# ...and the most unoffered groups it lists under `unmatched`, largest first.
+RELINK_GROUPS_CAP = 20
 
 
 class RelinkBody(BaseModel):
@@ -386,6 +388,37 @@ def _rule_json(rule) -> dict:
     }
 
 
+def _group_json(rule) -> dict:
+    """An unoffered group: the counts that say why it is not a rule, and 3 pairs."""
+    included = rule.included
+    return {
+        "old_head": rule.old_head,
+        "new_head": rule.new_head,
+        "verified": rule.verified,
+        # `verified` counts the pairs whose stale row has a verdict; the rest are probe-only.
+        "probe_only": len(included) - rule.verified,
+        "by_size": len(rule.by_size),
+        "path_only": len(rule.path_only),
+        "path_only_withheld": rule.path_only_withheld,
+        "mismatches": rule.mismatches,
+        "collisions": rule.collisions,
+        "sample": [_pair_json(p) for p in included[:3]],
+    }
+
+
+def _unmatched_json(analysis) -> dict:
+    from .. import relink
+
+    groups = analysis.unoffered
+    return {
+        "reasons": analysis.reasons,
+        "examples": analysis.examples,
+        "min_verified": relink.RULE_MIN_VERIFIED,
+        "groups": [_group_json(g) for g in groups[:RELINK_GROUPS_CAP]],
+        "groups_truncated": max(0, len(groups) - RELINK_GROUPS_CAP),
+    }
+
+
 def _relink_dry_run(request: Request) -> dict:
     rules, stale, inv, cached, analysis = _relink_analysis(request, use_no_rules_cache=True)
     return {
@@ -399,9 +432,7 @@ def _relink_dry_run(request: Request) -> dict:
             "walk_s": round(inv.walk_s, 3) if inv is not None else 0.0,
         },
         # Why the remaining stale rows are not in an offered rule; null when no walk ran.
-        "unmatched": {"reasons": analysis.reasons, "examples": analysis.examples}
-        if analysis is not None
-        else None,
+        "unmatched": _unmatched_json(analysis) if analysis is not None else None,
     }
 
 
