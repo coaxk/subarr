@@ -1453,6 +1453,38 @@ class _SeriesIntentLookup(dict):
         return value if value is not None else default
 
 
+def _read_post_pass_lookups(audio_lang_store: Any):
+    """Fetch the post-pass store lookups the coverage build applies at the end.
+
+    Runs in a single worker thread (#626): five synchronous SQLite reads on the
+    event loop stall it on a large library. Each read keeps its own fallback
+    here so one failing query never stops the others.
+    """
+    try:
+        multi_map = audio_lang_store.get_all_multi_as_lookup()
+    except Exception:  # noqa: BLE001 — a transient DB read must not block the build
+        log.warning("multilingual lookup failed; skipping suppression this build", exc_info=True)
+        multi_map = None
+    try:
+        carried = audio_lang_store.get_carried_lookup()
+    except Exception:  # noqa: BLE001 — a note must never block the build
+        log.warning("carried-verdict lookup failed; skipping notes this build", exc_info=True)
+        carried = None
+    try:
+        mixed_dismissed = audio_lang_store.get_mixed_dismissed_set()
+    except Exception:  # noqa: BLE001 — never let this block a coverage build
+        mixed_dismissed = set()
+    try:
+        tm_dismissed = audio_lang_store.get_track_mismatch_dismissed_set()
+    except Exception:  # noqa: BLE001 — never let this block a coverage build
+        tm_dismissed = set()
+    try:
+        ignored_titles = audio_lang_store.get_ignored_titles_set()
+    except Exception:  # noqa: BLE001 — never let this block a coverage build
+        ignored_titles = set()
+    return multi_map, carried, mixed_dismissed, tm_dismissed, ignored_titles
+
+
 def _build_verification_lookup(audio_lang_store: Any):
     """Build the (user_verifications, verification_sources) pair the coverage
     build feeds to _classify_audio_label / _refine_audio_sources.
@@ -2167,7 +2199,15 @@ async def build_coverage(
     #     machine detection never declares a series intent.
     # Splitting avoids the user layer (which runs first) grabbing a whisper row
     # and conflating machine detection with user action.
-    user_verifications, verification_sources = _build_verification_lookup(audio_lang_store)
+    # #626: three synchronous SQLite reads — build the lookup in a worker so a
+    # large library's verifications don't stall the event loop. The None path
+    # needs no store read and so takes no thread hop.
+    if audio_lang_store is not None:
+        user_verifications, verification_sources = await asyncio.to_thread(
+            _build_verification_lookup, audio_lang_store
+        )
+    else:
+        user_verifications, verification_sources = {}, {}
 
     def _is_machine(p: str) -> bool:
         s = (verification_sources.get(p) or "").lower()
@@ -2456,56 +2496,48 @@ async def build_coverage(
 
     _disqualify_unsupported(items)
     _refine_audio_sources(items, verification_sources)
+    # #626: the post-pass store reads are synchronous SQLite queries; fetch all
+    # of them in ONE worker thread (each read keeps its own fallback there) so
+    # the event loop is never blocked. Application order below is unchanged.
+    if audio_lang_store is not None:
+        (
+            _multi_map,
+            _carried_lookup,
+            mixed_dismissed,
+            tm_dismissed,
+            ignored_titles,
+        ) = await asyncio.to_thread(_read_post_pass_lookups, audio_lang_store)
+    else:
+        _multi_map, _carried_lookup = None, None
+        mixed_dismissed, tm_dismissed, ignored_titles = set(), set(), set()
     # #357: surface confident-multilingual files (>=2 stored lang_codes) and
     # suppress their false suspect flag. After _refine so 'multilingual' wins.
-    if audio_lang_store is not None:
-        try:
-            _multi_map = audio_lang_store.get_all_multi_as_lookup()
-        except Exception:  # noqa: BLE001 — a transient DB read must not block the build
-            log.warning("multilingual lookup failed; skipping suppression this build", exc_info=True)
-            _multi_map = None
-        _apply_multilingual_verifications(items, _multi_map)
-        try:
-            _annotate_carried_verdicts(items, audio_lang_store.get_carried_lookup())
-        except Exception:  # noqa: BLE001 — a note must never block the build
-            log.warning("carried-verdict lookup failed; skipping notes this build", exc_info=True)
+    _apply_multilingual_verifications(items, _multi_map)
+    try:
+        _annotate_carried_verdicts(items, _carried_lookup)
+    except Exception:  # noqa: BLE001 — a note must never block the build
+        log.warning("carried-verdict lookup failed; skipping notes this build", exc_info=True)
     # #140: mis-grouped-series detection runs LAST — it reads the final
     # (refined) audio_source per episode. Dismissed series are read from the
     # store so known-legit multilingual shows stay quiet across walks.
-    mixed_dismissed: set[str] = set()
-    if audio_lang_store is not None:
-        try:
-            mixed_dismissed = audio_lang_store.get_mixed_dismissed_set()
-        except Exception:  # noqa: BLE001 — never let this block a coverage build
-            mixed_dismissed = set()
     flagged = _flag_mixed_language_series(items, dismissed_series=mixed_dismissed)
     if flagged:
         sources.setdefault("coverage", {})["mixed_language_series"] = flagged
     # #159: clear the default-track mismatch flag for files the user dismissed
     # (e.g. an intentional dub default). Detection runs in _attach_probe_*; the
     # dismissal lives in the store and is applied centrally here.
-    if audio_lang_store is not None:
-        try:
-            tm_dismissed = audio_lang_store.get_track_mismatch_dismissed_set()
-        except Exception:  # noqa: BLE001 — never let this block a coverage build
-            tm_dismissed = set()
-        if tm_dismissed:
-            for it in items:
-                if it.default_track_mismatch and it.file_canonical_path in tm_dismissed:
-                    it.default_track_mismatch = False
+    if tm_dismissed:
+        for it in items:
+            if it.default_track_mismatch and it.file_canonical_path in tm_dismissed:
+                it.default_track_mismatch = False
     # #316: drop rows for user-ignored titles (a movie file, or a series prefix)
     # so they leave gaps / Review and stop feeding the auto-queue. A deliberate
     # exclude — aftercare still audits any subs that exist (it reads sub files,
     # not these rows).
-    if audio_lang_store is not None:
-        try:
-            ignored_titles = audio_lang_store.get_ignored_titles_set()
-        except Exception:  # noqa: BLE001 — never let this block a coverage build
-            ignored_titles = set()
-        if ignored_titles:
-            items, n_ignored = _drop_ignored_titles(items, ignored_titles)
-            if n_ignored:
-                sources.setdefault("coverage", {})["ignored_titles"] = n_ignored
+    if ignored_titles:
+        items, n_ignored = _drop_ignored_titles(items, ignored_titles)
+        if n_ignored:
+            sources.setdefault("coverage", {})["ignored_titles"] = n_ignored
     items.sort(key=lambda i: i.score, reverse=True)
     return CoverageReport(generated_at=time.time(), sources=sources, items=items)
 
