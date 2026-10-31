@@ -6,6 +6,7 @@ the subgen container (URL, container name, compose path).
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -219,6 +220,19 @@ class Settings:
     # pick the first vision-capable model from /api/tags.
     ollama_vision_model: str
 
+    # #616: OpenAI-compatible LLM provider, an alternative to Ollama. One
+    # provider is active at a time (llm_provider). The base URL is entered
+    # INCLUDING /v1; the client appends /chat/completions and /models, so no
+    # slash or /v1 munging happens here. openai_vision: "off" / "same" (the
+    # text model also does vision) / a model id. openai_api_key is a secret:
+    # never validated and never logged.
+    llm_provider: str
+    openai_base_url: str
+    openai_api_key: str
+    openai_model: str
+    openai_vision: str
+    openai_server_type: str
+
     # Docker discovery (Tier-2 read-only introspection) — optional. When
     # set, the onboarding wizard pre-fills integration URLs by reading
     # docker container metadata. RECOMMENDED form is the tecnativa
@@ -387,6 +401,15 @@ def load() -> Settings:
         # #232: defaults to qwen2.5vl:7b (the recommended pull). "auto"
         # = subarr picks the first vision-capable installed model.
         ollama_vision_model=_env_or("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+        # #616: OpenAI-compatible provider. Provider/server-type/vision treat
+        # empty as missing (_env_or); the URL/key/model empty is the sensible
+        # "unconfigured" resting value, so bare .get() + strip.
+        llm_provider=_norm_llm_provider(_env_or("LLM_PROVIDER", "ollama")),
+        openai_base_url=_clean_str(os.environ.get("OPENAI_BASE_URL", "")),
+        openai_api_key=_clean_str(os.environ.get("OPENAI_API_KEY", "")),
+        openai_model=_clean_str(os.environ.get("OPENAI_MODEL", "")),
+        openai_vision=_norm_openai_vision(_env_or("OPENAI_VISION", "off")),
+        openai_server_type=_norm_openai_server_type(_env_or("OPENAI_SERVER_TYPE", "auto")),
         docker_proxy_url=os.environ.get("SUBARR_DOCKER_PROXY_URL", ""),
         docker_socket_path=os.environ.get("SUBARR_DOCKER_SOCKET_PATH", ""),
         # telemetry_endpoint keeps bare .get(): empty = "don't transmit",
@@ -561,6 +584,48 @@ def _warn_dangling_bindings(s: Settings) -> None:
         log.warning("library binding validation failed", exc_info=True)
 
 
+# ─── #616: OpenAI-compatible provider normalisation ─────────────────
+# One small helper per normalisation rule, shared by the env path in load()
+# and the _FIELD_COERCE entries, so a value saved from the UI is normalised
+# exactly like one read from env. The API key is never validated, so no helper
+# here may log its value (nor may anything downstream).
+def _clean_str(v) -> str:
+    """Rule 1: strip leading/trailing whitespace (spaces, tabs, newlines)."""
+    return "" if v is None else str(v).strip()
+
+
+def _norm_llm_provider(v, source: str = "LLM_PROVIDER") -> str:
+    """Rules 2 + 4: lower-cased; unknown falls back to ollama (never raises —
+    a typo must not break config load)."""
+    val = _clean_str(v).lower()
+    if val == "":
+        return "ollama"
+    if val not in ("ollama", "openai"):
+        log.warning("%s=%r is not a known LLM provider; using 'ollama'", source, val)
+        return "ollama"
+    return val
+
+
+def _norm_openai_server_type(v, source: str = "OPENAI_SERVER_TYPE") -> str:
+    """Rules 2 + 4: lower-cased; unknown falls back to auto."""
+    val = _clean_str(v).lower()
+    if val == "":
+        return "auto"
+    if val not in ("auto", "local", "openai", "openrouter"):
+        log.warning("%s=%r is not a known server type; using 'auto'", source, val)
+        return "auto"
+    return val
+
+
+def _norm_openai_vision(v) -> str:
+    """Rules 2 + 3: "off"/"same" are keywords (case-insensitive); anything
+    else is a model id and keeps its case exactly."""
+    val = _clean_str(v)
+    if val.lower() in ("off", "same"):
+        return val.lower()
+    return val or "off"
+
+
 # ─── Onboarding clobber guard support ───────────────────────────────
 # Maps each Settings field the onboarding wizard can write to the env var
 # that backs it in load(). config owns this so the field<->env relationship
@@ -584,6 +649,14 @@ FIELD_ENV_VARS: dict[str, str] = {
     # Persistable via _FIELD_COERCE, so it must be guardable here too or a
     # saved override silently beats OLLAMA_VISION_MODEL from compose.
     "ollama_vision_model": "OLLAMA_VISION_MODEL",
+    # #616: the OpenAI-compatible provider settings are UI-persistable too, so
+    # each must be guardable here (env > file > default).
+    "llm_provider": "LLM_PROVIDER",
+    "openai_base_url": "OPENAI_BASE_URL",
+    "openai_api_key": "OPENAI_API_KEY",
+    "openai_model": "OPENAI_MODEL",
+    "openai_vision": "OPENAI_VISION",
+    "openai_server_type": "OPENAI_SERVER_TYPE",
     # #75: Plex creds become UI-editable. PLEX_URL has a built-in default
     # (via _env_or) but env_is_set() checks the raw env var presence, so an
     # operator who pinned PLEX_URL keeps authority; a default-only install
@@ -657,6 +730,14 @@ _FIELD_COERCE = {
     "ollama_model": str,
     "ollama_url": str,
     "ollama_vision_model": str,
+    # #616: same normalisers as the env path. The warning source is the field
+    # name so a rejected persisted value is reported as such.
+    "llm_provider": functools.partial(_norm_llm_provider, source="llm_provider"),
+    "openai_base_url": _clean_str,
+    "openai_api_key": _clean_str,
+    "openai_model": _clean_str,
+    "openai_vision": _norm_openai_vision,
+    "openai_server_type": functools.partial(_norm_openai_server_type, source="openai_server_type"),
     # #75: integration credentials are now UI-editable. Persisting them
     # here means a saved URL / API key / Plex token survives a restart
     # (env still wins per _apply_persisted_overrides). All plain strings.
