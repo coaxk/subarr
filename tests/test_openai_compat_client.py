@@ -3,8 +3,9 @@
 The transport is mocked with httpx.MockTransport (the same pattern as
 tests/test_ollama_think.py::_capturing_client) and swapped in on the client,
 so the Authorization header must be per-request rather than baked into the
-shared AsyncClient. Everything here fails immediately on a non-200: parameter
-negotiation, rate-limit retries and the breaker are later tasks.
+shared AsyncClient. Parameter negotiation and the reasoning retry are tested in
+tests/test_openai_compat_negotiation.py; rate-limit retries and the breaker
+are later tasks.
 """
 
 from __future__ import annotations
@@ -19,7 +20,14 @@ import pytest
 from subarr.config import settings
 from subarr.integrations.llm import LLMError, resolve_profile
 from subarr.integrations.ollama import OllamaClient, OllamaError
-from subarr.integrations.openai_compat import OpenAICompatClient, _redact
+from subarr.integrations.openai_compat import OpenAICompatClient, _redact, reset_negotiation_cache
+
+
+@pytest.fixture(autouse=True)
+def _clean_negotiation_cache():
+    reset_negotiation_cache()
+    yield
+    reset_negotiation_cache()
 
 
 def _completion(content="ok", finish_reason="stop", **message_extra) -> dict:
@@ -443,7 +451,7 @@ async def test_empty_without_finish_reason_raises():
 
 
 @pytest.mark.asyncio
-async def test_empty_with_reasoning_and_length_raises_after_one_request():
+async def test_empty_with_reasoning_and_length_raises_after_one_retry():
     rec = _fixed(
         httpx.Response(
             200,
@@ -453,8 +461,8 @@ async def test_empty_with_reasoning_and_length_raises_after_one_request():
     c = _client(rec)
     with pytest.raises(LLMError, match="reply budget"):
         await c.generate("p")
-    # No reasoning retry in this task.
-    assert len(rec.calls) == 1
+    # One reasoning retry with the raised cap, then the reply-budget error.
+    assert len(rec.calls) == 2
 
 
 # --- r. malformed 200s ----------------------------------------------------
