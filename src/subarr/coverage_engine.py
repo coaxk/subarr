@@ -2513,7 +2513,10 @@ async def build_coverage(
     # #357: surface confident-multilingual files (>=2 stored lang_codes) and
     # suppress their false suspect flag. After _refine so 'multilingual' wins.
     _apply_multilingual_verifications(items, _multi_map)
-    _annotate_carried_verdicts(items, _carried_lookup)
+    try:
+        _annotate_carried_verdicts(items, _carried_lookup)
+    except Exception:  # noqa: BLE001 — a note must never block the build
+        log.warning("carried-verdict lookup failed; skipping notes this build", exc_info=True)
     # #140: mis-grouped-series detection runs LAST — it reads the final
     # (refined) audio_source per episode. Dismissed series are read from the
     # store so known-legit multilingual shows stay quiet across walks.

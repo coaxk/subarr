@@ -230,6 +230,28 @@ async def test_failing_carried_lookup_skips_notes_but_applies_the_rest(bundle, a
 
 
 @pytest.mark.asyncio
+async def test_failing_carried_annotation_does_not_block_the_build(bundle, als, monkeypatch, caplog):
+    # The pre-#626 try covered the annotation as well as the read: a note must
+    # never block the build, whichever half of it fails.
+    from subarr import coverage_engine as ce
+
+    als.ignore_title(_MOVIE_PATH)
+
+    def boom(items, carried):
+        raise RuntimeError("annotation broke")
+
+    monkeypatch.setattr(ce, "_annotate_carried_verdicts", boom)
+
+    with caplog.at_level(logging.WARNING, logger="subarr.coverage_engine"):
+        report = await _build(bundle, als)
+
+    assert any(
+        "carried-verdict lookup failed; skipping notes this build" in r.message for r in caplog.records
+    )
+    assert _MOVIE_PATH not in _rows(report), "the passes after the notes must still run"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failing",
     ["get_mixed_dismissed_set", "get_track_mismatch_dismissed_set", "get_ignored_titles_set"],
