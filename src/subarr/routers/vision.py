@@ -27,7 +27,9 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..error_detail import safe_error
-from ..integrations.ollama import OllamaError, _VISION_FAMILIES
+from ..integrations.llm import LLMError
+from ..integrations.ollama import _VISION_FAMILIES
+from ..integrations.openai_compat import LLMCoolingDown
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
 log = logging.getLogger(__name__)
@@ -103,10 +105,23 @@ async def vision_status(request: Request) -> dict[str, Any]:
         families_supported: list[str],   # the allowlist, for UI hints
       }
     """
-    ollama = getattr(request.app.state, "ollama", None)
+    ollama = getattr(request.app.state, "llm", None)
+    if ollama is not None and ollama.provider == "openai":
+        configured = ollama.is_configured()
+        return {
+            "ollama_configured": configured,
+            "provider": "openai",
+            "vision_model_config": ollama.vision_model_config,
+            "vision_model_resolved": ollama.vision_model if configured else None,
+            "vision_capable": bool(configured and ollama.vision_model),
+            "installed_models": [],
+            "vision_capable_installed": [],
+            "families_supported": [],
+        }
     if ollama is None or not ollama.is_configured():
         return {
             "ollama_configured": False,
+            "provider": "ollama",
             "vision_model_config": "",
             "vision_model_resolved": None,
             "vision_capable": False,
@@ -126,6 +141,7 @@ async def vision_status(request: Request) -> dict[str, Any]:
         vision_caps.append(resolved)
     return {
         "ollama_configured": True,
+        "provider": "ollama",
         "vision_model_config": ollama.vision_model_config,
         "vision_model_resolved": resolved,
         "vision_capable": bool(resolved),
@@ -144,15 +160,19 @@ async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResp
 
     Used by the onboarding wizard's "Install vision model" button and by
     the Settings → Integrations → Ollama vision card."""
-    ollama = getattr(request.app.state, "ollama", None)
-    if ollama is None or not ollama.is_configured():
-        raise HTTPException(503, detail="ollama not configured")
+    ollama = getattr(request.app.state, "llm", None)
+    if ollama is None:
+        raise HTTPException(503, detail="llm not configured")
+    if not ollama.supports_pull:
+        raise HTTPException(409, detail="not supported by this provider")
+    if not ollama.is_configured():
+        raise HTTPException(503, detail="llm not configured")
 
     async def gen():
         try:
             async for line in ollama.pull_model(req.name):
                 yield (line + "\n").encode("utf-8")
-        except OllamaError as e:
+        except LLMError as e:
             err = json.dumps({"error": safe_error(e)})
             yield (err + "\n").encode("utf-8")
 
@@ -161,9 +181,9 @@ async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResp
 
 @router.post("/check")
 async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, Any]:
-    ollama = request.app.state.ollama
-    if not ollama.is_configured():
-        raise HTTPException(503, detail="ollama not configured")
+    ollama = getattr(request.app.state, "llm", None)
+    if ollama is None or not ollama.is_configured():
+        raise HTTPException(503, detail="llm not configured")
     # SSRF guard: image_url is fetched server-side. Only allow the
     # configured Plex / Tautulli thumbnail hosts; everything else must
     # arrive as image_b64.
@@ -186,11 +206,13 @@ async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, A
             prompt=req.prompt or PROMPT,
             model=req.model,  # None -> resolve_vision_model()
         )
-    except OllamaError as e:
+    except LLMCoolingDown:
+        raise HTTPException(503, detail="cooling down")
+    except LLMError as e:
         msg = str(e)
         # #232: a missing vision model is NOT a backend failure — it's a
         # missing prerequisite. 503 with the actionable hint, not 502.
-        if "no vision-capable model" in msg:
+        if "no vision-capable model" in msg or "vision not configured" in msg:
             raise HTTPException(503, detail=msg)
         raise HTTPException(502, detail=msg)
     # Best-effort JSON parse from the model output

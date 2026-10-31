@@ -58,7 +58,7 @@ from .config import settings
 from .coverage_engine import IntegrationBundle
 from .docker_client import DockerOps
 from .enrichment import EnrichmentStore
-from .integrations.ollama import OllamaClient
+from .integrations.llm import build_llm_client
 from .pending_store import PendingStore
 from .probe_store import ProbeStore
 from .probe_walker import ProbeWalker
@@ -495,7 +495,7 @@ async def lifespan(app_: FastAPI):
         # ollama EXPLAINS the result in plain language (not scoring). Resolved
         # live so an onboarding ollama-config swap is picked up without restart.
         explainer=lambda result, media_path: _arena_explain.explain(
-            result, media_path, getattr(app_.state, "ollama", None)
+            result, media_path, getattr(app_.state, "llm", None)
         ),
         # Fallback source language when Whisper robust detection is inconclusive:
         # the file's KNOWN audio language from the ffprobe tag (probe_store).
@@ -618,7 +618,7 @@ async def lifespan(app_: FastAPI):
     app_.state.queue_feeder._health = app_.state.task_health  # #157 supervision
     app_.state.queue_feeder.start()
 
-    app_.state.ollama = OllamaClient()
+    app_.state.llm = build_llm_client()
     # #119: last-known ollama reachability, populated by the integrations-
     # health probe (GET /api/integrations/health). None until first probe;
     # telemetry gates "ollama configured" on this real signal instead of
@@ -1145,7 +1145,7 @@ async def lifespan(app_: FastAPI):
         await app_.state.runner.aclose()
         await app_.state.subgen.aclose()
         await app_.state.integrations.aclose()
-        await app_.state.ollama.aclose()
+        await app_.state.llm.aclose()
         app_.state.scans.close()
         app_.state.errors.close()
         app_.state.task_health.close()  # #157

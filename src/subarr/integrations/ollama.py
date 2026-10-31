@@ -86,6 +86,7 @@ def _match_configured_model(installed: list[str], cfg: str) -> str | None:
 
 class OllamaClient:
     # #616: capability flags the routers/UI branch on instead of isinstance.
+    provider = "ollama"
     supports_pull = True
     supports_unload = True
     is_local_gpu = True

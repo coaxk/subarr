@@ -19,10 +19,15 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .data_persistence import apply_journal_mode
-from .integrations.ollama import OllamaClient, OllamaError
+from .integrations.llm import LLMError
+from .integrations.openai_compat import LLMCoolingDown
+
+if TYPE_CHECKING:
+    from .integrations.ollama import OllamaClient
+    from .integrations.openai_compat import OpenAICompatClient
 
 log = logging.getLogger(__name__)
 
@@ -218,7 +223,7 @@ async def enrich_one(
     *,
     canonical_path: str,
     title: str,
-    ollama: OllamaClient,
+    ollama: OllamaClient | OpenAICompatClient,
     store: EnrichmentStore,
     use_cache: bool = True,
     keep_alive: str | int | None = None,
@@ -251,7 +256,9 @@ async def enrich_one(
             keep_alive=keep_alive,
             format_schema=_LANG_SCHEMA,
         )
-    except OllamaError as e:
+    except LLMCoolingDown:
+        raise
+    except LLMError as e:
         store.upsert(
             canonical_path=canonical_path,
             title=title,

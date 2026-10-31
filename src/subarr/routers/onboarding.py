@@ -912,16 +912,16 @@ async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:
     """
     from ..coverage_engine import IntegrationBundle
     from ..subgen_client import SubgenClient
-    from ..integrations.ollama import OllamaClient
+    from ..integrations.llm import build_llm_client
 
     old_integrations = getattr(state, "integrations", None)
     old_subgen = getattr(state, "subgen", None)
-    old_ollama = getattr(state, "ollama", None)
+    old_llm = getattr(state, "llm", None)
 
     # Construct fresh clients — they read the now-updated Settings.
     state.integrations = IntegrationBundle()
     state.subgen = SubgenClient()
-    state.ollama = OllamaClient()
+    state.llm = build_llm_client()
 
     if reprobe:
         try:
@@ -930,7 +930,7 @@ async def _rebuild_runtime_clients(state, reprobe: bool = True) -> None:
             log.warning("live-reload: subgen caps re-probe failed: %s", e)
 
     # Close the old clients after the swap so nothing routes to them.
-    for old in (old_integrations, old_subgen, old_ollama):
+    for old in (old_integrations, old_subgen, old_llm):
         if old is None:
             continue
         try:

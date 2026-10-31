@@ -8,8 +8,15 @@ client module needs to import the other.
 
 from __future__ import annotations
 
-from typing import Literal
+import logging
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from .ollama import OllamaClient
+    from .openai_compat import OpenAICompatClient
+
+log = logging.getLogger(__name__)
 
 # Which thinking-off / token-cap dialect the endpoint speaks.
 Profile = Literal["local", "openai", "openrouter"]
@@ -19,6 +26,25 @@ _PROFILES = ("local", "openai", "openrouter")
 
 class LLMError(RuntimeError):
     pass
+
+
+def build_llm_client() -> OllamaClient | OpenAICompatClient:
+    """#616: the one active LLM client, chosen by settings.llm_provider."""
+    from ..config import settings
+    from .ollama import OllamaClient
+    from .openai_compat import OpenAICompatClient
+
+    if settings.llm_provider == "openai":
+        return OpenAICompatClient(
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            vision=settings.openai_vision,
+            server_type=settings.openai_server_type,
+        )
+    if settings.llm_provider != "ollama":
+        log.warning("unknown llm_provider %r; using ollama", settings.llm_provider)
+    return OllamaClient()
 
 
 def resolve_profile(base_url: str, server_type: str | None) -> Profile:

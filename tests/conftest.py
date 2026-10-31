@@ -537,7 +537,16 @@ def app_with_stub(subarr_env, request):
 
     ollama_marker = request.node.get_closest_marker("ollama_stub")
     ollama_kwargs = ollama_marker.kwargs if ollama_marker else {}
-    app_mod.OllamaClient = _make_ollama_stub(**ollama_kwargs)  # type: ignore[attr-defined]
+    ollama_stub_cls = _make_ollama_stub(**ollama_kwargs)
+    from subarr import config as _config
+    from subarr.integrations import llm as _llm
+
+    def _build_llm_stub():
+        if _config.settings.llm_provider == "openai":
+            return _llm.build_llm_client()
+        return ollama_stub_cls()
+
+    app_mod.build_llm_client = _build_llm_stub  # type: ignore[attr-defined]
 
     with TestClient(app) as c:
         yield c

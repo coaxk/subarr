@@ -241,6 +241,21 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                     "vision_capable": bool(vision_resolved),
                 },
             }
+        if summary_kind == "openai_models":
+            names = await client.models()
+            return {
+                "name": name,
+                "online": True,
+                "configured": True,
+                "version": None,
+                "badges": {
+                    "models": len(names),
+                    "model_names": ", ".join(names[:3]) + (" ..." if len(names) > 3 else ""),
+                    "vision_model_config": client.vision_model_config,
+                    "vision_model_resolved": client.vision_model or "",
+                    "vision_capable": bool(client.vision_model),
+                },
+            }
         if summary_kind == "bazarr_badges":
             # Run both concurrently but retrieve BOTH results even if one
             # raises — return_exceptions=True means neither task is ever left
@@ -287,7 +302,7 @@ async def integrations_health(request: Request) -> dict[str, Any]:
     # (used only by lang_enrichment, not coverage flow). Treating it like
     # a first-class integration here so the Settings panel can show its
     # model list + reachability without us inventing a separate endpoint.
-    ollama = getattr(request.app.state, "ollama", None)
+    llm = getattr(request.app.state, "llm", None)
     probes_coros = [
         _probe("bazarr", integrations.bazarr, "bazarr_badges"),
         _probe("sonarr", integrations.sonarr),
@@ -296,16 +311,17 @@ async def integrations_health(request: Request) -> dict[str, Any]:
         _probe("jellyfin", integrations.jellyfin),
         _probe("tautulli", integrations.tautulli),
     ]
-    if ollama is not None:
-        probes_coros.append(_probe("ollama", ollama, "ollama_models"))
+    if llm is not None:
+        summary_kind = "ollama_models" if llm.provider == "ollama" else "openai_models"
+        probes_coros.append(_probe("ollama", llm, summary_kind))
     probes = await asyncio.gather(*probes_coros)
     # #119: cache ollama reachability on app.state so telemetry reports it
     # on a real signal (was /api/tags up?) instead of the defaulted URL.
     # The ollama probe, when present, is always the last entry appended.
-    if ollama is not None:
+    if llm is not None:
         ollama_probe = next((p for p in probes if p.get("name") == "ollama"), None)
         request.app.state.ollama_probe_result = OllamaProbeResult(
-            reachable=bool(ollama_probe and ollama_probe.get("online"))
+            reachable=bool(ollama_probe and ollama_probe.get("online")) and llm.provider == "ollama"
         )
     # Subgen capabilities probed once at boot, cached on app.state.
     # Surfaced here so the UI can show "compat mode" badges + gate

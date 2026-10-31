@@ -162,6 +162,7 @@ class LLMCoolingDown(LLMError):
 
 class OpenAICompatClient:
     # #616: capability flags the routers/UI branch on instead of isinstance.
+    provider = "openai"
     supports_pull = False
     supports_unload = False
 
@@ -209,6 +210,11 @@ class OpenAICompatClient:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def vision_model_config(self) -> str:
+        """The raw OPENAI_VISION setting (e.g. "off", "same" or a model id)."""
+        return self._vision
 
     @property
     def vision_model(self) -> str | None:

@@ -139,13 +139,13 @@ async def test_rebuild_runtime_clients_swaps_and_closes():
             self.closed = True
 
     old_b, old_s, old_o = FakeClient(), FakeClient(), FakeClient()
-    state = SimpleNamespace(integrations=old_b, subgen=old_s, ollama=old_o, subgen_caps="stale")
+    state = SimpleNamespace(integrations=old_b, subgen=old_s, llm=old_o, subgen_caps="stale")
     # reprobe=False keeps the test hermetic (no network to subgen).
     await _rebuild_runtime_clients(state, reprobe=False)
 
     assert state.integrations is not old_b
     assert state.subgen is not old_s
-    assert state.ollama is not old_o
+    assert state.llm is not old_o
     assert old_b.closed and old_s.closed and old_o.closed
 
 
