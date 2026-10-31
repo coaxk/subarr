@@ -18,11 +18,12 @@ import httpx
 
 from ..config import settings
 from .base import _is_client_closed
+from .llm import LLMError
 
 log = logging.getLogger(__name__)
 
 
-class OllamaError(RuntimeError):
+class OllamaError(LLMError):
     pass
 
 
@@ -84,6 +85,11 @@ def _match_configured_model(installed: list[str], cfg: str) -> str | None:
 
 
 class OllamaClient:
+    # #616: capability flags the routers/UI branch on instead of isinstance.
+    supports_pull = True
+    supports_unload = True
+    is_local_gpu = True
+
     def __init__(
         self,
         base_url: str | None = None,
