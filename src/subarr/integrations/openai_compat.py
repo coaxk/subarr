@@ -8,13 +8,16 @@ thinking-off knobs differ per server profile (see `llm.resolve_profile`).
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
+import math
 from typing import Any
 
 import httpx
 
+from ..circuit_breaker import CircuitBreaker
 from ..config import settings
 from .base import _is_client_closed
 from .llm import LLMError, resolve_profile
@@ -22,7 +25,8 @@ from .llm import LLMError, resolve_profile
 log = logging.getLogger(__name__)
 
 # #616: a 400 that names one of the optional parameters is retried with that
-# parameter dropped or changed; every other non-200 still fails immediately.
+# parameter dropped or changed; every other non-200 fails immediately, except
+# a 429/5xx, which may be retried once after a `retry-after`.
 
 # Local servers can take a while on first model load. Hosted endpoints get a
 # slightly longer connect budget (TLS + DNS + a shared edge).
@@ -41,6 +45,12 @@ _NEGOTIABLE = (
 )
 _MAX_NEGOTIATIONS = 3
 
+# #616: the longest `retry-after` wait honoured; longer values fail at once.
+_RETRY_AFTER_MAX_S = 30.0
+
+# Patchable sleep, so tests never wait.
+_sleep = asyncio.sleep
+
 # Learned request shapes keyed by (base_url, model, profile).
 _SHAPES: dict[tuple[str, str, str], dict] = {}
 
@@ -48,6 +58,20 @@ _SHAPES: dict[tuple[str, str, str], dict] = {}
 def reset_negotiation_cache() -> None:
     """Forget every learned request shape."""
     _SHAPES.clear()
+
+
+def _retry_after_delay(response: httpx.Response) -> float | None:
+    """The `retry-after` delay in seconds, or None when it is not honoured."""
+    value = response.headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        delay = float(value.strip())
+    except ValueError:
+        return None
+    if not math.isfinite(delay) or not 0 <= delay <= _RETRY_AFTER_MAX_S:
+        return None
+    return delay
 
 
 def _redact(text: str, key: str) -> str:
@@ -110,6 +134,10 @@ def _with_schema_hint(messages: list[dict[str, Any]], format_schema: dict) -> li
     return copied
 
 
+class LLMCoolingDown(LLMError):
+    """#616: the client's breaker is open, so no request was sent."""
+
+
 class OpenAICompatClient:
     # #616: capability flags the routers/UI branch on instead of isinstance.
     supports_pull = False
@@ -123,6 +151,7 @@ class OpenAICompatClient:
         vision: str | None = None,
         server_type: str | None = None,
         timeout: httpx.Timeout | None = None,
+        breaker: CircuitBreaker | None = None,
     ):
         # `is None` (not `or`): an explicit "" means "no key", even when settings
         # holds one, so a caller can build a keyless client for a local server.
@@ -141,6 +170,12 @@ class OpenAICompatClient:
         # No Authorization header on the shared client: tests swap `_client`
         # for a MockTransport one, so the header is passed per request instead.
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+        # #616: per-client breaker, injected by the caller if tuned.
+        self._breaker = breaker or CircuitBreaker(name="llm", fail_threshold=5, cooldown_s=60.0)
+
+    @property
+    def breaker(self) -> CircuitBreaker:
+        return self._breaker
 
     @property
     def is_local_gpu(self) -> bool:
@@ -204,95 +239,128 @@ class OpenAICompatClient:
     ) -> str:
         """Build the profile's request body, send it and unwrap the reply.
 
-        Parameter negotiation and the reasoning retry happen in this loop;
-        keep this the single place a completion request is made."""
+        Parameter negotiation, the reasoning retry and the retry-after wait
+        happen in this loop; keep this the single place a completion request
+        is made."""
         if not self._configured:
             raise LLMError("llm not configured (set OPENAI_BASE_URL + OPENAI_MODEL)")
+        # #616: fail fast while the per-client breaker is open.
+        if not self._breaker.allow():
+            raise LLMCoolingDown("LLM provider cooling down after repeated failures; try again in a minute")
         key = (self._base_url, self._model, self.profile)
         shape = copy.deepcopy(_SHAPES.get(key, {})) if use_learned else {}
         negotiations = 0
         swapped_cap = False
-        while True:
-            raised_now = bool(shape.get("raise_cap"))
-            body = self._build_body(
-                shape,
-                messages,
-                cap=cap,
-                temperature=temperature,
-                format_schema=format_schema,
-                schema_name=schema_name,
-            )
-            try:
-                r = await self._client.post("/chat/completions", json=body, headers=self._headers())
-            except httpx.HTTPError as e:
-                raise LLMError(_redact(f"llm /chat/completions failed: {e}", self._api_key)) from e
-            except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
-                if not _is_client_closed(e):
-                    raise
-                raise LLMError("llm /chat/completions: client closed mid-request (live rebuild)") from e
-            if r.status_code in (401, 403):
-                # Never include the body: a proxy may echo the key back.
-                raise LLMError("LLM API key rejected (check OPENAI_API_KEY)")
-            if r.status_code == 404:
-                raise LLMError("model not found at this server (check OPENAI_MODEL and the /v1 base URL)")
-            if r.status_code == 400:
-                err_param, err_msg, err_code = _parse_error(r.text)
-                if err_msg is None:
-                    err_msg = r.text
-                retry, swapped_cap = self._negotiate(
-                    body, shape, err_param, err_msg, err_code, negotiations, swapped_cap
+        waited = False
+        outcome: bool | None = None
+        try:
+            while True:
+                raised_now = bool(shape.get("raise_cap"))
+                body = self._build_body(
+                    shape,
+                    messages,
+                    cap=cap,
+                    temperature=temperature,
+                    format_schema=format_schema,
+                    schema_name=schema_name,
                 )
-                if retry:
-                    negotiations += 1
-                    continue
-            if r.status_code != 200:
-                # Redact the whole body FIRST, then truncate: a key straddling the
-                # 200-char cut must not leave a partial key behind.
-                safe = _redact(r.text, self._api_key)[:200]
-                raise LLMError(f"llm /chat/completions status {r.status_code}: {safe}")
-            if shape:
-                _SHAPES[key] = copy.deepcopy(shape)
-            else:
-                _SHAPES.pop(key, None)
-            try:
-                data = r.json()
-            except ValueError as e:
-                raise LLMError(_redact(f"llm returned non-json: {e}", self._api_key)) from e
-            choices = data.get("choices") if isinstance(data, dict) else None
-            if not choices:
-                raise LLMError("llm reply has no choices")
-            message = choices[0].get("message") if isinstance(choices[0], dict) else None
-            if not isinstance(message, dict):
-                raise LLMError("llm reply has no message")
-            content = message.get("content")
-            raw = "" if content is None else str(content)
-            text = raw.strip()
-            # Some servers inline reasoning in content; drop a LEADING block only.
-            if text.startswith("<think>"):
-                end = text.find("</think>")
-                if end == -1:
-                    text = ""  # all reasoning, no answer
-                else:
-                    text = text[end + len("</think>") :].strip()
-            finish_reason = choices[0].get("finish_reason")
-            if not text:
-                if finish_reason == "length":
-                    reasoning_present = _has_reasoning(message) or raw.strip().startswith("<think>")
-                    if reasoning_present and not raised_now:
-                        shape["raise_cap"] = True
+                try:
+                    r = await self._client.post("/chat/completions", json=body, headers=self._headers())
+                except httpx.HTTPError as e:
+                    outcome = False
+                    raise LLMError(_redact(f"llm /chat/completions failed: {e}", self._api_key)) from None
+                except RuntimeError as e:  # #392: client closed mid-rebuild → graceful
+                    if not _is_client_closed(e):
+                        raise
+                    raise LLMError("llm /chat/completions: client closed mid-request (live rebuild)") from e
+                if r.status_code in (401, 403):
+                    # Never include the body: a proxy may echo the key back.
+                    outcome = True
+                    raise LLMError("LLM API key rejected (check OPENAI_API_KEY)")
+                if r.status_code == 404:
+                    outcome = True
+                    raise LLMError("model not found at this server (check OPENAI_MODEL and the /v1 base URL)")
+                if r.status_code == 400:
+                    err_param, err_msg, err_code = _parse_error(r.text)
+                    if err_msg is None:
+                        err_msg = r.text
+                    retry, swapped_cap = self._negotiate(
+                        body, shape, err_param, err_msg, err_code, negotiations, swapped_cap
+                    )
+                    if retry:
+                        negotiations += 1
+                        continue
+                if (r.status_code == 429 or r.status_code >= 500) and not waited:
+                    delay = _retry_after_delay(r)
+                    if delay is not None:
+                        waited = True
                         log.info(
-                            "#616: %s reply was all reasoning; retrying with a %s cap (model %s)",
+                            "#616: %s returned %s; waiting %ss before one retry (model %s)",
                             self.profile,
-                            _raised(cap),
+                            r.status_code,
+                            delay,
                             self._model,
                         )
+                        outcome = None
+                        await _sleep(delay)
                         continue
-                    raise LLMError(
-                        "the model used its whole reply budget reasoning; "
-                        "turn thinking off on the server or choose a non-thinking model"
-                    )
-                raise LLMError("the model returned an empty reply")
-            return text
+                if r.status_code != 200:
+                    outcome = not (r.status_code == 429 or r.status_code >= 500)
+                    # Redact the whole body FIRST, then truncate: a key straddling the
+                    # 200-char cut must not leave a partial key behind.
+                    safe = _redact(r.text, self._api_key)[:200]
+                    raise LLMError(f"llm /chat/completions status {r.status_code}: {safe}")
+                outcome = True
+                if shape:
+                    _SHAPES[key] = copy.deepcopy(shape)
+                else:
+                    _SHAPES.pop(key, None)
+                try:
+                    data = r.json()
+                except ValueError as e:
+                    raise LLMError(_redact(f"llm returned non-json: {e}", self._api_key)) from None
+                choices = data.get("choices") if isinstance(data, dict) else None
+                if not choices:
+                    raise LLMError("llm reply has no choices")
+                message = choices[0].get("message") if isinstance(choices[0], dict) else None
+                if not isinstance(message, dict):
+                    raise LLMError("llm reply has no message")
+                content = message.get("content")
+                raw = "" if content is None else str(content)
+                text = raw.strip()
+                # Some servers inline reasoning in content; drop a LEADING block only.
+                if text.startswith("<think>"):
+                    end = text.find("</think>")
+                    if end == -1:
+                        text = ""  # all reasoning, no answer
+                    else:
+                        text = text[end + len("</think>") :].strip()
+                finish_reason = choices[0].get("finish_reason")
+                if not text:
+                    if finish_reason == "length":
+                        reasoning_present = _has_reasoning(message) or raw.strip().startswith("<think>")
+                        if reasoning_present and not raised_now:
+                            shape["raise_cap"] = True
+                            log.info(
+                                "#616: %s reply was all reasoning; retrying with a %s cap (model %s)",
+                                self.profile,
+                                _raised(cap),
+                                self._model,
+                            )
+                            outcome = None
+                            continue
+                        raise LLMError(
+                            "the model used its whole reply budget reasoning; "
+                            "turn thinking off on the server or choose a non-thinking model"
+                        )
+                    raise LLMError("the model returned an empty reply")
+                return text
+        finally:
+            if outcome is not None:
+                if outcome:
+                    self._breaker.record_success()
+                else:
+                    self._breaker.record_failure()
 
     def _cap_field(self) -> str:
         return "max_completion_tokens" if self.profile == "openai" else "max_tokens"
