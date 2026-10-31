@@ -9,6 +9,7 @@ thinking-off knobs differ per server profile (see `llm.resolve_profile`).
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import logging
@@ -51,6 +52,10 @@ _RETRY_AFTER_MAX_S = 30.0
 # Patchable sleep, so tests never wait.
 _sleep = asyncio.sleep
 
+# #616: image fetches use their own client, so tests can swap the transport.
+_IMAGE_FETCH_TIMEOUT = 30.0
+_image_fetch_transport: httpx.AsyncBaseTransport | None = None
+
 # Learned request shapes keyed by (base_url, model, profile).
 _SHAPES: dict[tuple[str, str, str], dict] = {}
 
@@ -58,6 +63,23 @@ _SHAPES: dict[tuple[str, str, str], dict] = {}
 def reset_negotiation_cache() -> None:
     """Forget every learned request shape."""
     _SHAPES.clear()
+
+
+def _image_mime(image_b64: str) -> str:
+    """Best-effort MIME type from the magic bytes at the head of the payload."""
+    try:
+        head = base64.b64decode(image_b64[:24], validate=False)
+    except ValueError:
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
 
 
 def _retry_after_delay(response: httpx.Response) -> float | None:
@@ -188,6 +210,25 @@ class OpenAICompatClient:
     def model(self) -> str:
         return self._model
 
+    @property
+    def vision_model(self) -> str | None:
+        """The vision model id, or None when vision is off."""
+        v = self._vision
+        if v == "" or v.lower() == "off":
+            return None
+        if v.lower() == "same":
+            return self._model or None
+        return v
+
+    async def resolve_vision_model(self, installed: list[str] | None = None) -> str | None:
+        """#616: the vision model id; `installed` is accepted for signature
+        compatibility with OllamaClient.resolve_vision_model and ignored."""
+        return self.vision_model
+
+    def reset_vision_cache(self) -> None:
+        """No-op: there is no cache; exists for signature compatibility with OllamaClient."""
+        return
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -195,6 +236,41 @@ class OpenAICompatClient:
         if not self._api_key:
             return {}
         return {"Authorization": f"Bearer {self._api_key}"}
+
+    async def models(self) -> list[str]:
+        """#616: GET /models — the server's model ids, in server order."""
+        if not self._base_url:
+            raise LLMError("llm not configured (set OPENAI_BASE_URL)")
+        # #616: this is the liveness probe, so it must report the server's real
+        # state, and a working /models must not reset the completion failure
+        # count while completions fail; the breaker is neither gated nor recorded.
+        try:
+            r = await self._client.get("/models", headers=self._headers())
+        except httpx.HTTPError as e:
+            raise LLMError(_redact(f"llm /models failed: {e}", self._api_key)) from None
+        except RuntimeError as e:  # #616: client closed mid-rebuild → graceful
+            if not _is_client_closed(e):
+                raise
+            raise LLMError("llm /models: client closed mid-request (live rebuild)") from e
+        if r.status_code in (401, 403):
+            # Never include the body: a proxy may echo the key back.
+            raise LLMError("LLM API key rejected (check OPENAI_API_KEY)")
+        if r.status_code != 200:
+            # Redact the whole body FIRST, then truncate.
+            safe = _redact(r.text, self._api_key)[:200]
+            raise LLMError(f"llm /models status {r.status_code}: {safe}")
+        try:
+            data = r.json()
+        except ValueError as e:
+            raise LLMError(_redact(f"llm /models returned non-json: {e}", self._api_key)) from None
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise LLMError("llm /models reply has no data list")
+        return [
+            item["id"]
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+        ]
 
     async def generate(
         self,
@@ -227,27 +303,96 @@ class OpenAICompatClient:
             use_learned=use_learned,
         )
 
+    async def vision_describe(
+        self,
+        *,
+        image_url: str | None = None,
+        image_b64: str | None = None,
+        prompt: str,
+        model: str | None = None,
+        num_predict: int = 256,
+    ) -> str:
+        """#616: describe an image through /chat/completions.
+
+        Pass either a URL we fetch and base64-encode, or pre-encoded base64
+        (which wins when both are given)."""
+        if not self._configured:
+            raise LLMError("llm not configured (set OPENAI_BASE_URL + OPENAI_MODEL)")
+        vision_model = self.vision_model
+        if vision_model is None:
+            raise LLMError("vision not configured (set OPENAI_VISION to same or a model id)")
+        chosen = model.strip() if model and model.strip() else vision_model
+        if not image_b64 and not image_url:
+            raise LLMError("vision_describe needs image_url or image_b64")
+        if not image_b64:
+            assert image_url is not None
+            image_b64 = await self._fetch_image_b64(image_url)
+        data_uri = f"data:{_image_mime(image_b64)};base64,{image_b64}"
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            }
+        ]
+        return await self._chat(
+            messages,
+            cap=num_predict,
+            temperature=0.1,
+            format_schema=None,
+            schema_name="subarr",
+            model=chosen,
+        )
+
+    async def _fetch_image_b64(self, image_url: str) -> str:
+        """Fetch an image with a throwaway client and return its base64 body."""
+        try:
+            # #616: routers/vision.py allowlists only the URL it was given, so a
+            # redirect must not be followed.
+            async with httpx.AsyncClient(
+                timeout=_IMAGE_FETCH_TIMEOUT,
+                transport=_image_fetch_transport,
+                follow_redirects=False,
+            ) as fetch:
+                r = await fetch.get(image_url)
+                content = r.content
+        # The URL can carry a Plex token or a Tautulli API key in its query
+        # string, and httpx exception text carries the URL, so only the type name.
+        except Exception as e:
+            raise LLMError(f"image fetch failed: {type(e).__name__}") from None
+        if 300 <= r.status_code <= 399:
+            raise LLMError(f"image fetch failed: HTTP {r.status_code} (redirects are not followed)")
+        if r.status_code != 200:
+            raise LLMError(f"image fetch failed: HTTP {r.status_code}")
+        if not content:
+            raise LLMError("image fetch returned no data")
+        return base64.b64encode(content).decode("ascii")
+
     async def _chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         cap: int,
         temperature: float,
         format_schema: dict | None,
         schema_name: str,
         use_learned: bool = True,
+        model: str | None = None,
     ) -> str:
         """Build the profile's request body, send it and unwrap the reply.
 
         Parameter negotiation, the reasoning retry and the retry-after wait
         happen in this loop; keep this the single place a completion request
         is made."""
+        model_id = model or self._model
         if not self._configured:
             raise LLMError("llm not configured (set OPENAI_BASE_URL + OPENAI_MODEL)")
         # #616: fail fast while the per-client breaker is open.
         if not self._breaker.allow():
             raise LLMCoolingDown("LLM provider cooling down after repeated failures; try again in a minute")
-        key = (self._base_url, self._model, self.profile)
+        key = (self._base_url, model_id, self.profile)
         shape = copy.deepcopy(_SHAPES.get(key, {})) if use_learned else {}
         negotiations = 0
         swapped_cap = False
@@ -263,6 +408,7 @@ class OpenAICompatClient:
                     temperature=temperature,
                     format_schema=format_schema,
                     schema_name=schema_name,
+                    model_id=model_id,
                 )
                 try:
                     r = await self._client.post("/chat/completions", json=body, headers=self._headers())
@@ -299,7 +445,7 @@ class OpenAICompatClient:
                             self.profile,
                             r.status_code,
                             delay,
-                            self._model,
+                            model_id,
                         )
                         outcome = None
                         await _sleep(delay)
@@ -345,7 +491,7 @@ class OpenAICompatClient:
                                 "#616: %s reply was all reasoning; retrying with a %s cap (model %s)",
                                 self.profile,
                                 _raised(cap),
-                                self._model,
+                                model_id,
                             )
                             outcome = None
                             continue
@@ -368,15 +514,16 @@ class OpenAICompatClient:
     def _build_body(
         self,
         shape: dict,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         cap: int,
         temperature: float,
         format_schema: dict | None,
         schema_name: str,
+        model_id: str,
     ) -> dict[str, Any]:
         drop = set(shape.get("drop", ()))
-        body: dict[str, Any] = {"model": self._model, "messages": messages}
+        body: dict[str, Any] = {"model": model_id, "messages": messages}
         if "temperature" not in drop:
             body["temperature"] = temperature
         # Token-cap field and thinking-off knobs differ per profile. Ollama
@@ -441,7 +588,7 @@ class OpenAICompatClient:
                 self.profile,
                 named,
                 other,
-                self._model,
+                body["model"],
             )
             return True, True
         if named == "reasoning_effort" and value_error and self.profile == "openai":
@@ -452,7 +599,7 @@ class OpenAICompatClient:
                     "#616: %s rejected %s; retrying without it (model %s)",
                     self.profile,
                     named,
-                    self._model,
+                    body["model"],
                 )
             else:
                 new_value = "minimal" if current == "none" else "low"
@@ -462,7 +609,7 @@ class OpenAICompatClient:
                     self.profile,
                     named,
                     new_value,
-                    self._model,
+                    body["model"],
                 )
             return True, swapped_cap
         _drop(shape, named)
@@ -470,7 +617,7 @@ class OpenAICompatClient:
             "#616: %s rejected %s; retrying without it (model %s)",
             self.profile,
             named,
-            self._model,
+            body["model"],
         )
         return True, swapped_cap
 
