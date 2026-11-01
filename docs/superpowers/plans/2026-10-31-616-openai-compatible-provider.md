@@ -258,15 +258,18 @@ Judd asked for this on 2026-11-01, after Task 8 (`d2b88d2`). Before Task 8, `_pa
 
 **Files:**
 - Modify: `src/subarr/telemetry.py` (~560-576)
-- Test: `tests/test_telemetry.py` (extend)
-- Check first: the `coaxk/subarr-telemetry` ingest (`gh repo clone coaxk/subarr-telemetry` into a temp dir and grep its payload schema). If it rejects unknown fields, STOP and report back: that repo needs the field added first, in its own PR.
+- Test: a new `tests/test_telemetry_llm_provider.py` (`tests/test_telemetry.py` must still pass unchanged)
+
+**Ingest check (done 2026-11-01, coaxk/subarr-telemetry `cd33c06`):** `validatePayload` in `src/worker.js` keeps only `ALLOWED_FIELDS` and silently DROPS any other top-level key, so a top-level `llm_provider` would be sent and never stored. The `integrations` object is stored as-is (`integrations_json`); its keys must be short safe strings and its values booleans or numbers, and `/v1/stats/integrations` counts every `true` key generically. Judd chose (2026-11-01) booleans inside `integrations` over a telemetry-repo PR.
 
 **Interfaces:**
-- Produces: payload key `llm_provider` in `{"ollama", "openai-local", "openai-hosted"}`. The existing `ollama` boolean keeps its meaning (Ollama reachable, False when another provider is active).
+- Produces: two new keys in the payload's `integrations` object, `openai_local` and `openai_hosted` (booleans). No new top-level key. Both are True only when `llm_provider == "openai"` and both `openai_base_url` and `openai_model` are non-empty; then `resolve_profile(base_url, server_type)` decides: `local` -> `openai_local`, `openai` or `openrouter` -> `openai_hosted`. The existing `ollama` boolean keeps its meaning (Ollama reachable, already False when another provider is active).
 
-- [ ] **Step 1: Write failing tests** `test_llm_provider_field` (all three values) and `test_payload_has_no_llm_secrets` (with the url `http://secret-host/v1`, key `sk-test-123` and model `m-secret` set, the serialised payload contains none of those strings).
+- [ ] **Step 1: Write failing tests** for every provider/profile combination and `test_payload_has_no_llm_secrets` (with the url `http://secret-host/v1`, a key and model `m-secret` set, the serialised payload contains none of those strings).
 - [ ] **Step 2-4:** run (FAIL), implement, run (PASS).
 - [ ] **Step 5: Commit** `feat(616): telemetry reports the LLM provider kind`.
+
+Task 10 note: the Settings UI's telemetry disclosure, if it lists the integrations sent, gains these two keys.
 
 ### Task 10: Settings UI
 
