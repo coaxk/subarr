@@ -391,6 +391,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
                 out.append(
                     {
                         "name": "ollama",
+                        "provider": ollama.provider,
                         "status": "ok",
                         "version": "",  # ollama /api/tags doesn't surface server version
                         "ping": 0,
@@ -403,6 +404,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
                 out.append(
                     {
                         "name": "ollama",
+                        "provider": ollama.provider,
                         "status": "error",
                         "version": "",
                         "ping": 0,
@@ -414,6 +416,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
             out.append(
                 {
                     "name": "ollama",
+                    "provider": ollama.provider,
                     "status": "muted",
                     "version": "",
                     "ping": 0,
