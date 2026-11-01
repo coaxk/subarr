@@ -115,7 +115,10 @@ class CredentialsBody(BaseModel):
 
 
 class TestBody(BaseModel):
-    url: str
+    # #649: every field is optional. The editor omits env-managed fields, so
+    # an all-env card posts {}; test_credentials fills each missing field
+    # from the live settings instead of rejecting the request 422.
+    url: str | None = None
     api_key: str | None = None
     token: str | None = None  # Plex
     model: str | None = None  # OpenAI-compatible
@@ -230,15 +233,38 @@ async def test_credentials(name: str, body: TestBody, request: Request) -> dict[
     svc = name.lower()
     if svc not in _CREDENTIAL_FIELDS:
         raise HTTPException(404, detail=f"unknown integration: {svc}")
+    from ..config import settings
+    from ..onboarding import _is_masked
+
+    # #649: a field the editor omitted (env-managed) or left blank is tested
+    # with its CURRENT value, so an env-configured card tests what is actually
+    # configured. A supplied value still wins (test-before-save). A masked
+    # secret is treated as omitted too; onboarding's resolver does the same
+    # for the services it knows, this covers the rest (jellyfin).
+    values = body.model_dump()
+    for key, (settings_attr, _coerce) in _CREDENTIAL_FIELDS[svc].items():
+        supplied = values.get(key)
+        if supplied and not (key in _SECRET_KEYS and _is_masked(supplied)):
+            continue
+        current = getattr(settings, settings_attr, None)
+        if current:
+            values[key] = str(current)
+    if not values.get("url"):
+        return {
+            "ok": False,
+            "version": None,
+            "detail": None,
+            "error": f"No URL configured for {svc}",
+        }
     # Map the credential body onto the onboarding TestRequest. Plex's token
     # rides in `token`; everything else in `api_key`.
     req = TestRequest(
-        url=body.url,
-        api_key=body.api_key,
-        token=body.token,
-        model=body.model,
-        vision=body.vision,
-        server_type=body.server_type,
+        url=values["url"],
+        api_key=values.get("api_key"),
+        token=values.get("token"),
+        model=values.get("model"),
+        vision=values.get("vision"),
+        server_type=values.get("server_type"),
     )
     return await test_connection(svc, req, request)
 
