@@ -105,20 +105,20 @@ async def vision_status(request: Request) -> dict[str, Any]:
         families_supported: list[str],   # the allowlist, for UI hints
       }
     """
-    ollama = getattr(request.app.state, "llm", None)
-    if ollama is not None and ollama.provider == "openai":
-        configured = ollama.is_configured()
+    llm = getattr(request.app.state, "llm", None)
+    if llm is not None and llm.provider == "openai":
+        configured = llm.is_configured()
         return {
             "ollama_configured": configured,
             "provider": "openai",
-            "vision_model_config": ollama.vision_model_config,
-            "vision_model_resolved": ollama.vision_model if configured else None,
-            "vision_capable": bool(configured and ollama.vision_model),
+            "vision_model_config": llm.vision_model_config,
+            "vision_model_resolved": llm.vision_model if configured else None,
+            "vision_capable": bool(configured and llm.vision_model),
             "installed_models": [],
             "vision_capable_installed": [],
             "families_supported": [],
         }
-    if ollama is None or not ollama.is_configured():
+    if llm is None or not llm.is_configured():
         return {
             "ollama_configured": False,
             "provider": "ollama",
@@ -130,9 +130,9 @@ async def vision_status(request: Request) -> dict[str, Any]:
             "suggested_pull": VISION_MODEL_DEFAULT,
             "families_supported": list(_VISION_FAMILIES),
         }
-    installed = await ollama.installed_models()
-    ollama.reset_vision_cache()
-    resolved = await ollama.resolve_vision_model()
+    installed = await llm.installed_models()
+    llm.reset_vision_cache()
+    resolved = await llm.resolve_vision_model()
     vision_caps = [m for m in installed if any(m.lower().startswith(f) for f in _VISION_FAMILIES)]
     # An explicitly-configured, installed vision model counts even if it is not
     # in the allowlist (user opt-in) — otherwise the UI wrongly says "no
@@ -142,7 +142,7 @@ async def vision_status(request: Request) -> dict[str, Any]:
     return {
         "ollama_configured": True,
         "provider": "ollama",
-        "vision_model_config": ollama.vision_model_config,
+        "vision_model_config": llm.vision_model_config,
         "vision_model_resolved": resolved,
         "vision_capable": bool(resolved),
         "installed_models": installed,
@@ -160,17 +160,17 @@ async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResp
 
     Used by the onboarding wizard's "Install vision model" button and by
     the Settings → Integrations → Ollama vision card."""
-    ollama = getattr(request.app.state, "llm", None)
-    if ollama is None:
+    llm = getattr(request.app.state, "llm", None)
+    if llm is None:
         raise HTTPException(503, detail="llm not configured")
-    if not ollama.supports_pull:
+    if not llm.supports_pull:
         raise HTTPException(409, detail="not supported by this provider")
-    if not ollama.is_configured():
+    if not llm.is_configured():
         raise HTTPException(503, detail="llm not configured")
 
     async def gen():
         try:
-            async for line in ollama.pull_model(req.name):
+            async for line in llm.pull_model(req.name):
                 yield (line + "\n").encode("utf-8")
         except LLMError as e:
             err = json.dumps({"error": safe_error(e)})
@@ -181,8 +181,8 @@ async def vision_pull(req: VisionPullRequest, request: Request) -> StreamingResp
 
 @router.post("/check")
 async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, Any]:
-    ollama = getattr(request.app.state, "llm", None)
-    if ollama is None or not ollama.is_configured():
+    llm = getattr(request.app.state, "llm", None)
+    if llm is None or not llm.is_configured():
         raise HTTPException(503, detail="llm not configured")
     # SSRF guard: image_url is fetched server-side. Only allow the
     # configured Plex / Tautulli thumbnail hosts; everything else must
@@ -200,7 +200,7 @@ async def vision_check(req: VisionCheckRequest, request: Request) -> dict[str, A
         # #232: pass model=None so resolve_vision_model() runs and we get
         # honest "vision pre-filter unavailable" instead of a text-model
         # hallucination. Caller can still override explicitly via req.model.
-        raw = await ollama.vision_describe(
+        raw = await llm.vision_describe(
             image_url=req.image_url,
             image_b64=req.image_b64,
             prompt=req.prompt or PROMPT,

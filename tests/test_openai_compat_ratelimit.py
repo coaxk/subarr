@@ -404,7 +404,7 @@ async def test_rejected_key_counts_with_server_errors(now):
 
 
 @pytest.mark.asyncio
-async def test_rejected_key_is_not_reset_by_404(now):
+async def test_404_resets_streak_so_rejected_keys_count_from_zero(now):
     rec = _Recorder([_err(500)] * 4 + [_err(404)] + [_err(401)] * 5)
     breaker = _breaker(now)
     c = _client(rec, breaker=breaker)

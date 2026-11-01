@@ -378,24 +378,24 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
     # Add Ollama tile — it's a standalone client on app.state, not part
     # of the integrations bundle. Probe via /api/tags (cheap — lists
     # installed models) so we can show "ok · <model-count> models".
-    ollama = getattr(state, "llm", None)
-    if ollama is not None:
-        if ollama.is_configured():
+    llm = getattr(state, "llm", None)
+    if llm is not None:
+        if llm.is_configured():
             try:
-                if ollama.provider == "openai":
-                    names = await ollama.models()
+                if llm.provider == "openai":
+                    names = await llm.models()
                 else:
-                    tags = await ollama.tags()
+                    tags = await llm.tags()
                     names = [m.get("name") for m in (tags.get("models") or [])]
                 model_count = len(names)
                 out.append(
                     {
                         "name": "ollama",
-                        "provider": ollama.provider,
+                        "provider": llm.provider,
                         "status": "ok",
                         "version": "",  # ollama /api/tags doesn't surface server version
                         "ping": 0,
-                        "extra": f"{model_count} models · {ollama.model}",
+                        "extra": f"{model_count} models · {llm.model}",
                         "configured": True,
                     }
                 )
@@ -404,7 +404,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
                 out.append(
                     {
                         "name": "ollama",
-                        "provider": ollama.provider,
+                        "provider": llm.provider,
                         "status": "error",
                         "version": "",
                         "ping": 0,
@@ -416,7 +416,7 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
             out.append(
                 {
                     "name": "ollama",
-                    "provider": ollama.provider,
+                    "provider": llm.provider,
                     "status": "muted",
                     "version": "",
                     "ping": 0,
