@@ -233,6 +233,27 @@
 - [ ] **Step 5: Write the eval script.** CLI: `python scripts/eval_title_language.py --n 60 [--arm old|new|both]`. It reads Radarr and Sonarr URLs and keys from subarr settings. It takes `originalLanguage` as truth (ISO 639-1 mapped from the arr language name), N split half English and half not, at temperature 0, through the active provider (`build_llm_client()`). It prints per-arm `correct/N`, the English and foreign splits, and each disagreement. The `old` arm uses the pre-change template kept inside the script. It never writes to the enrichment store.
 - [ ] **Step 6: Commit** `feat(616): language prompt sends library name and relative path; eval script`.
 
+### Task 8b: Clear rows the old free-text fallback stored as a guess
+
+Judd asked for this on 2026-11-01, after Task 8 (`d2b88d2`). Before Task 8, `_parse_structured` fell back to `parse_iso` on ANY non-JSON reply. That meant a prose reply was stored as its first word (`"It is Japanese."` became `it`), and a truncated JSON reply was stored as `iso`. Rows with a non-NULL `iso_code` are cached, so they are never asked again.
+
+**Files:**
+- Modify: `src/subarr/enrichment.py` (a `requeue_unparseable(store) -> int` helper, or an `EnrichmentStore` method)
+- Wire: run it once at startup, after `run_migrations()`. Or ship it as a numbered migration if the migration runner can call Python; check `src/subarr/migrate.py` first and pick one.
+- Test: a new `tests/test_enrichment_requeue.py`
+
+**Rule:** every `lang_enrichment` row whose `iso_code` is not NULL is re-parsed from its stored `raw_response` with the CURRENT `_parse_structured`. Where that raises `NotJSONReply`, set `iso_code = NULL` and `error = "reply was not valid JSON"`, and keep `raw_response` (the row is then retried on the next walk). Every other row is untouched, including a row whose re-parse gives a different code than the one stored (never rewrite a code silently). The function is idempotent, and it logs how many rows it cleared.
+
+**Edge cases to test:**
+- the prose row (`it`) is cleared
+- the truncated-JSON row (`iso`) is cleared
+- valid JSON, a bare code (`ko\n`), `es</th>`, and an `und` row that is already NULL are all untouched
+- an empty `raw_response` with a non-NULL `iso_code` is cleared
+- a second run clears 0
+- a cleared row is re-asked by `enrich_one` (not a cache hit)
+
+- [ ] Steps: failing tests, implement, run, commit `fix(616): clear language guesses the old free-text fallback stored`.
+
 ### Task 9: Telemetry field
 
 **Files:**
