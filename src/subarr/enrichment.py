@@ -1,8 +1,8 @@
 """LLM-based language enrichment for ambiguous Coverage rows.
 
 For rows where Sonarr's `originalLanguage` is null / 'und', we ask the
-local LLM what the most likely language is, based on title + folder
-context. Cached in SQLite so we don't re-ask.
+local LLM what the most likely language is, based on the title, the library name
+and the path inside that library. Cached in SQLite so we don't re-ask.
 
 Gating: caller (router) checks subgen `/queue` idle before enrichment
 to avoid GPU contention with active transcribes. The LLM also runs on
@@ -19,10 +19,16 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .data_persistence import apply_journal_mode
-from .integrations.ollama import OllamaClient, OllamaError
+from .integrations.llm import LLMError
+from .integrations.openai_compat import LLMCoolingDown
+from .paths import library_for_canonical, relative_part
+
+if TYPE_CHECKING:
+    from .integrations.ollama import OllamaClient
+    from .integrations.openai_compat import OpenAICompatClient
 
 log = logging.getLogger(__name__)
 
@@ -33,14 +39,15 @@ log = logging.getLogger(__name__)
 # errors drop to zero and we get a confidence score for free (lets the
 # scorer downstream weight low-confidence guesses appropriately).
 _SYSTEM_PROMPT = (
-    "You are a media-cataloguing assistant. Given a TV series or movie title "
-    "and folder path, identify the ORIGINAL spoken language of the production. "
+    "You are a media-cataloguing assistant. Given a TV series or movie title, "
+    "the library it is filed in and its path inside that library, identify the "
+    "ORIGINAL spoken language of the production. "
     "Output a JSON object with: iso_code (ISO 639-1 two-letter code, or 'und' "
     "if you can't tell), confidence (0.0 to 1.0), and a one-sentence reasoning. "
     "Examples of ISO codes: en, fr, es, de, it, ja, ko, zh, ru, pl, pt, hi."
 )
 
-_USER_TEMPLATE = "Title: {title}\nFolder path: {path}"
+_USER_TEMPLATE = "Title: {title}\nLibrary: {library}\nPath: {path}"
 
 # Schema passed to Ollama's `format` parameter. Ollama (and llama.cpp under
 # the hood) honour this as a grammar constraint — the model's output is
@@ -65,6 +72,10 @@ _LANG_SCHEMA = {
 }
 
 _ISO_RE = re.compile(r"^[a-z]{2,3}$")
+
+
+class NotJSONReply(LLMError):
+    """A reply that was neither a JSON object nor a bare language code."""
 
 
 # Schema (lang_enrichment incl. the #156 confidence/reasoning columns) is
@@ -171,6 +182,42 @@ class EnrichmentStore:
                 ),
             )
 
+    def requeue_unparseable(self) -> int:
+        """Clear stored language guesses whose reply is not a valid reply.
+
+        Before #616 `_parse_structured` fell back to the first word of ANY
+        non-JSON reply, so a prose reply was stored as its first word
+        ("It is Japanese." became "it") and a truncated JSON reply became
+        "iso". Rows with a non-NULL iso_code are cache hits, so those wrong
+        codes are never re-asked; this clears them. Idempotent.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, iso_code, raw_response FROM lang_enrichment "
+                "WHERE iso_code IS NOT NULL ORDER BY canonical_path"
+            ).fetchall()
+            self._conn.execute("BEGIN")
+            cleared = 0
+            try:
+                for canonical_path, iso_code, raw_response in rows:
+                    try:
+                        _parse_structured(raw_response or "")
+                    except NotJSONReply:
+                        cursor = self._conn.execute(
+                            "UPDATE lang_enrichment SET iso_code = NULL, "
+                            "error = 'reply was not valid JSON', confidence = NULL, "
+                            "reasoning = NULL "
+                            "WHERE canonical_path = ? AND iso_code = ?",
+                            (canonical_path, iso_code),
+                        )
+                        cleared += cursor.rowcount
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        log.info("enrichment: cleared %d stored language guess(es) that were not valid replies", cleared)
+        return cleared
+
 
 def parse_iso(raw: str) -> str | None:
     """Strip the LLM response down to a probable ISO 639-1 code, or None."""
@@ -183,13 +230,21 @@ def parse_iso(raw: str) -> str | None:
     return None
 
 
+def _bare_token(text: str) -> str | None:
+    s = re.sub(r"<[^>]*>", "", text or "").strip()
+    s = s.strip("'\"`")
+    s = s.removesuffix(".")
+    s = s.strip()
+    return s if re.fullmatch(r"[A-Za-z]{2,3}", s) else None
+
+
 def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
     """Parse Ollama's JSON-mode response into (iso_code, confidence, reasoning).
 
     Ollama with `format=<schema>` guarantees valid JSON matching the schema —
     but defensively handle the rare case where the model returned something
-    malformed (e.g. transient backend hiccup), falling back to the v1.1
-    free-text iso parser so legacy prompts/models still work.
+    malformed (e.g. transient backend hiccup). The free-text fallback accepts
+    only a bare language code; anything else raises NotJSONReply.
     """
     text = (raw or "").strip()
     try:
@@ -202,7 +257,9 @@ def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
         obj = None
     if not isinstance(obj, dict):
         # Fallback: maybe the model returned bare ISO text (vanilla mode).
-        return parse_iso(text), None, None
+        if (tok := _bare_token(text)) is not None:
+            return parse_iso(tok), None, None
+        raise NotJSONReply("reply was not valid JSON")
     iso_norm = parse_iso(str(obj.get("iso_code") or ""))
     conf = obj.get("confidence")
     try:
@@ -214,11 +271,20 @@ def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
     return iso_norm, conf_norm, reasoning_norm
 
 
+def build_user_prompt(title: str, canonical_path: str) -> str:
+    """The enrichment prompt: title, owning library name and relative path."""
+    return _USER_TEMPLATE.format(
+        title=title,
+        library=library_for_canonical(canonical_path).name,
+        path=relative_part(canonical_path),
+    )
+
+
 async def enrich_one(
     *,
     canonical_path: str,
     title: str,
-    ollama: OllamaClient,
+    ollama: OllamaClient | OpenAICompatClient,
     store: EnrichmentStore,
     use_cache: bool = True,
     keep_alive: str | int | None = None,
@@ -237,7 +303,7 @@ async def enrich_one(
                 reasoning=cached.get("reasoning"),
             )
 
-    prompt = _USER_TEMPLATE.format(title=title, path=canonical_path)
+    prompt = build_user_prompt(title, canonical_path)
     try:
         # #156: structured JSON output. num_predict bumped from 8 (enough
         # for a bare ISO code) to 120 (enough for ISO + confidence + a
@@ -250,8 +316,11 @@ async def enrich_one(
             num_predict=120,
             keep_alive=keep_alive,
             format_schema=_LANG_SCHEMA,
+            schema_name="subarr_lang",
         )
-    except OllamaError as e:
+    except LLMCoolingDown:
+        raise
+    except LLMError as e:
         store.upsert(
             canonical_path=canonical_path,
             title=title,
@@ -262,7 +331,18 @@ async def enrich_one(
         )
         raise
 
-    iso, confidence, reasoning = _parse_structured(raw)
+    try:
+        iso, confidence, reasoning = _parse_structured(raw)
+    except NotJSONReply as e:
+        store.upsert(
+            canonical_path=canonical_path,
+            title=title,
+            raw_response=raw,
+            iso_code=None,
+            model=ollama.model,
+            error=str(e),
+        )
+        raise
     store.upsert(
         canonical_path=canonical_path,
         title=title,

@@ -378,12 +378,16 @@ async def _integrations_block(state) -> list[dict[str, Any]]:
     # Add Ollama tile — it's a standalone client on app.state, not part
     # of the integrations bundle. Probe via /api/tags (cheap — lists
     # installed models) so we can show "ok · <model-count> models".
-    ollama = getattr(state, "ollama", None)
+    ollama = getattr(state, "llm", None)
     if ollama is not None:
         if ollama.is_configured():
             try:
-                tags = await ollama.tags()
-                model_count = len(tags.get("models") or [])
+                if ollama.provider == "openai":
+                    names = await ollama.models()
+                else:
+                    tags = await ollama.tags()
+                    names = [m.get("name") for m in (tags.get("models") or [])]
+                model_count = len(names)
                 out.append(
                     {
                         "name": "ollama",

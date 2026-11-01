@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..integrations import IntegrationError
+from .. import config as _config
 from ..error_detail import safe_error
+from ..integrations import IntegrationError
+from ..onboarding import _is_masked
 
 router = APIRouter(prefix="/api", tags=["integrations"])
 log = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ log = logging.getLogger(__name__)
 # declaration and is never overwritten (mirrors the onboarding clobber
 # guard). subgen + ollama also carry non-credential knobs (model) but those
 # flow through the same path.
-_CREDENTIAL_FIELDS: dict[str, dict[str, tuple[str, type]]] = {
+_CREDENTIAL_FIELDS: dict[str, dict[str, tuple[str, Callable[[Any], Any]]]] = {
     "bazarr": {"url": ("bazarr_url", str), "api_key": ("bazarr_api_key", str)},
     "sonarr": {"url": ("sonarr_url", str), "api_key": ("sonarr_api_key", str)},
     "radarr": {"url": ("radarr_url", str), "api_key": ("radarr_api_key", str)},
@@ -46,6 +49,17 @@ _CREDENTIAL_FIELDS: dict[str, dict[str, tuple[str, type]]] = {
     "jellyfin": {"url": ("jellyfin_url", str), "api_key": ("jellyfin_api_key", str)},
     "subgen": {"url": ("subgen_url", str)},
     "ollama": {"url": ("ollama_url", str), "model": ("ollama_model", str)},
+    "openai": {
+        "url": ("openai_base_url", _config._FIELD_COERCE["openai_base_url"]),
+        "api_key": ("openai_api_key", _config._FIELD_COERCE["openai_api_key"]),
+        "model": ("openai_model", _config._FIELD_COERCE["openai_model"]),
+        "vision": ("openai_vision", _config._FIELD_COERCE["openai_vision"]),
+        "server_type": (
+            "openai_server_type",
+            _config._FIELD_COERCE["openai_server_type"],
+        ),
+    },
+    "llm": {"provider": ("llm_provider", _config._FIELD_COERCE["llm_provider"])},
 }
 
 
@@ -95,12 +109,18 @@ class CredentialsBody(BaseModel):
     api_key: str | None = None
     token: str | None = None  # Plex
     model: str | None = None  # Ollama
+    vision: str | None = None  # OpenAI-compatible
+    server_type: str | None = None  # OpenAI-compatible
+    provider: str | None = None  # LLM provider
 
 
 class TestBody(BaseModel):
     url: str
     api_key: str | None = None
     token: str | None = None  # Plex
+    model: str | None = None  # OpenAI-compatible
+    vision: str | None = None  # OpenAI-compatible
+    server_type: str | None = None  # OpenAI-compatible
 
 
 @router.put("/integrations/{name}/credentials")
@@ -137,14 +157,34 @@ async def save_credentials(name: str, body: CredentialsBody, request: Request) -
             detail=f"no editable fields for {svc}; accepts {sorted(schema)}",
         )
 
+    # Validate before any write, so a rejected request persists and applies
+    # nothing.
+    if (
+        svc == "llm"
+        and "provider" in relevant
+        and str(relevant["provider"]).strip().lower() not in ("ollama", "openai")
+    ):
+        raise HTTPException(400, detail="provider must be ollama or openai")
+    if (
+        svc == "openai"
+        and "server_type" in relevant
+        and str(relevant["server_type"]).strip().lower() not in ("auto", "local", "openai", "openrouter")
+    ):
+        raise HTTPException(400, detail="server_type must be auto, local, openai or openrouter")
+
     applied: list[str] = []
     managed_by_env: list[str] = []
+    skipped_masked: list[str] = []
     for key, raw in relevant.items():
         settings_attr, coerce = schema[key]
         if env_is_set(settings_attr):
             # Operator's env is authoritative — never clobber it.
             managed_by_env.append(settings_attr)
             log.info("creds: %s.%s managed by env, ignored UI write", svc, settings_attr)
+            continue
+        if key in _SECRET_KEYS and _is_masked(raw):
+            skipped_masked.append(settings_attr)
+            log.info("creds: %s.%s masked value, kept the stored secret", svc, settings_attr)
             continue
         value = coerce(raw)
         # Persist below env (survives restart).
@@ -170,6 +210,7 @@ async def save_credentials(name: str, body: CredentialsBody, request: Request) -
         "ok": True,
         "applied": applied,
         "managed_by_env": managed_by_env,
+        "skipped_masked": skipped_masked,
     }
 
 
@@ -191,7 +232,14 @@ async def test_credentials(name: str, body: TestBody, request: Request) -> dict[
         raise HTTPException(404, detail=f"unknown integration: {svc}")
     # Map the credential body onto the onboarding TestRequest. Plex's token
     # rides in `token`; everything else in `api_key`.
-    req = TestRequest(url=body.url, api_key=body.api_key, token=body.token)
+    req = TestRequest(
+        url=body.url,
+        api_key=body.api_key,
+        token=body.token,
+        model=body.model,
+        vision=body.vision,
+        server_type=body.server_type,
+    )
     return await test_connection(svc, req, request)
 
 
@@ -241,6 +289,21 @@ async def _probe(name: str, client, summary_kind: str = "version") -> dict[str, 
                     "vision_capable": bool(vision_resolved),
                 },
             }
+        if summary_kind == "openai_models":
+            names = await client.models()
+            return {
+                "name": name,
+                "online": True,
+                "configured": True,
+                "version": None,
+                "badges": {
+                    "models": len(names),
+                    "model_names": ", ".join(names[:3]) + (" ..." if len(names) > 3 else ""),
+                    "vision_model_config": client.vision_model_config,
+                    "vision_model_resolved": client.vision_model or "",
+                    "vision_capable": bool(client.vision_model),
+                },
+            }
         if summary_kind == "bazarr_badges":
             # Run both concurrently but retrieve BOTH results even if one
             # raises — return_exceptions=True means neither task is ever left
@@ -287,7 +350,7 @@ async def integrations_health(request: Request) -> dict[str, Any]:
     # (used only by lang_enrichment, not coverage flow). Treating it like
     # a first-class integration here so the Settings panel can show its
     # model list + reachability without us inventing a separate endpoint.
-    ollama = getattr(request.app.state, "ollama", None)
+    llm = getattr(request.app.state, "llm", None)
     probes_coros = [
         _probe("bazarr", integrations.bazarr, "bazarr_badges"),
         _probe("sonarr", integrations.sonarr),
@@ -296,16 +359,17 @@ async def integrations_health(request: Request) -> dict[str, Any]:
         _probe("jellyfin", integrations.jellyfin),
         _probe("tautulli", integrations.tautulli),
     ]
-    if ollama is not None:
-        probes_coros.append(_probe("ollama", ollama, "ollama_models"))
+    if llm is not None:
+        summary_kind = "ollama_models" if llm.provider == "ollama" else "openai_models"
+        probes_coros.append(_probe("ollama", llm, summary_kind))
     probes = await asyncio.gather(*probes_coros)
     # #119: cache ollama reachability on app.state so telemetry reports it
     # on a real signal (was /api/tags up?) instead of the defaulted URL.
     # The ollama probe, when present, is always the last entry appended.
-    if ollama is not None:
+    if llm is not None:
         ollama_probe = next((p for p in probes if p.get("name") == "ollama"), None)
         request.app.state.ollama_probe_result = OllamaProbeResult(
-            reachable=bool(ollama_probe and ollama_probe.get("online"))
+            reachable=bool(ollama_probe and ollama_probe.get("online")) and llm.provider == "ollama"
         )
     # Subgen capabilities probed once at boot, cached on app.state.
     # Surfaced here so the UI can show "compat mode" badges + gate

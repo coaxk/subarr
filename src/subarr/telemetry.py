@@ -13,7 +13,8 @@ What we collect
   - os_arch           : 'Linux/x86_64' etc.
   - subgen_kind       : 'subarr-subgen' | 'vanilla' | 'unreachable'
   - subgen_version    : upstream version string when reachable
-  - integrations      : {bazarr: bool, sonarr: bool, ...} (configured, not values)
+  - integrations      : {bazarr: bool, sonarr: bool, ..., openai_local: bool,
+                        openai_hosted: bool} (configured, not values)
   - library_bucket    : '<100' | '100-1k' | '1k-10k' | '>10k'
   - scheduler_enabled : bool
   - scheduler_mode    : 'dashboard' | 'manual_confirm' | 'auto_rules' | None
@@ -523,6 +524,7 @@ def make_default_stats_provider(app_state) -> Any:
     that pulls live data off app.state. Kept separate so tests can swap
     in a deterministic mock dict instead."""
     from .config import settings, subgen_url_is_default
+    from .integrations.llm import resolve_profile
 
     def _provider() -> dict[str, Any]:
         # Library size bucket — pulled from probe_store row count as a
@@ -575,6 +577,17 @@ def make_default_stats_provider(app_state) -> Any:
             "plex": bool(settings.plex_token),
             "ollama": ollama_reachable,
         }
+        # The telemetry ingest drops unknown top-level keys but stores the
+        # integrations object as-is, so the LLM provider kind is reported as
+        # two booleans here instead of as a new top-level field.
+        openai_on = (
+            settings.llm_provider == "openai"
+            and bool(settings.openai_base_url.strip())
+            and bool(settings.openai_model.strip())
+        )
+        kind = resolve_profile(settings.openai_base_url, settings.openai_server_type) if openai_on else None
+        integrations["openai_local"] = openai_on and kind == "local"
+        integrations["openai_hosted"] = openai_on and kind in ("openai", "openrouter")
 
         # Docker tier inferred from config presence
         if settings.docker_socket_path or settings.docker_proxy_url:

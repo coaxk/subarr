@@ -176,6 +176,21 @@ Subarr does not require ollama. With it, you get two extras:
 
 Vision and text models are separate (`OLLAMA_MODEL` and `OLLAMA_VISION_MODEL`). Default vision model is `qwen2.5vl:7b`. Subarr auto-detects any installed model from `qwen2.5vl`, `qwen2-vl`, `llama3.2-vision`, `llava`, `bakllava`, `minicpm-v`, `moondream`. Without a vision-capable model the pre-filter is cleanly disabled, not silently broken. Settings shows the active state.
 
+### Using an OpenAI-compatible server instead (optional)
+
+If you run a different local server, such as Unsloth Studio, llama.cpp `llama-server`, LM Studio or vLLM, or want a hosted API such as OpenAI or OpenRouter, pick **Provider: OpenAI-compatible** in Settings → Integrations, or set it in the environment:
+
+```yaml
+environment:
+  LLM_PROVIDER: openai
+  OPENAI_BASE_URL: https://openrouter.ai/api/v1   # include /v1
+  OPENAI_API_KEY: ${OPENAI_API_KEY}              # optional for local servers
+  OPENAI_MODEL: google/gemini-2.5-flash
+  OPENAI_VISION: same                            # off | same | <vision model name>
+```
+
+The same features work on either provider. Only one is active at a time, and pulling or unloading models stays Ollama-only. **Test connection** runs six checks (reachable, key accepted, model listed, JSON honoured, reasoning off, vision) and names the one that fails. You do not need to tell subarr what each model supports: it works out the request format and how to switch reasoning off, and remembers what worked. Ollama's own `/v1` and OpenRouter have been tested live; OpenAI direct, Unsloth Studio and `llama-server` follow their published API but have not been tested live yet. Reports either way are welcome.
+
 ## Screens
 
 Real library, real foreign-language content — nothing staged.
@@ -319,6 +334,12 @@ Set only the ones for services you use. subarr reads these at boot; most also be
 | `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint (optional AI features). |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | Text model for Ollama tasks. |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Vision model; independent of `OLLAMA_MODEL`. |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai` (any OpenAI-compatible server). Picks which of the two blocks of settings is used. |
+| `OPENAI_BASE_URL` | — | OpenAI-compatible endpoint, including `/v1` (e.g. `http://unsloth:8000/v1`, `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`). |
+| `OPENAI_API_KEY` | — | Optional for local servers. A secret: masked in Settings, never logged or sent in telemetry. |
+| `OPENAI_MODEL` | — | Text model name exactly as the server lists it. |
+| `OPENAI_VISION` | `off` | `off`, `same` (the text model also reads images) or a separate vision model name. |
+| `OPENAI_SERVER_TYPE` | `auto` | `auto`, `local`, `openai` or `openrouter`. `auto` decides from the URL: `api.openai.com` is `openai`, `openrouter.ai` is `openrouter`, anything else is `local`. Only `local` waits for the GPU to be free. |
 
 ### Paths and path mapping
 

@@ -18,11 +18,12 @@ import httpx
 
 from ..config import settings
 from .base import _is_client_closed
+from .llm import LLMError
 
 log = logging.getLogger(__name__)
 
 
-class OllamaError(RuntimeError):
+class OllamaError(LLMError):
     pass
 
 
@@ -84,6 +85,12 @@ def _match_configured_model(installed: list[str], cfg: str) -> str | None:
 
 
 class OllamaClient:
+    # #616: capability flags the routers/UI branch on instead of isinstance.
+    provider = "ollama"
+    supports_pull = True
+    supports_unload = True
+    is_local_gpu = True
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -155,6 +162,7 @@ class OllamaClient:
         num_predict: int = 64,
         keep_alive: str | int | None = None,
         format_schema: dict | None = None,
+        schema_name: str | None = None,
     ) -> str:
         """POST /api/generate with stream=false. Returns the generated text.
 
@@ -167,7 +175,10 @@ class OllamaClient:
 
         v1.1-C: `format_schema` enables structured JSON outputs against a
         JSON Schema. When set, Ollama enforces the shape — replaces our
-        brittle string-parse paths."""
+        brittle string-parse paths.
+
+        `schema_name` is accepted but unused: callers pass the same arguments to
+        either client, and it is never sent."""
         if not self._configured:
             raise OllamaError("ollama not configured (set OLLAMA_URL + OLLAMA_MODEL)")
         body: dict[str, Any] = {

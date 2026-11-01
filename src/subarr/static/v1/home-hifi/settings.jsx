@@ -154,7 +154,7 @@ function Row({ label, value, hint, control }) {
 // #75: which editable fields each integration exposes + their human labels.
 // Mirrors the backend _CREDENTIAL_FIELDS schema; the editor renders one
 // FormRow per entry. Keep in sync with routers/integrations.py.
-const CREDENTIAL_SCHEMA = {
+export const CREDENTIAL_SCHEMA = {
   bazarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   sonarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   radarr:   [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
@@ -163,7 +163,61 @@ const CREDENTIAL_SCHEMA = {
   jellyfin: [{ key: 'url', label: 'URL', secret: false }, { key: 'api_key', label: 'API key', secret: true }],
   subgen:   [{ key: 'url', label: 'URL', secret: false }],
   ollama:   [{ key: 'url', label: 'URL', secret: false }, { key: 'model', label: 'Model', secret: false }],
+  openai:   [
+    { key: 'url', label: 'Base URL', secret: false },
+    { key: 'api_key', label: 'API key', secret: true },
+    { key: 'model', label: 'Model', secret: false },
+    { key: 'vision', label: 'Vision', secret: false, choices: [['off', 'Off'], ['same', 'Same as text model'], ['__other__', 'Another model…']] },
+    { key: 'server_type', label: 'Server type', secret: false, choices: [['auto', 'Auto (from the URL)'], ['local', 'Local server'], ['openai', 'OpenAI'], ['openrouter', 'OpenRouter']] },
+  ],
 };
+
+// #616: JS twin of the backend's resolve_profile rule — an explicit server
+// type wins; otherwise the URL host decides the OpenAI-compatible profile.
+export function resolveProfile(baseUrl, serverType) {
+  const st = String(serverType || '').trim().toLowerCase();
+  if (st === 'local' || st === 'openai' || st === 'openrouter') return st;
+  let host = '';
+  try {
+    host = new URL(String(baseUrl || '').trim()).hostname.toLowerCase();
+  } catch {
+    return 'local';
+  }
+  if (host === 'api.openai.com') return 'openai';
+  if (host === 'openrouter.ai' || host.endsWith('.openrouter.ai')) return 'openrouter';
+  return 'local';
+}
+
+// #616: the active LLM provider for the settings panel + SystemPanel.
+export function useLlmProvider() {
+  const [provider, setProvider] = useState('ollama');
+  const [envManaged, setEnvManaged] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    try {
+      const r = await fetch('/api/integrations/llm/config', { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const meta = (d && d.fields && d.fields.provider) || {};
+      setProvider(String(meta.value || '').trim().toLowerCase() === 'openai' ? 'openai' : 'ollama');
+      setEnvManaged(meta.env_managed === true);
+      setError(null);
+    } catch (e) {
+      setProvider('ollama');
+      setEnvManaged(false);
+      setError(String(e.message || e));
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  const reload = useCallback(() => load({ silent: true }), [load]);
+  return { provider, envManaged, loading, error, reload };
+}
 
 // #75: inline credential editor. Reads GET /config for per-field
 // env_managed + masked secret, edits behind a dirty bar, tests the
@@ -178,6 +232,7 @@ function CredentialEditor({ integrationId, refetchHealth }) {
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);   // null | {ok, text} | {err}
+  const [visionOther, setVisionOther] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -188,6 +243,7 @@ function CredentialEditor({ integrationId, refetchHealth }) {
       setDraft({});
       setTestResult(null);
       setSaveMsg(null);
+      setVisionOther(false);
     } catch (e) {
       setConfig({ error: String(e.message || e) });
     } finally {
@@ -209,12 +265,21 @@ function CredentialEditor({ integrationId, refetchHealth }) {
   const dirtyKeys = Object.keys(draft).filter(k => {
     const meta = fields[k] || {};
     if (meta.env_managed) return false;
+    const field = schema.find(f => f.key === k);
+    // A blank "Another model…" entry saves nothing.
+    if (field && field.choices && draft[k] === '') return false;
     // For URLs, dirty = different from current. For secrets, any non-empty entry is a change.
     if (meta.secret) return (draft[k] || '') !== '';
     return (draft[k] || '') !== (meta.value || '');
   });
   const isDirty = dirtyKeys.length > 0;
   const allEnvManaged = schema.every(f => (fields[f.key] || {}).env_managed);
+  const selectStyle = {
+    height: 34, padding: '0 12px',
+    background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+    borderRadius: 'var(--radius-md)', color: 'var(--fg-0)',
+    fontSize: 'var(--text-md)', outline: 'none',
+  };
 
   const setField = (key, val) => {
     setDraft(d => ({ ...d, [key]: val }));
@@ -319,24 +384,81 @@ function CredentialEditor({ integrationId, refetchHealth }) {
               </FormRow>
             );
           }
+          const openaiUrl = integrationId === 'openai' && f.key === 'url';
+          const savedValue = meta.value || '';
+          const eff = draft[f.key] !== undefined ? draft[f.key] : savedValue;
+          if (f.choices) {
+            if (f.key === 'vision') {
+              const isOther = visionOther
+                || (eff !== '' && eff !== 'off' && eff !== 'same');
+              return (
+                <FormRow key={f.key} label={f.label}>
+                  <select
+                    value={isOther ? '__other__' : (eff || 'off')}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === '__other__') {
+                        setVisionOther(true);
+                        setField('vision', '');
+                      } else {
+                        setVisionOther(false);
+                        setField('vision', v);
+                      }
+                    }}
+                    style={selectStyle}>
+                    {f.choices.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+                  </select>
+                  {isOther && (
+                    <TextInput
+                      value={eff}
+                      onChange={(v) => setField('vision', v)}
+                      placeholder="vision model id"
+                    />
+                  )}
+                </FormRow>
+              );
+            }
+            return (
+              <FormRow key={f.key} label={f.label}>
+                <select
+                  value={eff || f.choices[0][0]}
+                  onChange={(e) => setField(f.key, e.target.value)}
+                  style={selectStyle}>
+                  {f.choices.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+                </select>
+              </FormRow>
+            );
+          }
           return (
             <FormRow key={f.key} label={f.label}
-              hint={meta.secret && meta.has_value
-                ? `currently set (${meta.value}) — leave blank to keep`
-                : undefined}>
+              hint={openaiUrl
+                ? 'Include /v1, e.g. http://unsloth:8000/v1, https://api.openai.com/v1 or https://openrouter.ai/api/v1'
+                : (meta.secret && meta.has_value
+                  ? `currently set (${meta.value}) — leave blank to keep`
+                  : undefined)}>
               <TextInput
                 value={draft[f.key] ?? (f.secret ? '' : (meta.value || ''))}
                 onChange={(v) => setField(f.key, v)}
                 type={f.secret ? 'password' : 'text'}
                 placeholder={f.secret
                   ? (meta.has_value ? '•••• (unchanged)' : 'paste key')
-                  : (f.key === 'url' ? 'http://host:port' : '')}
+                  : (openaiUrl ? 'http://unsloth:8000/v1' : (f.key === 'url' ? 'http://host:port' : ''))}
               />
             </FormRow>
           );
         })}
 
+        {integrationId === 'openai' && resolveProfile(
+          draft.url !== undefined ? draft.url : (fields.url || {}).value,
+          draft.server_type !== undefined ? draft.server_type : (fields.server_type || {}).value,
+        ) !== 'local' && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-2)', lineHeight: 1.5 }}>
+            Sent to this service: titles with library name and file path inside the library, Arena score summaries with the file name, and video frames when vision is on.
+          </div>
+        )}
+
         {testResult && <TestResult result={testResult} />}
+        <TestSteps steps={testResult?.steps} />
         {saveMsg?.ok && (
           <div style={{ fontSize: 'var(--text-sm)', color: '#22c55e' }}>✓ {saveMsg.text}</div>
         )}
@@ -355,7 +477,7 @@ function CredentialEditor({ integrationId, refetchHealth }) {
             {dirtyKeys.length} unsaved change{dirtyKeys.length === 1 ? '' : 's'}. Saves persist across
             restarts (below any env var) and apply live — no restart.
           </span>
-          <button className="btn sm ghost" onClick={() => { setDraft({}); setTestResult(null); setSaveMsg(null); }}
+          <button className="btn sm ghost" onClick={() => { setDraft({}); setTestResult(null); setSaveMsg(null); setVisionOther(false); }}
             disabled={saving}>Discard</button>
           <button className="btn sm" onClick={save} disabled={saving}
             style={{ background: 'var(--violet-500)', color: '#fff' }}>
@@ -364,6 +486,131 @@ function CredentialEditor({ integrationId, refetchHealth }) {
         </div>
       )}
     </SectionCard>
+  );
+}
+
+// #616: the LLM panel — pick the provider, then edit that provider's
+// credentials. The key on CredentialEditor resets its draft when the
+// provider switches, so the other provider's unsaved draft is dropped.
+export function LlmSection({ refetchHealth }) {
+  const { provider, envManaged, loading, error, reload } = useLlmProvider();
+  const [selected, setSelected] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);   // null | {ok, text} | {err}
+
+  useEffect(() => {
+    if (!loading) setSelected(provider);
+  }, [loading, provider]);
+
+  if (loading) {
+    return <SectionCard label="Provider"><div style={{ padding: 12, color: 'var(--fg-2)' }}>Loading…</div></SectionCard>;
+  }
+
+  const current = selected == null ? provider : selected;
+
+  const save = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const r = await fetch('/api/integrations/llm/credentials', {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: current }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (j.detail) detail = j.detail; } catch {}
+        throw new Error(detail);
+      }
+      const d = await r.json();
+      setSaveMsg(d.managed_by_env?.includes('llm_provider')
+        ? { ok: true, text: 'Provider is managed by env (unchanged).' }
+        : null);
+      await reload();
+      refetchHealth?.({ silent: false });
+    } catch (e) {
+      setSaveMsg({ err: String(e.message || e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <React.Fragment>
+      <SectionCard label="Provider">
+        <FormRow label="Provider" hint={envManaged ? 'managed by env (read-only)' : undefined}>
+          <select value={current} disabled={envManaged}
+            onChange={(e) => { setSelected(e.target.value); setSaveMsg(null); }}
+            style={{
+              height: 34, padding: '0 12px',
+              background: 'var(--bg-2)', border: '1px solid var(--bg-4)',
+              borderRadius: 'var(--radius-md)', color: 'var(--fg-0)',
+              fontSize: 'var(--text-md)', outline: 'none',
+            }}>
+            <option value="ollama">Ollama</option>
+            <option value="openai">OpenAI-compatible</option>
+          </select>
+        </FormRow>
+        {error && (
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)' }}>
+            Couldn't load provider: {error}
+          </div>
+        )}
+        {saveMsg?.text && (
+          <div style={{ fontSize: 'var(--text-sm)', color: '#22c55e' }}>✓ {saveMsg.text}</div>
+        )}
+        {saveMsg?.err && (
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--error-500)' }}>Save failed: {saveMsg.err}</div>
+        )}
+        {current !== provider && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--bg-3)',
+          }}>
+            <span style={{ flex: 1, fontSize: 'var(--text-xs)', color: 'var(--fg-2)' }}>
+              Provider change not saved.
+            </span>
+            <button className="btn sm ghost" disabled={saving}
+              onClick={() => { setSelected(provider); setSaveMsg(null); }}>Discard</button>
+            <button className="btn sm" onClick={save} disabled={saving}
+              style={{ background: 'var(--violet-500)', color: '#fff' }}>
+              {saving ? 'Saving…' : 'Save provider'}
+            </button>
+          </div>
+        )}
+      </SectionCard>
+
+      {current === 'ollama' && <OllamaVisionCard />}
+      <CredentialEditor key={current} integrationId={current} refetchHealth={refetchHealth} />
+    </React.Fragment>
+  );
+}
+
+const TEST_STEP_LABELS = {
+  reachable: 'Server reachable',
+  key_accepted: 'API key accepted',
+  model_listed: 'Model listed',
+  json_honoured: 'JSON reply',
+  thinking_off: 'Thinking off',
+  vision: 'Vision',
+};
+
+// #616: one row per probe step, when the test reply carries steps.
+export function TestSteps({ steps }) {
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {steps.map((s, idx) => (
+        <div key={idx} data-step={s.name}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)' }}>
+          <StatusDot kind={s.ok ? 'ok' : 'error'} />
+          <span style={{ color: 'var(--fg-0)', fontWeight: 500 }}>
+            {TEST_STEP_LABELS[s.name] || s.name}
+          </span>
+          <span className="mono" style={{ color: 'var(--fg-2)', fontSize: 'var(--text-xs)' }}>{s.detail}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1859,11 +2106,9 @@ function IntegrationPanel({ rail, refetchHealth }) {
       {/* #633 per-file transcribe/translate (subgen panel only) */}
       {rail.id === 'subgen' && <PerFileTaskCard />}
 
-      {/* #232 vision capability card — only on the Ollama panel.
-          Shows whether the vision pre-filter is currently active,
-          which model it resolved to, and offers a one-click pull
-          of qwen2.5vl:7b when no vision-capable model is installed. */}
-      {rail.id === 'ollama' && <OllamaVisionCard />}
+      {/* #616: the LLM panel — provider picker + the matching credential
+          editor. The Ollama vision card lives inside LlmSection. */}
+      {rail.id === 'ollama' && <LlmSection refetchHealth={refetchHealth} />}
 
       {/* Bazarr-specific action */}
       {rail.id === 'bazarr' && (
@@ -1894,7 +2139,9 @@ function IntegrationPanel({ rail, refetchHealth }) {
       {/* #75: inline credential editor — only for integrations with an
           editable schema (every one except none currently). Reads
           GET /config, edits behind a dirty bar, tests + saves live. */}
-      {CREDENTIAL_SCHEMA[rail.id]
+      {rail.id === 'ollama'
+        ? null
+        : CREDENTIAL_SCHEMA[rail.id]
         ? <CredentialEditor integrationId={rail.id} refetchHealth={refetchHealth} />
         : (
           <SectionCard label="Connection">
@@ -1915,8 +2162,9 @@ function IntegrationPanel({ rail, refetchHealth }) {
 }
 
 // ─── System actions panel ────────────────────────────────────────
-function SystemPanel() {
+export function SystemPanel() {
   const [busy, setBusy] = useState(null);
+  const { provider, loading } = useLlmProvider();
 
   const run = async (label, url, confirmText) => {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -1950,22 +2198,24 @@ function SystemPanel() {
             onClick={() => run('Bazarr sync-disk', '/api/bazarr/sync-disk')}>
             {busy === 'Bazarr sync-disk' ? 'Syncing…' : 'Sync now'}
           </button>} />
-        <Row label="Unload Ollama model"
-          hint="Frees VRAM by evicting the currently-loaded Ollama model. Useful before a heavy subgen batch — Whisper needs ~5GB VRAM."
-          control={<button className="btn sm" disabled={!!busy}
-            onClick={async () => {
-              setBusy('Unload');
-              try {
-                const r = await fetch('/api/enrichment/unload', { method: 'POST' });
-                const d = await r.json();
-                const freed = (d.vram_before_mib || 0) - (d.vram_after_mib || 0);
-                alert(freed > 50 ? `Unloaded ${d.model}. Freed ~${freed} MiB VRAM.`
-                                 : `Unloaded ${d.model}. (Model wasn't resident — no VRAM freed.)`);
-              } catch (e) { alert(`Failed: ${e.message}`); }
-              finally { setBusy(null); }
-            }}>
-            {busy === 'Unload' ? 'Unloading…' : 'Unload'}
-          </button>} />
+        {!(provider === 'openai' && !loading) && (
+          <Row label="Unload Ollama model"
+            hint="Frees VRAM by evicting the currently-loaded Ollama model. Useful before a heavy subgen batch — Whisper needs ~5GB VRAM."
+            control={<button className="btn sm" disabled={!!busy}
+              onClick={async () => {
+                setBusy('Unload');
+                try {
+                  const r = await fetch('/api/enrichment/unload', { method: 'POST' });
+                  const d = await r.json();
+                  const freed = (d.vram_before_mib || 0) - (d.vram_after_mib || 0);
+                  alert(freed > 50 ? `Unloaded ${d.model}. Freed ~${freed} MiB VRAM.`
+                                   : `Unloaded ${d.model}. (Model wasn't resident — no VRAM freed.)`);
+                } catch (e) { alert(`Failed: ${e.message}`); }
+                finally { setBusy(null); }
+              }}>
+              {busy === 'Unload' ? 'Unloading…' : 'Unload'}
+            </button>} />
+        )}
       </SectionCard>
 
       <SpeechAudioCard />

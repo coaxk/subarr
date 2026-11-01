@@ -22,13 +22,13 @@ import httpx
 
 from .docker_client import DockerUnavailable
 from .integrations import IntegrationError
-from .integrations.ollama import OllamaError
+from .integrations.llm import LLMError
 from .subgen_client import SubgenUnavailable
 
 # Our own typed "service is down / misconfigured" errors. Their messages are
 # author-written, but we still don't echo them — type-mapping keeps CodeQL clean
 # and the wording consistent.
-_SERVICE_ERRORS = (IntegrationError, OllamaError, SubgenUnavailable, DockerUnavailable)
+_SERVICE_ERRORS = (IntegrationError, LLMError, SubgenUnavailable, DockerUnavailable)
 
 log = logging.getLogger(__name__)
 

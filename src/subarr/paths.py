@@ -55,6 +55,11 @@ def _split_canonical(canonical: str) -> tuple[str, str]:
     return "", s.strip("/")
 
 
+def relative_part(canonical: str) -> str:
+    """The canonical's path inside its library, without the '@<slug>/' head."""
+    return _split_canonical(canonical)[1]
+
+
 def _library_by_slug(slug: str) -> Library:
     """Resolve a library by slug. Unknown slug is a path-resolution error."""
     for lib in settings.libraries:
