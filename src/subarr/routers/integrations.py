@@ -368,6 +368,9 @@ async def integrations_health(request: Request) -> dict[str, Any]:
     # The ollama probe, when present, is always the last entry appended.
     if llm is not None:
         ollama_probe = next((p for p in probes if p.get("name") == "ollama"), None)
+        if ollama_probe is not None:
+            # #616: the entry keeps the name "ollama"; the UI labels it from this.
+            ollama_probe["provider"] = llm.provider
         request.app.state.ollama_probe_result = OllamaProbeResult(
             reachable=bool(ollama_probe and ollama_probe.get("online")) and llm.provider == "ollama"
         )

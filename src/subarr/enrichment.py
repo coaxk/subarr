@@ -73,6 +73,14 @@ _LANG_SCHEMA = {
 
 _ISO_RE = re.compile(r"^[a-z]{2,3}$")
 
+# #616: a model replied with the bare word `No` and the fallback stored it as
+# `no`, the code for Norwegian. Several 2-3 letter language codes are also
+# common English words, so a bare reply that is one of those words is not
+# evidence of a language.
+_ENGLISH_WORD_CODES = frozenset(
+    {"am", "as", "be", "ha", "haw", "he", "hi", "id", "is", "it", "my", "no", "so", "yo"}
+)
+
 
 class NotJSONReply(LLMError):
     """A reply that was neither a JSON object nor a bare language code."""
@@ -244,7 +252,8 @@ def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
     Ollama with `format=<schema>` guarantees valid JSON matching the schema —
     but defensively handle the rare case where the model returned something
     malformed (e.g. transient backend hiccup). The free-text fallback accepts
-    only a bare language code; anything else raises NotJSONReply.
+    only a bare language code that is not also a common English word; anything
+    else raises NotJSONReply.
     """
     text = (raw or "").strip()
     try:
@@ -258,6 +267,8 @@ def _parse_structured(raw: str) -> tuple[str | None, float | None, str | None]:
     if not isinstance(obj, dict):
         # Fallback: maybe the model returned bare ISO text (vanilla mode).
         if (tok := _bare_token(text)) is not None:
+            if tok.lower() in _ENGLISH_WORD_CODES:
+                raise NotJSONReply("bare reply is an English word, not a language code")
             return parse_iso(tok), None, None
         raise NotJSONReply("reply was not valid JSON")
     iso_norm = parse_iso(str(obj.get("iso_code") or ""))
