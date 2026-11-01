@@ -162,6 +162,7 @@ class OllamaClient:
         num_predict: int = 64,
         keep_alive: str | int | None = None,
         format_schema: dict | None = None,
+        schema_name: str | None = None,
     ) -> str:
         """POST /api/generate with stream=false. Returns the generated text.
 
@@ -174,7 +175,10 @@ class OllamaClient:
 
         v1.1-C: `format_schema` enables structured JSON outputs against a
         JSON Schema. When set, Ollama enforces the shape — replaces our
-        brittle string-parse paths."""
+        brittle string-parse paths.
+
+        `schema_name` is accepted but unused: callers pass the same arguments to
+        either client, and it is never sent."""
         if not self._configured:
             raise OllamaError("ollama not configured (set OLLAMA_URL + OLLAMA_MODEL)")
         body: dict[str, Any] = {
