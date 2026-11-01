@@ -467,6 +467,7 @@ describe('SystemPanel (#616)', () => {
     llmProvider = 'openai';
     llmConfig();
     const c = await render(React.createElement(SystemPanel));
+    expect(c.textContent).toContain('Restart subarr');
     expect(c.textContent).not.toContain('Unload Ollama model');
   });
 
