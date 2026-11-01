@@ -25,7 +25,9 @@ _PROFILES = ("local", "openai", "openrouter")
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, *args: object, status: int | None = None) -> None:
+        super().__init__(*args)
+        self.status = status
 
 
 def build_llm_client() -> OllamaClient | OpenAICompatClient:

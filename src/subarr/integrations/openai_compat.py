@@ -195,10 +195,19 @@ class OpenAICompatClient:
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
         # #616: per-client breaker, injected by the caller if tuned.
         self._breaker = breaker or CircuitBreaker(name="llm", fail_threshold=5, cooldown_s=60.0)
+        self._last_reply_had_reasoning: bool | None = None
 
     @property
     def breaker(self) -> CircuitBreaker:
         return self._breaker
+
+    @property
+    def last_reply_had_reasoning(self) -> bool | None:
+        """Whether the last parsed 200 reply carried reasoning, else None.
+
+        Test connection reads it on a client it owns; on a shared client
+        concurrent calls overwrite it."""
+        return self._last_reply_had_reasoning
 
     @property
     def is_local_gpu(self) -> bool:
@@ -260,11 +269,13 @@ class OpenAICompatClient:
             raise LLMError("llm /models: client closed mid-request (live rebuild)") from e
         if r.status_code in (401, 403):
             # Never include the body: a proxy may echo the key back.
-            raise LLMError("LLM API key rejected (check OPENAI_API_KEY)")
+            raise LLMError("LLM API key rejected (check OPENAI_API_KEY)", status=r.status_code)
+        if r.status_code == 404:
+            raise LLMError("no /v1/models here; the URL usually ends in /v1", status=404)
         if r.status_code != 200:
             # Redact the whole body FIRST, then truncate.
             safe = _redact(r.text, self._api_key)[:200]
-            raise LLMError(f"llm /models status {r.status_code}: {safe}")
+            raise LLMError(f"llm /models status {r.status_code}: {safe}", status=r.status_code)
         try:
             data = r.json()
         except ValueError as e:
@@ -398,6 +409,7 @@ class OpenAICompatClient:
         # #616: fail fast while the per-client breaker is open.
         if not self._breaker.allow():
             raise LLMCoolingDown("LLM provider cooling down after repeated failures; try again in a minute")
+        self._last_reply_had_reasoning = None
         key = (self._base_url, model_id, self.profile)
         shape = copy.deepcopy(_SHAPES.get(key, {})) if use_learned else {}
         negotiations = 0
@@ -489,6 +501,15 @@ class OpenAICompatClient:
                     else:
                         text = text[end + len("</think>") :].strip()
                 finish_reason = choices[0].get("finish_reason")
+                # A reply that used its whole budget and shows no content spent it
+                # on reasoning the server did not return; a plain reply cut at the
+                # cap still has content, so it is not counted.
+                seen = (
+                    _has_reasoning(message)
+                    or raw.strip().startswith("<think>")
+                    or (not text and finish_reason == "length")
+                )
+                self._last_reply_had_reasoning = seen or bool(self._last_reply_had_reasoning)
                 if not text:
                     if finish_reason == "length":
                         reasoning_present = _has_reasoning(message) or raw.strip().startswith("<think>")

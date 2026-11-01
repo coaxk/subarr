@@ -12,6 +12,8 @@ POST   /api/onboarding/first-walk         — kick off the foreground probe walk
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 from pathlib import Path
@@ -43,6 +45,9 @@ class TestRequest(BaseModel):
     # token is accepted here and consumed by _test_plex (falls back to
     # api_key for callers that put the token in the generic field).
     token: str | None = None
+    model: str | None = None  # #616: OpenAI-compatible
+    vision: str | None = None  # #616: OpenAI-compatible
+    server_type: str | None = None  # #616: OpenAI-compatible
 
 
 class ProbePathsRequest(BaseModel):
@@ -58,6 +63,7 @@ _TEST_CRED_ATTR = {
     "sonarr": "sonarr_api_key",
     "radarr": "radarr_api_key",
     "tautulli": "tautulli_api_key",
+    "openai": "openai_api_key",
 }
 
 
@@ -178,6 +184,7 @@ async def test_connection(service: str, body: TestRequest, request: Request) -> 
         "ollama": _test_ollama,
         "plex": _test_plex,
         "jellyfin": _test_jellyfin,
+        "openai": _test_openai,
     }
     handler = handlers.get(svc)
     if handler is None:
@@ -413,6 +420,165 @@ async def _test_ollama(body: TestRequest) -> dict[str, Any]:
         }
     finally:
         await c.aclose()
+
+
+# ─── Test connection: OpenAI-compatible provider (#616) ─────────────
+
+
+def _red_png_b64() -> str:
+    """A 64x64 solid red PNG, base64-encoded, built with zlib + struct only."""
+    import struct
+    import zlib
+
+    def chunk(ctype: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + ctype
+            + data
+            + struct.pack(">I", zlib.crc32(ctype + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", 64, 64, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * 64 for _ in range(64))
+    png = (
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    )
+    return base64.b64encode(png).decode("ascii")
+
+
+def _build_openai_test_client(body: TestRequest):
+    """The client a Test connection probe runs on (never app.state.llm)."""
+    from ..integrations.openai_compat import OpenAICompatClient
+
+    return OpenAICompatClient(
+        base_url=body.url,
+        api_key=body.api_key or "",
+        model=body.model or "",
+        vision=body.vision or "off",
+        server_type=body.server_type or "auto",
+    )
+
+
+async def _test_openai(body: TestRequest) -> dict[str, Any]:
+    """#616: run the OpenAI-compatible probe steps on a fresh client."""
+    from ..integrations.llm import LLMError
+
+    client = _build_openai_test_client(body)
+    vision_applies = client.vision_model_config.lower() != "off"
+    steps: list[dict[str, Any]] = []
+
+    def _step(name: str, ok: bool, detail: str) -> None:
+        steps.append({"name": name, "ok": ok, "detail": detail})
+
+    def _not_run(*names: str) -> None:
+        for name in names:
+            _step(name, False, "not run")
+
+    def _result() -> dict[str, Any]:
+        passed = sum(1 for step in steps if step["ok"])
+        first_failure = next((step["detail"] for step in steps if not step["ok"]), None)
+        return {
+            "ok": all(step["ok"] for step in steps),
+            "version": None,
+            "detail": f"{passed}/{len(steps)} checks passed",
+            "error": first_failure,
+            "steps": steps,
+        }
+
+    try:
+        try:
+            names = await client.models()
+        except LLMError as e:
+            detail = str(e)
+            if e.status in (401, 403):
+                _step("reachable", True, "server answered")
+                _step("key_accepted", False, detail)
+            else:
+                _step("reachable", False, detail)
+                _step("key_accepted", False, "not run")
+            _not_run("model_listed", "json_honoured", "thinking_off")
+            if vision_applies:
+                _not_run("vision")
+            return _result()
+
+        _step("reachable", True, "server answered")
+        _step("key_accepted", True, "accepted" if (body.api_key or "").strip() else "no key sent")
+
+        if not client.model:
+            _step("model_listed", False, "no model set")
+            _not_run("json_honoured", "thinking_off")
+            if vision_applies:
+                _not_run("vision")
+            return _result()
+
+        if client.model in names:
+            _step("model_listed", True, f"{client.model} is listed ({len(names)} models)")
+        else:
+            _step(
+                "model_listed",
+                False,
+                f"{client.model} is not in the server's list of {len(names)} models",
+            )
+
+        from ..enrichment import _LANG_SCHEMA, _SYSTEM_PROMPT
+
+        try:
+            raw = await client.generate(
+                "Title: Shingeki no Kyojin",
+                system=_SYSTEM_PROMPT,
+                temperature=0.0,
+                num_predict=120,
+                format_schema=_LANG_SCHEMA,
+                schema_name="subarr_lang",
+                use_learned=False,
+            )
+        except LLMError as e:
+            _step("json_honoured", False, str(e))
+        else:
+            try:
+                parsed = json.loads(raw.strip())
+            except ValueError:
+                parsed = None
+            iso_code = parsed.get("iso_code") if isinstance(parsed, dict) else None
+            if not isinstance(iso_code, str):
+                _step("json_honoured", False, "the reply was not a JSON object with iso_code")
+            elif iso_code.strip().lower() == "ja":
+                _step("json_honoured", True, "iso_code ja")
+            else:
+                _step(
+                    "json_honoured",
+                    False,
+                    f"valid JSON, but the model answered {iso_code!r} for a Japanese title",
+                )
+
+        had_reasoning = client.last_reply_had_reasoning
+        if had_reasoning is None:
+            _step("thinking_off", False, "not run")
+        elif had_reasoning:
+            _step(
+                "thinking_off",
+                False,
+                "the server returned reasoning: thinking is still on, which costs time and tokens",
+            )
+        else:
+            _step("thinking_off", True, "no reasoning in the reply")
+
+        if vision_applies:
+            try:
+                reply = await client.vision_describe(
+                    image_b64=_red_png_b64(),
+                    prompt="What colour is this image? Answer with one word.",
+                )
+            except LLMError as e:
+                _step("vision", False, str(e))
+            else:
+                if "red" in reply.lower():
+                    _step("vision", True, "answered red")
+                else:
+                    _step("vision", False, f"expected red, got {reply.strip()[:40]!r}")
+        return _result()
+    finally:
+        await client.aclose()
 
 
 # ─── Auto-detect (discovery + config-extract) ──────────────────────
