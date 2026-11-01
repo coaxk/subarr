@@ -6,8 +6,14 @@ Each arm asks the LLM the same questions and is scored against the arrs' own
 `originalLanguage`, the closest thing to ground truth we have. Read-only: it
 never writes to the enrichment store or to settings.
 
-Usage (piped in, so no bind-mount needed):
+Usage (piped in, so no bind-mount needed), into a container whose installed
+subarr includes #616 (it imports subarr.integrations.llm and openai_compat):
     cat scripts/eval_title_language.py | docker exec -i subarr-next python - --n 60 --arm both
+
+To run it against an install whose code predates #616, start a throwaway
+container from the same image with the #616 source mounted over the installed
+package, that install's .env, and a copy of its database (SQLite backup API,
+never the live file); the script only reads.
 """
 
 from __future__ import annotations
