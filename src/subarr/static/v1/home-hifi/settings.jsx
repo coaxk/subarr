@@ -681,7 +681,7 @@ const BADGE_LABELS = {
   vision_capable: 'vision pre-filter',
 };
 
-function buildRailItems(health) {
+export function buildRailItems(health) {
   if (!health) return [];
   const out = [];
   const byName = {};
@@ -690,8 +690,9 @@ function buildRailItems(health) {
   for (const name of INTEGRATION_ORDER) {
     if (!byName[name]) continue;
     const i = byName[name];
+    const llmLabel = name === 'ollama' && String(i.provider ?? '').trim().toLowerCase() === 'openai';
     out.push({
-      id: name, name: name.charAt(0).toUpperCase() + name.slice(1),
+      id: name, name: llmLabel ? 'OpenAI-compatible' : name.charAt(0).toUpperCase() + name.slice(1),
       status: i.online ? 'ok' : (i.configured ? 'error' : 'muted'),
       meta: i.version ? `v${i.version}` : (i.configured ? '—' : 'unconfigured'),
       raw: i,

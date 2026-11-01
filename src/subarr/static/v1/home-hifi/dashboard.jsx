@@ -437,6 +437,13 @@ function titleCase(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+export function integrationTitle(i) {
+  if (i.name === 'ollama' && String(i.provider ?? '').trim().toLowerCase() === 'openai') {
+    return 'OpenAI-compatible';
+  }
+  return titleCase(i.name);
+}
+
 function ServiceBadge({ name, size = 16 }) {
   const brand = SERVICE_BRAND[name?.toLowerCase()] || {
     color: 'var(--bg-4)', initial: name?.[0]?.toUpperCase() || '?',
@@ -458,8 +465,9 @@ function ServiceBadge({ name, size = 16 }) {
 }
 
 // ─── Integration tile ────────────────────────────────────────────
-function IntegrationTile({ i }) {
+export function IntegrationTile({ i }) {
   const isError = i.status === 'error';
+  const title = integrationTitle(i);
   return (
     <div style={{
       flex: 1, minWidth: 0,
@@ -471,12 +479,12 @@ function IntegrationTile({ i }) {
       gap: 4,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        <ServiceBadge name={i.name} size={16} />
+        <ServiceBadge name={title === 'OpenAI-compatible' ? 'openai' : i.name} size={16} />
         <span style={{
           fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-0)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           minWidth: 0, flex: '0 1 auto',
-        }}>{titleCase(i.name)}</span>
+        }}>{title}</span>
         <span title={
           i.status === 'ok' ? 'Online and responding' :
           i.status === 'error' ? 'Configured but unreachable / returning errors' :
@@ -487,7 +495,7 @@ function IntegrationTile({ i }) {
         </span>
         <span style={{ flex: 1, minWidth: 4 }} />
         <span className="mono"
-          title={`${titleCase(i.name)} version reported by /system/status`}
+          title={`${title} version reported by /system/status`}
           style={{
             fontSize: 'var(--text-2xs)', color: 'var(--fg-3)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
