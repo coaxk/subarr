@@ -200,6 +200,30 @@ async def library(
     Independent of Bazarr's wanted list — shows what subarr's probe sees
     on disk. Used to confirm 'this file has X embedded' and feed back to
     Coverage's hide_embedded_en filter."""
+    # [#626] Hydrating every media_probe row is pure Python. On the loop it
+    # blocked every other request for 1.1-1.5 s per call at 40k rows (measured
+    # 2026-11-02, 2 CPUs), so the whole build runs in a worker thread.
+    return await asyncio.to_thread(
+        _library_payload,
+        request.app.state.probe_store,
+        filter_text=filter_text,
+        only_with_eng=only_with_eng,
+        only_without_eng=only_without_eng,
+        sub_kind=sub_kind,
+        limit=limit,
+    )
+
+
+def _library_payload(
+    store,
+    *,
+    filter_text: str,
+    only_with_eng: bool,
+    only_without_eng: bool,
+    sub_kind: str,
+    limit: int,
+) -> dict:
+    """Synchronous body of GET /api/probe/library. Runs off the event loop."""
     from ..media_probe import (
         audio_lang_summary,
         english_track_summary,
@@ -207,7 +231,6 @@ async def library(
         has_usable_embedded_english,
     )
 
-    store = request.app.state.probe_store
     rows = store.all_entries()
     out: list[dict] = []
     f = filter_text.lower().strip()
