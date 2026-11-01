@@ -639,6 +639,10 @@ async def lifespan(app_: FastAPI):
 
     app_.state.dashboard_cache = DashboardCache()
     app_.state.enrichment = EnrichmentStore(settings.db_path)
+    try:
+        app_.state.enrichment.requeue_unparseable()
+    except Exception:
+        log.exception("enrichment: requeue of unparseable rows failed")
     app_.state.probe_store = ProbeStore(settings.db_path)
     app_.state.probe_walker = ProbeWalker(app_.state.probe_store)
     # #155 phase 2: library-wide audio-language audit walker. OPT-IN (started

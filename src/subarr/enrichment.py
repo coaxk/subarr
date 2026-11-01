@@ -182,6 +182,42 @@ class EnrichmentStore:
                 ),
             )
 
+    def requeue_unparseable(self) -> int:
+        """Clear stored language guesses whose reply is not a valid reply.
+
+        Before #616 `_parse_structured` fell back to the first word of ANY
+        non-JSON reply, so a prose reply was stored as its first word
+        ("It is Japanese." became "it") and a truncated JSON reply became
+        "iso". Rows with a non-NULL iso_code are cache hits, so those wrong
+        codes are never re-asked; this clears them. Idempotent.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT canonical_path, iso_code, raw_response FROM lang_enrichment "
+                "WHERE iso_code IS NOT NULL ORDER BY canonical_path"
+            ).fetchall()
+            self._conn.execute("BEGIN")
+            cleared = 0
+            try:
+                for canonical_path, iso_code, raw_response in rows:
+                    try:
+                        _parse_structured(raw_response or "")
+                    except NotJSONReply:
+                        cursor = self._conn.execute(
+                            "UPDATE lang_enrichment SET iso_code = NULL, "
+                            "error = 'reply was not valid JSON', confidence = NULL, "
+                            "reasoning = NULL "
+                            "WHERE canonical_path = ? AND iso_code = ?",
+                            (canonical_path, iso_code),
+                        )
+                        cleared += cursor.rowcount
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        log.info("enrichment: cleared %d stored language guess(es) that were not valid replies", cleared)
+        return cleared
+
 
 def parse_iso(raw: str) -> str | None:
     """Strip the LLM response down to a probable ISO 639-1 code, or None."""
