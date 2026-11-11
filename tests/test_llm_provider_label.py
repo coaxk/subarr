@@ -20,6 +20,8 @@ def openai_app(monkeypatch, request):
         monkeypatch.setenv("OPENAI_MODEL", model)
         monkeypatch.setenv("OPENAI_VISION", "off")
         monkeypatch.setenv("OPENAI_SERVER_TYPE", "auto")
+        # The boot warm reads app.state.llm while these tests swap it.
+        request.getfixturevalue("no_dashboard_warm")
         return request.getfixturevalue("app_with_stub")
 
     return _build
