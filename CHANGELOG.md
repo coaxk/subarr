@@ -7,6 +7,16 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.27] - 2026-11-11
+
+**A rebuild that picks up Debian security updates, and the Library Probe page no longer stalls the app on a large library.**
+
+### Security
+- **OS packages refreshed (#655).** The 2.7.26 image ships `zlib1g 1:1.3.dfsg+really1.3.1-1+b1`, `apt 3.0.3` and `libapt-pkg7.0 3.0.3`, and Debian has since published `1:1.3.dfsg+really1.3.1-1+deb13u1` and `3.0.4` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: `apt-get -s upgrade` inside `ghcr.io/coaxk/subarr:2.7.26` found exactly those three security-pocket packages pending on 2026-11-11.
+
+### Fixed
+- **Opening the Library Probe page froze the app for a moment on a large library (#626).** Building the page's list read every probed file on the same thread that answers every other request, so on a 40,000-file library each visit held the whole app for 1 to 1.5 seconds and logged a slow-event-loop warning. That work now runs in the background and the app stays responsive while it does; at 40,000 files the warning no longer appears. A typical library of a few thousand files saw about a tenth of a second and will not notice a difference. Nothing to configure.
+
 ## [2.7.26] - 2026-11-01
 
 **Use any OpenAI-compatible server for the AI features, not just Ollama.**
