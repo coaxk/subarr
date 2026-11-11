@@ -552,6 +552,28 @@ def app_with_stub(subarr_env, request):
         yield c
 
 
+@pytest.fixture
+def no_dashboard_warm(monkeypatch):
+    """Keep the dashboard cache loop (and its boot warm) from running.
+
+    The boot warm builds the dashboard concurrently with the test, and that
+    build reads ``app.state.llm`` (routers/home.py ``_integrations_block``).
+    A test that swaps ``app.state.llm`` after boot and asserts on the upstream
+    calls its mock saw can then pick up a stray call from the warm. Request
+    this fixture BEFORE ``app_with_stub`` (lifespan imports the loop at
+    startup, so patching the module attribute is enough). The stand-in loop
+    just waits to be cancelled, which is what shutdown does to the real one.
+    """
+    import asyncio
+
+    from subarr import dashboard_cache
+
+    async def _idle_loop(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(dashboard_cache, "background_refresh_loop", _idle_loop)
+
+
 def _make_ollama_stub(handler=None):
     """OllamaClient stub backed by an httpx.MockTransport. handler is a
     callable httpx.Request -> httpx.Response. If None, the stub is

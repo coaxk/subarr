@@ -41,6 +41,8 @@ def openai_app(monkeypatch, request):
         monkeypatch.setenv("OPENAI_MODEL", model)
         monkeypatch.setenv("OPENAI_VISION", vision)
         monkeypatch.setenv("OPENAI_SERVER_TYPE", server_type)
+        # The boot warm reads app.state.llm while these tests swap it.
+        request.getfixturevalue("no_dashboard_warm")
         return request.getfixturevalue("app_with_stub")
 
     return _build
@@ -631,3 +633,17 @@ def test_no_state_ollama_left():
 def test_default_app_holds_ollama_stub(app_with_stub):
     assert app_with_stub.app.state.llm.provider == "ollama"
     assert not hasattr(app_with_stub.app.state, "ollama")
+
+
+def test_openai_app_runs_no_dashboard_warm(openai_app):
+    """Tests built on openai_app swap app.state.llm after boot and assert on the
+    upstream paths their mock saw. The dashboard boot warm reads app.state.llm
+    concurrently (routers/home.py _integrations_block -> llm.models()), so if it
+    runs it can land a stray /v1/models on the swapped-in mock, which made
+    test_vision_status_openai flaky in CI. The fixture must keep it from running:
+    with the warm active, the dashboard cache is built within a few ms of boot."""
+    import time
+
+    client = openai_app()
+    time.sleep(0.5)
+    assert client.app.state.dashboard_cache.get_cached() is None
