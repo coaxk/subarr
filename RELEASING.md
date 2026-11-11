@@ -19,8 +19,11 @@ lives in [docs/release-procedure.md](docs/release-procedure.md). Short form:
      becomes the title suffix, so lead the section's notable line with a bold
      phrase like `**Guided subgen setup.**`.
 5. **Verify the release landed** (no manual create needed anymore):
-   `gh api repos/coaxk/subarr/releases --jq '.[0] | .tag_name + " " + .name'`
-   should show your derived title within a minute, not an empty string.
+   `gh release view vX.Y.Z --repo coaxk/subarr --json tagName,name,isDraft,isPrerelease,publishedAt`
+   should show your derived title within a minute (not an empty string),
+   with `isDraft` and `isPrerelease` both `false`. Query the tag by name:
+   the raw `releases` API lists drafts first, so `.[0]` can return an old
+   draft instead of the release you just cut.
 6. After a 7-day clean soak, promote to `:stable` (see the full doc).
 
 Telemetry/worker side has its own runbook:
