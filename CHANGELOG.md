@@ -7,6 +7,14 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.28] - 2026-11-12
+
+**The orphan cleanup no longer stalls on probe-cache rows, and path matching no longer picks the wrong library.**
+
+### Fixed
+- **The orphan cleanup on the Review page still refused when most stale rows were probe-cache entries (#638).** The safety check that stops a dropped mount from wiping your data counted every stale row the same way, so thousands of missing probe-cache rows (cheap, and rebuilt on the next scan) held back the whole cleanup, verifications included. The two kinds of row are now judged separately. Audio-language verifications, which are work you did by hand, keep the existing "more than half missing" check, measured against other verifications only. Probe-cache rows are cleaned up one top-level folder at a time: a folder's stale rows go once at least 3 files in that folder can still be read, or when the folder itself is gone from a library where at least 3 files can be read. Anything else is held, so a dropped mount still removes nothing. The cleanup's API reply now counts the held rows and names up to 5 of the places, and that explanation is what Review shows when nothing could be removed. A path subarr cannot check is never counted as missing. Thanks to @ErroneousBosch for the follow-up data that showed where the old check went wrong.
+- **With `PLEX_PATH_PREFIX` or `JELLYFIN_PATH_PREFIX` unset, subarr could pick the wrong library when guessing how its paths map to the media server's (#662).** The guess took the first media-server folder whose name matched the first folder under subarr's library root, so its answer depended on library order. With `/Media` as the root, `/Media/Anime/Movies` listed before `/Media/Movies` produced the prefix `/Media/Anime`. subarr now checks every library: when they all agree it uses that prefix, when any of them needs no prefix it uses none, and when they disagree it uses no prefix and logs one warning naming the candidates and asking you to set `PLEX_PATH_PREFIX` or `JELLYFIN_PATH_PREFIX`. Installs that already set the prefix see no change. Reported on #638 by @ErroneousBosch.
+
 ## [2.7.27] - 2026-11-11
 
 **A rebuild that picks up Debian security updates, and the Library Probe page no longer stalls the app on a large library.**
