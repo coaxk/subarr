@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from ..docker_client import DockerUnavailable
 from ..error_detail import safe_error
 from ..integrations import IntegrationError
+from ..orphan_prune import PathState
 
 router = APIRouter(prefix="/api", tags=["admin"])
 log = logging.getLogger(__name__)
@@ -230,6 +231,19 @@ def _orphan_stores(request: Request) -> dict:
     return out
 
 
+def _path_state(canonical: str) -> PathState:
+    from ..paths import canonical_to_fs
+
+    try:
+        p = canonical_to_fs(canonical)
+    except Exception:  # noqa: BLE001 - an unresolvable path proves nothing was read
+        return "unknown"
+    try:
+        return "present" if p.exists() else "missing"
+    except Exception:  # noqa: BLE001 - a path we cannot stat proves nothing was read
+        return "unknown"
+
+
 def _path_exists(canonical: str) -> bool:
     """Does this canonical path still point at a real file?
 
@@ -240,16 +254,22 @@ def _path_exists(canonical: str) -> bool:
     deletion candidate in one pass. A stale row left behind is recoverable;
     hours of deleted verifications are not.
     """
+    return _path_state(canonical) != "missing"
+
+
+def _folder_gone(library: str, folder: str) -> bool:
     from ..paths import canonical_to_fs
 
+    canonical = f"@{library}/{folder}" if library else folder
     try:
-        return canonical_to_fs(canonical).exists()
-    except Exception:
-        return True
+        return not canonical_to_fs(canonical).exists()
+    except Exception:  # noqa: BLE001 - never assume gone
+        return False
 
 
 def _sweep(request: Request, *, dry_run: bool) -> dict:
     from ..orphan_prune import prune_missing_multi
+    from ..paths import prune_scope
 
     stores = _orphan_stores(request)
     if not stores:
@@ -262,6 +282,9 @@ def _sweep(request: Request, *, dry_run: bool) -> dict:
             "deleted_by_store": {},
             "missing": [],
             "carried_over": 0,
+            "held": 0,
+            "held_verified": 0,
+            "held_scopes": [],
         }
     # #563: a verdict whose file Sonarr replaced is not an orphan, it just moved.
     # Carry those over first so a prune never deletes a verdict that could have
@@ -274,7 +297,14 @@ def _sweep(request: Request, *, dry_run: bool) -> dict:
             carried = len(als.sweep_carry_overs())
         except Exception as e:  # noqa: BLE001 - never block the prune on the carry step
             log.warning("verdict carry-over before prune failed: %s", e)
-    rep = prune_missing_multi(stores, exists=_path_exists, dry_run=dry_run)
+    rep = prune_missing_multi(
+        stores,
+        state=_path_state,
+        dry_run=dry_run,
+        regenerable=frozenset({"probe"}),
+        scope_of=prune_scope,
+        folder_gone=_folder_gone,
+    )
     return {
         "carried_over": carried,
         "safe": rep.decision.safe,
@@ -284,6 +314,17 @@ def _sweep(request: Request, *, dry_run: bool) -> dict:
         "deleted_total": sum(rep.deleted_by_store.values()),
         "deleted_by_store": rep.deleted_by_store,
         "missing": rep.missing,
+        "held": len(rep.held),
+        "held_verified": rep.held_protected,
+        "held_scopes": [
+            {
+                "library": scope.library,
+                "folder": scope.folder,
+                "missing": scope.missing,
+                "present": scope.present,
+            }
+            for scope in rep.held_scopes
+        ],
     }
 
 

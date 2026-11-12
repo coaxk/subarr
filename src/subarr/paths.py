@@ -60,6 +60,17 @@ def relative_part(canonical: str) -> str:
     return _split_canonical(canonical)[1]
 
 
+def prune_scope(canonical: str) -> tuple[str, str]:
+    """The (library, top folder) scope of a canonical path.
+
+    '@anime/Movies/A/a.mkv' -> ('anime', 'Movies'); 'TV/Show/e.mkv' ->
+    ('', 'TV'); '@x/a.mkv' -> ('x', '').
+    """
+    slug, rel = _split_canonical(canonical)
+    parts = rel.split("/") if rel else []
+    return slug, parts[0] if len(parts) >= 2 else ""
+
+
 def _library_by_slug(slug: str) -> Library:
     """Resolve a library by slug. Unknown slug is a path-resolution error."""
     for lib in settings.libraries:
