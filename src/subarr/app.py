@@ -1308,13 +1308,23 @@ def health_tasks() -> dict:
     """#157: per-loop background-task health. Powers the header pill (any
     unhealthy) + the Health page (per-task status, last error, traceback).
     #234: each task carries `can_run_now` so the page shows a Run-now button
-    on the loops that support an on-demand trigger."""
+    on the loops that support an on-demand trigger.
+    #666: each task also carries `paused`, the reason its loop is held off, or None."""
+    from .job_pause import paused_states
     from .jobs import can_run_now
 
     th = getattr(app.state, "task_health", None)
     states = th.states() if th is not None else []
+    paused = paused_states(getattr(app.state, "schedule", None))
     return {
-        "tasks": [{**t.to_dict(), "can_run_now": can_run_now(t.task_name)} for t in states],
+        "tasks": [
+            {
+                **t.to_dict(),
+                "can_run_now": can_run_now(t.task_name),
+                "paused": paused.get(t.task_name),
+            }
+            for t in states
+        ],
         "any_unhealthy": any(t.is_unhealthy for t in states),
         "unhealthy_count": sum(1 for t in states if t.is_unhealthy),
         "version": __version__,  # for the "Report a problem" prefill
