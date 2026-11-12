@@ -44,8 +44,12 @@ async def refresh_file_on_all(servers, subarr_file: str) -> list[dict]:
 def derive_path_prefix(locations: list[str], media_root: str, sample_subarr_path: str) -> str | None:
     """Derive the path prefix P such that translate_path yields the server's own
     path: P + sample[len(media_root):] lands under one of the server's library
-    `locations`. Returns None when no location aligns (caller falls back to
-    identity, which is correct for identical mounts)."""
+    `locations`. Every location contributes a candidate; the decision is:
+    a) no candidates -> None;
+    b) any candidate is media_root or "" (identity / inexpressible) -> None;
+    c) all candidates agree -> that shared prefix;
+    d) two or more distinct non-identity candidates -> None and one warning
+    naming them plus PLEX_PATH_PREFIX and JELLYFIN_PATH_PREFIX (no majority)."""
     media_root = (media_root or "").rstrip("/")
     if not media_root or not sample_subarr_path.startswith(media_root):
         return None
@@ -54,9 +58,23 @@ def derive_path_prefix(locations: list[str], media_root: str, sample_subarr_path
     if not parts:
         return None
     first = parts[0]
+    suffix = "/" + first
+    candidates: list[str] = []
     for loc in locations:
         locn = (loc or "").rstrip("/")
-        if locn.endswith("/" + first):
-            prefix = locn[: -len("/" + first)]
-            return prefix if prefix and prefix != media_root else None
+        if locn.endswith(suffix):
+            candidates.append(locn[: -len(suffix)])
+    if not candidates:
+        return None
+    if any(c == media_root or c == "" for c in candidates):
+        return None
+    distinct = sorted(set(candidates))
+    if len(distinct) == 1:
+        return distinct[0]
+    log.warning(
+        "path-prefix auto-detect is ambiguous for %r: candidate prefixes %s; "
+        "set PLEX_PATH_PREFIX or JELLYFIN_PATH_PREFIX explicitly",
+        first,
+        ", ".join(repr(c) for c in distinct),
+    )
     return None
