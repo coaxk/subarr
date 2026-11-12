@@ -68,7 +68,7 @@ const linkStyle = {
   fontSize: 'var(--text-sm)', color: 'var(--violet-400)', textDecoration: 'none',
 };
 
-function TaskRow({ t, version, onRun }) {
+export function TaskRow({ t, version, onRun }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
@@ -76,8 +76,12 @@ function TaskRow({ t, version, onRun }) {
   const [ranOk, setRanOk] = useState(false);
   const unhealthy = t.is_unhealthy;
   const hasErr = !!t.last_error_detail;
+  const p = t.paused;
+  const pause = (p && typeof p === 'object' && typeof p.label === 'string' && p.label !== ''
+    && typeof p.href === 'string' && p.href.startsWith('/') && !p.href.startsWith('//')) ? p : null;
   const doRun = (e) => {
     e.stopPropagation();
+    if (pause) return;
     setRunning(true);
     setRunErr(null);
     Promise.resolve(onRun && onRun(t.task_name))
@@ -136,9 +140,21 @@ function TaskRow({ t, version, onRun }) {
             {runErr}
           </span>
         )}
+        {pause && (
+          <a href={pause.href} data-testid="task-paused"
+            title="Paused. Open the page where you resume it."
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              flex: 'none', color: 'var(--fg-2)', border: 'var(--border)',
+              borderRadius: 999, padding: '1px 8px', fontSize: 'var(--text-2xs)',
+              textDecoration: 'none',
+            }}>
+            {pause.label}
+          </a>
+        )}
         {t.can_run_now && (
-          <button onClick={doRun} disabled={running}
-            title="Trigger this job now"
+          <button onClick={doRun} disabled={running || !!pause}
+            title={pause ? 'Paused. Resume it before running it now.' : 'Trigger this job now'}
             className="btn sm" style={{ flex: 'none', fontSize: 'var(--text-2xs)' }}>
             {running ? '…' : 'Run now'}
           </button>
