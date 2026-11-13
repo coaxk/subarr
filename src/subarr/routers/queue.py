@@ -33,6 +33,7 @@ from ..audio_lang_store import resolve_audio_language_override
 from ..config import settings
 from ..log_safe import scrub
 from ..paths import PathOutsideRootError, canonical_to_fs, library_label
+from ..scan_runner import valid_skip_reasons
 from ..scan_store import (
     PATH_STATUS_EMPTY,
     PATH_STATUS_ERROR,
@@ -151,6 +152,146 @@ def _infer_skip_reason(canonical_path: str) -> str:
     return "unknown"
 
 
+# #669: the exact skip rules subarr-subgen v4.40 can name in /batch's
+# `skip_reasons`, each as (phrase, label, detail, benign). `unknown` is not
+# here: it means subgen recorded no rule at all.
+_SKIP_REASON_TEXT: dict[str, tuple[str, str, str, bool]] = {
+    "internal_sub": (
+        "sub embedded in file",
+        "sub embedded in file",
+        (
+            "the file already carries a subtitle track in the target language, so subgen had nothing "
+            "to do. Not an issue."
+        ),
+        True,
+    ),
+    "external_sub": (
+        "sub already on disk",
+        "sub already exists",
+        "a matching subtitle is already on disk, so subgen had nothing to do. Not an issue.",
+        True,
+    ),
+    "named_sub": (
+        "named sub already on disk",
+        "sub already exists",
+        (
+            "a subtitle named for SUBTITLE_LANGUAGE_NAME is already on disk, so subgen had nothing "
+            "to do. Not an issue."
+        ),
+        True,
+    ),
+    "output_exists": (
+        "subgen's subtitle already on disk",
+        "sub already exists",
+        "the subtitle subgen would write is already on disk, so subgen had nothing to do. Not an issue.",
+        True,
+    ),
+    "internal_sub_configured": (
+        "embedded sub in the skip-if language",
+        "sub embedded in file",
+        (
+            "the file carries an embedded subtitle in the SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE "
+            "language, so subgen skipped it as set. Not an issue."
+        ),
+        True,
+    ),
+    "lrc_exists": (
+        "lyrics already on disk",
+        "lyrics already exist",
+        "an .lrc file is already beside this audio file, so subgen had nothing to do. Not an issue.",
+        True,
+    ),
+    "audio_lang": (
+        "audio language on the skip list",
+        "skipped: audio language",
+        (
+            "the audio language is on this subgen's SKIP_IF_AUDIO_LANGUAGES list. If the audio is "
+            "really another language, verify it in Review and requeue."
+        ),
+        False,
+    ),
+    "no_preferred_audio": (
+        "no preferred audio track",
+        "skipped: no preferred audio",
+        "no audio track matches PREFERRED_AUDIO_LANGUAGES, and LIMIT_TO_PREFERRED_AUDIO_LANGUAGE is on.",
+        False,
+    ),
+    "unknown_language": (
+        "audio language unknown",
+        "skipped: audio language unknown",
+        "the audio track has no language tag, and SKIP_UNKNOWN_LANGUAGE is on.",
+        False,
+    ),
+    "unknown_language_has_subs": (
+        "audio language unknown and subs present",
+        "skipped: audio language unknown",
+        (
+            "the audio track has no language tag, the file has embedded subtitles, and "
+            "SKIP_IF_NO_LANGUAGE_BUT_SUBTITLES_EXIST is on."
+        ),
+        False,
+    ),
+    "skip_sub_language": (
+        "embedded sub language on the skip list",
+        "skipped: subtitle language",
+        "the file has an embedded subtitle in a language on SKIP_SUBTITLE_LANGUAGES.",
+        False,
+    ),
+}
+
+
+def _explain_skip_reasons(body) -> dict | None:
+    """Name the skip rule(s) a subgen /batch reply reports (#669), or None when
+    the reply carries no usable `skip_reasons`."""
+    valid = valid_skip_reasons(body)
+    if not valid:
+        return None
+    if len(valid) == 1:
+        ((reason, _count),) = valid.items()
+        entry = _SKIP_REASON_TEXT.get(reason)
+        if entry is None:
+            return None
+        _phrase, label, detail, benign = entry
+        return {
+            "category": "skipped",
+            "label": label,
+            "detail": detail,
+            "skip_reason": "sub_exists" if benign else reason,
+        }
+    total = sum(valid.values())
+    ordered = sorted(valid.items(), key=lambda item: (-item[1], item[0]))
+    parts = []
+    for reason, count in ordered:
+        entry = _SKIP_REASON_TEXT.get(reason)
+        if entry is not None:
+            phrase = entry[0]
+        elif reason == "unknown":
+            phrase = "reason not reported"
+        else:
+            phrase = reason
+        parts.append(f"{count} {phrase}")
+    breakdown = ", ".join(parts)
+    if all(_SKIP_REASON_TEXT.get(reason, (None, None, None, False))[3] for reason in valid):
+        return {
+            "category": "skipped",
+            "label": "sub already exists",
+            "detail": f"subgen skipped {total}: {breakdown}. Not an issue.",
+            "skip_reason": "sub_exists",
+        }
+    needs_attention = [
+        reason for reason in valid if reason not in _SKIP_REASON_TEXT or not _SKIP_REASON_TEXT[reason][3]
+    ]
+    skip_reason = "unknown"
+    if len(needs_attention) == 1 and needs_attention[0] in _SKIP_REASON_TEXT:
+        skip_reason = needs_attention[0]
+    return {
+        "category": "skipped",
+        "label": "skipped",
+        "detail": f"subgen skipped {total}: {breakdown}.",
+        "skip_reason": skip_reason,
+    }
+
+
 def _path_outcome_chip(
     status: str,
     body: dict | None,
@@ -201,6 +342,17 @@ def _path_outcome_chip(
             "detail": f"subgen queued {queued}" if queued else "subgen accepted",
         }
     if status == PATH_STATUS_SKIPPED:
+        structured = _explain_skip_reasons(body)
+        if structured is not None:
+            valid = valid_skip_reasons(body)
+            if list(valid) == ["audio_lang"] and explain_skip is not None and canonical_path:
+                try:
+                    explained = explain_skip(canonical_path)
+                except Exception:  # noqa: BLE001 - never break the Queue page
+                    explained = None
+                if explained:
+                    return {"category": "skipped", **explained}
+            return structured
         skip_reason = _infer_skip_reason(canonical_path) if canonical_path else "unknown"
         explained = None
         if skip_reason != "sub_exists" and explain_skip is not None and canonical_path:
@@ -370,14 +522,15 @@ def _build_history_view(
 def _skip_explainer(request: Request) -> Callable[[str], dict | None]:
     """#569: bind the audio-language skip explainer to this app's verdicts,
     probe cache and connected subgen's capabilities."""
-    from ..submission_language import explain_audio_language_skip
+    from ..submission_language import explain_audio_language_skip, explain_embedded_subtitle_skip
 
     state = request.app.state
     store = getattr(state, "audio_lang", None)
     caps = getattr(state, "subgen_caps", None)
     probe_store = getattr(state, "probe_store", None)
-    return lambda canonical: explain_audio_language_skip(
-        canonical, store=store, caps=caps, probe_store=probe_store
+    return lambda canonical: (
+        explain_embedded_subtitle_skip(canonical, caps=caps, probe_store=probe_store)
+        or explain_audio_language_skip(canonical, store=store, caps=caps, probe_store=probe_store)
     )
 
 
