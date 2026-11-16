@@ -37,6 +37,7 @@ from typing import Any
 
 from .langs import normalize_lang
 from .log_safe import scrub
+from .media_probe import is_image_subtitle_codec
 from .per_file_task import active_config, choose_task, resolve_source_language
 
 log = logging.getLogger(__name__)
@@ -402,10 +403,44 @@ def explain_audio_language_skip(canonical: str, *, store: Any, caps: Any, probe_
     }
 
 
+def explain_embedded_subtitle_skip(canonical: str, *, caps: Any, probe_store: Any) -> dict | None:
+    """Explain, for an older subgen whose /batch reply carries no
+    skip_reasons, a translate-mode skip caused by an embedded English text
+    subtitle track found in subarr's probe cache (#669)."""
+    if caps is None or probe_store is None:
+        return None
+    mode = str(getattr(caps, "transcribe_or_translate", None) or "").strip().lower()
+    if mode != "translate":
+        return None
+    try:
+        probe = probe_store.get(canonical)
+    except Exception:  # noqa: BLE001 - an unreadable probe means "cannot tell"
+        return None
+    if probe is None:
+        return None
+    for stream in getattr(probe, "subtitles", None) or []:
+        if (
+            _norm(stream.language) == "en"
+            and not stream.forced
+            and not stream.commentary
+            and not is_image_subtitle_codec(stream.codec)
+        ):
+            return {
+                "skip_reason": "sub_exists",
+                "label": "sub embedded in file",
+                "detail": (
+                    "the file already carries an embedded English subtitle track, so subgen had "
+                    "nothing to do. Not an issue."
+                ),
+            }
+    return None
+
+
 __all__ = [
     "PER_FILE_TASK_FOLDER_CAP",
     "SubmissionLanguage",
     "explain_audio_language_skip",
+    "explain_embedded_subtitle_skip",
     "plan_job_dispatch",
     "resolve_for_job",
     "resolve_submission",

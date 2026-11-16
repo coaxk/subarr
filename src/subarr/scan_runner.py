@@ -33,6 +33,25 @@ from .subgen_client import SubgenCapabilities, SubgenClient, SubgenUnavailable
 log = logging.getLogger(__name__)
 
 
+def valid_skip_reasons(body) -> dict[str, int]:
+    """The per-reason skip counts in a subgen /batch reply, junk dropped.
+
+    subarr-subgen v4.40 sends `skip_reasons` as {reason: count}; older builds
+    omit the key and a future one may send other keys. Only string keys whose
+    value is a positive int (and not a bool) are kept. Always a new dict.
+    """
+    if not isinstance(body, dict):
+        return {}
+    raw = body.get("skip_reasons")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, int) and not isinstance(value, bool) and value > 0
+    }
+
+
 def classify_batch_outcome(status_code: int, body) -> "tuple[str, str]":
     """Map a subgen POST /batch (status_code, body) to (path_status, error).
 
@@ -54,12 +73,17 @@ def classify_batch_outcome(status_code: int, body) -> "tuple[str, str]":
         # single counter without per-file reasons (queue.py infers where it can).
         reasons = []
         if skipped:
-            reasons.append(
-                f"subgen skipped {skipped} — reason not in /batch response "
-                f"(target sub exists, audio-lang match, or other skip rule). "
-                f"See subgen logs for the per-file reason; queue.py infers "
-                f"sub_exists vs audio_lang where possible."
-            )
+            valid = valid_skip_reasons(body)
+            if valid:
+                breakdown = ", ".join(f"{k} {v}" for k, v in sorted(valid.items()))
+                reasons.append(f"subgen skipped {skipped} ({breakdown})")
+            else:
+                reasons.append(
+                    f"subgen skipped {skipped} — reason not in /batch response "
+                    f"(target sub exists, audio-lang match, or other skip rule). "
+                    f"See subgen logs for the per-file reason; queue.py infers "
+                    f"sub_exists vs audio_lang where possible."
+                )
         if already_q:
             reasons.append(f"{already_q} already in queue")
         if body.get("no_audio", 0):
