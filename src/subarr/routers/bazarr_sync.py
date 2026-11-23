@@ -1,4 +1,4 @@
-"""POST /api/bazarr/sync-disk — tell Bazarr to rescan disk for a series.
+"""POST /api/bazarr/sync-disk — tell Bazarr to rescan disk for a series and/or movies.
 
 When subarr's probe walk surfaces an English track Bazarr's wanted list
 didn't account for, this endpoint nudges Bazarr to rescan and pick up
@@ -14,34 +14,23 @@ report what's actually there.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..integrations import IntegrationError
+from ..integrations.bazarr import MOVIES_SCAN_TASK_HINTS, SERIES_SCAN_TASK_HINTS, scan_task_id
 from ..paths import library_for_canonical
 
 router = APIRouter(prefix="/api", tags=["bazarr"])
 log = logging.getLogger(__name__)
 
 
-_TASK_HINTS = (
-    # Bazarr 1.5.x canonical job_ids (verified against live API)
-    "series_full_scan_subtitles",
-    "movies_full_scan_subtitles",
-    # Forward-compat
-    "scan_disk_series",
-    "scan_disk_episodes",
-    # Human-readable labels (case-insensitive substring match)
-    "index all existing episodes",
-    "index all existing movies",
-    "scan disk",
-)
-
-
 class SyncDiskRequest(BaseModel):
     series_id: int | None = None  # optional — when known, surfaced in response
     canonical_path: str | None = None  # optional — surfaced for context
+    media_type: Literal["episode", "movie"] | None = None  # None = both kinds
 
 
 @router.post("/bazarr/sync-disk")
@@ -64,37 +53,43 @@ async def sync_disk(request: Request, req: SyncDiskRequest | None = None) -> dic
     except IntegrationError as e:
         raise HTTPException(503, detail=f"bazarr list_tasks failed: {e}")
 
-    task_id = _find_task_id(tasks)
-    if task_id is None:
-        sample = [t.get("name") for t in tasks][:20]
+    if req.media_type is None:
+        kinds = ["series", "movies"]
+    elif req.media_type == "episode":
+        kinds = ["series"]
+    else:
+        kinds = ["movies"]
+
+    task_ids: list[str] = []
+    for kind in kinds:
+        tid = scan_task_id(tasks, kind)
+        if tid is not None and tid not in task_ids:
+            task_ids.append(tid)
+
+    if not task_ids:
+        hints = [
+            hint
+            for kind in kinds
+            for hint in (SERIES_SCAN_TASK_HINTS if kind == "series" else MOVIES_SCAN_TASK_HINTS)
+        ]
+        sample = [t.get("name") for t in tasks if isinstance(t, dict)][:20]
         raise HTTPException(
             502,
-            detail=(
-                f"no Bazarr task matched scan-disk hints {list(_TASK_HINTS)!r}. "
-                f"Available task names: {sample}"
-            ),
+            detail=(f"no Bazarr task matched scan-disk hints {hints!r}. Available task names: {sample}"),
         )
 
-    try:
-        await bazarr.trigger_task(task_id)
-    except IntegrationError as e:
-        raise HTTPException(502, detail=f"bazarr trigger_task({task_id}) failed: {e}")
+    triggered: list[str] = []
+    for task_id in task_ids:
+        try:
+            await bazarr.trigger_task(task_id)
+        except IntegrationError as e:
+            raise HTTPException(502, detail=f"bazarr trigger_task({task_id}) failed: {e}")
+        triggered.append(task_id)
 
     return {
         "triggered": True,
-        "task_id": task_id,
+        "task_id": triggered[0],
+        "task_ids": triggered,
         "series_id": req.series_id,
         "canonical_path": req.canonical_path,
     }
-
-
-def _find_task_id(tasks: list[dict]) -> str | None:
-    """Match task labels (case-insensitive) against the hint list.
-    Returns the first non-empty job_id / id / name found."""
-    for hint in _TASK_HINTS:
-        h = hint.lower()
-        for t in tasks:
-            label = (t.get("name") or t.get("job_id") or "").lower()
-            if h in label:
-                return t.get("job_id") or t.get("id") or t.get("name")
-    return None

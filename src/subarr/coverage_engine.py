@@ -69,6 +69,9 @@ class CoverageItem:
     bazarr_sonarr_id: int | None = None
     bazarr_radarr_id: int | None = None
     bazarr_episode_id: int | None = None
+    # #671: True only for rows built from Bazarr's wanted lists — radarr_id
+    # alone cannot tell them from _add_radarr_blind_movie_rows.
+    bazarr_wanted: bool = False
     missing_subtitles: list[str] = field(default_factory=list)
     # ffprobe-driven embedded reconciliation (v1.1 batch 1 hotfix)
     embedded_en: str | None = None  # 'EN' / 'EN(forced)' / 'EN(SDH)' / 'EN(commentary)' / 'EN(image)' / None
@@ -210,6 +213,7 @@ class CoverageItem:
                 "episode_id": self.bazarr_episode_id,
                 "missing_subtitles": self.missing_subtitles,
             },
+            "bazarr_wanted": self.bazarr_wanted,
             "embedded_en": self.embedded_en,
             # #358: emit 2-letter ISO-639-1 so the frontend picker (2-letter
             # options) pre-selects the detected audio; internal item.audio_langs
@@ -2312,6 +2316,7 @@ async def build_coverage(
                 image_subs_on_disk=ep_image_pairs,
                 bazarr_sonarr_id=sonarr_id,
                 bazarr_episode_id=w.get("sonarrEpisodeId"),
+                bazarr_wanted=True,
                 missing_subtitles=[
                     ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
                 ],
@@ -2430,6 +2435,7 @@ async def build_coverage(
                 sub_files_seen=srts,
                 image_subs_on_disk=image_pairs,
                 bazarr_radarr_id=m.get("id"),
+                bazarr_wanted=True,
                 missing_subtitles=[
                     ms.get("code2") or ms.get("name") or "?" for ms in (w.get("missing_subtitles") or [])
                 ],
