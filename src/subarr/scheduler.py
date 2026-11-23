@@ -28,6 +28,7 @@ from typing import Any
 from .auto_queue import Decision, evaluate
 from .coverage_engine import IntegrationBundle, build_coverage
 from .arr_resolve import resolve_episode_target
+from .integrations.bazarr import scan_task_id
 from .paths import PathOutsideRootError, canonical_to_fs, library_for_canonical
 from .pending_store import PendingStore
 from .probe_walker import ProbeWalker
@@ -283,8 +284,15 @@ class Scheduler:
                 else bundle.bazarr
             )
             key = getattr(bz, "_base_url", "") or str(id(bz))
-            slot = by_inst.setdefault(key, {"client": bz, "count": 0})
+            slot = by_inst.setdefault(
+                key,
+                {"client": bz, "count": 0, "has_movie": False, "has_non_movie": False},
+            )
             slot["count"] += 1
+            if getattr(it, "media_type", None) == "movie":
+                slot["has_movie"] = True
+            else:
+                slot["has_non_movie"] = True
 
         fired_any = False
         instances: list[dict] = []
@@ -305,47 +313,62 @@ class Scheduler:
                     }
                 )
                 continue
+            kinds: list[str] = []
+            if slot["has_non_movie"]:
+                kinds.append("series")
+            if slot["has_movie"]:
+                kinds.append("movies")
             try:
-                task_id = await self._discover_bazarr_scan_task(bz)
+                task_ids = await self._discover_bazarr_scan_tasks(bz, kinds)
             except Exception as e:  # noqa: BLE001 — one bad instance must not abort the poke
                 log.warning("coverage_walk: bazarr task discovery failed on %s: %s", key, e)
                 instances.append({"instance": key, "fired": False, "reason": f"task discovery failed: {e}"})
                 continue
-            if not task_id:
+            if not task_ids:
                 instances.append({"instance": key, "fired": False, "reason": "no scan-disk task id found"})
                 continue
-            try:
-                await bz.trigger_task(task_id)
-                fired_any = True
-                cooldowns[key] = now  # #371: advance ONLY this instance's cooldown, on success
-                instances.append({"instance": key, "fired": True, "task_id": task_id, "count": slot["count"]})
-                log.info(
-                    "coverage_walk: poked Bazarr %s scan-disk (%s) — %d stale-disk items",
-                    key,
-                    task_id,
-                    slot["count"],
-                )
-            except Exception as e:  # noqa: BLE001
-                log.warning("coverage_walk: bazarr trigger_task failed on %s: %s", key, e)
-                instances.append({"instance": key, "fired": False, "reason": str(e)})
+            triggered: list[str] = []
+            error: str | None = None
+            for task_id in task_ids:
+                try:
+                    await bz.trigger_task(task_id)
+                    triggered.append(task_id)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("coverage_walk: bazarr trigger_task failed on %s: %s", key, e)
+                    error = str(e)
+                    break
+            if not triggered:
+                instances.append({"instance": key, "fired": False, "reason": error})
+                continue
+            fired_any = True
+            cooldowns[key] = now  # #371: advance ONLY this instance's cooldown, on success
+            record = {
+                "instance": key,
+                "fired": True,
+                "task_id": triggered[0],
+                "task_ids": triggered,
+                "count": slot["count"],
+            }
+            if error is not None:
+                record["error"] = error
+            instances.append(record)
+            log.info(
+                "coverage_walk: poked Bazarr %s scan-disk (%s) — %d stale-disk items",
+                key,
+                ", ".join(triggered),
+                slot["count"],
+            )
         return {"fired": fired_any, "stale_count": len(stale), "instances": instances}
 
-    async def _discover_bazarr_scan_task(self, bz) -> str | None:
-        """Find one Bazarr instance's scan-disk task id by hint match."""
+    async def _discover_bazarr_scan_tasks(self, bz, kinds: list[str]) -> list[str]:
+        """Find one Bazarr instance's scan-disk task ids for `kinds`."""
         tasks = await bz.list_tasks()
-        hints = (
-            "series_full_scan_subtitles",
-            "movies_full_scan_subtitles",
-            "scan_disk_series",
-            "scan_disk_episodes",
-            "scan disk",
-            "index all existing episodes",
-        )
-        for hint in hints:
-            for t in tasks:
-                if hint in (t.get("job_id") or "").lower() or hint in (t.get("name") or "").lower():
-                    return t.get("job_id")
-        return None
+        task_ids: list[str] = []
+        for kind in kinds:
+            task_id = scan_task_id(tasks, kind)
+            if task_id is not None and task_id not in task_ids:
+                task_ids.append(task_id)
+        return task_ids
 
     async def run_coverage_walk(self) -> dict[str, Any]:
         """Public entry point — also called by POST /api/schedule/run-now.

@@ -27,6 +27,41 @@ def _rows_for(rows: list[dict[str, Any]], id_field: str, wanted: int | None) -> 
     return [r for r in rows if isinstance(r, dict) and r.get(id_field) == wanted]
 
 
+SERIES_SCAN_TASK_HINTS = (
+    "series_full_scan_subtitles",
+    "scan_disk_series",
+    "scan_disk_episodes",
+    "index all existing episodes",
+    "scan disk",
+)
+MOVIES_SCAN_TASK_HINTS = (
+    "movies_full_scan_subtitles",
+    "scan_disk_movies",
+    "index all existing movies",
+)
+
+
+def scan_task_id(tasks: list[dict], kind: str) -> str | None:
+    """#671: the job id that re-indexes `kind` ("series" or "movies") on disk.
+
+    Walks that kind's hints first, then tasks; matches job_id or name.
+    """
+    if kind == "series":
+        hints = SERIES_SCAN_TASK_HINTS
+    elif kind == "movies":
+        hints = MOVIES_SCAN_TASK_HINTS
+    else:
+        raise ValueError(f"unknown scan kind {kind!r}")
+    for hint in hints:
+        h = hint.lower()
+        for t in tasks:
+            if not isinstance(t, dict):
+                continue
+            if h in (t.get("job_id") or "").lower() or h in (t.get("name") or "").lower():
+                return t.get("job_id") or t.get("id") or t.get("name")
+    return None
+
+
 class BazarrClient(IntegrationClient):
     name = "bazarr"
 

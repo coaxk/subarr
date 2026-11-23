@@ -128,7 +128,9 @@ function deriveReason(item) {
   if (item.bazarr_blind && item.audio_verified) return 'awaiting-bazarr-sync';
   if (item.bazarr_blind) return 'audio-mislabel';
   if (item.embedded_en === 'EN' || item.embedded_en === 'EN(SDH)') return 'embedded-only';
-  if (item.bazarr && item.bazarr.episode_id) return 'bazarr-wanted';
+  // #671: bazarr_wanted marks rows from Bazarr's wanted lists (episodes and
+  // movies); episode_id covers snapshots from before the flag existed.
+  if (item.bazarr_wanted === true || (item.bazarr && item.bazarr.episode_id)) return 'bazarr-wanted';
   return 'no-track';
 }
 
