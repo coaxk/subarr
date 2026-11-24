@@ -7,6 +7,21 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.29] - 2026-11-24
+
+**Movies with a subtitle already on disk now leave Bazarr's wanted list, and the image picks up Debian security updates.**
+
+### Security
+- **OS packages refreshed.** The 2.7.28 image ships `libkrb5-3`, `libk5crypto3`, `libgssapi-krb5-2` and `libkrb5support0` at `1.21.3-5+deb13u1`, and Debian has since published `1.21.3-5+deb13u2` in its security pocket. This release rebuilds against current packages, which also brings in the Debian 13.8 point release (`libc6 2.41-12+deb13u5`, `openssl` and `libssl3t64 3.5.9-1~deb13u1`, `libfreetype6 2.13.3+dfsg-1+deb13u2`). Measured against the published artifact rather than a fresh build: `apt-get -s upgrade` inside `ghcr.io/coaxk/subarr:2.7.28` on 2026-11-24.
+
+### Fixed
+- **Movies never got re-indexed in Bazarr, so a movie whose subtitle was already on disk stayed on Bazarr's wanted list (#671).** When subarr finds a subtitle on disk that Bazarr has not noticed, it asks Bazarr to rescan. It always picked Bazarr's series scan, even for movies, so Bazarr's movie index was never triggered. subarr now asks for the scan that matches each row: series for episodes, movies for movies, or both when both are stale. The **Sync disk** API takes an optional `media_type` (`episode` or `movie`; leave it out for both) and its reply lists every task it started in `task_ids`, beside the existing `task_id`.
+- **Movies on Bazarr's wanted list read "no track" on the Coverage page (#671).** The page recognised a Bazarr wanted-list row by its episode id, which a movie never has, so every wanted movie was shown with the wrong reason. Coverage rows now carry a `bazarr_wanted` flag and the page reads that. Thanks to @IdahoRC for the report and the logs that pinned both bugs down.
+- **The Queue page filed subgen skips under Issues as "reason not in /batch response" (#669).** With subgen v4.40 or later, subgen names the rule that skipped each file, and the Queue page now shows it. Skips that mean a subtitle already exists (embedded, sidecar, a named or earlier subgen output) are filed as the harmless "sub already exists"; the others name their rule and stay in Issues. With an older subgen, a file in translate mode whose probe shows an embedded English text track is explained as that.
+
+### Added
+- **The Health page shows when the queue feed or the coverage walk is paused (#666).** A paused task gets a chip, **feed paused** or **coverage walk off**, linking to the page where you turn it back on. Pausing does not change the task's health. **Run now** is disabled on a paused queue feed, because a run does nothing until you resume it. `GET /api/health/tasks` gives each task a `paused` field (`null`, or `{label, href}`).
+
 ## [2.7.28] - 2026-11-12
 
 **The orphan cleanup no longer stalls on probe-cache rows, and path matching no longer picks the wrong library.**
