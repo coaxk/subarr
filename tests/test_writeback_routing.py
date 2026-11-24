@@ -238,11 +238,13 @@ def test_scheduler_poke_fans_out_per_bazarr_instance(writeback_stack):
     items = [
         SimpleNamespace(
             suggest_bazarr_rescan=True,
+            bazarr_wanted=True,
             file_canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
             canonical_path=None,
         ),
         SimpleNamespace(
             suggest_bazarr_rescan=True,
+            bazarr_wanted=True,
             file_canonical_path="ShowTV/Season 1/ShowTV.S01E01.mkv",
             canonical_path=None,
         ),
@@ -314,11 +316,13 @@ def test_poke_cooldown_is_per_instance(writeback_stack):
     items = [
         SimpleNamespace(
             suggest_bazarr_rescan=True,
+            bazarr_wanted=True,
             file_canonical_path="@anime/Naruto/Season 1/Naruto.S01E01.mkv",
             canonical_path=None,
         ),
         SimpleNamespace(
             suggest_bazarr_rescan=True,
+            bazarr_wanted=True,
             file_canonical_path="ShowTV/Season 1/ShowTV.S01E01.mkv",
             canonical_path=None,
         ),

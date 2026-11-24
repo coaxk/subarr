@@ -195,6 +195,7 @@ def _serve_live(ws, *, failing: tuple[str, ...] = ()):
 def _row(canonical: str, media_type: str | None = None):
     fields = {
         "suggest_bazarr_rescan": True,
+        "bazarr_wanted": True,
         "file_canonical_path": canonical,
         "canonical_path": None,
     }
