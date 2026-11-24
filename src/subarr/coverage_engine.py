@@ -65,6 +65,8 @@ class CoverageItem:
     # container -- rendering an external file as "embedded" sends the reader
     # hunting for a track that is not there.
     image_subs_on_disk: list[str] = field(default_factory=list)
+    # #671: plain <stem>.srt sidecars (no language token), set only by _add_radarr_blind_movie_rows.
+    sidecar_no_lang: list[str] = field(default_factory=list)
     # Bazarr cross-reference
     bazarr_sonarr_id: int | None = None
     bazarr_radarr_id: int | None = None
@@ -245,6 +247,7 @@ class CoverageItem:
             "forced_only_subgen_will_skip": self.forced_only_subgen_will_skip,
             "image_only_subgen_will_skip": self.image_only_subgen_will_skip,
             "image_subs_on_disk": self.image_subs_on_disk,
+            "sidecar_no_lang": self.sidecar_no_lang,
             "wanted_lang_subgen_cannot_produce": self.wanted_lang_subgen_cannot_produce,
             "default_track_mismatch": self.default_track_mismatch,
             "mismatch_default_track_lang": self.mismatch_default_track_lang,
@@ -1795,6 +1798,9 @@ def _score(
         s -= 5000
         reasons.append("stale: disk already has .srt (Bazarr needs scan-disk)")
         item.suggest_bazarr_rescan = True
+    if item.sidecar_no_lang:
+        s -= 5000
+        reasons.append("sidecar .srt has no language in its filename")
     # v1.1 hotfix + 2026-05-27 SDH collapse: SDH counts the same as a
     # clean English track for scoring purposes (an SDH track IS English).
     # Forced + commentary tracks remain partial (those genuinely aren't
@@ -2883,15 +2889,20 @@ async def _add_radarr_blind_movie_rows(
         # sidecar on disk, means this is not a gap (Bazarr was right to omit
         # it). Unprobed movies are KEPT (verification_state stays "unprobed")
         # so the probe-gate + eager-probe resolve them next build, exactly
-        # like TV — never silently dropped.
+        # like TV — never silently dropped. Non-verified rows are scanned too
+        # so a plain sidecar is recorded on them.
+        srts: list[str] = []
+        stem = file_canonical.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         if item.verification_state == "verified":
             has_en = bool(item.embedded_en)
             if not has_en and folder_canonical:
                 _has_srt, srts = await asyncio.to_thread(_scan_for_srt, folder_canonical)
-                stem = file_canonical.rsplit("/", 1)[-1].rsplit(".", 1)[0]
                 has_en = any(_is_en_sidecar_for(s, stem) for s in srts)
             if has_en:
                 continue
+        elif folder_canonical:
+            _has_srt, srts = await asyncio.to_thread(_scan_for_srt, folder_canonical)
+        item.sidecar_no_lang = [s for s in srts if _is_plain_sidecar_for(s, stem)]
         _score(
             item,
             tt_signals,
@@ -2962,3 +2973,15 @@ def _is_en_sidecar_for(srt_path: str, file_stem: str, suffixes: tuple[str, ...] 
     parts = [p for p in tail.split(".") if p]
     # Any token equal to en/eng marks it English.
     return any(p.lower() in ("en", "eng") for p in parts)
+
+
+def _is_plain_sidecar_for(srt_path: str, file_stem: str) -> bool:
+    """True if `srt_path` is a plain `<stem>.srt` sidecar (no language token)
+    for the video whose stem is `file_stem`."""
+    if not file_stem:
+        return False
+    name = srt_path.rsplit("/", 1)[-1]
+    low = name.lower()
+    if not low.endswith(".srt"):
+        return False
+    return name[: -len(".srt")] == file_stem

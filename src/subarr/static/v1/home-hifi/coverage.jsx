@@ -131,6 +131,8 @@ function deriveReason(item) {
   // #671: bazarr_wanted marks rows from Bazarr's wanted lists (episodes and
   // movies); episode_id covers snapshots from before the flag existed.
   if (item.bazarr_wanted === true || (item.bazarr && item.bazarr.episode_id)) return 'bazarr-wanted';
+  // #671: a plain <stem>.srt sits beside the video; its language is not in the filename.
+  if (Array.isArray(item.sidecar_no_lang) && item.sidecar_no_lang.length > 0) return 'sidecar-no-lang';
   return 'no-track';
 }
 
@@ -273,6 +275,7 @@ const REASON_STYLE = {
   'no-track':       { fg: 'var(--error-500)',  bg: 'rgba(239,68,68,0.08)',  br: 'rgba(239,68,68,0.30)', label: 'no-track' },
   'embedded-only':  { fg: 'var(--warn-500)',   bg: 'rgba(245,158,11,0.08)', br: 'rgba(245,158,11,0.30)', label: 'embedded' },
   'bazarr-wanted':  { fg: 'var(--violet-400)', bg: 'rgba(139,92,246,0.10)', br: 'rgba(139,92,246,0.35)', label: 'wanted' },
+  'sidecar-no-lang': { fg: 'var(--fg-1)', bg: 'var(--bg-2)', br: 'var(--bg-4)', label: 'srt no-lang' },
   // v1.1.1 #219: rows Bazarr can't see — file metadata lies, Bazarr's
   // "audio matches subs" heuristic excludes them silently. Distinct
   // cyan tone so they stand out from regular wanted rows in the table.
@@ -289,6 +292,7 @@ const REASON_TIPS = {
   'no-track':       'No subtitle track present and no audio metadata to even guess. Run probe or queue Whisper.',
   'embedded-only':  'File has an embedded English subtitle stream but no SRT sidecar. Plex/Apple TV need the sidecar.',
   'bazarr-wanted':  "Bazarr's wanted list put this in front of us — standard pipeline.",
+  'sidecar-no-lang': "A .srt file sits next to the video, but its filename has no language code, so subarr can't tell its language. If it is English, rename it to <name>.en.srt and the row clears on a later walk.",
   // v1.1.1 #219: distinct surface — explains *why* this row exists at all.
   'audio-mislabel': "Bazarr can't see this episode because the file's audio metadata claims English, but Sonarr says the series is in another language. Subarr surfaced it independently. Permanent fix: edit the series in Sonarr → Language Profile = the right language.",
   // v1.1.1 #219 closer: post-verification "we're done; waiting on Bazarr".
@@ -445,7 +449,7 @@ function FilterChip({ children, active, onClose }) {
   );
 }
 
-const REASON_FILTERS = ['all', 'no-track', 'bazarr-wanted', 'audio-mislabel', 'awaiting-bazarr-sync', 'embedded-only', 'low-score', 'unmonitored'];
+const REASON_FILTERS = ['all', 'no-track', 'sidecar-no-lang', 'bazarr-wanted', 'audio-mislabel', 'awaiting-bazarr-sync', 'embedded-only', 'low-score', 'unmonitored'];
 
 // Languages I care about — persisted in localStorage so it survives reloads.
 // Reads on every fetch in useLiveCoverage. Empty string = show everything
@@ -2104,7 +2108,7 @@ function CoverageHeader({ allSelected }) {
       <HeaderCell w={COL.audio}
         tip="Audio track languages in the file. From ffprobe stream tags, stream titles, or user verification. 'und' = no language metadata at all (encoder didn't tag the stream).">audio</HeaderCell>
       <HeaderCell w={COL.reason}
-        tip="Why this row is in coverage: bazarr-wanted (Bazarr's gap list), no-track (no audio/sub data), embedded-only (only embedded sub), low-score (low priority), unmonitored.">reason</HeaderCell>
+        tip="Why this row is in coverage: bazarr-wanted (Bazarr's gap list), no-track (no audio/sub data), sidecar-no-lang (a .srt with no language in its filename), embedded-only (only embedded sub), low-score (low priority), unmonitored.">reason</HeaderCell>
       <HeaderCell w={COL.action} />
     </div>
   );
