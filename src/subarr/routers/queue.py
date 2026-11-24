@@ -1094,14 +1094,13 @@ async def backfill_library(request: Request) -> dict:
     snapshot — run a coverage walk first if it's cold."""
     from ..backfill import eligible_backfill_items
     from ..coverage_engine import CoverageItem
-    from .schedule import _COVERAGE_ITEM_FIELDS
 
     cov = getattr(request.app.state, "coverage_cache", None)
     snap = cov.get_cached() if cov is not None else None
     if snap is None:
         raise HTTPException(409, detail="coverage cache not warm yet — run a coverage walk first")
 
-    items = [CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS}) for d in snap.items]
+    items = [CoverageItem.from_dict(d) for d in snap.items]
     rules = request.app.state.schedule.get_rules()
     pending = request.app.state.pending_queue
     prov = request.app.state.provenance
@@ -1117,7 +1116,13 @@ async def backfill_library(request: Request) -> dict:
         canonical = it.file_canonical_path or it.canonical_path
         if not canonical:
             continue
-        pending.enqueue(canonical, source="backfill", sonarr_episode_id=it.bazarr_episode_id)
+        pending.enqueue(
+            canonical,
+            source="backfill",
+            series_id=it.bazarr_sonarr_id,
+            sonarr_episode_id=it.bazarr_episode_id,
+            radarr_movie_id=it.bazarr_radarr_id,
+        )
         enqueued += 1
 
     counts = pending.count_by_status()

@@ -342,7 +342,10 @@ def _apply_filters_and_pack(
             # only_wanted_langs filter — keep row only if any of its
             # missing-subs codes intersect the user's preference set.
             if wanted_lang_set:
-                missing = it.get("bazarr", {}).get("missing_subtitles") or []
+                if isinstance(it.get("wanted_langs"), list):
+                    missing = it["wanted_langs"]
+                else:
+                    missing = (it.get("bazarr") or {}).get("missing_subtitles") or []
                 missing_set = {(c or "").lower() for c in missing}
                 if not (missing_set & wanted_lang_set):
                     wanted_lang_dropped += 1
