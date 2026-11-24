@@ -251,15 +251,33 @@ class Scheduler:
         to re-scan is the only way to get those items off the wanted list
         (Bazarr only re-checks disk on its scheduled cadence otherwise).
 
+        Only rows Bazarr lists as wanted (bazarr_wanted) are counted, because
+        Bazarr's index cannot clear a row it never listed (#680).
+
         Returns: a dict logged for the run-now JSON response so users can see
         what happened. Two shapes: the no-work early-out is
-        {fired: False, reason: "no stale-disk items"}; otherwise
-        {fired, stale_count, instances: [{instance, fired, reason|task_id, count}]}
+        {fired: False, reason: "no stale-disk items", not_bazarr_wanted};
+        otherwise
+        {fired, stale_count, not_bazarr_wanted,
+        instances: [{instance, fired, reason|task_id, count}]}
         — fired/skip reasons are per-instance (#371), not a single top-level reason.
         """
-        stale = [it for it in items if getattr(it, "suggest_bazarr_rescan", False)]
+        stale = [
+            it
+            for it in items
+            if getattr(it, "suggest_bazarr_rescan", False) and getattr(it, "bazarr_wanted", False)
+        ]
+        not_wanted = sum(
+            1
+            for it in items
+            if getattr(it, "suggest_bazarr_rescan", False) and not getattr(it, "bazarr_wanted", False)
+        )
         if not stale:
-            return {"fired": False, "reason": "no stale-disk items"}
+            return {
+                "fired": False,
+                "reason": "no stale-disk items",
+                "not_bazarr_wanted": not_wanted,
+            }
 
         # #371: per-instance cooldown. A recent poke on one Bazarr instance must
         # not gate a DIFFERENT instance whose rows just went stale, and a failed
@@ -358,7 +376,12 @@ class Scheduler:
                 ", ".join(triggered),
                 slot["count"],
             )
-        return {"fired": fired_any, "stale_count": len(stale), "instances": instances}
+        return {
+            "fired": fired_any,
+            "stale_count": len(stale),
+            "not_bazarr_wanted": not_wanted,
+            "instances": instances,
+        }
 
     async def _discover_bazarr_scan_tasks(self, bz, kinds: list[str]) -> list[str]:
         """Find one Bazarr instance's scan-disk task ids for `kinds`."""
