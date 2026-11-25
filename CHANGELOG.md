@@ -7,6 +7,19 @@ breaking config changes.
 
 ## [Unreleased]
 
+## [2.7.30] - 2026-11-25
+
+**Library backfill jobs carry their Sonarr and Radarr ids again, and movies with a plain `.srt` say so.**
+
+### Security
+- **OS packages refreshed.** The 2.7.29 image ships `libzstd1 1.5.7+dfsg-1`, and Debian has since published `1.5.7+dfsg-1+deb13u1` in its security pocket. This release rebuilds against current packages. Measured against the published artifact rather than a fresh build: `apt-get -s upgrade` inside `ghcr.io/coaxk/subarr:2.7.29` on 2026-11-25.
+
+### Fixed
+- **Library backfill queued its jobs without Sonarr or Radarr ids, so a subtitle it produced never reached Bazarr (#685).** Backfill and the Rules page preview rebuild coverage rows from the cached snapshot, and that rebuild silently dropped each row's ids and wanted languages. Without the ids, completion could neither upload the subtitle to Bazarr nor ask Bazarr to rescan. Rows now rebuild in full, and backfill jobs carry the series, episode and Radarr ids, as scheduled jobs always have. The preview's decisions show the episode id again.
+- **A movie with a plain `Movie.srt` beside it read "no track" on the Coverage page (#671).** subarr takes a sidecar's language from its filename, so a `.srt` with no language code is not counted as English and the movie stays in Gaps. Such a row now reads **srt no-lang**, its tooltip explains that renaming the file to `<name>.en.srt` clears it, and it sorts low, so auto-queue does not send a movie that probably has an English subtitle to Whisper. This applies to movies subarr finds through Radarr, the ones not on Bazarr's wanted list. Thanks to @IdahoRC for the report.
+- **The coverage API showed Bazarr asking for English on rows Bazarr never listed (#683).** Rows subarr adds itself from Radarr and Sonarr carried subarr's own English assumption under `bazarr.missing_subtitles`. That field now holds only Bazarr's list, and every row has a new top-level `wanted_langs`: the languages subarr treats the row as needing. The Gaps WANTED column and the `only_wanted_langs` filter read `wanted_langs`, so what the page shows does not change.
+- **After a coverage walk, subarr asked Bazarr to rescan its disk for rows Bazarr cannot clear (#680).** The automatic rescan now counts only stale rows that Bazarr lists as wanted. Rows subarr built itself are reported as `not_bazarr_wanted` in the walk result.
+
 ## [2.7.29] - 2026-11-24
 
 **Movies with a subtitle already on disk now leave Bazarr's wanted list, and the image picks up Debian security updates.**
