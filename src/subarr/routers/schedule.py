@@ -193,9 +193,7 @@ async def preview(request: Request) -> dict[str, Any]:
     cov_cache = getattr(request.app.state, "coverage_cache", None)
     snap = cov_cache.get_cached() if cov_cache is not None else None
     if snap is not None:
-        items = [
-            CoverageItem(**{k: v for k, v in d.items() if k in _COVERAGE_ITEM_FIELDS}) for d in snap.items
-        ]
+        items = [CoverageItem.from_dict(d) for d in snap.items]
 
         class _Report:
             pass

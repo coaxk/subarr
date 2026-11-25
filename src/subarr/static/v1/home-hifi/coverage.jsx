@@ -167,7 +167,10 @@ export function normalizeRow(item, idx, settleMinutes = 0) {
     ? item.audio_langs.join(',')
     : '—';
   const origLang = langCodeFromName(item.original_language);
-  const missing = (item.bazarr && item.bazarr.missing_subtitles) || [];
+  // #683: wanted_langs is the row's wanted list; older snapshots only have bazarr.missing_subtitles.
+  const missing = Array.isArray(item.wanted_langs)
+    ? item.wanted_langs
+    : (item.bazarr && item.bazarr.missing_subtitles) || [];
   // FIX: WANTED column should ONLY show what Bazarr is missing — not
   // union with Sonarr's original_language. Including origLang made
   // every foreign show look like Bazarr was asking for double when in

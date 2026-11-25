@@ -213,9 +213,11 @@ class CoverageItem:
                 "sonarr_id": self.bazarr_sonarr_id,
                 "radarr_id": self.bazarr_radarr_id,
                 "episode_id": self.bazarr_episode_id,
-                "missing_subtitles": self.missing_subtitles,
+                "missing_subtitles": list(self.missing_subtitles) if self.bazarr_wanted else [],
             },
             "bazarr_wanted": self.bazarr_wanted,
+            # #683: the languages subarr treats the row as needing; Bazarr's own list is under "bazarr" only when bazarr_wanted.
+            "wanted_langs": list(self.missing_subtitles),
             "embedded_en": self.embedded_en,
             # #358: emit 2-letter ISO-639-1 so the frontend picker (2-letter
             # options) pre-selects the detected audio; internal item.audio_langs
@@ -254,6 +256,29 @@ class CoverageItem:
             "mismatch_native_track_lang": self.mismatch_native_track_lang,
             "mismatch_native_audio_ordinal": self.mismatch_native_audio_ordinal,
         }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> CoverageItem:
+        """Rebuild an item from a to_dict() snapshot row (#685)."""
+        from dataclasses import fields
+
+        names = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in d.items() if k in names}
+        b = d.get("bazarr")
+        if isinstance(b, dict):
+            for key, field_name in (
+                ("sonarr_id", "bazarr_sonarr_id"),
+                ("radarr_id", "bazarr_radarr_id"),
+                ("episode_id", "bazarr_episode_id"),
+            ):
+                if field_name not in kwargs and key in b:
+                    kwargs[field_name] = b[key]
+        if "missing_subtitles" not in kwargs:
+            if isinstance(d.get("wanted_langs"), list):
+                kwargs["missing_subtitles"] = list(d["wanted_langs"])
+            elif isinstance(b, dict) and isinstance(b.get("missing_subtitles"), list):
+                kwargs["missing_subtitles"] = list(b["missing_subtitles"])
+        return cls(**kwargs)
 
 
 @dataclass
